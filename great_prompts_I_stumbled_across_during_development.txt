@@ -1,0 +1,3 @@
+# Code Review
+- "Review your edits. Ultrathink about if they are correctly implemented in the most graceful and accurate way possible. Return a report."
+  ^ Note - This gave me a detailed strengths and weaknesses about each file Claude had worked on. I had recently /clear'd the chat so its only context was what we'd just worked on
