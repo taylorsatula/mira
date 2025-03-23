@@ -37,3 +37,19 @@
 - **Interface Preservation**: Maintain existing public interfaces when refactoring internals to ensure backward compatibility
 - **Tool Interface Consistency**: Ensure all tool implementations follow the same patterns for input/output handling and error management
 - **Response Formatting**: Adhere to established response structures and formatting conventions when modifying or adding agent outputs
+
+## Tool Architecture
+- **Tool Composition**: Favor composing existing tools together over creating new tools; let the LLM handle coordination between tools
+- **Single Responsibility**: Each tool should have a single, well-defined purpose; avoid creating monolithic tools that combine multiple responsibilities
+- **Logic Placement**: Keep business logic in the LLM prompts where possible rather than hardcoding it in tools
+- **Tool Creation Criteria**: Only create new tools when functionality cannot be achieved by combining existing tools or when a composition would be used repeatedly
+
+## Continuous Improvement
+- **Self-Reflection**: After completing tasks, reflect on what went well and what could be improved
+- **Pattern Recognition**: Identify recurring success patterns and failure patterns in your solutions
+- **Feedback Integration**: When receiving feedback, document the specific insights and how they apply to future tasks
+- **Solution Alternatives**: For each problem, consider multiple approaches before implementing a solution
+- **Knowledge Persistence**: Update this CLAUDE.md file with new insights and guidelines based on feedback
+- **Solution Simplification**: Periodically review completed solutions to identify unnecessary complexity
+- **Anti-Patterns**: Document approaches to avoid based on past experiences
+- **Learning Transfer**: Apply lessons from one part of the codebase to similar situations elsewhere
