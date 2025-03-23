@@ -45,6 +45,7 @@ class ErrorCode(Enum):
     TOOL_EXECUTION_ERROR = 402
     TOOL_INVALID_INPUT = 403
     TOOL_INVALID_OUTPUT = 404
+    TOOL_INITIALIZATION_ERROR = 405
     
     # Conversation errors (5xx)
     CONVERSATION_NOT_FOUND = 501

@@ -123,9 +123,8 @@ def initialize_system(args) -> Dict[str, Any]:
         # Initialize async task manager
         async_task_manager = AsyncTaskManager(tool_repo=tool_repo, llm_bridge=llm_bridge)
         
-        # Register async tools with the task manager
-        tool_repo.register_tool(ScheduleAsyncTaskTool(task_manager=async_task_manager))
-        tool_repo.register_tool(CheckAsyncTaskTool(task_manager=async_task_manager))
+        # Register task_manager as a dependency - this will initialize async tools
+        tool_repo.register_dependency("task_manager", async_task_manager)
         
         # Setup notification callback for async tasks
         def notify_task_completion(task):
