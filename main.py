@@ -117,6 +117,9 @@ def initialize_system(args) -> Dict[str, Any]:
         # Initialize tool repository
         tool_repo = ToolRepository()
         
+        # Task notification queue
+        task_notifications = []
+        
         # Initialize async task manager
         async_task_manager = AsyncTaskManager(tool_repo=tool_repo, llm_bridge=llm_bridge)
         
@@ -128,8 +131,9 @@ def initialize_system(args) -> Dict[str, Any]:
         def notify_task_completion(task):
             # This will be called when an async task completes if notify_on_completion is True
             logging.info(f"Task completed: {task.task_id} - {task.description}")
-            # In a real implementation, you might want to add this to a notification queue
-            # that the conversation loop checks periodically
+            # Add to notification queue if notify_on_completion is True
+            if task.notify_on_completion:
+                task_notifications.append(f"Task completed: {task.description}")
         
         async_task_manager.set_notification_callback(notify_task_completion)
         
@@ -164,7 +168,8 @@ def initialize_system(args) -> Dict[str, Any]:
             'llm_bridge': llm_bridge,
             'tool_repo': tool_repo,
             'async_task_manager': async_task_manager,
-            'conversation': conversation
+            'conversation': conversation,
+            'task_notifications': task_notifications
         }
     
     except AgentError as e:
@@ -206,6 +211,7 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
     conversation = system['conversation']
     file_ops = system['file_ops']
     async_task_manager = system['async_task_manager']
+    task_notifications = system['task_notifications']
     
     print("\nAI Agent System - Interactive Mode")
     print(f"Conversation ID: {conversation.conversation_id}")
@@ -221,6 +227,15 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
     
     while True:
         try:
+            # Display any pending task notifications
+            if task_notifications:
+                print("\n" + "-" * 30)
+                for notification in task_notifications:
+                    print(notification)
+                print("-" * 30)
+                # Clear notifications after displaying them
+                task_notifications.clear()
+            
             # Get user input
             user_input = input("\nYou: ")
             
@@ -289,6 +304,15 @@ def main():
         print(f"Unexpected error: {e}")
         return 1
     finally:
+        # Display any pending notifications before exit
+        task_notifications = system.get('task_notifications', [])
+        if task_notifications:
+            print("\n" + "-" * 30)
+            print("Pending task notifications:")
+            for notification in task_notifications:
+                print(notification)
+            print("-" * 30)
+            
         # Ensure async task manager is properly shut down
         if 'async_task_manager' in system:
             system['async_task_manager'].shutdown()
