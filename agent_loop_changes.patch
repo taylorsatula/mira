@@ -1,0 +1,158 @@
+diff --git a/conversation.py b/conversation.py
+index 6b768df..96799f8 100644
+--- a/conversation.py
+@@ -124,7 +124,38 @@ class Conversation:
+         else:
+             
+         # Initialize error tracking
+         self.last_error = None
+@@ -208,7 +239,8 @@ class Conversation:
+         temperature: Optional[float] = None,
+         max_tokens: Optional[int] = None,
+         stream: bool = False,
+-        stream_callback: Optional[callable] = None
+     ) -> Union[str, None]:
+         """
+         Generate a response to user input.
+@@ -219,6 +251,7 @@ class Conversation:
+             max_tokens: Optional maximum tokens for the response
+             stream: Whether to stream the response (default: False)
+             stream_callback: Optional callback function for processing streamed tokens
+             
+         Returns:
+             If stream=False: Assistant's response text
+@@ -231,71 +264,83 @@ class Conversation:
+         self.add_message("user", user_input)
+         
+         try:
+-            # Prepare messages for the API
+-            messages = self.get_formatted_messages()
+             
+-            # Initial response generation (potentially streaming)
+-            if stream:
+-                # Streaming mode
+-                def _handle_streaming_response(text_chunk):
+-                    # Call user-provided callback with each chunk
+-                    if stream_callback:
+-                        stream_callback(text_chunk)
+-                
+-                # Stream initial response
+-                response = self.llm_bridge.generate_response(
+-                    messages=messages,
+-                    temperature=temperature,
+-                    max_tokens=max_tokens,
+-                    tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None,
+-                    stream=True,
+-                    callback=_handle_streaming_response
+-                )
+-            else:
+-                # Standard non-streaming mode
+-                response = self.llm_bridge.generate_response(
+-                    messages=messages,
+-                    temperature=temperature,
+-                    max_tokens=max_tokens,
+-                    tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
+-                )
+             
+-            # For stream responses, we need to get the final message from the completed response
+-            # MessageStream objects don't have content directly, need to complete the stream first
+-            if stream and hasattr(response, 'get_final_message'):
+-                final_message = response.get_final_message()
+-                # Use the final_message for content and tool extraction
+-                response = final_message
+             
+-            # Now we can check for tool calls (works for both streaming and non-streaming)
+-            tool_calls = self.llm_bridge.extract_tool_calls(response)
+-            if tool_calls:
+-                # Save the assistant response with the tool use blocks to the conversation
+-                # This is critical - we must add the assistant's message with the tool_use blocks 
+-                # before adding the tool results
+-                # Convert response.content to a serializable format if necessary
+-                # First make sure response has a content attribute
+                 if hasattr(response, 'content'):
+                     content = response.content
+                     if hasattr(content, '__dict__') and not isinstance(content, (str, list, dict)):
+-                        # If response.content is a complex object, convert it to a string representation
+                         content = str(content)
+                 else:
+-                    # Fallback if response doesn't have content attribute
+                     content = str(response)
+                 
+-                assistant_message_with_tools = self.add_message(
+                     "assistant",
+-                    content,  # Store the serializable content
+                     {"has_tool_calls": True}
+                 )
+                 
+                 # Process tool calls
+                 tool_results = self._process_tool_calls(tool_calls)
+                 
+-                # Format tool results as content blocks for a user message
+                 tool_result_blocks = []
+                 for tool_id, tool_result in tool_results.items():
+                     tool_result_blocks.append({
+@@ -305,66 +350,26 @@ class Conversation:
+                         "is_error": tool_result.get("is_error", False)
+                     })
+                 
+-                # Add user message with tool results as content blocks
+-                # Per Anthropic API: tool results must be in a user message with content as an array
+                 self.add_message(
+                     "user", 
+                     tool_result_blocks, 
+                     {"is_tool_result": True}
+                 )
+-                
+-                # Generate a new response with tool results (which may also be streamed)
+-                messages = self.get_formatted_messages()
+-                
+-                if stream:
+-                    # Stream the follow-up response after tool calls
+-                    response = self.llm_bridge.generate_response(
+-                        messages=messages,
+-                        temperature=temperature,
+-                        max_tokens=max_tokens,
+-                        stream=True,
+-                        callback=_handle_streaming_response
+-                    )
+-                    
+-                    # For stream responses, get the final message for content extraction
+-                    if hasattr(response, 'get_final_message'):
+-                        final_message = response.get_final_message()
+-                        response = final_message
+-                else:
+-                    # Standard follow-up response after tool calls
+-                    response = self.llm_bridge.generate_response(
+-                        messages=messages,
+-                        temperature=temperature,
+-                        max_tokens=max_tokens
+-                    )
+             
+-            # For responses without tool calls or for the final response after tool usage
+-            if not tool_calls:
+-                # Extract text content
+-                assistant_response = self.llm_bridge.extract_text_content(response)
+-                
+-                # Add assistant message to conversation
+-                self.add_message("assistant", assistant_response)
+-                
+-                # In streaming mode with callback, the content has already been sent
+-                # to the callback, so we don't need to return it
+-                if stream and stream_callback:
+-                    return None
+-                else:
+-                    return assistant_response
+             else:
+-                # For responses with tool calls, we've already added the assistant message above
+-                # and processed the tool calls, so we can return the text content
+-                assistant_response = self.llm_bridge.extract_text_content(response)
+-                
+-                # In streaming mode with callback, the content has already been sent
+-                # to the callback, so we don't need to return it
+-                if stream and stream_callback:
+-                    return None
+-                else:
+-                    return assistant_response
+         
+         except Exception as e:
+             error_msg = f"Failed to generate response: {e}"

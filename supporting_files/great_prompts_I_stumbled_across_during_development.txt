@@ -1,0 +1,8 @@
+# Code Review
+- "Review your edits. Ultrathink about if they are correctly implemented in the most graceful and accurate way possible. Return a report."
+  ^ Note - This gave me a detailed strengths and weaknesses about each file Claude had worked on. I had recently /clear'd the chat so its only context was what we'd just worked on
+
+
+# Code Generation
+ - Yes it does. I want you to ultrathink about the plan of action and what order you'd implement the functionality in. Provide a detailed report to me.
+  ^ Incredibly detailed and it implements them in the correct order which is crucial when LLMs are predicting the next token. They must have the supporting code ready when they make a function

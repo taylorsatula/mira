@@ -39,17 +39,19 @@
 - **Response Formatting**: Adhere to established response structures and formatting conventions when modifying or adding agent outputs
 
 ## Tool Architecture
-- **Tool Composition**: Favor composing existing tools together over creating new tools; let the LLM handle coordination between tools
-- **Single Responsibility**: Each tool should have a single, well-defined purpose; avoid creating monolithic tools that combine multiple responsibilities
-- **Logic Placement**: Keep business logic in the LLM prompts where possible rather than hardcoding it in tools
-- **Tool Creation Criteria**: Only create new tools when functionality cannot be achieved by combining existing tools or when a composition would be used repeatedly
+- **Tool Composition**: Compose existing tools rather than creating new ones. Example: Combine extraction and persistence tools for preference management instead of building a dedicated tool.
+- **Single Responsibility**: Design tools with focused functionality. Extraction tools should extract, persistence tools should store - separating concerns improves flexibility and reuse.
+- **Logic Placement**: Use system prompts for business logic (like detecting preference statements) rather than hardcoding it in tools. This keeps the codebase cleaner and more adaptable.
+- **Tool Creation Test**: Before creating a new tool, ask: "Can existing tools solve this problem?" Only create new tools when composition is insufficient or a particular combination will be used repeatedly.
 
 ## Continuous Improvement
 - **Self-Reflection**: After completing tasks, reflect on what went well and what could be improved
-- **Pattern Recognition**: Identify recurring success patterns and failure patterns in your solutions
-- **Feedback Integration**: When receiving feedback, document the specific insights and how they apply to future tasks
-- **Solution Alternatives**: For each problem, consider multiple approaches before implementing a solution
-- **Knowledge Persistence**: Update this CLAUDE.md file with new insights and guidelines based on feedback
-- **Solution Simplification**: Periodically review completed solutions to identify unnecessary complexity
-- **Anti-Patterns**: Document approaches to avoid based on past experiences
-- **Learning Transfer**: Apply lessons from one part of the codebase to similar situations elsewhere
+- **Pattern Recognition**: Identify recurring success and failure patterns across different solutions
+- **Feedback Integration**: Convert specific feedback into general principles that guide future work
+- **Solution Alternatives**: Consider multiple approaches before implementation, evaluating tradeoffs
+- **Knowledge Capture**: Proactively update this CLAUDE.md file when discovering significant insights; don't wait for explicit requests to document learnings
+- **Solution Simplification**: Periodically review solutions to identify and eliminate unnecessary complexity
+- **Anti-Patterns**: Document specific approaches to avoid and the contexts where they're problematic
+- **Learning Transfer**: Apply principles across different parts of the codebase, even when contexts appear dissimilar
+- **Guideline Evolution**: Refine guidelines with concrete examples as implementation experience grows
+- **Test Before Commit**: Never commit code changes without verification that they solve the problem; enthusiasm to fix issues shouldn't override testing discipline

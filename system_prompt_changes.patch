@@ -1,0 +1,205 @@
+         if system_prompt:
+             self.system_prompt = system_prompt
+         else:
+-            self.system_prompt = "You are a helpful AI assistant with access to tools."
++            self.system_prompt = """You are a helpful AI assistant with access to tools.
++
++## Available Tool: extract
++Use the extraction tool to analyze and extract information from user messages.
++- Available templates: "general", "personal_info", "keywords", "question", "sentiment", "entities", "food_preferences", "custom"
++- For general template, provide the target information as a parameter
++- For custom template, provide the full extraction prompt as the target parameter
++
++Examples:
++- extract(message="I'm John from New York", template="personal_info")
++- extract(message="Is the weather nice today?", template="question")
++- extract(message="I'm feeling great today!", template="sentiment")
++- extract(message="When was the Declaration of Independence signed?", template="general", target="year")
++
++## Available Tool: persistence
++Use the persistence tool to store and retrieve data:
++- Operations: "get", "set", "delete", "list"
++- Files are stored as JSON in the persistent/ directory
++- Must include .json extension in filename
++
++Examples:
++- persistence(filename="preferences.json", operation="get", key="preferences")
++- persistence(filename="preferences.json", operation="set", key="preferences", value=extracted_data)
++- persistence(filename="user_info.json", operation="list")
++
++## Food Preference Workflow
++When users express food preferences (e.g., "I love rosemary" or "I hate cilantro"), use these specific steps:
++1. Extract: extract(message="user message", template="food_preferences")
++2. Get current preferences: persistence(filename="preferences.json", operation="get", key="preferences")
++3. Update the preferences with new data
++4. Save: persistence(filename="preferences.json", operation="set", key="preferences", value=updated_preferences)
++5. Confirm to user that their preference was saved"""
+             
+         # Initialize error tracking
+         self.last_error = None
+@@ -208,7 +239,8 @@ class Conversation:
+         temperature: Optional[float] = None,
+         max_tokens: Optional[int] = None,
+         stream: bool = False,
+-        stream_callback: Optional[callable] = None
++        stream_callback: Optional[callable] = None,
+--
+-                    system_prompt=self.system_prompt,
+-                    temperature=temperature,
+-                    max_tokens=max_tokens,
+-                    tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None,
+-                    stream=True,
+-                    callback=_handle_streaming_response
+-                )
+-            else:
+-                # Standard non-streaming mode
+-                response = self.llm_bridge.generate_response(
+-                    messages=messages,
+-                    system_prompt=self.system_prompt,
+-                    temperature=temperature,
+-                    max_tokens=max_tokens,
+-                    tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
+-                )
++            # Keep track of the final response for return value
++            final_response = None
+             
+-            # For stream responses, we need to get the final message from the completed response
+-            # MessageStream objects don't have content directly, need to complete the stream first
+-            if stream and hasattr(response, 'get_final_message'):
+-                final_message = response.get_final_message()
+-                # Use the final_message for content and tool extraction
+-                response = final_message
++            # Tool iteration counter
++            tool_iterations = 0
+             
+-            # Now we can check for tool calls (works for both streaming and non-streaming)
+-            tool_calls = self.llm_bridge.extract_tool_calls(response)
+-            if tool_calls:
+-                # Save the assistant response with the tool use blocks to the conversation
+-                # This is critical - we must add the assistant's message with the tool_use blocks 
+-                # before adding the tool results
+-                # Convert response.content to a serializable format if necessary
+-                # First make sure response has a content attribute
++            # Continue processing responses until no more tool calls are made
++            # or we reach the maximum number of iterations
++            while tool_iterations < max_tool_iterations:
++                # Get current messages for the API
++                messages = self.get_formatted_messages()
++                
++                # Generate response (streaming or standard)
++                if stream:
++                    response = self.llm_bridge.generate_response(
++                        messages=messages,
++                        system_prompt=self.system_prompt,
++                        temperature=temperature,
++                        max_tokens=max_tokens,
++                        tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None,
++                        stream=True,
++                        callback=_handle_streaming_response
++                    )
++                    
++                    # For stream responses, get the final message
++                    if hasattr(response, 'get_final_message'):
++                        final_message = response.get_final_message()
++                        response = final_message
++                else:
++                    response = self.llm_bridge.generate_response(
++                        messages=messages,
++                        system_prompt=self.system_prompt,
++                        temperature=temperature,
++                        max_tokens=max_tokens,
++                        tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
++                    )
++                
++                # Extract text content for final return value
++                assistant_response = self.llm_bridge.extract_text_content(response)
++                final_response = assistant_response
++                
++                # Check for tool calls
++                tool_calls = self.llm_bridge.extract_tool_calls(response)
++                
++                # If no tool calls, add the response to conversation and break the loop
++                if not tool_calls:
++                    self.add_message("assistant", assistant_response)
++                    break
++                
++                # Otherwise, process the tool calls and continue the loop
++                tool_iterations += 1
++                self.logger.debug(f"Processing tool iteration {tool_iterations}/{max_tool_iterations}")
++                
++                # Add the assistant's message with tool calls to the conversation
+                 if hasattr(response, 'content'):
+                     content = response.content
+                     if hasattr(content, '__dict__') and not isinstance(content, (str, list, dict)):
+-                        # If response.content is a complex object, convert it to a string representation
+                         content = str(content)
+                 else:
+-                    # Fallback if response doesn't have content attribute
+                     content = str(response)
+                 
+-                assistant_message_with_tools = self.add_message(
++                self.add_message(
+                     "assistant",
+-                    content,  # Store the serializable content
++                    content,
+                     {"has_tool_calls": True}
+                 )
+                 
+                 # Process tool calls
+--
+-                        system_prompt=self.system_prompt,
+-                        temperature=temperature,
+-                        max_tokens=max_tokens,
+-                        stream=True,
+-                        callback=_handle_streaming_response
+-                    )
+-                    
+-                    # For stream responses, get the final message for content extraction
+-                    if hasattr(response, 'get_final_message'):
+-                        final_message = response.get_final_message()
+-                        response = final_message
+-                else:
+-                    # Standard follow-up response after tool calls
+-                    response = self.llm_bridge.generate_response(
+-                        messages=messages,
+-                        system_prompt=self.system_prompt,
+-                        temperature=temperature,
+-                        max_tokens=max_tokens
+-                    )
+             
+-            # For responses without tool calls or for the final response after tool usage
+-            if not tool_calls:
+-                # Extract text content
+-                assistant_response = self.llm_bridge.extract_text_content(response)
+-                
+-                # Add assistant message to conversation
+-                self.add_message("assistant", assistant_response)
+-                
+-                # In streaming mode with callback, the content has already been sent
+-                # to the callback, so we don't need to return it
+-                if stream and stream_callback:
+-                    return None
+-                else:
+-                    return assistant_response
++            # If we've exceeded the maximum iterations, log a warning
++            if tool_iterations >= max_tool_iterations:
++                self.logger.warning(f"Reached maximum tool iterations ({max_tool_iterations})")
++                # Add a final response indicating the limit was reached
++                if final_response:
++                    self.add_message("assistant", 
++                                    f"{final_response}\n\n[Note: Maximum tool iterations reached]")
++            
++            # In streaming mode with callback, return None as content was already sent
++            if stream and stream_callback:
++                return None
+             else:
+-                # For responses with tool calls, we've already added the assistant message above
+-                # and processed the tool calls, so we can return the text content
+-                assistant_response = self.llm_bridge.extract_text_content(response)
+-                
+-                # In streaming mode with callback, the content has already been sent
+-                # to the callback, so we don't need to return it
+-                if stream and stream_callback:
+-                    return None
+-                else:
+-                    return assistant_response

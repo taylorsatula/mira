@@ -1,0 +1,4 @@
+{
+  "food_preferences": "Loves lemons",
+  "preferences": "{\"food_items\": [{\"item\": \"lima beans\",\"sentiment\": \"positive\",\"intensity\": \"moderate\",\"attributes\": []}]}"
+}
