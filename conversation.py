@@ -253,7 +253,14 @@ class Conversation:
                     tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
                 )
             
-            # Check for tool calls (same logic for both streaming and non-streaming)
+            # For stream responses, we need to get the final message from the completed response
+            # MessageStream objects don't have content directly, need to complete the stream first
+            if stream and hasattr(response, 'get_final_message'):
+                final_message = response.get_final_message()
+                # Use the final_message for content and tool extraction
+                response = final_message
+            
+            # Now we can check for tool calls (works for both streaming and non-streaming)
             tool_calls = self.llm_bridge.extract_tool_calls(response)
             if tool_calls:
                 # Save the assistant response with the tool use blocks to the conversation
@@ -299,6 +306,11 @@ class Conversation:
                         stream=True,
                         callback=_handle_streaming_response
                     )
+                    
+                    # For stream responses, get the final message for content extraction
+                    if hasattr(response, 'get_final_message'):
+                        final_message = response.get_final_message()
+                        response = final_message
                 else:
                     # Standard follow-up response after tool calls
                     response = self.llm_bridge.generate_response(

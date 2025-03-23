@@ -243,7 +243,12 @@ class LLMBridge:
                 # Make the API call
                 if stream:
                     # Stream mode - return the stream or process with callback
-                    stream_response = self.client.messages.stream(**params)
+                    # Remove 'stream' param since it's not needed for stream() method
+                    stream_params = params.copy()
+                    if 'stream' in stream_params:
+                        del stream_params['stream']
+                    
+                    stream_response = self.client.messages.stream(**stream_params)
                     
                     if callback:
                         # Process stream with callback
@@ -324,21 +329,26 @@ class LLMBridge:
         # Log at debug level - sanitize or truncate if needed
         self.logger.debug(f"API Response received: {type(response)}")
     
-    def extract_text_content(self, response: Dict[str, Any]) -> str:
+    def extract_text_content(self, response: Any) -> str:
         """
         Extract text content from an Anthropic API response.
         
         Args:
-            response: API response dictionary
+            response: API response (could be a standard Message or a MessageStream.message)
             
         Returns:
             Extracted text content from all text blocks
         """
         text_content = []
         
+        # First check if we have a content attribute
+        if not hasattr(response, 'content'):
+            self.logger.warning("Response has no content attribute")
+            return ""
+            
         # Process all content blocks to extract text
         for content_block in response.content:
-            if content_block.type == "text":
+            if hasattr(content_block, 'type') and content_block.type == "text":
                 text_content.append(content_block.text)
             elif hasattr(content_block, 'text'):  # Fallback for other content types with text
                 text_content.append(content_block.text)
@@ -353,21 +363,26 @@ class LLMBridge:
             
         return " ".join(text_content).strip()
     
-    def extract_tool_calls(self, response: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def extract_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
         """
         Extract tool calls from an Anthropic API response.
         
         Args:
-            response: API response dictionary
+            response: API response (could be a standard Message or a MessageStream.message)
             
         Returns:
             List of tool call objects
         """
         tool_calls = []
         
+        # First check if we have a content attribute
+        if not hasattr(response, 'content'):
+            self.logger.warning("Response has no content attribute")
+            return []
+        
         # Process all content blocks in the response
         for content_block in response.content:
-            if content_block.type == "tool_use":
+            if hasattr(content_block, 'type') and content_block.type == "tool_use":
                 tool_calls.append({
                     "id": content_block.id,
                     "tool_name": content_block.name,

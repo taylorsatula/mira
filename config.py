@@ -30,6 +30,7 @@ class Config:
     DEFAULT_CONFIG = {
         "log_level": "INFO",
         "data_dir": "data",
+        "streaming": True,  # Enable streaming responses by default
         "api": {
             "model": "claude-3-7-sonnet-20250219",
             "max_tokens": 1000,

@@ -42,11 +42,21 @@ def parse_arguments():
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
         help='Set the logging level'
     )
-    parser.add_argument(
+    stream_group = parser.add_mutually_exclusive_group()
+    stream_group.add_argument(
         '--stream',
         action='store_true',
+        dest='stream_mode',
         help='Enable streaming mode for responses'
     )
+    stream_group.add_argument(
+        '--no-stream',
+        action='store_false',
+        dest='stream_mode',
+        help='Disable streaming mode for responses'
+    )
+    # Default is None so we know if the user specified an option or not
+    parser.set_defaults(stream_mode=None)
     return parser.parse_args()
 
 
@@ -248,9 +258,12 @@ def main():
     # Initialize the system
     system = initialize_system(args)
     
-    # Run in interactive mode with streaming if requested
+    # Determine streaming mode: use command-line flag if provided, otherwise use config
+    stream_mode = args.stream_mode if args.stream_mode is not None else config.get("streaming", False)
+    
+    # Run in interactive mode with appropriate streaming setting
     try:
-        interactive_mode(system, stream_mode=args.stream)
+        interactive_mode(system, stream_mode=stream_mode)
     except Exception as e:
         logging.exception("Unexpected error in main loop")
         print(f"Unexpected error: {e}")
