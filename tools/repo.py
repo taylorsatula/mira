@@ -149,7 +149,11 @@ class ToolRepository:
         """
         self.logger = logging.getLogger("tool_repo")
         self.tools_package = tools_package
-        self.tools: Dict[str, Type[Tool]] = {}
+        # Store both tool classes and instances
+        self.tools: Dict[str, Union[Type[Tool], Tool]] = {}
+        
+        # Track whether each entry is an instance or a class
+        self.tool_instances: Dict[str, bool] = {}
         
         # Discover and register tools
         self.discover_tools()
@@ -193,34 +197,42 @@ class ToolRepository:
         except Exception as e:
             self.logger.error(f"Error discovering tools: {e}")
     
-    def register_tool(self, tool_class: Type[Tool]) -> None:
+    def register_tool(self, tool: Union[Type[Tool], Tool]) -> None:
         """
-        Register a tool class in the repository.
+        Register a tool class or instance in the repository.
         
         Args:
-            tool_class: Tool class to register
+            tool: Tool class or instance to register
         """
-        # Validate the tool class
-        if not hasattr(tool_class, "name") or not tool_class.name:
-            self.logger.warning(f"Skipping tool class {tool_class.__name__} with missing name")
+        # Check if it's an instance or a class
+        is_instance = not inspect.isclass(tool)
+        
+        # Get the tool name
+        tool_name = getattr(tool, "name", None)
+        
+        # Validate the tool
+        if not tool_name:
+            class_name = tool.__class__.__name__ if is_instance else tool.__name__
+            self.logger.warning(f"Skipping tool {class_name} with missing name")
             return
         
-        if tool_class.name in self.tools:
-            self.logger.warning(f"Tool with name '{tool_class.name}' already registered, overwriting")
+        if tool_name in self.tools:
+            self.logger.warning(f"Tool with name '{tool_name}' already registered, overwriting")
         
         # Register the tool
-        self.tools[tool_class.name] = tool_class
-        self.logger.debug(f"Registered tool: {tool_class.name}")
+        self.tools[tool_name] = tool
+        self.tool_instances[tool_name] = is_instance
+        self.logger.debug(f"Registered tool: {tool_name} ({'instance' if is_instance else 'class'})")
     
-    def get_tool(self, tool_name: str) -> Optional[Type[Tool]]:
+    def get_tool(self, tool_name: str) -> Optional[Union[Type[Tool], Tool]]:
         """
-        Get a tool class by name.
+        Get a tool class or instance by name.
         
         Args:
             tool_name: Name of the tool to get
             
         Returns:
-            Tool class or None if not found
+            Tool class, tool instance, or None if not found
         """
         return self.tools.get(tool_name)
     
@@ -231,7 +243,17 @@ class ToolRepository:
         Returns:
             List of tool definitions
         """
-        return [tool_class.get_tool_definition() for tool_class in self.tools.values()]
+        definitions = []
+        for tool_name, tool in self.tools.items():
+            # Handle both classes and instances
+            is_instance = self.tool_instances.get(tool_name, False)
+            if is_instance:
+                # Get definition from instance method
+                definitions.append(tool.get_tool_definition())
+            else:
+                # Get definition from class method
+                definitions.append(tool.get_tool_definition())
+        return definitions
     
     def invoke_tool(self, tool_name: str, tool_params: Dict[str, Any]) -> Any:
         """
@@ -247,17 +269,24 @@ class ToolRepository:
         Raises:
             ToolError: If the tool is not found or execution fails
         """
-        # Get the tool class
-        tool_class = self.get_tool(tool_name)
-        if not tool_class:
+        # Get the tool class or instance
+        tool = self.get_tool(tool_name)
+        if not tool:
             raise ToolError(
                 f"Tool not found: {tool_name}",
                 ErrorCode.TOOL_NOT_FOUND
             )
         
         try:
-            # Create an instance of the tool
-            tool_instance = tool_class()
+            # Determine if this is an instance or class
+            is_instance = self.tool_instances.get(tool_name, False)
+            
+            if is_instance:
+                # If it's already an instance, use it directly
+                tool_instance = tool
+            else:
+                # If it's a class, create an instance
+                tool_instance = tool()
             
             # Run the tool with the provided parameters
             result = tool_instance.run(**tool_params)

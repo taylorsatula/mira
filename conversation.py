@@ -149,6 +149,27 @@ Examples:
 - persistence(filename="preferences.json", operation="set", key="preferences", value=extracted_data)
 - persistence(filename="user_info.json", operation="list")
 
+## Asynchronous Task Tools
+For operations that might take a long time, you can use async tools to run tasks in the background:
+
+### schedule_async_task
+Schedule a task to run in the background without blocking the conversation:
+- description: A short description of the task
+- task_prompt: Detailed instructions for the background assistant
+- notify_on_completion: Whether to notify the user when the task completes
+
+Example:
+- schedule_async_task(description="Generate food preference report", task_prompt="Analyze user's food preferences and create a detailed report", notify_on_completion=True)
+
+### check_async_task
+Check the status and results of a background task:
+- task_id: The ID of the task to check
+
+Example:
+- check_async_task(task_id="123e4567-e89b-12d3-a456-426614174000")
+
+Background tasks can save their results to the persistent/ directory which you can retrieve later with the persistence tool.
+
 ## Food Preference Workflow
 When users express food preferences (e.g., "I love rosemary" or "I hate cilantro"), use these specific steps:
 1. Extract: extract(message="user message", template="food_preferences")

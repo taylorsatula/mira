@@ -15,6 +15,8 @@ from config import config
 from errors import handle_error, AgentError
 from api.llm_bridge import LLMBridge
 from tools.repo import ToolRepository
+from tools.async_manager import AsyncTaskManager
+from tools.async_tools import ScheduleAsyncTaskTool, CheckAsyncTaskTool
 from conversation import Conversation
 from crud import FileOperations
 
@@ -115,6 +117,22 @@ def initialize_system(args) -> Dict[str, Any]:
         # Initialize tool repository
         tool_repo = ToolRepository()
         
+        # Initialize async task manager
+        async_task_manager = AsyncTaskManager(tool_repo=tool_repo, llm_bridge=llm_bridge)
+        
+        # Register async tools with the task manager
+        tool_repo.register_tool(ScheduleAsyncTaskTool(task_manager=async_task_manager))
+        tool_repo.register_tool(CheckAsyncTaskTool(task_manager=async_task_manager))
+        
+        # Setup notification callback for async tasks
+        def notify_task_completion(task):
+            # This will be called when an async task completes if notify_on_completion is True
+            logging.info(f"Task completed: {task.task_id} - {task.description}")
+            # In a real implementation, you might want to add this to a notification queue
+            # that the conversation loop checks periodically
+        
+        async_task_manager.set_notification_callback(notify_task_completion)
+        
         # Initialize or load conversation
         if args.conversation:
             try:
@@ -145,6 +163,7 @@ def initialize_system(args) -> Dict[str, Any]:
             'file_ops': file_ops,
             'llm_bridge': llm_bridge,
             'tool_repo': tool_repo,
+            'async_task_manager': async_task_manager,
             'conversation': conversation
         }
     
@@ -186,6 +205,7 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
     """
     conversation = system['conversation']
     file_ops = system['file_ops']
+    async_task_manager = system['async_task_manager']
     
     print("\nAI Agent System - Interactive Mode")
     print(f"Conversation ID: {conversation.conversation_id}")
@@ -268,6 +288,11 @@ def main():
         logging.exception("Unexpected error in main loop")
         print(f"Unexpected error: {e}")
         return 1
+    finally:
+        # Ensure async task manager is properly shut down
+        if 'async_task_manager' in system:
+            system['async_task_manager'].shutdown()
+            logging.info("Async task manager has been shut down")
     
     return 0
 
