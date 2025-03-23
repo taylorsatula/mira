@@ -55,3 +55,12 @@
 - **Learning Transfer**: Apply principles across different parts of the codebase, even when contexts appear dissimilar
 - **Guideline Evolution**: Refine guidelines with concrete examples as implementation experience grows
 - **Test Before Commit**: Never commit code changes without verification that they solve the problem; enthusiasm to fix issues shouldn't override testing discipline
+
+## Effective Problem-Solving
+- **Root Cause Analysis**: Focus on understanding underlying issues rather than addressing surface symptoms
+- **Leverage Built-in Capabilities**: Use language/framework introspection and reflection for automatic pattern detection
+- **Lifecycle Management**: Separate object lifecycle phases (creation, initialization, usage) for cleaner architecture
+- **Incremental Enhancement**: Build upon existing patterns rather than introducing completely new approaches
+- **Minimal Design**: Add just enough abstraction to solve both immediate issues and support future changes
+- **Generic Solutions**: Design solutions for the general case that can handle variations of the same problem
+- **Dependency Management**: Use proper dependency management patterns to reduce coupling between components
