@@ -30,7 +30,29 @@ Return only the extracted information in JSON format with appropriate keys.""",
     
     "sentiment": "Analyze the sentiment of this message. Return only one word: positive, negative, or neutral.",
     
-    "entities": "Extract named entities (people, places, organizations, products) from the message. Return only the entities in JSON format with appropriate type labels."
+    "entities": "Extract named entities (people, places, organizations, products) from the message. Return only the entities in JSON format with appropriate type labels.",
+    
+    "food_preferences": """Extract food preference information from this statement. Identify:
+
+1. Food item(s) being mentioned (return as a list if multiple items)
+2. Sentiment towards each item (positive, negative, or neutral)
+3. Intensity (mild, moderate, strong) if expressed
+4. Any specific attributes mentioned (e.g., texture, flavor, spiciness)
+
+Return as JSON with these fields:
+{
+  "food_items": [
+    {
+      "item": "food name",
+      "sentiment": "positive/negative/neutral",
+      "intensity": "mild/moderate/strong",
+      "attributes": ["crispy", "spicy", etc]
+    }
+  ]
+}
+
+If no food items are mentioned, return {"food_items": []}.
+Ensure all food items identified are actual food, not metaphors or non-food items."""
 }
 
 
