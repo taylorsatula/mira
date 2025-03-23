@@ -197,8 +197,10 @@ class Conversation:
         self,
         user_input: str,
         temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None
-    ) -> str:
+        max_tokens: Optional[int] = None,
+        stream: bool = False,
+        stream_callback: Optional[callable] = None
+    ) -> Union[str, None]:
         """
         Generate a response to user input.
         
@@ -206,9 +208,12 @@ class Conversation:
             user_input: User input text
             temperature: Optional temperature parameter
             max_tokens: Optional maximum tokens for the response
+            stream: Whether to stream the response (default: False)
+            stream_callback: Optional callback function for processing streamed tokens
             
         Returns:
-            Assistant's response text
+            If stream=False: Assistant's response text
+            If stream=True with callback: None (results sent to callback)
             
         Raises:
             ConversationError: If response generation fails
@@ -220,16 +225,35 @@ class Conversation:
             # Prepare messages for the API
             messages = self.get_formatted_messages()
             
-            # Generate response
-            response = self.llm_bridge.generate_response(
-                messages=messages,
-                system_prompt=self.system_prompt,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
-            )
+            # Initial response generation (potentially streaming)
+            if stream:
+                # Streaming mode
+                def _handle_streaming_response(text_chunk):
+                    # Call user-provided callback with each chunk
+                    if stream_callback:
+                        stream_callback(text_chunk)
+                
+                # Stream initial response
+                response = self.llm_bridge.generate_response(
+                    messages=messages,
+                    system_prompt=self.system_prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None,
+                    stream=True,
+                    callback=_handle_streaming_response
+                )
+            else:
+                # Standard non-streaming mode
+                response = self.llm_bridge.generate_response(
+                    messages=messages,
+                    system_prompt=self.system_prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
+                )
             
-            # Check for tool calls
+            # Check for tool calls (same logic for both streaming and non-streaming)
             tool_calls = self.llm_bridge.extract_tool_calls(response)
             if tool_calls:
                 # Save the assistant response with the tool use blocks to the conversation
@@ -262,14 +286,27 @@ class Conversation:
                     {"is_tool_result": True}
                 )
                 
-                # Generate a new response with tool results
+                # Generate a new response with tool results (which may also be streamed)
                 messages = self.get_formatted_messages()
-                response = self.llm_bridge.generate_response(
-                    messages=messages,
-                    system_prompt=self.system_prompt,
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
+                
+                if stream:
+                    # Stream the follow-up response after tool calls
+                    response = self.llm_bridge.generate_response(
+                        messages=messages,
+                        system_prompt=self.system_prompt,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        stream=True,
+                        callback=_handle_streaming_response
+                    )
+                else:
+                    # Standard follow-up response after tool calls
+                    response = self.llm_bridge.generate_response(
+                        messages=messages,
+                        system_prompt=self.system_prompt,
+                        temperature=temperature,
+                        max_tokens=max_tokens
+                    )
             
             # For responses without tool calls or for the final response after tool usage
             if not tool_calls:
@@ -279,12 +316,23 @@ class Conversation:
                 # Add assistant message to conversation
                 self.add_message("assistant", assistant_response)
                 
-                return assistant_response
+                # In streaming mode with callback, the content has already been sent
+                # to the callback, so we don't need to return it
+                if stream and stream_callback:
+                    return None
+                else:
+                    return assistant_response
             else:
                 # For responses with tool calls, we've already added the assistant message above
                 # and processed the tool calls, so we can return the text content
                 assistant_response = self.llm_bridge.extract_text_content(response)
-                return assistant_response
+                
+                # In streaming mode with callback, the content has already been sent
+                # to the callback, so we don't need to return it
+                if stream and stream_callback:
+                    return None
+                else:
+                    return assistant_response
         
         except Exception as e:
             error_msg = f"Failed to generate response: {e}"

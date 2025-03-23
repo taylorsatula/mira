@@ -42,6 +42,11 @@ def parse_arguments():
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
         help='Set the logging level'
     )
+    parser.add_argument(
+        '--stream',
+        action='store_true',
+        help='Enable streaming mode for responses'
+    )
     return parser.parse_args()
 
 
@@ -161,22 +166,28 @@ def save_conversation(file_ops: FileOperations, conversation: Conversation) -> N
         print(f"Error saving conversation: {e}")
 
 
-def interactive_mode(system: Dict[str, Any]) -> None:
+def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
     """
     Run the system in interactive mode.
     
     Args:
         system: Dictionary of system components
+        stream_mode: Whether to enable streaming responses
     """
     conversation = system['conversation']
     file_ops = system['file_ops']
     
     print("\nAI Agent System - Interactive Mode")
     print(f"Conversation ID: {conversation.conversation_id}")
+    print(f"Streaming mode: {'Enabled' if stream_mode else 'Disabled'}")
     print("Type 'exit' or 'quit' to end the session")
     print("Type 'save' to save the conversation")
     print("Type 'clear' to clear the conversation history")
     print("-" * 50)
+    
+    def print_token(token: str):
+        """Print token by token for streaming effect."""
+        print(token, end="", flush=True)
     
     while True:
         try:
@@ -201,8 +212,19 @@ def interactive_mode(system: Dict[str, Any]) -> None:
             
             # Generate response
             print("\nAssistant: ", end="", flush=True)
-            response = conversation.generate_response(user_input)
-            print(response)
+            
+            if stream_mode:
+                # Streaming mode - tokens are printed via callback
+                conversation.generate_response(
+                    user_input,
+                    stream=True, 
+                    stream_callback=print_token
+                )
+                print()  # Add newline after streaming completes
+            else:
+                # Standard mode - print full response at once
+                response = conversation.generate_response(user_input)
+                print(response)
             
         except KeyboardInterrupt:
             print("\nInterrupted. Saving conversation...")
@@ -226,9 +248,9 @@ def main():
     # Initialize the system
     system = initialize_system(args)
     
-    # Run in interactive mode
+    # Run in interactive mode with streaming if requested
     try:
-        interactive_mode(system)
+        interactive_mode(system, stream_mode=args.stream)
     except Exception as e:
         logging.exception("Unexpected error in main loop")
         print(f"Unexpected error: {e}")

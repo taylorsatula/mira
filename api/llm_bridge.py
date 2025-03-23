@@ -186,8 +186,10 @@ class LLMBridge:
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        tools: Optional[List[Dict[str, Any]]] = None
-    ) -> Dict[str, Any]:
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream: bool = False,
+        callback: Optional[callable] = None
+    ) -> Union[Dict[str, Any], Any]:
         """
         Generate a response from the LLM.
         
@@ -197,9 +199,12 @@ class LLMBridge:
             temperature: Optional temperature parameter (0.0 to 1.0)
             max_tokens: Optional maximum tokens for the response
             tools: Optional list of tool definitions
+            stream: Whether to stream the response (default: False)
+            callback: Optional callback function to process streaming chunks
             
         Returns:
-            API response as a dictionary
+            If stream=False: API response as a dictionary
+            If stream=True: A stream object to be processed
             
         Raises:
             APIError: If the API request fails
@@ -228,16 +233,33 @@ class LLMBridge:
                 if tools:
                     params["tools"] = tools
                 
+                # Add streaming parameter if requested
+                if stream:
+                    params["stream"] = True
+                
                 # Log the request (sanitized for security)
                 self._log_request(params)
                 
                 # Make the API call
-                response = self.client.messages.create(**params)
-                
-                # Log the response
-                self._log_response(response)
-                
-                return response
+                if stream:
+                    # Stream mode - return the stream or process with callback
+                    stream_response = self.client.messages.stream(**params)
+                    
+                    if callback:
+                        # Process stream with callback
+                        return self._process_stream_with_callback(stream_response, callback)
+                    else:
+                        # Return stream directly
+                        self.logger.debug("Returning stream object directly")
+                        return stream_response
+                else:
+                    # Normal mode - make regular API call
+                    response = self.client.messages.create(**params)
+                    
+                    # Log the response
+                    self._log_response(response)
+                    
+                    return response
             
             except Exception as e:
                 self._handle_api_error(e, attempt)
@@ -247,6 +269,37 @@ class LLMBridge:
             "Failed to generate response after all retry attempts",
             ErrorCode.API_RESPONSE_ERROR
         )
+        
+    def _process_stream_with_callback(self, stream, callback):
+        """
+        Process a streaming response with a callback function.
+        
+        Args:
+            stream: The streaming response from Anthropic API
+            callback: A callback function to process each chunk
+            
+        Returns:
+            The final complete response
+        """
+        try:
+            final_response = None
+            
+            with stream as response:
+                # Store the final response for later
+                final_response = response
+                
+                # Process each text chunk with the callback
+                for text in response.text_stream:
+                    callback(text)
+            
+            return final_response
+            
+        except Exception as e:
+            self.logger.error(f"Error processing stream: {e}")
+            raise APIError(
+                f"Stream processing error: {e}",
+                ErrorCode.API_RESPONSE_ERROR
+            )
     
     def _log_request(self, params: Dict[str, Any]) -> None:
         """
