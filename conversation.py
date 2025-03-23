@@ -281,6 +281,12 @@ When users express food preferences (e.g., "I love rosemary" or "I hate cilantro
         Raises:
             ConversationError: If response generation fails
         """
+        # Check for empty input
+        if not user_input or user_input.strip() == "":
+            error_msg = "Empty message content is not allowed"
+            self.logger.warning(error_msg)
+            raise ConversationError(error_msg, ErrorCode.INVALID_INPUT)
+            
         # Add user message to conversation
         self.add_message("user", user_input)
         

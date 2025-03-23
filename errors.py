@@ -49,6 +49,7 @@ class ErrorCode(Enum):
     # Conversation errors (5xx)
     CONVERSATION_NOT_FOUND = 501
     CONTEXT_OVERFLOW = 502
+    INVALID_INPUT = 503
     
     # Stimulus errors (6xx)
     STIMULUS_INVALID = 601
