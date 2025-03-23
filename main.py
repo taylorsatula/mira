@@ -1,0 +1,241 @@
+"""
+Main entry point for the AI agent system.
+
+This module handles central control flow, system initialization,
+and provides a clean, readable entry point with minimal complexity.
+"""
+import argparse
+import logging
+import os
+import sys
+from pathlib import Path
+from typing import Dict, Any, Optional
+
+from config import config
+from errors import handle_error, AgentError
+from api.llm_bridge import LLMBridge
+from tools.repo import ToolRepository
+from conversation import Conversation
+from crud import FileOperations
+
+
+def parse_arguments():
+    """
+    Parse command line arguments.
+    
+    Returns:
+        Parsed arguments
+    """
+    parser = argparse.ArgumentParser(description='AI Agent System')
+    parser.add_argument(
+        '--config', '-c',
+        type=str,
+        help='Path to configuration file'
+    )
+    parser.add_argument(
+        '--conversation', '-id',
+        type=str,
+        help='Conversation ID to load'
+    )
+    parser.add_argument(
+        '--log-level',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+        help='Set the logging level'
+    )
+    return parser.parse_args()
+
+
+def setup_logging(log_level: Optional[str] = None) -> None:
+    """
+    Set up logging configuration.
+    
+    Args:
+        log_level: Optional override for the log level
+    """
+    level = log_level or config.get('log_level', 'INFO')
+    logging.basicConfig(
+        level=getattr(logging, level),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+
+
+def initialize_system(args) -> Dict[str, Any]:
+    """
+    Initialize the AI agent system.
+    
+    Args:
+        args: Command line arguments
+        
+    Returns:
+        Dictionary of system components
+    """
+    # Initialize logger
+    logger = logging.getLogger("main")
+    logger.info("Initializing AI agent system")
+    
+    # Initialize components
+    try:
+        # Override config with command line arguments
+        if args.config:
+            from config import Config
+            config_instance = Config(args.config)
+        
+        # Set up logging level
+        if args.log_level:
+            setup_logging(args.log_level)
+        
+        # Initialize data directory
+        data_dir = Path(config.get('data_dir', 'data'))
+        os.makedirs(data_dir, exist_ok=True)
+        
+        # Initialize file operations
+        file_ops = FileOperations(data_dir)
+        
+        # Initialize LLM bridge
+        llm_bridge = LLMBridge()
+        
+        # Initialize tool repository
+        tool_repo = ToolRepository()
+        
+        # Initialize or load conversation
+        if args.conversation:
+            try:
+                conversation_data = file_ops.read(f"conversation_{args.conversation}")
+                conversation = Conversation.from_dict(
+                    conversation_data,
+                    llm_bridge=llm_bridge,
+                    tool_repo=tool_repo
+                )
+                logger.info(f"Loaded conversation: {conversation.conversation_id}")
+            except Exception as e:
+                logger.error(f"Failed to load conversation: {e}")
+                conversation = Conversation(
+                    conversation_id=args.conversation,
+                    llm_bridge=llm_bridge,
+                    tool_repo=tool_repo
+                )
+        else:
+            conversation = Conversation(
+                llm_bridge=llm_bridge,
+                tool_repo=tool_repo
+            )
+        
+        logger.info(f"System initialized with conversation ID: {conversation.conversation_id}")
+        
+        # Return system components
+        return {
+            'file_ops': file_ops,
+            'llm_bridge': llm_bridge,
+            'tool_repo': tool_repo,
+            'conversation': conversation
+        }
+    
+    except AgentError as e:
+        logger.error(f"Initialization error: {e}")
+        print(f"Error: {e}")
+        sys.exit(1)
+    
+    except Exception as e:
+        logger.error(f"Unexpected error during initialization: {e}")
+        print(f"Unexpected error: {e}")
+        sys.exit(1)
+
+
+def save_conversation(file_ops: FileOperations, conversation: Conversation) -> None:
+    """
+    Save the current conversation to a file.
+    
+    Args:
+        file_ops: File operations handler
+        conversation: Conversation to save
+    """
+    try:
+        conversation_data = conversation.to_dict()
+        file_ops.write(f"conversation_{conversation.conversation_id}", conversation_data)
+        logging.info(f"Saved conversation: {conversation.conversation_id}")
+    except Exception as e:
+        logging.error(f"Failed to save conversation: {e}")
+        print(f"Error saving conversation: {e}")
+
+
+def interactive_mode(system: Dict[str, Any]) -> None:
+    """
+    Run the system in interactive mode.
+    
+    Args:
+        system: Dictionary of system components
+    """
+    conversation = system['conversation']
+    file_ops = system['file_ops']
+    
+    print("\nAI Agent System - Interactive Mode")
+    print(f"Conversation ID: {conversation.conversation_id}")
+    print("Type 'exit' or 'quit' to end the session")
+    print("Type 'save' to save the conversation")
+    print("Type 'clear' to clear the conversation history")
+    print("-" * 50)
+    
+    while True:
+        try:
+            # Get user input
+            user_input = input("\nYou: ")
+            
+            # Check for commands
+            if user_input.lower() in ['exit', 'quit']:
+                save_conversation(file_ops, conversation)
+                print("Goodbye!")
+                break
+            
+            elif user_input.lower() == 'save':
+                save_conversation(file_ops, conversation)
+                print("Conversation saved.")
+                continue
+            
+            elif user_input.lower() == 'clear':
+                conversation.clear_history()
+                print("Conversation history cleared.")
+                continue
+            
+            # Generate response
+            print("\nAssistant: ", end="", flush=True)
+            response = conversation.generate_response(user_input)
+            print(response)
+            
+        except KeyboardInterrupt:
+            print("\nInterrupted. Saving conversation...")
+            save_conversation(file_ops, conversation)
+            print("Goodbye!")
+            break
+        
+        except Exception as e:
+            error_message = handle_error(e)
+            print(f"\nError: {error_message}")
+
+
+def main():
+    """Main entry point for the application."""
+    # Parse command line arguments
+    args = parse_arguments()
+    
+    # Set up logging
+    setup_logging(args.log_level)
+    
+    # Initialize the system
+    system = initialize_system(args)
+    
+    # Run in interactive mode
+    try:
+        interactive_mode(system)
+    except Exception as e:
+        logging.exception("Unexpected error in main loop")
+        print(f"Unexpected error: {e}")
+        return 1
+    
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
