@@ -41,9 +41,18 @@ class Message:
         Returns:
             Dictionary representation of the message
         """
+        # Handle complex content objects like TextBlock by converting to string
+        content = self.content
+        if not isinstance(content, (str, list, dict)) and hasattr(content, '__dict__'):
+            # Convert non-serializable objects to string representation
+            content = str(content)
+        elif isinstance(content, list) and any(not isinstance(item, (str, int, float, bool, dict, list, type(None))) for item in content):
+            # Handle list of complex objects
+            content = [str(item) if not isinstance(item, (str, int, float, bool, dict, list, type(None))) else item for item in content]
+        
         return {
             "role": self.role,
-            "content": self.content,
+            "content": content,
             "id": self.id,
             "created_at": self.created_at,
             "metadata": self.metadata
@@ -266,9 +275,20 @@ class Conversation:
                 # Save the assistant response with the tool use blocks to the conversation
                 # This is critical - we must add the assistant's message with the tool_use blocks 
                 # before adding the tool results
+                # Convert response.content to a serializable format if necessary
+                # First make sure response has a content attribute
+                if hasattr(response, 'content'):
+                    content = response.content
+                    if hasattr(content, '__dict__') and not isinstance(content, (str, list, dict)):
+                        # If response.content is a complex object, convert it to a string representation
+                        content = str(content)
+                else:
+                    # Fallback if response doesn't have content attribute
+                    content = str(response)
+                
                 assistant_message_with_tools = self.add_message(
                     "assistant",
-                    response.content,  # Store the full content including tool_use blocks
+                    content,  # Store the serializable content
                     {"has_tool_calls": True}
                 )
                 
