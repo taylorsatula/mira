@@ -32,12 +32,12 @@ class ScheduleAsyncTaskTool(Tool):
         }
     ]
     
-    def __init__(self, task_manager: Optional[AsyncTaskManager] = None):
+    def __init__(self, task_manager: AsyncTaskManager):
         """
         Initialize the schedule async task tool.
         
         Args:
-            task_manager: Async task manager instance
+            task_manager: Async task manager instance (required)
         """
         super().__init__()
         self.task_manager = task_manager
@@ -62,11 +62,6 @@ class ScheduleAsyncTaskTool(Tool):
         Raises:
             ToolError: If scheduling fails
         """
-        if not self.task_manager:
-            raise ToolError(
-                "Async task manager not initialized",
-                ErrorCode.TOOL_EXECUTION_ERROR
-            )
         
         try:
             task_id = self.task_manager.schedule_task(
@@ -105,12 +100,12 @@ class CheckAsyncTaskTool(Tool):
         }
     ]
     
-    def __init__(self, task_manager: Optional[AsyncTaskManager] = None):
+    def __init__(self, task_manager: AsyncTaskManager):
         """
         Initialize the check async task tool.
         
         Args:
-            task_manager: Async task manager instance
+            task_manager: Async task manager instance (required)
         """
         super().__init__()
         self.task_manager = task_manager
@@ -128,11 +123,6 @@ class CheckAsyncTaskTool(Tool):
         Raises:
             ToolError: If the task is not found or checking fails
         """
-        if not self.task_manager:
-            raise ToolError(
-                "Async task manager not initialized",
-                ErrorCode.TOOL_EXECUTION_ERROR
-            )
         
         try:
             task_status = self.task_manager.get_task_status(task_id)

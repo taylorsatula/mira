@@ -117,7 +117,7 @@ def test_async_task_execution(async_task_manager):
 
 def test_schedule_async_task_tool(async_task_manager):
     """Test the ScheduleAsyncTaskTool."""
-    # Create the tool
+    # Create the tool with required task_manager
     schedule_tool = ScheduleAsyncTaskTool(task_manager=async_task_manager)
     
     # Run the tool
@@ -141,7 +141,7 @@ def test_check_async_task_tool(async_task_manager):
         notify_on_completion=False
     )
     
-    # Create the check tool
+    # Create the check tool with required task_manager
     check_tool = CheckAsyncTaskTool(task_manager=async_task_manager)
     
     # Run the tool
@@ -155,7 +155,7 @@ def test_check_async_task_tool(async_task_manager):
 
 def test_check_nonexistent_task(async_task_manager):
     """Test checking a nonexistent task."""
-    # Create the check tool
+    # Create the check tool with required task_manager
     check_tool = CheckAsyncTaskTool(task_manager=async_task_manager)
     
     # Attempt to check nonexistent task
