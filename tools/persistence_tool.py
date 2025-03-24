@@ -38,8 +38,14 @@ class PersistenceTool(Tool):
     def __init__(self):
         """Initialize the persistence tool."""
         super().__init__()
+        self.logger = logging.getLogger("persistence_tool")
         self.base_dir = Path(__file__).parent.parent / "persistent"
         self.base_dir.mkdir(exist_ok=True)
+        
+        # Create async_results directory if it doesn't exist
+        async_results_dir = self.base_dir / "async_results"
+        async_results_dir.mkdir(exist_ok=True)
+        self.logger.info(f"Persistence tool initialized with base dir: {self.base_dir}")
     
     def run(
         self, 
@@ -66,6 +72,10 @@ class PersistenceTool(Tool):
         # Ensure filename has .json extension
         if not filename.endswith('.json'):
             filename = f"{filename}.json"
+        
+        # Remove 'persistent/' prefix if present to prevent double nesting
+        if filename.startswith('persistent/'):
+            filename = filename[len('persistent/'):]
         
         # Validate operation
         valid_operations = ["get", "set", "delete", "list"]
@@ -199,6 +209,9 @@ class PersistenceTool(Tool):
             Dictionary with operation result
         """
         try:
+            # Log the file path being used
+            self.logger.info(f"Setting value in file: {file_path} with key: {key}")
+            
             # Load existing data or create empty dict if file doesn't exist
             data = {}
             if file_path.exists():
@@ -210,9 +223,11 @@ class PersistenceTool(Tool):
             # Save updated data
             self._save_data(file_path, data)
             
+            self.logger.info(f"Successfully saved data to {file_path}")
             return {"success": True, "message": "Data stored successfully"}
         
         except Exception as e:
+            self.logger.error(f"Failed to store data in {file_path}: {str(e)}")
             return {"success": False, "message": f"Failed to store data: {str(e)}"}
     
     def _delete_value(self, file_path: Path, key: str) -> Dict[str, Any]:

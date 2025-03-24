@@ -1,0 +1,3 @@
+{
+  "result": "{'location': 'New York City', 'temperature': 27, 'units': 'celsius', 'conditions': 'Rainy', 'humidity': 66, 'wind_speed': 14, 'forecast': [{'day': 1, 'temperature': 26.7, 'conditions': 'Partly Cloudy', 'humidity': 34, 'precipitation_chance': 34}, {'day': 2, 'temperature': 23.5, 'conditions': 'Windy', 'humidity': 86, 'precipitation_chance': 51}, {'day': 3, 'temperature': 24.5, 'conditions': 'Windy', 'humidity': 54, 'precipitation_chance': 74}, {'day': 4, 'temperature': 27.2, 'conditions': 'Thunderstorm', 'humidity': 78, 'precipitation_chance': 91}, {'day': 5, 'temperature': 24.4, 'conditions': 'Windy', 'humidity': 71, 'precipitation_chance': 95}]}"
+}

@@ -346,8 +346,13 @@ class AsyncTaskManager:
                     
                     # Check if this was a persistence tool call saving the final result
                     if tool_name == "persistence" and tool_input.get("operation") == "set":
-                        if "async_results" in str(tool_input.get("filename", "")):
-                            final_result = f"Task completed and result saved to {tool_input.get('filename')}"
+                        filename = str(tool_input.get("filename", ""))
+                        if "async_results" in filename:
+                            # Log the successful result save
+                            self.logger.info(f"Task {task.task_id} saved result to {filename}")
+                            # Store full path for reporting
+                            full_path = f"persistent/{filename}"
+                            final_result = f"Task completed and result saved to {full_path}"
                 
                 except Exception as e:
                     # Handle tool execution errors
