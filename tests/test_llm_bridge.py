@@ -9,6 +9,7 @@ import time
 import json
 from unittest.mock import patch, MagicMock
 
+import anthropic
 from api.llm_bridge import LLMBridge
 from errors import APIError, ErrorCode
 
@@ -171,6 +172,84 @@ def test_api_error_handling(mock_anthropic, monkeypatch):
     assert mock_anthropic.messages.create.call_count == 2
     assert mock_sleep.called
     assert response.content[0].text == "Success after retry"
+
+
+def test_overloaded_error_handling(mock_anthropic, monkeypatch):
+    """Test handling of overloaded errors."""
+    # Mock the API key
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-api-key")
+    
+    # Initialize the bridge
+    bridge = LLMBridge()
+    
+    # Prepare test messages
+    messages = [{"role": "user", "content": "Hello"}]
+    
+    # Test dictionary format error
+    overloaded_error = {
+        "type": "error", 
+        "error": {
+            "type": "overloaded_error", 
+            "message": "Overloaded"
+        }
+    }
+    mock_anthropic.messages.create.side_effect = overloaded_error
+    
+    with pytest.raises(APIError) as excinfo:
+        bridge.generate_response(messages=messages)
+    
+    assert excinfo.value.code == ErrorCode.API_RATE_LIMIT_ERROR
+    assert "high traffic" in str(excinfo.value)
+    
+    # Test string format error
+    mock_anthropic.messages.create.reset_mock()
+    string_error = Exception("{'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'Overloaded'}}")
+    mock_anthropic.messages.create.side_effect = string_error
+    
+    with pytest.raises(APIError) as excinfo:
+        bridge.generate_response(messages=messages)
+    
+    assert excinfo.value.code == ErrorCode.API_RATE_LIMIT_ERROR
+    assert "high traffic" in str(excinfo.value)
+
+
+def test_streaming_overloaded_error_handling(mock_anthropic, monkeypatch):
+    """Test handling of overloaded errors in streaming mode."""
+    # Mock the API key
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-api-key")
+    
+    # Initialize the bridge
+    bridge = LLMBridge()
+    
+    # Prepare test messages
+    messages = [{"role": "user", "content": "Hello"}]
+    
+    # Create a mock stream that will raise an overloaded error
+    mock_stream = MagicMock()
+    mock_context = MagicMock()
+    mock_context.__enter__ = MagicMock(side_effect=Exception("{'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'Overloaded'}}"))
+    mock_stream.__enter__ = mock_context.__enter__
+    mock_stream.__exit__ = MagicMock()
+    
+    # Mock the stream method
+    mock_anthropic.messages.stream.return_value = mock_stream
+    
+    # Test streaming error handling
+    with pytest.raises(APIError) as excinfo:
+        bridge.generate_response(messages=messages, stream=True)
+    
+    assert excinfo.value.code == ErrorCode.API_RATE_LIMIT_ERROR
+    assert "high traffic" in str(excinfo.value)
+    
+    # Test with callback
+    mock_callback = MagicMock()
+    
+    with pytest.raises(APIError) as excinfo:
+        bridge.generate_response(messages=messages, stream=True, callback=mock_callback)
+    
+    assert excinfo.value.code == ErrorCode.API_RATE_LIMIT_ERROR
+    assert "high traffic" in str(excinfo.value)
+    assert not mock_callback.called  # Callback should not be called when there's an error
 
 
 def test_extract_text_content(mock_anthropic, monkeypatch):

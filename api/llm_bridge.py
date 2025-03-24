@@ -88,6 +88,27 @@ class LLMBridge:
         Raises:
             APIError: With appropriate error code and details
         """
+        # Check for overloaded error in dictionary format
+        if hasattr(error, "get") and callable(getattr(error, "get", None)):
+            try:
+                if error.get("type") == "error" and error.get("error", {}).get("type") == "overloaded_error":
+                    raise APIError(
+                        "The API is currently experiencing high traffic. Please try again later.",
+                        ErrorCode.API_RATE_LIMIT_ERROR,
+                        {"details": error.get("error", {})}
+                    )
+            except (AttributeError, TypeError):
+                pass
+            
+        # Check for overloaded error in string representation
+        error_str = str(error)
+        if "overloaded_error" in error_str and "Overloaded" in error_str:
+            raise APIError(
+                "The API is currently experiencing high traffic. Please try again later.",
+                ErrorCode.API_RATE_LIMIT_ERROR,
+                {"original_error": error_str}
+            )
+        
         if isinstance(error, anthropic.APIError):
             # Handle specific Anthropic API errors
             if error.status_code == 401:
@@ -301,10 +322,8 @@ class LLMBridge:
             
         except Exception as e:
             self.logger.error(f"Error processing stream: {e}")
-            raise APIError(
-                f"Stream processing error: {e}",
-                ErrorCode.API_RESPONSE_ERROR
-            )
+            # Use centralized error handling (streams don't retry)
+            self._handle_api_error(e, self.max_retries)
     
     def _log_request(self, params: Dict[str, Any]) -> None:
         """
