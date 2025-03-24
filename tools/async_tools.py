@@ -95,7 +95,7 @@ class CheckAsyncTaskTool(Tool):
             "output": {
                 "status": "completed",
                 "description": "Generate report on customer data",
-                "result": "Task completed and result saved to async_results/123e4567-e89b-12d3-a456-426614174000.json"
+                "result": "Task completed and result saved to persistent/async_results/123e4567-e89b-12d3-a456-426614174000.json"
             }
         }
     ]

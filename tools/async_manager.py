@@ -247,6 +247,22 @@ class AsyncTaskManager:
             except Exception as e:
                 self.logger.error(f"Error in worker loop: {e}")
     
+    def _get_system_prompt(self, task_id: str) -> str:
+        """
+        Get the system prompt for background LLM tasks.
+        
+        Args:
+            task_id: The ID of the task to include in the prompt
+            
+        Returns:
+            Formatted system prompt with task ID inserted
+        """
+        from config import config
+        
+        # Load system prompt from file with task_id replacement
+        return config.get_system_prompt("background_system_prompt", 
+                                      replacements={"{task_id}": task_id})
+    
     def _execute_task_with_llm(self, task: AsyncTask, task_prompt: str) -> Any:
         """
         Execute a task using the background LLM.
@@ -258,37 +274,8 @@ class AsyncTaskManager:
         Returns:
             Result of the task execution
         """
-        # Prepare system prompt for background LLM
-        system_prompt = """You are a background task executor that uses tools to complete tasks. You are NOT having a conversation - your only job is to execute tools correctly.
-
-PERSISTENCE TOOL USAGE:
-- CORRECT operations: "get", "set", "delete", "list" (NEVER use "read", "write", or other invalid operations)
-- CORRECT format: persistence(filename="async_results/{task_id}.json", operation="set", key="result", value=data)
-- ALWAYS save your final results with: persistence(filename="async_results/{task_id}.json", operation="set", key="result", value=data)
-
-TASK EXECUTION STEPS:
-1. Process the assigned task
-2. Execute necessary tools in sequence
-3. Save the FINAL result using ONLY the persistence tool with operation="set"
-4. Return a SHORT completion confirmation message
-
-CRITICAL RULES:
-- Use EXACT operation names: "get"/"set"/"delete"/"list" for persistence tool
-- When extracting information, specify the correct template
-- ALL results MUST be saved to "async_results/{task_id}.json"
-- Use simple text for your final response, NOT JSON or other structured formats
-- DO NOT use markdown formatting in your responses
-
-EXAMPLE CORRECT USAGE:
-1. extract(message="user message", template="food_preferences")  
-2. persistence(filename="preferences.json", operation="get", key="preferences")
-3. persistence(filename="async_results/{task_id}.json", operation="set", key="result", value=analyzed_data)
-4. Return: "Task completed and results saved."
-
-You are working autonomously without user interaction."""
-        
-        # Add task ID to system prompt
-        system_prompt = system_prompt.replace("{task_id}", task.task_id)
+        # Get system prompt for the task
+        system_prompt = self._get_system_prompt(task.task_id)
         
         # Create message for the background LLM
         messages = [
@@ -397,35 +384,8 @@ You are working autonomously without user interaction."""
                 {"role": "user", "content": tool_result_blocks}
             ]
             
-            # Generate next response using the same system prompt from above
-            # Get the existing system prompt with task ID replaced
-            task_system_prompt = """You are a background task executor that uses tools to complete tasks. You are NOT having a conversation - your only job is to execute tools correctly.
-
-PERSISTENCE TOOL USAGE:
-- CORRECT operations: "get", "set", "delete", "list" (NEVER use "read", "write", or other invalid operations)
-- CORRECT format: persistence(filename="async_results/{task_id}.json", operation="set", key="result", value=data)
-- ALWAYS save your final results with: persistence(filename="async_results/{task_id}.json", operation="set", key="result", value=data)
-
-TASK EXECUTION STEPS:
-1. Process the assigned task
-2. Execute necessary tools in sequence
-3. Save the FINAL result using ONLY the persistence tool with operation="set"
-4. Return a SHORT completion confirmation message
-
-CRITICAL RULES:
-- Use EXACT operation names: "get"/"set"/"delete"/"list" for persistence tool
-- When extracting information, specify the correct template
-- ALL results MUST be saved to "async_results/{task_id}.json"
-- Use simple text for your final response, NOT JSON or other structured formats
-- DO NOT use markdown formatting in your responses
-
-EXAMPLE CORRECT USAGE:
-1. extract(message="user message", template="food_preferences")  
-2. persistence(filename="preferences.json", operation="get", key="preferences")
-3. persistence(filename="async_results/{task_id}.json", operation="set", key="result", value=analyzed_data)
-4. Return: "Task completed and results saved."
-
-You are working autonomously without user interaction.""".replace("{task_id}", task.task_id)
+            # Generate next response using the same system prompt method
+            task_system_prompt = self._get_system_prompt(task.task_id)
             
             response = self.llm_bridge.generate_response(
                 messages=messages,

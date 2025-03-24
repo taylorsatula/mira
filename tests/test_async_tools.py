@@ -23,7 +23,7 @@ def mock_llm_bridge():
     
     # Configure extract_tool_calls to initially return tool calls, then no tool calls
     mock_bridge.extract_tool_calls.side_effect = [
-        [{"id": "1", "tool_name": "persistence", "input": {"operation": "set", "filename": "async_results/test.json"}}],
+        [{"id": "1", "tool_name": "persistence", "input": {"operation": "set", "filename": "persistent/async_results/test.json"}}],
         []  # No more tool calls on second invocation
     ]
     

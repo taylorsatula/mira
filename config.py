@@ -75,6 +75,14 @@ class Config:
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         )
         self.logger = logging.getLogger("config")
+        
+        # Initialize system prompt cache
+        self._prompt_cache = {}
+        
+        # Create prompts directory if it doesn't exist
+        self._prompts_dir = Path(__file__).parent / "config" / "prompts"
+        self._prompts_dir.mkdir(parents=True, exist_ok=True)
+        
         self.logger.debug("Configuration initialized")
     
     def _load_from_file(self, config_path: Union[str, Path]) -> None:
@@ -259,6 +267,62 @@ class Config:
         """
         # Create a copy to prevent modification
         return self._config.copy()
+        
+    def get_system_prompt(self, prompt_name: str, replacements: Optional[Dict[str, str]] = None) -> str:
+        """
+        Get a system prompt by name.
+        
+        Args:
+            prompt_name: Name of the prompt file (without .txt extension)
+            replacements: Optional dictionary of placeholder replacements
+            
+        Returns:
+            The prompt text with any replacements applied
+            
+        Raises:
+            ConfigError: If the prompt file is not found
+        """
+        # Check cache first
+        if prompt_name in self._prompt_cache:
+            prompt_text = self._prompt_cache[prompt_name]
+        else:
+            # Construct file path
+            file_path = self._prompts_dir / f"{prompt_name}.txt"
+            
+            # Check if file exists
+            if not file_path.exists():
+                raise ConfigError(
+                    f"Prompt file not found: {file_path}",
+                    ErrorCode.CONFIG_NOT_FOUND
+                )
+            
+            try:
+                # Load prompt from file
+                with open(file_path, 'r') as f:
+                    prompt_text = f.read()
+                
+                # Cache the prompt
+                self._prompt_cache[prompt_name] = prompt_text
+            
+            except Exception as e:
+                raise ConfigError(
+                    f"Error loading prompt file {file_path}: {e}",
+                    ErrorCode.INVALID_CONFIG
+                )
+        
+        # Apply replacements if provided
+        if replacements:
+            for placeholder, value in replacements.items():
+                prompt_text = prompt_text.replace(placeholder, value)
+        
+        return prompt_text
+    
+    def reload_system_prompts(self) -> None:
+        """
+        Reload all system prompts from disk, refreshing the cache.
+        """
+        self._prompt_cache.clear()
+        self.logger.debug("System prompt cache cleared")
 
 
 # Global configuration instance
