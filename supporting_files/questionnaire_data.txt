@@ -1,0 +1,81 @@
+"""Structured data for recipe questionnaire flow.
+
+This module defines the questions, their order, and configuration
+for the recipe preference collection questionnaire.
+"""
+from typing import Dict, Any, List, Union
+
+# Question types
+STATIC_QUESTION = "static"
+DYNAMIC_QUESTION = "dynamic"
+
+# Define the questionnaire flow structure
+QUESTIONNAIRE_FLOW = [
+    {
+        "id": "cuisine",
+        "type": STATIC_QUESTION,
+        "config": {
+            "text": "Any particular cuisine you're interested in exploring?",
+            "options": [
+                "Mexican",
+                "Chinese", 
+                "Italian",
+                "Indian",
+                "French",
+                "Japanese",
+                "Mediterranean",
+                "Thai"
+            ]
+        }
+    },
+    {
+        "id": "ingredients",
+        "type": DYNAMIC_QUESTION,
+        "config": {
+            "text": "Do you have specific ingredients you'd like to use?",
+            "option_generator": "generate_ingredient_options",
+            "focused_prompt": "List only 4 popular ingredients in {{cuisine}} cuisine. Return exactly one ingredient per line with no numbers, bullets, or extra text. Do not include any introduction or explanation."
+        }
+    },
+    {
+        "id": "dietary_restrictions",
+        "type": STATIC_QUESTION,
+        "config": {
+            "text": "Any dietary preferences or restrictions I should know about?",
+            "options": ["Yes", "No"]
+        }
+    },
+    {
+        "id": "cooking_time",
+        "type": STATIC_QUESTION,
+        "config": {
+            "text": "How much time do you have for cooking today?",
+            "options": [
+                "Less than 30 minutes",
+                "Less than 60 minutes",
+                "60 minutes or more"
+            ]
+        }
+    },
+    {
+        "id": "skill_level",
+        "type": STATIC_QUESTION,
+        "config": {
+            "text": "What's your comfort level in the kitchen?",
+            "options": [
+                "Novice",
+                "Intermediate",
+                "Expert"
+            ]
+        }
+    }
+]
+
+# Mapping of question IDs to preference keys in the final output
+PREFERENCE_MAPPING = {
+    "cuisine": "Cuisine",
+    "ingredients": "Ingredients to use",
+    "dietary_restrictions": "Dietary restrictions",
+    "cooking_time": "Cooking time",
+    "skill_level": "Difficulty"
+}

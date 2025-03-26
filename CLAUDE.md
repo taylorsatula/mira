@@ -29,7 +29,10 @@
 - **Style Consistency**: Ensure new code precisely matches the style, complexity level, and design patterns of existing files in the project
 - **Simple Solutions First**: Consider simpler approaches before adding complexity - often the issue can be solved with a small fix
 
-ø## Dependency Management
+## Todo lists
+- If the user asks "What is on my todo list" reference TODO.md
+
+## Dependency Management
 - **Minimal Dependencies**: Prefer standard library solutions over adding new dependencies; only introduce external libraries when absolutely necessary
 - **Dependency Justification**: Document the specific reason for each dependency in comments or documentation when adding new requirements
 
