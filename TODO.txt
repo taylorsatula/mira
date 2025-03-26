@@ -20,3 +20,11 @@ TASK: When the project is nearly done look at it to identify security vulnerabil
 TASK: Add things the project /doesn't/ do to the README.md. Since this project is a base framework there are things that are outside the scope of what we're designing. End users should be aware of what they need to bring on their own when deploying the code.
 
 TASK: provide a way to serve more than one user at a time (async tasks, user conversation history, long-term data saving and retrieval.
+
+TASK: Implement a RESTful API server interface to allow external systems (other servers, iOS app) to:
+- Send stimuli to the conversation system
+- Retrieve conversation history and results
+- Manage async tasks
+- Authenticate and authorize different access levels
+- Schedule notifications and events
+- Implement webhooks for bidirectional communication
