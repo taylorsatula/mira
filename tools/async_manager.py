@@ -163,14 +163,19 @@ class AsyncTaskManager:
         Raises:
             ToolError: If task not found
         """
+        self.logger.info(f"Checking status of task: {task_id}")
+        
         task = self.tasks.get(task_id)
         if not task:
+            self.logger.warning(f"Task not found: {task_id}")
             raise ToolError(
                 f"Task not found: {task_id}",
                 ErrorCode.TOOL_NOT_FOUND
             )
         
-        return task.to_dict()
+        status_info = task.to_dict()
+        self.logger.info(f"Task {task_id} status: {status_info['status']}")
+        return status_info
     
     def set_notification_callback(self, callback):
         """
@@ -188,26 +193,30 @@ class AsyncTaskManager:
         Runs continuously, processing tasks from the queue.
         """
         while True:
-            # Use error context for the worker loop with proper component name
-            with error_context(
-                component_name="AsyncTaskManager",
-                operation="worker loop",
-                error_class=ToolError,
-                error_code=ErrorCode.TOOL_EXECUTION_ERROR,
-                logger=self.logger
-            ):
+            # Declare task variable to ensure it's defined for finally block
+            task = None
+            
+            try:
                 # Get next task from queue
                 task, task_prompt = self.task_queue.get()
                 
-                try:
-                    # Handle None task (for testing) or skip completed tasks
-                    if task is None:
-                        self.task_queue.task_done()
-                        continue
-                    
+                # Handle None task (for testing) - special shutdown signal
+                if task is None:
+                    self.task_queue.task_done()
+                    # Exit the worker loop
+                    return
+                
+                # Process the task inside error context
+                with error_context(
+                    component_name="AsyncTaskManager",
+                    operation="worker loop",
+                    error_class=ToolError,
+                    error_code=ErrorCode.TOOL_EXECUTION_ERROR,
+                    logger=self.logger
+                ):
                     # Skip if task already completed or failed
                     if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED]:
-                        self.task_queue.task_done()
+                        self.logger.debug(f"Skipping already processed task: {task.task_id}")
                         continue
                     
                     # Mark task as running
@@ -219,10 +228,9 @@ class AsyncTaskManager:
                         task.status = TaskStatus.FAILED
                         task.error = "Task manager not properly initialized (missing LLM Bridge or Tool Repository)"
                         task.completed_at = time.time()
-                        self.task_queue.task_done()
                         continue
                     
-                    # Use nested error context for task execution
+                    # Execute the task
                     with error_context(
                         component_name="AsyncTaskManager",
                         operation=f"executing task {task.task_id}",
@@ -243,21 +251,23 @@ class AsyncTaskManager:
                             self.notification_callback(task)
                         
                         self.logger.info(f"Completed async task: {task.task_id}")
-                
-                except Exception as e:
-                    # Handle execution error (exceptions from task execution should be caught by the inner context)
-                    self.logger.error(f"Error executing async task {task.task_id}: {e}")
-                    if task:
-                        task.status = TaskStatus.FAILED
-                        task.error = str(e)
-                        task.completed_at = time.time()
-                        
-                        # Send notification for failures too
-                        if task.notify_on_completion and self.notification_callback:
-                            self.notification_callback(task)
-                
-                finally:
-                    # Mark task as done in queue
+            
+            except Exception as e:
+                # Handle execution error
+                self.logger.error(f"Error executing async task {task.task_id if task else 'unknown'}: {e}")
+                if task:
+                    task.status = TaskStatus.FAILED
+                    task.error = str(e)
+                    task.completed_at = time.time()
+                    
+                    # Send notification for failures too
+                    if task.notify_on_completion and self.notification_callback:
+                        self.notification_callback(task)
+            
+            finally:
+                # Always mark task as done in queue, exactly once per get() call
+                # Only exception is if we already returned from the None task
+                if task is not None:
                     self.task_queue.task_done()
     
     def _get_system_prompt(self, task_id: str) -> str:
@@ -366,14 +376,21 @@ class AsyncTaskManager:
                         self.logger.debug(f"Background tool call successful: {tool_name}")
                         
                         # Check if this was a persistence tool call saving the final result
-                        if tool_name == "persistence" and tool_input.get("operation") == "set":
-                            filename = str(tool_input.get("filename", ""))
-                            if "async_results" in filename:
-                                # Log the successful result save
-                                self.logger.info(f"Task {task.task_id} saved result to {filename}")
-                                # Store full path for reporting
-                                full_path = f"persistent/{filename}"
-                                final_result = f"Task completed and result saved to {full_path}"
+                        if tool_name == "persistence":
+                            operation = tool_input.get("operation", "")
+                            
+                            # Check for file operations that might be working with async results
+                            if operation in ["set_data", "set_file"] and "location" in tool_input:
+                                location = str(tool_input.get("location", ""))
+                                # Only process locations related to async_results
+                                if "async_results" in location:
+                                    # Log the successful result save
+                                    self.logger.info(f"Task {task.task_id} saved result to {location}")
+                                    # Store full path for reporting
+                                    full_path = f"persistent/{location}"
+                                    if not full_path.endswith('.json'):
+                                        full_path += '.json'
+                                    final_result = f"Task completed and result saved to {full_path}"
                     
                     except Exception as e:
                         # We still need to catch exceptions here to continue processing
@@ -462,5 +479,9 @@ class AsyncTaskManager:
         # Wait for worker thread to finish
         if self.worker_thread.is_alive():
             self.worker_thread.join(timeout=5)
+            
+            # If thread is still alive after timeout, log a warning
+            if self.worker_thread.is_alive():
+                self.logger.warning("AsyncTaskManager worker thread did not terminate within timeout")
         
         self.logger.info("AsyncTaskManager shut down")
