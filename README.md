@@ -11,7 +11,8 @@ Key features:
 - Anthropic Claude API integration with proper error handling and rate limiting
 - Extensible tool system for adding custom capabilities
 - Conversation management with history tracking
-- Persistent storage for conversations and data
+- Persistent storage with dedicated data and file operations
+- Background task processing with reliable storage of results
 - Standardized error handling with context managers
 
 ## Installation
@@ -144,6 +145,75 @@ class MyCustomTool(Tool):
 ```
 
 The tool will be automatically discovered and registered when the system starts.
+
+### Using the Persistence Tool
+
+The system provides a flexible persistence tool for storing and retrieving data:
+
+```python
+from tools.repo import ToolRepository
+
+# Initialize the tool repository
+tool_repo = ToolRepository()
+
+# Get the persistence tool
+persistence_tool = tool_repo.get_tool("persistence")
+
+# Store data (key-value operations)
+result = persistence_tool.run(
+    operation="set_data",
+    location="user_preferences.json",
+    key="theme",
+    value="dark"
+)
+
+# Retrieve data
+result = persistence_tool.run(
+    operation="get_data",
+    location="user_preferences.json",
+    key="theme"
+)
+theme = result["value"]  # "dark"
+
+# Store an entire file
+result = persistence_tool.run(
+    operation="set_file",
+    location="user_data.json",
+    data={"name": "John", "preferences": {"theme": "dark"}}
+)
+
+# Retrieve an entire file
+result = persistence_tool.run(
+    operation="get_file",
+    location="user_data.json"
+)
+user_data = result["value"]
+```
+
+### Working with Asynchronous Tasks
+
+```python
+# Schedule a background task
+task_result = tool_repo.invoke_tool("schedule_async_task", {
+    "description": "Analyze data",
+    "task_prompt": "Analyze the provided data and save the results.",
+    "notify_on_completion": True
+})
+task_id = task_result["task_id"]
+
+# Check task status
+status_result = tool_repo.invoke_tool("check_async_task", {
+    "task_id": task_id
+})
+
+# Retrieve task results
+if status_result["status"] == "completed":
+    result = persistence_tool.run(
+        operation="get_file",
+        location=f"async_results/{task_id}.json"
+    )
+    analysis_data = result["value"]
+```
 
 ### Saving and Loading Conversations
 

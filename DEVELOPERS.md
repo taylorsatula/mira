@@ -88,7 +88,9 @@ model_name = config.get("api.model")
 api_key = config.api_key
 ```
 
-### File Operations (`crud.py`)
+### File Operations (`crud.py` and `tools/persistence_tool.py`)
+
+#### Basic File Operations (`crud.py`)
 
 The `FileOperations` class provides CRUD operations for working with JSON files:
 
@@ -100,6 +102,87 @@ The `FileOperations` class provides CRUD operations for working with JSON files:
 - `list_files`: List JSON files in the data directory
 
 All methods include proper error handling and validation.
+
+#### Persistence Tool (`tools/persistence_tool.py`)
+
+The `PersistenceTool` provides a higher-level interface for data persistence with a clear separation between data and file operations:
+
+1. **Data Operations**:
+   - `get_data`: Retrieve a specific value from a JSON file
+   - `set_data`: Store a value in a JSON file
+   - `delete_data`: Remove a value from a JSON file
+   - `list_keys`: List all keys in a JSON file
+
+2. **File Operations**:
+   - `get_file`: Retrieve the entire contents of a JSON file
+   - `set_file`: Store complete data in a JSON file
+   - `list_files`: List all available JSON files
+
+Example usage:
+```python
+# Get a specific value
+result = persistence_tool.run(
+    operation="get_data",
+    location="preferences.json",
+    key="theme"
+)
+
+# Store a value
+result = persistence_tool.run(
+    operation="set_data",
+    location="preferences.json",
+    key="theme",
+    value="dark"
+)
+
+# Save an entire file
+result = persistence_tool.run(
+    operation="set_file",
+    location="async_results/task-123.json",
+    data={"task_id": "task-123", "result": {"data": "value"}}
+)
+
+# Load an entire file
+result = persistence_tool.run(
+    operation="get_file",
+    location="async_results/task-123.json"
+)
+```
+
+The persistence tool handles path resolution, directory creation, error handling, and provides a consistent interface for all persistence operations.
+
+#### Working with Asynchronous Task Results
+
+Asynchronous tasks store their results in the `persistent/async_results/` directory. To work with these results:
+
+```python
+# Save async task result
+result = persistence_tool.run(
+    operation="set_file",
+    location="async_results/task-123.json",  # 'task-123' is the task ID
+    data={
+        "task_id": "task-123",
+        "status": "completed",
+        "result": {"data": "analysis results"}
+    }
+)
+
+# Retrieve async task result
+result = persistence_tool.run(
+    operation="get_file",
+    location="async_results/task-123.json"
+)
+# The value is in result["value"]
+
+# List all async results
+result = persistence_tool.run(
+    operation="list_files"
+)
+# Filter for async results
+async_files = [f for f in result["files"] if "async_results" in f]
+```
+
+The AsyncTaskManager automatically detects when the persistence tool is used to save results in the `async_results` directory and provides appropriate task completion messages.
 
 ### API Communication (`api/llm_bridge.py`)
 
