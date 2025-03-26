@@ -410,9 +410,15 @@ class ToolRepository:
                 # Already an instance
                 tool_instance = tool
 
+            # Log the tool invocation
+            self.logger.info(f"Invoking tool: {tool_name} with parameters: {tool_params}")
+            
             # Run the tool with the provided parameters
             result = tool_instance.run(**tool_params)
-
+            
+            # Log successful execution
+            self.logger.info(f"Tool {tool_name} executed successfully")
+            
             return result
 
         except Exception as e:
