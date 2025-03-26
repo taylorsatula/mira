@@ -7,7 +7,7 @@ prompt construction, response handling, and error management for API interaction
 import json
 import logging
 import time
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, Callable
 
 import anthropic
 import requests
@@ -20,22 +20,22 @@ from config import config
 class LLMBridge:
     """
     Bridge to the Anthropic Claude API.
-    
+
     Handles communication with the Anthropic API, including:
     - Prompt construction
     - Response handling
     - Error management
     - Rate limiting
     """
-    
+
     def __init__(self):
         """
         Initialize the LLM bridge.
-        
+
         Sets up the API client, logging, and rate limiting.
         """
         self.logger = logging.getLogger("llm_bridge")
-        
+
         # Get API settings from config
         self.api_key = config.api_key
         self.model = config.get("api.model", "claude-3-7-sonnet-20250219")
@@ -43,7 +43,7 @@ class LLMBridge:
         self.temperature = config.get("api.temperature", 0.7)
         self.max_retries = config.get("api.max_retries", 3)
         self.timeout = config.get("api.timeout", 60)
-        
+
         # Initialize the API client
         try:
             self.client = anthropic.Anthropic(api_key=self.api_key)
@@ -52,39 +52,39 @@ class LLMBridge:
                 f"Failed to initialize Anthropic API client: {e}",
                 ErrorCode.API_AUTHENTICATION_ERROR
             )
-        
+
         # Rate limiting variables
         self.rate_limit_rpm = config.get("api.rate_limit_rpm", 10)
         self.min_request_interval = 60.0 / self.rate_limit_rpm
         self.last_request_time = 0.0
-        
+
         self.logger.debug(f"LLM Bridge initialized with model {self.model}")
-    
+
     def _enforce_rate_limit(self) -> None:
         """
         Enforce API rate limiting by waiting if necessary.
-        
+
         Ensures that requests to the API don't exceed the rate limit.
         """
         now = time.time()
         time_since_last_request = now - self.last_request_time
-        
+
         if time_since_last_request < self.min_request_interval:
             # Wait to respect rate limit
             wait_time = self.min_request_interval - time_since_last_request
             self.logger.debug(f"Rate limiting: waiting {wait_time:.2f} seconds")
             time.sleep(wait_time)
-        
+
         self.last_request_time = time.time()
-    
+
     def _handle_api_error(self, error: Exception, attempt: int) -> None:
         """
         Handle API errors, with appropriate retry logic.
-        
+
         Args:
             error: The API error that occurred
             attempt: The current retry attempt number
-            
+
         Raises:
             APIError: With appropriate error code and details
         """
@@ -99,7 +99,7 @@ class LLMBridge:
                     )
             except (AttributeError, TypeError):
                 pass
-            
+
         # Check for overloaded error in string representation
         error_str = str(error)
         if "overloaded_error" in error_str and "Overloaded" in error_str:
@@ -108,7 +108,7 @@ class LLMBridge:
                 ErrorCode.API_RATE_LIMIT_ERROR,
                 {"original_error": error_str}
             )
-        
+
         if isinstance(error, anthropic.APIError):
             # Handle specific Anthropic API errors
             if error.status_code == 401:
@@ -154,7 +154,7 @@ class LLMBridge:
                     ErrorCode.API_RESPONSE_ERROR,
                     {"status_code": error.status_code}
                 )
-        
+
         elif isinstance(error, RequestException):
             # Network-related errors
             if attempt < self.max_retries:
@@ -170,7 +170,7 @@ class LLMBridge:
                     ErrorCode.API_CONNECTION_ERROR,
                     {"attempts": attempt}
                 )
-        
+
         elif isinstance(error, requests.Timeout):
             # Timeout errors
             if attempt < self.max_retries:
@@ -186,34 +186,34 @@ class LLMBridge:
                     ErrorCode.API_TIMEOUT_ERROR,
                     {"attempts": attempt}
                 )
-        
+
         else:
             # Other unexpected errors
             raise APIError(
                 f"Unexpected API error: {error}",
                 ErrorCode.API_RESPONSE_ERROR
             )
-        
+
         # If we got here, we should not retry
         raise APIError(
             f"API error after {attempt} attempts: {error}",
             ErrorCode.API_RESPONSE_ERROR,
             {"attempts": attempt}
         )
-    
+
     def generate_response(
-        self, 
+        self,
         messages: List[Dict[str, str]],
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
-        callback: Optional[callable] = None
+        callback: Optional[Callable] = None
     ) -> Union[Dict[str, Any], Any]:
         """
         Generate a response from the LLM.
-        
+
         Args:
             messages: List of message dictionaries with 'role' and 'content'
             system_prompt: Optional system prompt for the conversation
@@ -222,23 +222,23 @@ class LLMBridge:
             tools: Optional list of tool definitions
             stream: Whether to stream the response (default: False)
             callback: Optional callback function to process streaming chunks
-            
+
         Returns:
             If stream=False: API response as a dictionary
             If stream=True: A stream object to be processed
-            
+
         Raises:
             APIError: If the API request fails
         """
         # Use provided values or defaults from config
         temperature = temperature if temperature is not None else self.temperature
         max_tokens = max_tokens if max_tokens is not None else self.max_tokens
-        
+
         for attempt in range(1, self.max_retries + 1):
             try:
                 # Enforce rate limiting
                 self._enforce_rate_limit()
-                
+
                 # Prepare request parameters
                 params = {
                     "model": self.model,
@@ -246,21 +246,21 @@ class LLMBridge:
                     "max_tokens": max_tokens,
                     "temperature": temperature,
                 }
-                
+
                 # Add optional parameters if provided
                 if system_prompt:
                     params["system"] = system_prompt
-                
+
                 if tools:
                     params["tools"] = tools
-                
+
                 # Add streaming parameter if requested
                 if stream:
                     params["stream"] = True
-                
+
                 # Log the request (sanitized for security)
                 self._log_request(params)
-                
+
                 # Make the API call
                 if stream:
                     # Stream mode - return the stream or process with callback
@@ -268,9 +268,9 @@ class LLMBridge:
                     stream_params = params.copy()
                     if 'stream' in stream_params:
                         del stream_params['stream']
-                    
+
                     stream_response = self.client.messages.stream(**stream_params)
-                    
+
                     if callback:
                         # Process stream with callback
                         return self._process_stream_with_callback(stream_response, callback)
@@ -281,97 +281,97 @@ class LLMBridge:
                 else:
                     # Normal mode - make regular API call
                     response = self.client.messages.create(**params)
-                    
+
                     # Log the response
                     self._log_response(response)
-                    
+
                     return response
-            
+
             except Exception as e:
                 self._handle_api_error(e, attempt)
-        
+
         # This should never be reached due to _handle_api_error raising exceptions
         raise APIError(
             "Failed to generate response after all retry attempts",
             ErrorCode.API_RESPONSE_ERROR
         )
-        
+
     def _process_stream_with_callback(self, stream, callback):
         """
         Process a streaming response with a callback function.
-        
+
         Args:
             stream: The streaming response from Anthropic API
             callback: A callback function to process each chunk
-            
+
         Returns:
             The final complete response
         """
         try:
             final_response = None
-            
+
             with stream as response:
                 # Store the final response for later
                 final_response = response
-                
+
                 # Process each text chunk with the callback
                 for text in response.text_stream:
                     callback(text)
-            
+
             return final_response
-            
+
         except Exception as e:
             self.logger.error(f"Error processing stream: {e}")
             # Use centralized error handling (streams don't retry)
             self._handle_api_error(e, self.max_retries)
-    
+
     def _log_request(self, params: Dict[str, Any]) -> None:
         """
         Log API request parameters (with sensitive data removed).
-        
+
         Args:
             params: Request parameters
         """
         # Create a sanitized copy of the parameters
         sanitized = params.copy()
-        
+
         # Log at debug level
         self.logger.debug(f"API Request: {json.dumps(sanitized, indent=2, default=str)}")
-    
+
     def _log_response(self, response: Any) -> None:
         """
         Log API response for debugging.
-        
+
         Args:
             response: API response
         """
         # Log at debug level - sanitize or truncate if needed
         self.logger.debug(f"API Response received: {type(response)}")
-    
+
     def extract_text_content(self, response: Any) -> str:
         """
         Extract text content from an Anthropic API response.
-        
+
         Args:
             response: API response (could be a standard Message or a MessageStream.message)
-            
+
         Returns:
             Extracted text content from all text blocks
         """
         text_content = []
-        
+
         # First check if we have a content attribute
         if not hasattr(response, 'content'):
             self.logger.warning("Response has no content attribute")
             return ""
-            
+
         # Process all content blocks to extract text
         for content_block in response.content:
             if hasattr(content_block, 'type') and content_block.type == "text":
                 text_content.append(content_block.text)
             elif hasattr(content_block, 'text'):  # Fallback for other content types with text
                 text_content.append(content_block.text)
-                
+
         # If no text content found with either approach
         if not text_content and len(response.content) > 0:
             if hasattr(response.content[0], 'text'):  # Last resort fallback
@@ -379,26 +379,26 @@ class LLMBridge:
             else:
                 self.logger.warning("Could not extract text from response content")
                 return ""
-            
+
         return " ".join(text_content).strip()
-    
+
     def extract_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
         """
         Extract tool calls from an Anthropic API response.
-        
+
         Args:
             response: API response (could be a standard Message or a MessageStream.message)
-            
+
         Returns:
             List of tool call objects
         """
         tool_calls = []
-        
+
         # First check if we have a content attribute
         if not hasattr(response, 'content'):
             self.logger.warning("Response has no content attribute")
             return []
-        
+
         # Process all content blocks in the response
         for content_block in response.content:
             if hasattr(content_block, 'type') and content_block.type == "tool_use":
@@ -407,6 +407,6 @@ class LLMBridge:
                     "tool_name": content_block.name,
                     "input": content_block.input
                 })
-                
+
         self.logger.debug(f"Extracted {len(tool_calls)} tool calls from response")
         return tool_calls

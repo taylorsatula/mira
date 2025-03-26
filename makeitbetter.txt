@@ -1,0 +1,256 @@
+# Implementation Guide: Consolidating Persistence & Error Handling
+
+## Part 1: Consolidating Persistence Mechanisms
+
+### Current State
+- `crud.py` defines `FileOperations` for handling JSON files in `data/` directory
+- `tools/persistence_tool.py` defines `PersistenceTool` handling JSON files in `persistent/` directory
+- Both implement similar functionality with different interfaces
+- Only `main.py` uses `FileOperations` for conversation storage
+
+### Implementation Steps
+
+1. **Modify `FileOperations` to be more flexible**
+   - Add a `base_dir` parameter to `__init__` with a default value (`data/`)
+   - Check how `persistent/` directory is being created & ensure compatibility
+
+2. **Update `PersistenceTool` to use `FileOperations`**
+   - Import `FileOperations` in persistence_tool.py
+   - Replace the direct file operations with `FileOperations` instance
+   - Keep the JSON key-value layer in `PersistenceTool`
+   - Initialize with `FileOperations(self.base_dir)` where `base_dir` is `persistent/`
+
+3. **Mapping between interfaces**
+   - `PersistenceTool.run(operation="get")` → `self.file_ops.read()`
+   - `PersistenceTool.run(operation="set")` → `self.file_ops.write()`
+   - For key-value operations, do something like:
+     ```python
+     # GET
+     def _get_value(self, file_path, key):
+         data = self.file_ops.read(file_path)
+         return {"value": data.get(key)}
+
+     # SET
+     def _set_value(self, file_path, key, value):
+         try:
+             data = {} 
+             if self.file_ops.exists(file_path):
+                 data = self.file_ops.read(file_path)
+             data[key] = value
+             self.file_ops.write(file_path, data)
+             return {"success": True}
+         except Exception as e:
+             return {"success": False, "message": str(e)}
+     ```
+
+4. **Error Handling Translation**
+   - Make sure `PersistenceTool` properly translates `FileOperationError` to `ToolError`
+   - Maintain backward compatibility with error messages and codes
+
+5. **Testing**
+   - Test with existing files in both directories
+   - Verify that `main.py` conversation loading still works
+   - Test all `PersistenceTool` operations (get/set/delete/list)
+
+## Part 2: Error Handling Duplication
+
+### Current State
+- Each tool implements similar try/except patterns
+- Common pattern: catch exceptions, translate to `ToolError`
+- Lots of code duplication across tool implementations
+
+### Implementation Steps
+
+1. **Add Helper Method to Base `Tool` Class**
+   ```python
+   def safe_execute(self, func, error_msg=None, error_code=ErrorCode.TOOL_EXECUTION_ERROR, **kwargs):
+       """
+       Execute a function with standardized error handling.
+       
+       Args:
+           func: Function to execute
+           error_msg: Optional custom error message template
+           error_code: Error code to use if an exception occurs
+           **kwargs: Arguments to pass to the function
+           
+       Returns:
+           Result of the function
+           
+       Raises:
+           ToolError: If an exception occurs during execution
+       """
+       try:
+           return func(**kwargs)
+       except Exception as e:
+           # Pass through ToolErrors unchanged
+           if isinstance(e, ToolError):
+               raise
+               
+           # Format error message
+           msg = error_msg or f"Error executing {self.name}: {str(e)}"
+           if '{error}' in msg:
+               msg = msg.format(error=str(e))
+               
+           # Log the error
+           self.logger.error(msg)
+           
+           # Raise as ToolError
+           raise ToolError(msg, error_code, {"original_error": str(e)})
+   ```
+
+2. **Update `run` Method in Base `Tool` Class**
+   ```python
+   def run(self, **kwargs):
+       """
+       Execute the tool safely with standardized error handling.
+       
+       This wraps the _run implementation with error handling.
+       Subclasses should override _run, not run.
+       """
+       return self.safe_execute(self._run, **kwargs)
+       
+   def _run(self, **kwargs):
+       """
+       Tool implementation to be overridden by subclasses.
+       """
+       raise NotImplementedError("Tool subclasses must implement '_run' method")
+   ```
+
+3. **Update Tool Subclasses**
+   - Rename `run` methods to `_run` in all tool classes
+   - Remove redundant try/except blocks
+   - Use `self.safe_execute()` for any internal operations that need error handling
+
+4. **Handle Special Cases**
+   - Some tools may need custom error handling
+   - Allow them to override `run` if needed, but document clearly
+
+5. **Testing**
+   - Test each tool to ensure error handling still works
+   - Verify error messages contain the same information
+   - Check that correct error codes are still used
+
+## Part 3: Simplifying Configuration Management
+
+### Current State
+- `config.py` defines a complex `Config` class with nested dictionaries and multiple sources
+- Supports loading from environment variables, config files, and defaults
+- Uses dot notation for accessing nested keys: `config.get("api.model")`
+- Most actual usages only access simple properties
+- Implements nested dictionaries and complex key parsing that may be overkill
+
+### Implementation Steps
+
+1. **Identify Most Commonly Used Config Values**
+   - Review all files that import from `config.py`
+   - Note which config values are actually used (e.g., examine `llm_bridge.py`, `main.py`, etc.)
+   - Example core values found in usage:
+     ```
+     api_key (from config.api_key property)
+     model (from config.get("api.model"))
+     max_tokens (from config.get("api.max_tokens"))
+     temperature (from config.get("api.temperature"))
+     data_dir (from config.get("data_dir"))
+     ```
+
+2. **Simplify Config Loading**
+   - Maintain the existing class but reduce complexity
+   - For most config values, prefer direct environment variables with defaults:
+
+   ```python
+   # Instead of this complex loading hierarchy:
+   self._config = self.DEFAULT_CONFIG.copy()
+   if config_path:
+       self._load_from_file(config_path)
+   self._load_from_env()
+   
+   # Consider a simpler approach using direct env vars with fallbacks:
+   self.api_key = os.getenv("ANTHROPIC_API_KEY")
+   self.model = os.getenv("AGENT_API__MODEL", "claude-3-7-sonnet-20250219")
+   self.max_tokens = int(os.getenv("AGENT_API__MAX_TOKENS", "1000"))
+   self.temperature = float(os.getenv("AGENT_API__TEMPERATURE", "0.7"))
+   ```
+
+3. **Expose Direct Properties Instead of Dict Access**
+   - Add properties for commonly accessed values
+
+   ```python
+   @property
+   def model(self) -> str:
+       """Get the model name to use for API calls."""
+       return self._config.get("api", {}).get("model", "claude-3-7-sonnet-20250219")
+   
+   @property
+   def max_tokens(self) -> int:
+       """Get the maximum tokens for API responses."""
+       return self._config.get("api", {}).get("max_tokens", 1000)
+   ```
+
+4. **Update Usage Sites**
+   - Replace nested dictionary access with property access:
+
+   ```python
+   # Instead of:
+   self.model = config.get("api.model", "claude-3-7-sonnet-20250219")
+   
+   # Use:
+   self.model = config.model
+   ```
+
+5. **System Prompts Handling**
+   - Keep the existing `get_system_prompt` functionality 
+   - It's useful and properly separates configuration from code
+
+6. **Implementation Strategy**
+   - Don't rewrite the entire config system at once
+   - Add new properties alongside existing dict-based access
+   - Update consuming code to use the new properties
+   - Maintain backward compatibility
+
+### Example Implementation
+
+```python
+# In config.py
+class Config:
+    # ... existing code ...
+    
+    @property
+    def model(self) -> str:
+        """Get the model name for API calls."""
+        return self.get("api.model", "claude-3-7-sonnet-20250219")
+    
+    @property
+    def max_tokens(self) -> int:
+        """Get the maximum tokens for API responses."""
+        return self.get("api.max_tokens", 1000)
+    
+    @property
+    def temperature(self) -> float:
+        """Get the temperature setting for API calls."""
+        return self.get("api.temperature", 0.7)
+        
+    @property
+    def data_directory(self) -> Path:
+        """Get the data directory path."""
+        return Path(self.get("data_dir", "data"))
+
+# In llm_bridge.py
+# Before:
+self.model = config.get("api.model", "claude-3-7-sonnet-20250219")
+self.max_tokens = config.get("api.max_tokens", 1000)
+self.temperature = config.get("api.temperature", 0.7)
+
+# After:
+self.model = config.model
+self.max_tokens = config.max_tokens
+self.temperature = config.temperature
+```
+
+## Implementation Notes
+
+- Keep changes minimal and focused
+- Don't change tool interfaces or behaviors
+- Test each change thoroughly before moving to the next
+- Consider backwards compatibility throughout
+- Document any changes to error behavior
+- For configs, maintain backward compatibility for existing users
