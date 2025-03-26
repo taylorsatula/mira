@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from config import config
-from errors import handle_error, AgentError
+from errors import handle_error, AgentError, error_context, ErrorCode
 from api.llm_bridge import LLMBridge
 from tools.repo import ToolRepository
 from tools.async_manager import AsyncTaskManager
@@ -92,8 +92,14 @@ def initialize_system(args) -> Dict[str, Any]:
     logger = logging.getLogger("main")
     logger.info("Initializing AI agent system")
 
-    # Initialize components
-    try:
+    # Use centralized error context for system initialization
+    with error_context(
+        component_name="System",
+        operation="initialization",
+        error_class=AgentError,
+        error_code=ErrorCode.UNKNOWN_ERROR,
+        logger=logger
+    ):
         # Override config with command line arguments
         if args.config:
             pass  # Removed unused config_instance
@@ -136,21 +142,28 @@ def initialize_system(args) -> Dict[str, Any]:
 
         # Initialize or load conversation
         if args.conversation:
-            try:
-                conversation_data = file_ops.read(f"conversation_{args.conversation}")
-                conversation = Conversation.from_dict(
-                    conversation_data,
-                    llm_bridge=llm_bridge,
-                    tool_repo=tool_repo
-                )
-                logger.info(f"Loaded conversation: {conversation.conversation_id}")
-            except Exception as e:
-                logger.error(f"Failed to load conversation: {e}")
-                conversation = Conversation(
-                    conversation_id=args.conversation,
-                    llm_bridge=llm_bridge,
-                    tool_repo=tool_repo
-                )
+            # Use error context specifically for loading the conversation
+            with error_context(
+                component_name="System", 
+                operation=f"loading conversation {args.conversation}",
+                error_class=AgentError,
+                logger=logger
+            ):
+                try:
+                    conversation_data = file_ops.read(f"conversation_{args.conversation}")
+                    conversation = Conversation.from_dict(
+                        conversation_data,
+                        llm_bridge=llm_bridge,
+                        tool_repo=tool_repo
+                    )
+                    logger.info(f"Loaded conversation: {conversation.conversation_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to load conversation, creating new one: {e}")
+                    conversation = Conversation(
+                        conversation_id=args.conversation,
+                        llm_bridge=llm_bridge,
+                        tool_repo=tool_repo
+                    )
         else:
             conversation = Conversation(
                 llm_bridge=llm_bridge,
@@ -169,16 +182,6 @@ def initialize_system(args) -> Dict[str, Any]:
             'task_notifications': task_notifications
         }
 
-    except AgentError as e:
-        logger.error(f"Initialization error: {e}")
-        print(f"Error: {e}")
-        sys.exit(1)
-
-    except Exception as e:
-        logger.error(f"Unexpected error during initialization: {e}")
-        print(f"Unexpected error: {e}")
-        sys.exit(1)
-
 
 def save_conversation(file_ops: FileOperations, conversation: Conversation) -> None:
     """
@@ -188,13 +191,15 @@ def save_conversation(file_ops: FileOperations, conversation: Conversation) -> N
         file_ops: File operations handler
         conversation: Conversation to save
     """
-    try:
+    with error_context(
+        component_name="System",
+        operation="saving conversation",
+        error_class=AgentError,
+        logger=logging.getLogger("main")
+    ):
         conversation_data = conversation.to_dict()
         file_ops.write(f"conversation_{conversation.conversation_id}", conversation_data)
         logging.info(f"Saved conversation: {conversation.conversation_id}")
-    except Exception as e:
-        logging.error(f"Failed to save conversation: {e}")
-        print(f"Error saving conversation: {e}")
 
 
 def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
@@ -254,18 +259,25 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
             # Generate response
             print("\nAssistant: ", end="", flush=True)
 
-            if stream_mode:
-                # Streaming mode - tokens are printed via callback
-                conversation.generate_response(
-                    user_input,
-                    stream=True,
-                    stream_callback=print_token
-                )
-                print()  # Add newline after streaming completes
-            else:
-                # Standard mode - print full response at once
-                response = conversation.generate_response(user_input)
-                print(response)
+            # Use error context for response generation
+            with error_context(
+                component_name="Interactive",
+                operation="generating response",
+                error_class=AgentError,
+                logger=logging.getLogger("interactive")
+            ):
+                if stream_mode:
+                    # Streaming mode - tokens are printed via callback
+                    conversation.generate_response(
+                        user_input,
+                        stream=True,
+                        stream_callback=print_token
+                    )
+                    print()  # Add newline after streaming completes
+                else:
+                    # Standard mode - print full response at once
+                    response = conversation.generate_response(user_input)
+                    print(response)
 
         except KeyboardInterrupt:
             print("\nInterrupted. Saving conversation...")
@@ -274,6 +286,7 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
             break
 
         except Exception as e:
+            # Handle any errors that weren't caught by the error context
             error_message = handle_error(e)
             print(f"\nError: {error_message}")
 
@@ -294,11 +307,13 @@ def main():
 
     # Run in interactive mode with appropriate streaming setting
     try:
-        interactive_mode(system, stream_mode=stream_mode)
-    except Exception as e:
-        logging.exception("Unexpected error in main loop")
-        print(f"Unexpected error: {e}")
-        return 1
+        with error_context(
+            component_name="System",
+            operation="main loop",
+            error_class=AgentError,
+            logger=logging.getLogger("main")
+        ):
+            interactive_mode(system, stream_mode=stream_mode)
     finally:
         # Display any pending notifications before exit
         task_notifications = system.get('task_notifications', [])

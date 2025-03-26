@@ -8,7 +8,7 @@ from typing import Dict, Any
 
 from tools.repo import Tool
 from tools.async_manager import AsyncTaskManager
-from errors import ToolError, ErrorCode
+from errors import ToolError, ErrorCode, error_context
 
 
 class ScheduleAsyncTaskTool(Tool):
@@ -63,7 +63,13 @@ class ScheduleAsyncTaskTool(Tool):
             ToolError: If scheduling fails
         """
 
-        try:
+        with error_context(
+            component_name=self.name,
+            operation="scheduling async task",
+            error_class=ToolError,
+            error_code=ErrorCode.TOOL_EXECUTION_ERROR,
+            logger=self.logger
+        ):
             task_id = self.task_manager.schedule_task(
                 description=description,
                 task_prompt=task_prompt,
@@ -71,12 +77,6 @@ class ScheduleAsyncTaskTool(Tool):
             )
 
             return {"task_id": task_id}
-
-        except Exception as e:
-            raise ToolError(
-                f"Error scheduling async task: {str(e)}",
-                ErrorCode.TOOL_EXECUTION_ERROR
-            )
 
 
 class CheckAsyncTaskTool(Tool):
@@ -123,16 +123,13 @@ class CheckAsyncTaskTool(Tool):
         Raises:
             ToolError: If the task is not found or checking fails
         """
-
-        try:
+        
+        with error_context(
+            component_name=self.name,
+            operation="checking task status",
+            error_class=ToolError,
+            error_code=ErrorCode.TOOL_EXECUTION_ERROR,
+            logger=self.logger
+        ):
             task_status = self.task_manager.get_task_status(task_id)
             return task_status
-
-        except Exception as e:
-            if isinstance(e, ToolError):
-                raise
-
-            raise ToolError(
-                f"Error checking task status: {str(e)}",
-                ErrorCode.TOOL_EXECUTION_ERROR
-            )

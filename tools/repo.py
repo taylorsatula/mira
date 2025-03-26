@@ -8,9 +8,10 @@ import importlib
 import inspect
 import logging
 import pkgutil
+from contextlib import contextmanager
 from typing import Dict, List, Any, Optional, Type, Union, get_type_hints
 
-from errors import ToolError, ErrorCode
+from errors import ToolError, ErrorCode, error_context
 
 
 class Tool:
@@ -18,7 +19,7 @@ class Tool:
     Base class for all tools in the system.
 
     Defines the interface that all tools must implement and
-    provides common functionality.
+    provides common functionality including standardized error handling.
     """
 
     # Class properties for tool definition
@@ -46,6 +47,8 @@ class Tool:
             NotImplementedError: If the subclass doesn't implement this method
         """
         raise NotImplementedError("Tool subclasses must implement 'run' method")
+        
+    # Tool error handling should use the centralized error_context function from errors.py
 
     @classmethod
     def get_parameter_schema(cls) -> Dict[str, Any]:

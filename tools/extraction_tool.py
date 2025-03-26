@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, List
 
 from tools.repo import Tool
 from api.llm_bridge import LLMBridge
-from errors import ToolError, ErrorCode
+from errors import ToolError, ErrorCode, error_context
 
 
 # Extraction prompt templates
@@ -113,7 +113,14 @@ class ExtractionTool(Tool):
                 ErrorCode.TOOL_INVALID_INPUT
             )
 
-        try:
+        # Use the centralized error context manager for standardized error handling
+        with error_context(
+            component_name=self.name,
+            operation="information extraction",
+            error_class=ToolError,
+            error_code=ErrorCode.TOOL_EXECUTION_ERROR,
+            logger=self.logger
+        ):
             # Get prompt template
             prompt = self._get_prompt(template, target)
 
@@ -137,15 +144,6 @@ class ExtractionTool(Tool):
             extracted = self.llm_bridge.extract_text_content(response)
 
             return {"extracted": extracted.strip()}
-
-        except Exception as e:
-            if isinstance(e, ToolError):
-                raise
-
-            raise ToolError(
-                f"Error extracting information: {str(e)}",
-                ErrorCode.TOOL_EXECUTION_ERROR
-            )
 
     def _get_prompt(self, template: str, target: Optional[str]) -> str:
         """

@@ -2,6 +2,7 @@ import random
 from typing import List, Dict, Any
 
 from tools.repo import Tool
+from errors import ErrorCode, error_context, ToolError
 
 
 class WeatherTool(Tool):
@@ -53,33 +54,41 @@ class WeatherTool(Tool):
             Weather data as a dictionary
 
         Raises:
-            ValueError: If units are invalid
+            ToolError: If units are invalid or other errors occur
         """
         self.logger.info(f"Fetching weather for {location} in {units}")
 
-        # Validate units
-        if units not in ["celsius", "fahrenheit"]:
-            raise ValueError(f"Invalid units: {units}. Must be 'celsius' or 'fahrenheit'")
+        # Use the centralized error context for weather data generation
+        with error_context(
+            component_name=self.name,
+            operation="generating weather data",
+            error_class=ToolError,
+            error_code=ErrorCode.TOOL_INVALID_INPUT,
+            logger=self.logger
+        ):
+            # Validate units
+            if units not in ["celsius", "fahrenheit"]:
+                raise ValueError(f"Invalid units: {units}. Must be 'celsius' or 'fahrenheit'")
 
-        # Generate random weather data
-        base_temp = random.randint(5, 35)
-        temp = base_temp if units == "celsius" else base_temp * 9/5 + 32
+            # Generate random weather data
+            base_temp = random.randint(5, 35)
+            temp = base_temp if units == "celsius" else base_temp * 9/5 + 32
 
-        # Build response
-        weather_data = {
-            "location": location,
-            "temperature": round(temp, 1),
-            "units": units,
-            "conditions": random.choice(self.weather_conditions),
-            "humidity": random.randint(30, 90),
-            "wind_speed": random.randint(0, 30),
-        }
+            # Build response
+            weather_data = {
+                "location": location,
+                "temperature": round(temp, 1),
+                "units": units,
+                "conditions": random.choice(self.weather_conditions),
+                "humidity": random.randint(30, 90),
+                "wind_speed": random.randint(0, 30),
+            }
 
-        # Add forecast if requested
-        if include_forecast:
-            weather_data["forecast"] = self._generate_forecast(base_temp, units)
+            # Add forecast if requested
+            if include_forecast:
+                weather_data["forecast"] = self._generate_forecast(base_temp, units)
 
-        return weather_data
+            return weather_data
 
     def _generate_forecast(self, base_temp: float, units: str) -> List[Dict[str, Any]]:
         """

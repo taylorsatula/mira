@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Any, Optional, List, Callable
 
-from errors import ErrorCode, StimulusError
+from errors import ErrorCode, StimulusError, error_context
 
 
 class StimulusType(Enum):
@@ -160,10 +160,14 @@ class StimulusHandler:
 
         # Call all registered handlers for the stimulus type
         for handler in handlers:
-            try:
+            with error_context(
+                component_name="StimulusHandler",
+                operation=f"executing handler for {stimulus.type.value}",
+                error_class=StimulusError,
+                error_code=ErrorCode.STIMULUS_PROCESSING_ERROR,
+                logger=self.logger
+            ):
                 handler(stimulus)
-            except Exception as e:
-                self.logger.error(f"Error in stimulus handler: {e}")
 
     def create_stimulus(
         self,
@@ -441,7 +445,13 @@ def process_stimulus(
     # Add stimulus to conversation
     add_stimulus_to_conversation(stimulus, conversation)
 
-    try:
+    with error_context(
+        component_name="Stimulus",
+        operation="processing through conversation",
+        error_class=StimulusError,
+        error_code=ErrorCode.STIMULUS_PROCESSING_ERROR,
+        logger=logging.getLogger("stimulus")
+    ):
         # Generate response (empty input since stimulus is already added)
         response = conversation.generate_response("")
 
@@ -450,6 +460,3 @@ def process_stimulus(
             response_callback(stimulus, response)
 
         return response
-    except Exception as e:
-        logging.error(f"Error processing stimulus: {e}")
-        return None

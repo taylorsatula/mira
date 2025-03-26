@@ -12,7 +12,7 @@ The AI Agent System is built on several core design principles:
 
 3. **Minimal Dependencies**: The system minimizes external dependencies where possible, favoring the Python standard library.
 
-4. **Elegant Error Handling**: A comprehensive error handling system with custom exceptions, error codes, and clear error messages.
+4. **Standardized Error Handling**: A comprehensive error handling system with custom exceptions, error codes, clear error messages, and a unified context manager approach for consistent error wrapping.
 
 5. **Typed Code**: The codebase uses type hints throughout to improve code clarity and enable static type checking.
 
@@ -38,7 +38,35 @@ Error codes are defined in the `ErrorCode` enum, grouped by category:
 - 5xx: Conversation errors
 - 9xx: Uncategorized/system errors
 
-The `handle_error` utility function provides standardized error handling.
+#### Centralized Error Context Manager
+
+The system provides a centralized `error_context` context manager for standardized error handling:
+
+```python
+from errors import error_context, ToolError, ErrorCode
+
+# Use with any component
+with error_context(
+    component_name="my_component",
+    operation="specific operation",
+    error_class=ToolError,  # Or other appropriate error class
+    error_code=ErrorCode.TOOL_EXECUTION_ERROR,
+    logger=self.logger
+):
+    # Code that might raise exceptions
+    result = process_data(input)
+```
+
+This approach ensures consistent error handling, logging, and wrapping across all components.
+
+#### Specialized Error Handling
+
+Some components extend this pattern with domain-specific error handling:
+
+- `LLMBridge` includes the `api_error_context` context manager with specialized API retry logic
+- `PersistenceTool` uses custom handling for file-specific errors
+
+The `handle_error` utility function provides standardized user-facing error messages.
 
 ### Configuration Management (`config.py`)
 
@@ -377,34 +405,38 @@ def run(self, input_param: str) -> Dict[str, Any]:
 
 ### Step 4: Error Handling in Tools
 
-Tools should handle errors gracefully and raise appropriate exceptions:
+Tools should use the centralized error context manager for consistent error handling:
 
 ```python
+from errors import error_context, ToolError, ErrorCode
+
 def run(self, input_param: str) -> Dict[str, Any]:
-    try:
-        # Validate input
-        if not input_param:
-            raise ValueError("Input parameter cannot be empty")
-        
-        # Process input
-        result = self._process_input(input_param)
-        return result
-    
-    except ValueError as e:
-        # Convert to ToolError for consistent error handling
+    # Validate input
+    if not input_param:
         raise ToolError(
-            f"Invalid input: {e}",
+            "Input parameter cannot be empty",
             ErrorCode.TOOL_INVALID_INPUT,
             {"input": input_param}
         )
     
-    except Exception as e:
-        # Handle unexpected errors
-        raise ToolError(
-            f"Error executing tool: {e}",
-            ErrorCode.TOOL_EXECUTION_ERROR
-        )
+    # Use error context for operation that might fail
+    with error_context(
+        component_name=self.name,
+        operation="processing input",
+        error_class=ToolError,
+        error_code=ErrorCode.TOOL_EXECUTION_ERROR,
+        logger=self.logger
+    ):
+        # Process input (any exceptions will be caught and properly wrapped)
+        result = self._process_input(input_param)
+        return result
 ```
+
+This approach ensures:
+- Consistent error handling across all tools
+- Proper error wrapping with component name and operation context
+- Automatic logging of errors
+- Preservation of error details
 
 ## Tool Interface Contract
 

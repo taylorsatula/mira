@@ -4,8 +4,10 @@ Custom exception hierarchy for the AI agent system.
 This module defines standardized error codes, messages, and categorization
 for different types of errors that can occur within the system.
 """
+from contextlib import contextmanager
 from enum import Enum
-from typing import Optional, Dict, Any
+import logging
+from typing import Optional, Dict, Any, Type, Callable
 
 
 class ErrorCode(Enum):
@@ -164,6 +166,61 @@ class StimulusError(AgentError):
         details: Optional[Dict[str, Any]] = None
     ):
         super().__init__(message, code, details)
+
+
+@contextmanager
+def error_context(
+    component_name: str,
+    operation: str = None,
+    error_class: Type[AgentError] = AgentError,
+    error_code: ErrorCode = ErrorCode.UNKNOWN_ERROR,
+    logger: logging.Logger = None
+):
+    """
+    Context manager for standardized error handling across the system.
+    
+    Provides consistent error handling, logging, and error wrapping
+    for any component operation. Use with a 'with' statement to wrap code
+    that may raise exceptions.
+    
+    Args:
+        component_name: Name of the component (for error messages)
+        operation: Description of the operation (for error messages)
+        error_class: The AgentError subclass to use for wrapping
+        error_code: Error code to use for non-AgentError exceptions
+        logger: Logger to use (if None, creates a new one)
+        
+    Yields:
+        Control to the wrapped code block
+        
+    Raises:
+        AgentError: With appropriate error information
+    """
+    # Set up logger if not provided
+    if logger is None:
+        logger = logging.getLogger(f"error.{component_name}")
+        
+    try:
+        yield
+    except Exception as e:
+        # If it's already an AgentError, just log and re-raise
+        if isinstance(e, AgentError):
+            logger.error(f"{component_name} error: {e}")
+            raise
+            
+        # Generate error message
+        error_msg = f"Error in {component_name}"
+        if operation:
+            error_msg += f" during {operation}"
+            
+        # Log and wrap other exceptions
+        logger.error(f"{error_msg}: {str(e)}")
+        
+        raise error_class(
+            f"{error_msg}: {str(e)}",
+            error_code,
+            {"original_error": str(e)}
+        )
 
 
 def handle_error(error: Exception) -> str:

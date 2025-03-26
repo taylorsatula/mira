@@ -7,13 +7,14 @@ prompt construction, response handling, and error management for API interaction
 import json
 import logging
 import time
+from contextlib import contextmanager
 from typing import Dict, List, Any, Optional, Union, Callable
 
 import anthropic
 import requests
 from requests.exceptions import RequestException
 
-from errors import APIError, ErrorCode
+from errors import APIError, ErrorCode, error_context
 from config import config
 
 
@@ -201,6 +202,99 @@ class LLMBridge:
             {"attempts": attempt}
         )
 
+    @contextmanager
+    def api_error_context(self, operation, retry_allowed=True, max_attempts=None):
+        """
+        Context manager for API error handling with retry support.
+        
+        Args:
+            operation: Description of the API operation
+            retry_allowed: Whether retries are allowed for this operation
+            max_attempts: Override for max retry attempts
+            
+        Yields:
+            Tuple: (current_attempt, max_attempts) to track retry state
+            
+        Raises:
+            APIError: With appropriate error information after retries
+        """
+        max_retries = max_attempts if max_attempts is not None else self.max_retries
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                # Enforce rate limiting
+                self._enforce_rate_limit()
+                
+                # Provide attempt information to the caller
+                yield (attempt, max_retries)
+                
+                # If we get here, the operation succeeded
+                return
+                
+            except anthropic.APIError as e:
+                # Handle API-specific errors with retries
+                if e.status_code == 429 and retry_allowed and attempt < max_retries:
+                    wait_time = 2 ** attempt  # Exponential backoff
+                    self.logger.warning(
+                        f"Rate limit exceeded. Retrying in {wait_time}s (attempt {attempt}/{max_retries})"
+                    )
+                    time.sleep(wait_time)
+                    continue
+                elif e.status_code >= 500 and retry_allowed and attempt < max_retries:
+                    wait_time = 2 ** attempt  # Exponential backoff
+                    self.logger.warning(
+                        f"Server error. Retrying in {wait_time}s (attempt {attempt}/{max_retries})"
+                    )
+                    time.sleep(wait_time)
+                    continue
+                
+                # If retries not allowed or we're out of retries
+                with error_context(
+                    component_name="API",
+                    operation=operation,
+                    error_class=APIError,
+                    error_code=ErrorCode.API_RATE_LIMIT_ERROR if e.status_code == 429 else ErrorCode.API_RESPONSE_ERROR,
+                    logger=self.logger
+                ):
+                    raise
+                    
+            except (RequestException, requests.Timeout) as e:
+                # Handle network errors with retries
+                if retry_allowed and attempt < max_retries:
+                    wait_time = 2 ** attempt  # Exponential backoff
+                    self.logger.warning(
+                        f"Connection error. Retrying in {wait_time}s (attempt {attempt}/{max_retries})"
+                    )
+                    time.sleep(wait_time)
+                    continue
+                
+                # If retries not allowed or we're out of retries
+                with error_context(
+                    component_name="API",
+                    operation=operation,
+                    error_class=APIError,
+                    error_code=ErrorCode.API_CONNECTION_ERROR if isinstance(e, RequestException) else ErrorCode.API_TIMEOUT_ERROR,
+                    logger=self.logger
+                ):
+                    raise
+                    
+            except Exception as e:
+                # Handle any other errors (no retries)
+                with error_context(
+                    component_name="API",
+                    operation=operation,
+                    error_class=APIError,
+                    error_code=ErrorCode.API_RESPONSE_ERROR,
+                    logger=self.logger
+                ):
+                    raise
+        
+        # If we've exhausted all retries
+        raise APIError(
+            f"Failed to complete API operation '{operation}' after {max_retries} attempts",
+            ErrorCode.API_RESPONSE_ERROR
+        )
+
     def generate_response(
         self,
         messages: List[Dict[str, str]],
@@ -234,67 +328,55 @@ class LLMBridge:
         temperature = temperature if temperature is not None else self.temperature
         max_tokens = max_tokens if max_tokens is not None else self.max_tokens
 
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                # Enforce rate limiting
-                self._enforce_rate_limit()
+        # Prepare request parameters
+        params = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
 
-                # Prepare request parameters
-                params = {
-                    "model": self.model,
-                    "messages": messages,
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                }
+        # Add optional parameters if provided
+        if system_prompt:
+            params["system"] = system_prompt
 
-                # Add optional parameters if provided
-                if system_prompt:
-                    params["system"] = system_prompt
+        if tools:
+            params["tools"] = tools
 
-                if tools:
-                    params["tools"] = tools
+        # Add streaming parameter if requested
+        if stream:
+            params["stream"] = True
 
-                # Add streaming parameter if requested
-                if stream:
-                    params["stream"] = True
+        # Log the request (sanitized for security)
+        self._log_request(params)
 
-                # Log the request (sanitized for security)
-                self._log_request(params)
+        # Use the API error context for handling errors with retries
+        with self.api_error_context("generate response"):
+            # Make the API call
+            if stream:
+                # Stream mode - return the stream or process with callback
+                # Remove 'stream' param since it's not needed for stream() method
+                stream_params = params.copy()
+                if 'stream' in stream_params:
+                    del stream_params['stream']
 
-                # Make the API call
-                if stream:
-                    # Stream mode - return the stream or process with callback
-                    # Remove 'stream' param since it's not needed for stream() method
-                    stream_params = params.copy()
-                    if 'stream' in stream_params:
-                        del stream_params['stream']
+                stream_response = self.client.messages.stream(**stream_params)
 
-                    stream_response = self.client.messages.stream(**stream_params)
-
-                    if callback:
-                        # Process stream with callback
-                        return self._process_stream_with_callback(stream_response, callback)
-                    else:
-                        # Return stream directly
-                        self.logger.debug("Returning stream object directly")
-                        return stream_response
+                if callback:
+                    # Process stream with callback
+                    return self._process_stream_with_callback(stream_response, callback)
                 else:
-                    # Normal mode - make regular API call
-                    response = self.client.messages.create(**params)
+                    # Return stream directly
+                    self.logger.debug("Returning stream object directly")
+                    return stream_response
+            else:
+                # Normal mode - make regular API call
+                response = self.client.messages.create(**params)
 
-                    # Log the response
-                    self._log_response(response)
+                # Log the response
+                self._log_response(response)
 
-                    return response
-
-            except Exception as e:
-                self._handle_api_error(e, attempt)
-
-        # This should never be reached due to _handle_api_error raising exceptions
-        raise APIError(
-            "Failed to generate response after all retry attempts",
-            ErrorCode.API_RESPONSE_ERROR
-        )
+                return response
 
     def _process_stream_with_callback(self, stream, callback):
         """
@@ -307,7 +389,13 @@ class LLMBridge:
         Returns:
             The final complete response
         """
-        try:
+        with error_context(
+            component_name="API", 
+            operation="processing stream", 
+            error_class=APIError,
+            error_code=ErrorCode.API_RESPONSE_ERROR,
+            logger=self.logger
+        ):
             final_response = None
 
             with stream as response:
@@ -319,11 +407,6 @@ class LLMBridge:
                     callback(text)
 
             return final_response
-
-        except Exception as e:
-            self.logger.error(f"Error processing stream: {e}")
-            # Use centralized error handling (streams don't retry)
-            self._handle_api_error(e, self.max_retries)
 
     def _log_request(self, params: Dict[str, Any]) -> None:
         """

@@ -12,7 +12,7 @@ Key features:
 - Extensible tool system for adding custom capabilities
 - Conversation management with history tracking
 - Persistent storage for conversations and data
-- Comprehensive error handling
+- Standardized error handling with context managers
 
 ## Installation
 
@@ -109,6 +109,7 @@ Create a new file in the `tools` directory:
 ```python
 # tools/custom_tool.py
 from tools.repo import Tool
+from errors import error_context, ToolError, ErrorCode
 
 class MyCustomTool(Tool):
     name = "my_custom_tool"
@@ -125,13 +126,21 @@ class MyCustomTool(Tool):
         Returns:
             Result dictionary
         """
-        # Tool implementation here
-        result = {
-            "parameter1": parameter1,
-            "parameter2": parameter2,
-            "processed": f"{parameter1}-{parameter2}"
-        }
-        return result
+        # Use the centralized error context manager for error handling
+        with error_context(
+            component_name=self.name,
+            operation="processing parameters",
+            error_class=ToolError,
+            error_code=ErrorCode.TOOL_EXECUTION_ERROR,
+            logger=self.logger
+        ):
+            # Tool implementation here
+            result = {
+                "parameter1": parameter1,
+                "parameter2": parameter2,
+                "processed": f"{parameter1}-{parameter2}"
+            }
+            return result
 ```
 
 The tool will be automatically discovered and registered when the system starts.

@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, List
 
 from api.llm_bridge import LLMBridge
 from tools.repo import ToolRepository
-from errors import ToolError, ErrorCode
+from errors import ToolError, ErrorCode, error_context
 
 
 class TaskStatus:
@@ -188,64 +188,77 @@ class AsyncTaskManager:
         Runs continuously, processing tasks from the queue.
         """
         while True:
-            try:
+            # Use error context for the worker loop with proper component name
+            with error_context(
+                component_name="AsyncTaskManager",
+                operation="worker loop",
+                error_class=ToolError,
+                error_code=ErrorCode.TOOL_EXECUTION_ERROR,
+                logger=self.logger
+            ):
                 # Get next task from queue
                 task, task_prompt = self.task_queue.get()
                 
-                # Handle None task (for testing) or skip completed tasks
-                if task is None:
-                    self.task_queue.task_done()
-                    continue
-                
-                # Skip if task already completed or failed
-                if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED]:
-                    self.task_queue.task_done()
-                    continue
-                
-                # Mark task as running
-                task.status = TaskStatus.RUNNING
-                task.started_at = time.time()
-                
-                # Ensure we have the required components
-                if not self.llm_bridge or not self.tool_repo:
-                    task.status = TaskStatus.FAILED
-                    task.error = "Task manager not properly initialized (missing LLM Bridge or Tool Repository)"
-                    task.completed_at = time.time()
-                    self.task_queue.task_done()
-                    continue
-                
                 try:
-                    # Execute task using background LLM
-                    result = self._execute_task_with_llm(task, task_prompt)
+                    # Handle None task (for testing) or skip completed tasks
+                    if task is None:
+                        self.task_queue.task_done()
+                        continue
                     
-                    # Mark task as completed
-                    task.status = TaskStatus.COMPLETED
-                    task.result = result
-                    task.completed_at = time.time()
+                    # Skip if task already completed or failed
+                    if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED]:
+                        self.task_queue.task_done()
+                        continue
                     
-                    # Send notification if requested
-                    if task.notify_on_completion and self.notification_callback:
-                        self.notification_callback(task)
+                    # Mark task as running
+                    task.status = TaskStatus.RUNNING
+                    task.started_at = time.time()
                     
-                    self.logger.info(f"Completed async task: {task.task_id}")
+                    # Ensure we have the required components
+                    if not self.llm_bridge or not self.tool_repo:
+                        task.status = TaskStatus.FAILED
+                        task.error = "Task manager not properly initialized (missing LLM Bridge or Tool Repository)"
+                        task.completed_at = time.time()
+                        self.task_queue.task_done()
+                        continue
+                    
+                    # Use nested error context for task execution
+                    with error_context(
+                        component_name="AsyncTaskManager",
+                        operation=f"executing task {task.task_id}",
+                        error_class=ToolError,
+                        error_code=ErrorCode.TOOL_EXECUTION_ERROR,
+                        logger=self.logger
+                    ):
+                        # Execute task using background LLM
+                        result = self._execute_task_with_llm(task, task_prompt)
+                        
+                        # Mark task as completed
+                        task.status = TaskStatus.COMPLETED
+                        task.result = result
+                        task.completed_at = time.time()
+                        
+                        # Send notification if requested
+                        if task.notify_on_completion and self.notification_callback:
+                            self.notification_callback(task)
+                        
+                        self.logger.info(f"Completed async task: {task.task_id}")
                 
                 except Exception as e:
-                    # Handle execution error
+                    # Handle execution error (exceptions from task execution should be caught by the inner context)
                     self.logger.error(f"Error executing async task {task.task_id}: {e}")
-                    task.status = TaskStatus.FAILED
-                    task.error = str(e)
-                    task.completed_at = time.time()
-                    
-                    # Send notification for failures too
-                    if task.notify_on_completion and self.notification_callback:
-                        self.notification_callback(task)
+                    if task:
+                        task.status = TaskStatus.FAILED
+                        task.error = str(e)
+                        task.completed_at = time.time()
+                        
+                        # Send notification for failures too
+                        if task.notify_on_completion and self.notification_callback:
+                            self.notification_callback(task)
                 
                 finally:
                     # Mark task as done in queue
                     self.task_queue.task_done()
-            
-            except Exception as e:
-                self.logger.error(f"Error in worker loop: {e}")
     
     def _get_system_prompt(self, task_id: str) -> str:
         """
@@ -334,33 +347,42 @@ class AsyncTaskManager:
                 tool_input = tool_call["input"]
                 tool_id = tool_call["id"]
                 
-                try:
-                    # Invoke the tool
-                    result = self.tool_repo.invoke_tool(tool_name, tool_input)
-                    tool_results[tool_id] = {
-                        "content": str(result),
-                        "is_error": False
-                    }
+                # Use error context for tool execution
+                with error_context(
+                    component_name="AsyncTaskManager",
+                    operation=f"executing background tool {tool_name}",
+                    error_class=ToolError,
+                    error_code=ErrorCode.TOOL_EXECUTION_ERROR,
+                    logger=self.logger
+                ):
+                    try:
+                        # Invoke the tool
+                        result = self.tool_repo.invoke_tool(tool_name, tool_input)
+                        tool_results[tool_id] = {
+                            "content": str(result),
+                            "is_error": False
+                        }
+                        
+                        self.logger.debug(f"Background tool call successful: {tool_name}")
+                        
+                        # Check if this was a persistence tool call saving the final result
+                        if tool_name == "persistence" and tool_input.get("operation") == "set":
+                            filename = str(tool_input.get("filename", ""))
+                            if "async_results" in filename:
+                                # Log the successful result save
+                                self.logger.info(f"Task {task.task_id} saved result to {filename}")
+                                # Store full path for reporting
+                                full_path = f"persistent/{filename}"
+                                final_result = f"Task completed and result saved to {full_path}"
                     
-                    self.logger.debug(f"Background tool call successful: {tool_name}")
-                    
-                    # Check if this was a persistence tool call saving the final result
-                    if tool_name == "persistence" and tool_input.get("operation") == "set":
-                        filename = str(tool_input.get("filename", ""))
-                        if "async_results" in filename:
-                            # Log the successful result save
-                            self.logger.info(f"Task {task.task_id} saved result to {filename}")
-                            # Store full path for reporting
-                            full_path = f"persistent/{filename}"
-                            final_result = f"Task completed and result saved to {full_path}"
-                
-                except Exception as e:
-                    # Handle tool execution errors
-                    self.logger.error(f"Background tool execution error: {tool_name}: {e}")
-                    tool_results[tool_id] = {
-                        "content": f"Error: {e}",
-                        "is_error": True
-                    }
+                    except Exception as e:
+                        # We still need to catch exceptions here to continue processing
+                        # other tools even if one fails
+                        self.logger.error(f"Background tool execution error: {tool_name}: {e}")
+                        tool_results[tool_id] = {
+                            "content": f"Error: {e}",
+                            "is_error": True
+                        }
             
             # Prepare tool result blocks for next message
             tool_result_blocks = []

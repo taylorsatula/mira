@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from tools.repo import Tool
-from errors import ToolError, ErrorCode, FileOperationError
+from errors import ToolError, ErrorCode, FileOperationError, error_context
 
 
 class PersistenceTool(Tool):
@@ -98,37 +98,39 @@ class PersistenceTool(Tool):
 
         file_path = self.base_dir / filename
 
-        try:
-            # Perform the requested operation
-            if operation == "get":
+        # For the "get" operation, we need to handle FileNotFoundError specially
+        if operation == "get":
+            try:
                 return self._get_value(file_path, key)
-            elif operation == "set":
+            except FileNotFoundError:
+                raise ToolError(
+                    f"File not found: {filename}",
+                    ErrorCode.FILE_NOT_FOUND
+                )
+        
+        # For other operations, handle JSON errors separately
+        try:
+            if operation == "set":
                 return self._set_value(file_path, key, value)
             elif operation == "delete":
                 return self._delete_value(file_path, key)
             elif operation == "list":
                 return self._list_keys(file_path)
-
+                
         except FileNotFoundError:
-            if operation == "get":
-                raise ToolError(
-                    f"File not found: {filename}",
-                    ErrorCode.FILE_NOT_FOUND
-                )
-            # For other operations, we'll create the file if needed
+            # For operations other than "get", we'll create the file if needed
             return {"success": False, "message": f"File not found: {filename}"}
-
+            
         except json.JSONDecodeError:
-            raise ToolError(
-                f"Invalid JSON in file: {filename}",
-                ErrorCode.INVALID_JSON
-            )
-
-        except Exception as e:
-            raise ToolError(
-                f"Error during {operation} operation: {str(e)}",
-                ErrorCode.TOOL_EXECUTION_ERROR
-            )
+            # Special handling for JSON parsing errors
+            with error_context(
+                component_name=self.name,
+                operation=f"{operation} operation",
+                error_class=ToolError,
+                error_code=ErrorCode.INVALID_JSON,
+                logger=self.logger
+            ):
+                raise
 
     def _load_data(self, file_path: Path) -> Dict[str, Any]:
         """

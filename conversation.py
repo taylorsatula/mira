@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Union
 
-from errors import ConversationError, ErrorCode
+from errors import ConversationError, ErrorCode, error_context
 from config import config
 from api.llm_bridge import LLMBridge
 from tools.repo import ToolRepository
@@ -239,7 +239,14 @@ class Conversation:
         # Add user message to conversation
         self.add_message("user", user_input)
         
-        try:
+        # Use centralized error context manager for standardized error handling
+        with error_context(
+            component_name="Conversation",
+            operation="generating response",
+            error_class=ConversationError,
+            error_code=ErrorCode.UNKNOWN_ERROR,  # Will be updated if context overflow is detected
+            logger=self.logger
+        ):
             # Initialize streaming handler if needed
             def _handle_streaming_response(text_chunk):
                 # Call user-provided callback with each chunk
@@ -347,19 +354,7 @@ class Conversation:
             else:
                 return final_response
         
-        except Exception as e:
-            error_msg = f"Failed to generate response: {e}"
-            self.logger.error(error_msg)
-            
-            # Log the error but don't add to conversation since we can't use system role
-            self.logger.error(f"Error message not added to conversation: {error_msg}")
-            # Store error in instance variable for potential later use
-            self.last_error = error_msg
-            
-            raise ConversationError(
-                error_msg,
-                ErrorCode.CONTEXT_OVERFLOW if "context" in str(e).lower() else ErrorCode.UNKNOWN_ERROR
-            )
+        # Error handling now provided by the error_context context manager
     
     def _process_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -378,23 +373,30 @@ class Conversation:
             tool_input = tool_call["input"]
             tool_id = tool_call["id"]
             
-            try:
-                # Invoke the tool
-                result = self.tool_repo.invoke_tool(tool_name, tool_input)
-                tool_results[tool_id] = {
-                    "content": str(result),
-                    "is_error": False
-                }
+            with error_context(
+                component_name="Conversation",
+                operation=f"executing tool {tool_name}",
+                error_class=ConversationError,
+                logger=self.logger
+            ):
+                try:
+                    # Invoke the tool
+                    result = self.tool_repo.invoke_tool(tool_name, tool_input)
+                    tool_results[tool_id] = {
+                        "content": str(result),
+                        "is_error": False
+                    }
+                    
+                    self.logger.debug(f"Tool call successful: {tool_name}")
                 
-                self.logger.debug(f"Tool call successful: {tool_name}")
-            
-            except Exception as e:
-                # Handle tool execution errors
-                self.logger.error(f"Tool execution error: {tool_name}: {e}")
-                tool_results[tool_id] = {
-                    "content": f"Error: {e}",
-                    "is_error": True
-                }
+                except Exception as e:
+                    # We still need to catch exceptions here to continue processing
+                    # other tools even if one fails, but we log properly
+                    self.logger.error(f"Tool execution error: {tool_name}: {e}")
+                    tool_results[tool_id] = {
+                        "content": f"Error: {e}",
+                        "is_error": True
+                    }
         
         return tool_results
     
