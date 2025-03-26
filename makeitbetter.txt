@@ -205,7 +205,6 @@
    - Don't rewrite the entire config system at once
    - Add new properties alongside existing dict-based access
    - Update consuming code to use the new properties
-   - Maintain backward compatibility
 
 ### Example Implementation
 
