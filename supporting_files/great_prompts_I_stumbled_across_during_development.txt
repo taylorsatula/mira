@@ -6,3 +6,5 @@
 # Code Generation
  - Yes it does. I want you to ultrathink about the plan of action and what order you'd implement the functionality in. Provide a detailed report to me.
   ^ Incredibly detailed and it implements them in the correct order which is crucial when LLMs are predicting the next token. They must have the supporting code ready when they make a function
+
+- Ultrathink about the best way to implement this change before proceeding. Once you have a mental model you want to work with step back and look at it with a critical eye. If it stands up thats great and if it doesn't ultrathink again until you have a plan that can stand up to criticism.
