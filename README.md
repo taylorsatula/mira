@@ -60,17 +60,18 @@ Key features:
 
 ## Configuration
 
-Configuration can be set in three ways:
-1. Default settings in `config.py`
-2. Environment variables in `.env` file
-3. Command-line arguments
+The system uses a centralized configuration system with Pydantic for validation. Configuration can be set in two ways:
+1. Environment variables in `.env` file
+2. Command-line arguments
 
 Environment variables should be prefixed with `AGENT_`. For nested settings, use double underscores `__`. For example:
 ```
-AGENT_LOG_LEVEL=DEBUG
+AGENT_SYSTEM__LOG_LEVEL=DEBUG
 AGENT_API__MODEL=claude-3-7-sonnet-20250219
 AGENT_API__TEMPERATURE=0.8
 ```
+
+All configuration settings have sensible defaults, so you only need to specify values you want to override.
 
 Command-line options:
 - `--config` or `-c`: Path to a JSON configuration file
@@ -86,6 +87,10 @@ from config import config
 from api.llm_bridge import LLMBridge
 from tools.repo import ToolRepository
 from conversation import Conversation
+
+# The config instance is already initialized with sensible defaults
+print(f"Using model: {config.api.model}")
+print(f"Log level: {config.system.log_level}")
 
 # Initialize components
 llm_bridge = LLMBridge()

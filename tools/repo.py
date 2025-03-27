@@ -1,558 +1,459 @@
 """
-Tool discovery, registration, and invocation for the AI agent system.
+Conversation management for the AI agent system.
 
-This module handles the interface definition for all tools, tool
-discovery and registration, and tool invocation and response processing.
+This module handles conversation turns, context tracking,
+tool result integration, and conversation history management.
 """
-import importlib
-import inspect
 import logging
-import pkgutil
-from contextlib import contextmanager
-from typing import Dict, List, Any, Optional, Type, Union, get_type_hints
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional, Union
 
-from errors import ToolError, ErrorCode, error_context
+from errors import ConversationError, ErrorCode, error_context
+from config import config
+from api.llm_bridge import LLMBridge
+from tools.repo import ToolRepository
 
 
-class Tool:
+@dataclass
+class Message:
     """
-    Base class for all tools in the system.
-
-    Defines the interface that all tools must implement and
-    provides common functionality including standardized error handling.
+    Representation of a message in a conversation.
+    
+    Attributes:
+        role: The role of the message sender (must be 'user' or 'assistant')
+        content: The content of the message (string or list of content blocks)
+        id: Unique identifier for the message
+        created_at: Timestamp when the message was created
+        metadata: Additional metadata for the message
     """
-
-    # Class properties for tool definition
-    name: str = "base_tool"  # Name of the tool (must be set by subclasses)
-    description: str = "Base tool class"  # Description of what the tool does
-    usage_examples: List[Dict[str, Any]] = []  # Examples of how to use the tool
-
-    def __init__(self):
-        """Initialize the tool."""
-        self.logger = logging.getLogger(f"tool.{self.name}")
-
-    def run(self, **kwargs) -> Any:
+    role: str
+    content: Union[str, List[Dict[str, Any]]]
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: float = field(default_factory=time.time)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def to_dict(self) -> Dict[str, Any]:
         """
-        Execute the tool with the provided parameters.
-
-        This method must be implemented by all tool subclasses.
-
-        Args:
-            **kwargs: Tool-specific parameters
-
-        Returns:
-            Tool execution result
-
-        Raises:
-            NotImplementedError: If the subclass doesn't implement this method
-        """
-        raise NotImplementedError("Tool subclasses must implement 'run' method")
+        Convert the message to a dictionary representation.
         
-    # Tool error handling should use the centralized error_context function from errors.py
-
-    @classmethod
-    def get_parameter_schema(cls) -> Dict[str, Any]:
-        """
-        Get the parameter schema for the tool.
-
-        This method uses type hints from the run method to generate
-        a schema describing the expected parameters.
-
         Returns:
-            Parameter schema as a dictionary
+            Dictionary representation of the message
         """
-        schema = {"type": "object", "properties": {}, "required": []}
+        # Handle complex content objects like TextBlock by converting to string
+        content = self.content
+        if not isinstance(content, (str, list, dict)) and hasattr(content, '__dict__'):
+            # Convert non-serializable objects to string representation
+            content = str(content)
+        elif isinstance(content, list) and any(not isinstance(item, (str, int, float, bool, dict, list, type(None))) for item in content):
+            # Handle list of complex objects
+            content = [str(item) if not isinstance(item, (str, int, float, bool, dict, list, type(None))) else item for item in content]
+        
+        return {
+            "role": self.role,
+            "content": content,
+            "id": self.id,
+            "created_at": self.created_at,
+            "metadata": self.metadata
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'Message':
+        """
+        Create a message from a dictionary representation.
+        
+        Args:
+            data: Dictionary representation of the message
+            
+        Returns:
+            Message object
+        """
+        return cls(
+            role=data["role"],
+            content=data["content"],
+            id=data.get("id", str(uuid.uuid4())),
+            created_at=data.get("created_at", time.time()),
+            metadata=data.get("metadata", {})
+        )
 
-        # Get type hints for the run method
-        try:
-            hints = get_type_hints(cls.run)
-            # Remove 'return' from hints
-            if "return" in hints:
-                del hints["return"]
 
-            # Get parameter details from docstring if available
-            param_docs = {}
-            if cls.run.__doc__:
-                for line in cls.run.__doc__.split("\n"):
-                    line = line.strip()
-                    if line.startswith(":param ") or line.startswith("@param "):
-                        parts = line.split(":", 2) if line.startswith(":param ") else line.split("@param ", 1)[1].split(":", 1)
-                        if len(parts) >= 2:
-                            param_name = parts[0].strip().replace("param ", "")
-                            param_desc = parts[1].strip()
-                            param_docs[param_name] = param_desc
-
-            # Build schema from type hints
-            for param_name, param_type in hints.items():
-                param_info = {"description": param_docs.get(param_name, f"Parameter: {param_name}")}
-
-                # Map Python types to JSON schema types
-                if param_type == str:
-                    param_info["type"] = "string"
-                elif param_type == int:
-                    param_info["type"] = "integer"
-                elif param_type == float:
-                    param_info["type"] = "number"
-                elif param_type == bool:
-                    param_info["type"] = "boolean"
-                elif param_type == list or getattr(param_type, "__origin__", None) == list:
-                    param_info["type"] = "array"
-                elif param_type == dict or getattr(param_type, "__origin__", None) == dict:
-                    param_info["type"] = "object"
+class Conversation:
+    """
+    Manager for conversation interactions.
+    
+    Handles conversation turns, context tracking, tool result
+    integration, and conversation history management.
+    """
+    
+    def __init__(
+        self,
+        conversation_id: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        llm_bridge: Optional[LLMBridge] = None,
+        tool_repo: Optional[ToolRepository] = None
+    ):
+        """
+        Initialize a new conversation.
+        
+        Args:
+            conversation_id: Optional unique identifier for the conversation
+            system_prompt: Optional system prompt for the conversation
+            llm_bridge: Optional LLM bridge instance
+            tool_repo: Optional tool repository instance
+        """
+        # Set up logging
+        self.logger = logging.getLogger("conversation")
+        
+        # Initialize conversation ID
+        self.conversation_id = conversation_id or str(uuid.uuid4())
+        self.logger.debug(f"Created conversation with ID: {self.conversation_id}")
+        
+        # Set up conversation history
+        self.messages: List[Message] = []
+        
+        # Set up conversation components
+        self.llm_bridge = llm_bridge or LLMBridge()
+        self.tool_repo = tool_repo or ToolRepository()
+        
+        # Set up conversation config
+        self.max_history = config.conversation.max_history
+        self.max_context_tokens = config.conversation.max_context_tokens
+        
+        # Store system prompt as a property (not as a message)
+        if system_prompt:
+            self.system_prompt = system_prompt
+        else:
+            # Load system prompt from file
+            self.system_prompt = config.get_system_prompt("main_system_prompt")
+            
+        # Initialize error tracking
+        self.last_error = None
+    
+    def add_message(self, role: str, content: Union[str, List[Dict[str, Any]]], metadata: Optional[Dict[str, Any]] = None) -> Message:
+        """
+        Add a message to the conversation.
+        
+        Args:
+            role: The role of the message sender (must be 'user' or 'assistant')
+            content: The content of the message (string or list of content blocks)
+            metadata: Optional metadata for the message
+            
+        Returns:
+            The newly created message
+            
+        Raises:
+            ValueError: If role is not 'user' or 'assistant'
+        """
+        # Validate role is either 'user' or 'assistant'
+        if role not in ["user", "assistant"]:
+            self.logger.warning(f"Invalid role: {role}. Converting to 'user' role.")
+            role = "user"  # For backwards compatibility, convert invalid roles to 'user'
+            
+        # Create a new message
+        message = Message(role=role, content=content, metadata=metadata or {})
+        
+        # Add the message to the conversation
+        self.messages.append(message)
+        
+        # Prune history if needed
+        if self.max_history and len(self.messages) > self.max_history * 2:
+            # Keep only the most recent messages
+            self.messages = self.messages[-self.max_history*2:]
+            self.logger.debug(f"Pruned conversation history to {len(self.messages)} messages")
+        
+        return message
+    
+    def get_formatted_messages(self) -> List[Dict[str, Any]]:
+        """
+        Get the formatted messages for Anthropic API consumption.
+        
+        Returns:
+            List of message dictionaries with 'role' and 'content'
+            following Anthropic's API format requirements.
+        """
+        # Format messages for the API
+        formatted_messages = []
+        
+        for message in self.messages:
+            # Validate that the message role is 'user' or 'assistant'
+            if message.role not in ["user", "assistant"]:
+                self.logger.warning(f"Skipping message with invalid role: {message.role}")
+                continue
+                
+            # Handle assistant messages with tool_use blocks
+            if message.role == "assistant" and message.metadata.get("has_tool_calls", False):
+                # For messages with tool_use blocks, preserve the original content structure
+                formatted_messages.append({
+                    "role": "assistant",
+                    "content": message.content  # This preserves the tool_use blocks
+                })
+            # Handle user messages with tool results (content is already a list of content blocks)
+            elif message.role == "user" and isinstance(message.content, list):
+                formatted_messages.append({
+                    "role": "user",
+                    "content": message.content
+                })
+            else:
+                # For standard text messages
+                formatted_messages.append({
+                    "role": message.role,
+                    "content": message.content
+                })
+        
+        return formatted_messages
+    
+    def generate_response(
+        self,
+        user_input: str,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        stream: bool = False,
+        stream_callback: Optional[callable] = None,
+        max_tool_iterations: int = config.conversation.max_tool_iterations  # Limit iterations to prevent infinite loops
+    ) -> Union[str, None]:
+        """
+        Generate a response to user input.
+        
+        Args:
+            user_input: User input text
+            temperature: Optional temperature parameter
+            max_tokens: Optional maximum tokens for the response
+            stream: Whether to stream the response (default: False)
+            stream_callback: Optional callback function for processing streamed tokens
+            max_tool_iterations: Maximum number of tool call iterations
+            
+        Returns:
+            If stream=False: Assistant's response text
+            If stream=True with callback: None (results sent to callback)
+            
+        Raises:
+            ConversationError: If response generation fails
+        """
+        # Check for empty input
+        if not user_input or user_input.strip() == "":
+            error_msg = "Empty message content is not allowed"
+            self.logger.warning(error_msg)
+            raise ConversationError(error_msg, ErrorCode.INVALID_INPUT)
+            
+        # Add user message to conversation
+        self.add_message("user", user_input)
+        
+        # Use centralized error context manager for standardized error handling
+        with error_context(
+            component_name="Conversation",
+            operation="generating response",
+            error_class=ConversationError,
+            error_code=ErrorCode.UNKNOWN_ERROR,  # Will be updated if context overflow is detected
+            logger=self.logger
+        ):
+            # Initialize streaming handler if needed
+            def _handle_streaming_response(text_chunk):
+                # Call user-provided callback with each chunk
+                if stream_callback:
+                    stream_callback(text_chunk)
+            
+            # Keep track of the final response for return value
+            final_response = None
+            
+            # Tool iteration counter
+            tool_iterations = 0
+            
+            # Continue processing responses until no more tool calls are made
+            # or we reach the maximum number of iterations
+            while tool_iterations < max_tool_iterations:
+                # Get current messages for the API
+                messages = self.get_formatted_messages()
+                
+                # Generate response (streaming or standard)
+                if stream:
+                    response = self.llm_bridge.generate_response(
+                        messages=messages,
+                        system_prompt=self.system_prompt,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None,
+                        stream=True,
+                        callback=_handle_streaming_response
+                    )
+                    
+                    # For stream responses, get the final message
+                    if hasattr(response, 'get_final_message'):
+                        final_message = response.get_final_message()
+                        response = final_message
                 else:
-                    # Default to string for complex types
-                    param_info["type"] = "string"
-
-                schema["properties"][param_name] = param_info
-
-                # Mark as required if the parameter doesn't have a default value
-                sig = inspect.signature(cls.run)
-                if param_name in sig.parameters:
-                    param = sig.parameters[param_name]
-                    if param.default == inspect.Parameter.empty:
-                        schema["required"].append(param_name)
-
-        except Exception as e:
-            logging.warning(f"Error generating parameter schema for {cls.name}: {e}")
-            # Return a minimal schema if there was an error
-            return {"type": "object", "properties": {}, "required": []}
-
-        return schema
-
-    @classmethod
-    def get_tool_definition(cls) -> Dict[str, Any]:
+                    response = self.llm_bridge.generate_response(
+                        messages=messages,
+                        system_prompt=self.system_prompt,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
+                    )
+                
+                # Extract text content for final return value
+                assistant_response = self.llm_bridge.extract_text_content(response)
+                final_response = assistant_response
+                
+                # Check for tool calls
+                tool_calls = self.llm_bridge.extract_tool_calls(response)
+                
+                # If no tool calls, add the response to conversation and break the loop
+                if not tool_calls:
+                    self.add_message("assistant", assistant_response)
+                    break
+                
+                # Otherwise, process the tool calls and continue the loop
+                tool_iterations += 1
+                self.logger.debug(f"Processing tool iteration {tool_iterations}/{max_tool_iterations}")
+                
+                # Add the assistant's message with tool calls to the conversation
+                if hasattr(response, 'content'):
+                    content = response.content
+                    if hasattr(content, '__dict__') and not isinstance(content, (str, list, dict)):
+                        content = str(content)
+                else:
+                    content = str(response)
+                
+                self.add_message(
+                    "assistant",
+                    content,
+                    {"has_tool_calls": True}
+                )
+                
+                # Process tool calls
+                tool_results = self._process_tool_calls(tool_calls)
+                
+                # Format tool results for the user message
+                tool_result_blocks = []
+                for tool_id, tool_result in tool_results.items():
+                    tool_result_blocks.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": tool_result["content"],
+                        "is_error": tool_result.get("is_error", False)
+                    })
+                
+                # Add user message with tool results
+                self.add_message(
+                    "user",
+                    tool_result_blocks,
+                    {"is_tool_result": True}
+                )
+            
+            # If we've exceeded the maximum iterations, log a warning
+            if tool_iterations >= max_tool_iterations:
+                self.logger.warning(f"Reached maximum tool iterations ({max_tool_iterations})")
+                # Add a final response indicating the limit was reached
+                if final_response:
+                    self.add_message("assistant",
+                                    f"{final_response}\n\n[Note: Maximum tool iterations reached]")
+            
+            # In streaming mode with callback, return None as content was already sent
+            if stream and stream_callback:
+                return None
+            else:
+                return final_response
+        
+        # Error handling now provided by the error_context context manager
+    
+    def _process_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Get the complete tool definition for Anthropic API integration.
-
+        Process tool calls from the LLM.
+        
+        Args:
+            tool_calls: List of tool call dictionaries
+            
         Returns:
-            Tool definition dictionary following Anthropic's format
+            Dictionary mapping tool use IDs to tool results
+        """
+        tool_results = {}
+        
+        for tool_call in tool_calls:
+            tool_name = tool_call["tool_name"]
+            tool_input = tool_call["input"]
+            tool_id = tool_call["id"]
+            
+            with error_context(
+                component_name="Conversation",
+                operation=f"executing tool {tool_name}",
+                error_class=ConversationError,
+                logger=self.logger
+            ):
+                try:
+                    # Invoke the tool
+                    result = self.tool_repo.invoke_tool(tool_name, tool_input)
+                    tool_results[tool_id] = {
+                        "content": str(result),
+                        "is_error": False
+                    }
+                    
+                    self.logger.debug(f"Tool call successful: {tool_name}")
+                
+                except Exception as e:
+                    # We still need to catch exceptions here to continue processing
+                    # other tools even if one fails, but we log properly
+                    self.logger.error(f"Tool execution error: {tool_name}: {e}")
+                    tool_results[tool_id] = {
+                        "content": f"Error: {e}",
+                        "is_error": True
+                    }
+        
+        return tool_results
+    
+    def clear_history(self) -> None:
+        """
+        Clear the conversation history.
+        
+        Resets the conversation to its initial state while keeping
+        the conversation ID and system prompt.
+        """
+        self.messages = []
+        self.logger.debug(f"Cleared conversation history for {self.conversation_id}")
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert the conversation to a dictionary representation.
+        
+        Returns:
+            Dictionary representation of the conversation
         """
         return {
-            "name": cls.name,
-            "description": cls.description,
-            "input_schema": cls.get_parameter_schema()
+            "conversation_id": self.conversation_id,
+            "system_prompt": self.system_prompt,
+            "messages": [message.to_dict() for message in self.messages],
+            "created_at": self.messages[0].created_at if self.messages else time.time(),
+            "updated_at": self.messages[-1].created_at if self.messages else time.time(),
         }
-
-
-class ToolRepository:
-    """
-    Central registry and manager for all tools in the system.
-
-    Handles tool discovery, registration, invocation, and dependency injection.
-    """
-
-    def __init__(self, tools_package: str = "tools", initial_dependencies: Optional[Dict[str, Any]] = None):
+    
+    @classmethod
+    def from_dict(
+        cls,
+        data: Dict[str, Any],
+        llm_bridge: Optional[LLMBridge] = None,
+        tool_repo: Optional[ToolRepository] = None
+    ) -> 'Conversation':
         """
-        Initialize the tool repository.
-
+        Create a conversation from a dictionary representation.
+        
         Args:
-            tools_package: Python package where tools are located
-            initial_dependencies: Dictionary of dependencies available at initialization
-        """
-        self.logger = logging.getLogger("tool_repo")
-        self.tools_package = tools_package
-
-        # Store both tool classes and instances
-        self.tools: Dict[str, Union[Type[Tool], Tool]] = {}
-
-        # Track whether each entry is an instance or a class
-        self.tool_instances: Dict[str, bool] = {}
-
-        # Dependency injection support
-        self.dependencies: Dict[str, Any] = {}
-        self.tool_requirements: Dict[str, List[str]] = {}
-        self.initialization_status: Dict[str, str] = {}  # "pending", "initialized", "failed"
-
-        # Discover and register tools as classes first
-        self.discover_tools()
-
-        # Register any initial dependencies after discovery
-        if initial_dependencies:
-            for name, dependency in initial_dependencies.items():
-                self.register_dependency(name, dependency)
-
-        self.logger.info(f"Tool repository initialized with {len(self.tools)} tools")
-
-    def discover_tools(self) -> None:
-        """
-        Discover and register all available tools.
-
-        Searches the tools package for classes that inherit from Tool,
-        analyzes their dependency requirements, and registers them
-        in the tool registry as either classes (if they have dependencies)
-        or instances (if they can be instantiated without dependencies).
-        """
-        try:
-            # Get the tools package
-            package = importlib.import_module(self.tools_package)
-            package_path = getattr(package, "__path__", [None])[0]
-
-            if not package_path:
-                self.logger.warning(f"Could not find tools package path for {self.tools_package}")
-                return
-
-            pending_count = 0
-            total_count = 0
-
-            # Iterate through all modules in the package
-            for _, module_name, _ in pkgutil.iter_modules([package_path]):
-                # Skip the current module to avoid circular imports
-                if module_name == "repo":
-                    continue
-
-                try:
-                    # Import the module
-                    module = importlib.import_module(f"{self.tools_package}.{module_name}")
-
-                    # Find all Tool subclasses in the module
-                    for name, obj in inspect.getmembers(module, inspect.isclass):
-                        if issubclass(obj, Tool) and obj != Tool:
-                            # Register tool class and analyze its dependencies
-                            deps = self._register_tool_class(obj)
-                            if deps:
-                                pending_count += 1
-                            total_count += 1
-                except Exception as e:
-                    self.logger.error(f"Error loading tool module {module_name}: {e}")
-
-            if pending_count > 0:
-                self.logger.info(f"Discovered {total_count} tools, {pending_count} pending dependency injection")
-
-            # After all tools are discovered, try to initialize those that don't need dependencies
-            self._initialize_pending_tools()
-
-        except Exception as e:
-            self.logger.error(f"Error discovering tools: {e}")
-
-    def _register_tool_class(self, tool_class: Type[Tool]) -> List[str]:
-        """
-        Register a tool class and analyze its dependency requirements.
-
-        Args:
-            tool_class: Tool class to register
-
-        Returns:
-            List of required dependencies
-        """
-        # Get the tool name
-        tool_name = getattr(tool_class, "name", None)
-
-        # Validate the tool
-        if not tool_name:
-            self.logger.warning(f"Skipping tool {tool_class.__name__} with missing name")
-            return []
-
-        # Register the tool class
-        self.tools[tool_name] = tool_class
-        self.tool_instances[tool_name] = False  # It's a class, not an instance
-
-        # Analyze the tool's constructor requirements
-        required_deps = self._analyze_tool_requirements(tool_class)
-        self.tool_requirements[tool_name] = required_deps
-
-        if required_deps:
-            # Tool has dependencies, mark as pending initialization
-            self.initialization_status[tool_name] = "pending"
-            self.logger.debug(f"Registered tool class: {tool_name} with dependencies: {required_deps}")
-        else:
-            # No dependencies required, can initialize immediately
-            self.initialization_status[tool_name] = "ready"
-            self.logger.debug(f"Registered tool class: {tool_name} (no dependencies required)")
-
-        return required_deps
-
-    def _analyze_tool_requirements(self, tool_class: Type[Tool]) -> List[str]:
-        """
-        Determine what dependencies a tool needs by examining its __init__ signature.
-
-        Args:
-            tool_class: Tool class to analyze
-
-        Returns:
-            List of required parameter names (excluding self and parameters with defaults)
-        """
-        try:
-            required_deps = []
-            signature = inspect.signature(tool_class.__init__)
-
-            # Skip self parameter, check remaining parameters
-            for param_name, param in list(signature.parameters.items())[1:]:
-                if param.default == inspect.Parameter.empty:
-                    required_deps.append(param_name)
-
-            return required_deps
-        except Exception as e:
-            self.logger.error(f"Error analyzing requirements for {tool_class.__name__}: {e}")
-            return []
-
-    def register_tool(self, tool: Union[Type[Tool], Tool]) -> None:
-        """
-        Register a tool class or instance in the repository.
-
-        Args:
-            tool: Tool class or instance to register
-        """
-        # Check if it's an instance or a class
-        is_instance = not inspect.isclass(tool)
-
-        # Get the tool name
-        tool_name = getattr(tool, "name", None)
-
-        # Validate the tool
-        if not tool_name:
-            class_name = tool.__class__.__name__ if is_instance else tool.__name__
-            self.logger.warning(f"Skipping tool {class_name} with missing name")
-            return
-
-        if tool_name in self.tools:
-            self.logger.warning(f"Tool with name '{tool_name}' already registered, overwriting")
-
-        # Register the tool
-        self.tools[tool_name] = tool
-        self.tool_instances[tool_name] = is_instance
-        self.logger.debug(f"Registered tool: {tool_name} ({'instance' if is_instance else 'class'})")
-
-    def get_tool(self, tool_name: str) -> Optional[Union[Type[Tool], Tool]]:
-        """
-        Get a tool class or instance by name.
-
-        Args:
-            tool_name: Name of the tool to get
-
-        Returns:
-            Tool class, tool instance, or None if not found
-        """
-        return self.tools.get(tool_name)
-
-    def get_all_tool_definitions(self) -> List[Dict[str, Any]]:
-        """
-        Get definitions for all registered tools.
-
-        Returns:
-            List of tool definitions
-        """
-        definitions = []
-        for tool_name, tool in self.tools.items():
-            # Handle both classes and instances
-            is_instance = self.tool_instances.get(tool_name, False)
-            if is_instance:
-                # Get definition from instance method
-                definitions.append(tool.get_tool_definition())
-            else:
-                # Get definition from class method
-                definitions.append(tool.get_tool_definition())
-        return definitions
-
-    def invoke_tool(self, tool_name: str, tool_params: Dict[str, Any]) -> Any:
-        """
-        Invoke a tool by name with the provided parameters.
-
-        Args:
-            tool_name: Name of the tool to invoke
-            tool_params: Parameters to pass to the tool
-
-        Returns:
-            Tool execution result
-
-        Raises:
-            ToolError: If the tool is not found or execution fails
-        """
-        # Get the tool class or instance
-        tool = self.get_tool(tool_name)
-        if not tool:
-            raise ToolError(
-                f"Tool not found: {tool_name}",
-                ErrorCode.TOOL_NOT_FOUND
-            )
-
-        try:
-            # Check if the tool is a class that needs initialization
-            is_instance = self.tool_instances.get(tool_name, False)
-
-            if not is_instance:
-                # Tool is still a class, check initialization status
-                status = self.initialization_status.get(tool_name)
-
-                if status == "failed":
-                    # Tool failed to initialize previously
-                    required_deps = self.tool_requirements.get(tool_name, [])
-                    missing_deps = [dep for dep in required_deps if dep not in self.dependencies]
-
-                    if missing_deps:
-                        raise ToolError(
-                            f"Tool {tool_name} is missing required dependencies: {missing_deps}",
-                            ErrorCode.TOOL_INITIALIZATION_ERROR
-                        )
-                    else:
-                        raise ToolError(
-                            f"Tool {tool_name} failed to initialize with available dependencies",
-                            ErrorCode.TOOL_INITIALIZATION_ERROR
-                        )
-
-                # Try initializing one more time in case dependencies were added
-                if not self._try_initialize_tool(tool_name):
-                    # Still couldn't initialize
-                    required_deps = self.tool_requirements.get(tool_name, [])
-                    if required_deps:
-                        raise ToolError(
-                            f"Tool {tool_name} requires dependencies: {required_deps}",
-                            ErrorCode.TOOL_INITIALIZATION_ERROR
-                        )
-                    else:
-                        raise ToolError(
-                            f"Failed to initialize tool {tool_name}",
-                            ErrorCode.TOOL_INITIALIZATION_ERROR
-                        )
-
-                # Successfully initialized, get the instance
-                tool_instance = self.tools[tool_name]
-            else:
-                # Already an instance
-                tool_instance = tool
-
-            # Log the tool invocation
-            self.logger.info(f"Invoking tool: {tool_name} with parameters: {tool_params}")
+            data: Dictionary representation of the conversation
+            llm_bridge: Optional LLM bridge instance
+            tool_repo: Optional tool repository instance
             
-            # Run the tool with the provided parameters
-            result = tool_instance.run(**tool_params)
-            
-            # Log successful execution
-            self.logger.info(f"Tool {tool_name} executed successfully")
-            
-            return result
-
-        except Exception as e:
-            # Handle tool execution errors
-            if isinstance(e, ToolError):
-                raise
-            else:
-                raise ToolError(
-                    f"Error executing tool {tool_name}: {e}",
-                    ErrorCode.TOOL_EXECUTION_ERROR,
-                    {"original_error": str(e)}
-                )
-
-    def __len__(self) -> int:
-        """
-        Get the number of registered tools.
-
         Returns:
-            Number of tools
+            Conversation object
         """
-        return len(self.tools)
-
-    def __contains__(self, tool_name: str) -> bool:
-        """
-        Check if a tool is registered.
-
-        Args:
-            tool_name: Name of the tool to check
-
-        Returns:
-            True if the tool is registered, False otherwise
-        """
-        return tool_name in self.tools
-
-    def register_dependency(self, name: str, dependency: Any) -> None:
-        """
-        Register a dependency that can be injected into tools.
-
-        Args:
-            name: Name of the dependency
-            dependency: The dependency object
-        """
-        self.dependencies[name] = dependency
-        self.logger.debug(f"Registered dependency: {name}")
-
-        # Try to initialize pending tools with the new dependency
-        self._initialize_pending_tools()
-
-    def _initialize_pending_tools(self) -> None:
-        """
-        Try to initialize any pending tools whose dependencies are now available.
-        """
-        initialized_count = 0
-
-        # Get all tools that are pending initialization
-        pending_tools = [
-            name for name, status in self.initialization_status.items()
-            if status == "pending" or status == "ready"
+        conversation = cls(
+            conversation_id=data["conversation_id"],
+            system_prompt=data.get("system_prompt"),
+            llm_bridge=llm_bridge,
+            tool_repo=tool_repo
+        )
+        
+        # Load messages
+        conversation.messages = [
+            Message.from_dict(message_data)
+            for message_data in data.get("messages", [])
         ]
-
-        if pending_tools:
-            self.logger.debug(f"Attempting to initialize pending tools: {pending_tools}")
-
-        for tool_name in pending_tools:
-            if self._try_initialize_tool(tool_name):
-                initialized_count += 1
-
-        if initialized_count > 0:
-            self.logger.info(f"Successfully initialized {initialized_count} tools with dependencies")
-
-    def _try_initialize_tool(self, tool_name: str) -> bool:
-        """
-        Try to initialize a tool if all its dependencies are available.
-
-        Args:
-            tool_name: Name of the tool to try initializing
-
-        Returns:
-            True if successfully initialized, False otherwise
-        """
-        if tool_name not in self.tools:
-            return False
-
-        # Skip if already an instance
-        if self.tool_instances.get(tool_name, False):
-            return False
-
-        # Get required dependencies for this tool
-        required_deps = self.tool_requirements.get(tool_name, [])
-
-        # If no dependencies are required, initialize directly
-        if not required_deps:
-            try:
-                tool_class = self.tools[tool_name]
-                tool_instance = tool_class()
-                self.tools[tool_name] = tool_instance
-                self.tool_instances[tool_name] = True
-                self.initialization_status[tool_name] = "initialized"
-                self.logger.debug(f"Initialized tool with no dependencies: {tool_name}")
-                return True
-            except Exception as e:
-                self.logger.error(f"Error initializing tool {tool_name}: {e}")
-                self.initialization_status[tool_name] = "failed"
-                return False
-
-        # Check if all dependencies are available
-        missing_deps = [dep for dep in required_deps if dep not in self.dependencies]
-
-        if missing_deps:
-            self.logger.debug(f"Tool {tool_name} still missing dependencies: {missing_deps}")
-            return False
-
-        # All dependencies are available, try to initialize
-        try:
-            tool_class = self.tools[tool_name]
-
-            # Gather the required dependencies
-            deps_to_inject = {
-                name: self.dependencies[name]
-                for name in required_deps
-            }
-
-            # Create the instance with dependencies
-            tool_instance = tool_class(**deps_to_inject)
-
-            # Update registry
-            self.tools[tool_name] = tool_instance
-            self.tool_instances[tool_name] = True
-            self.initialization_status[tool_name] = "initialized"
-
-            self.logger.info(f"Successfully initialized tool {tool_name} with dependencies")
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Failed to initialize tool {tool_name}: {e}")
-            self.initialization_status[tool_name] = "failed"
-            return False
+        
+        return conversation

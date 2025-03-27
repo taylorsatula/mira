@@ -68,25 +68,66 @@ Some components extend this pattern with domain-specific error handling:
 
 The `handle_error` utility function provides standardized user-facing error messages.
 
-### Configuration Management (`config.py`)
+### Configuration Management (`config/`)
 
-The configuration system loads settings from multiple sources in order of increasing precedence:
+The configuration system uses Pydantic models for type safety and validation. Configuration is loaded from multiple sources:
 
-1. Default settings defined in the `Config.DEFAULT_CONFIG` dictionary
-2. Configuration file (JSON format)
+1. Pydantic models with default values
+2. Configuration file (JSON format, optional)
 3. Environment variables prefixed with `AGENT_`
 
-Nested configuration keys in environment variables use double underscores (`__`). For example, `AGENT_API__MODEL` sets the `api.model` configuration key.
+Nested configuration keys in environment variables use double underscores (`__`). For example, `AGENT_API__MODEL` sets the `config.api.model` value.
 
 The global `config` instance can be imported and used throughout the application:
 
 ```python
 from config import config
 
-# Access configuration values
+# Access via attributes (recommended, type-safe)
+model_name = config.api.model
+log_level = config.system.log_level
+extraction_templates = config.tools.extraction_templates
+
+# Alternative access using dot notation
 model_name = config.get("api.model")
+log_level = config.get("system.log_level")
+
+# Special property for API key
 api_key = config.api_key
 ```
+
+Configuration is organized into logical sections:
+
+1. **API Configuration**:
+   - `config.api.model`: LLM model to use
+   - `config.api.max_tokens`: Maximum tokens for responses
+   - `config.api.temperature`: Temperature setting
+   - ...
+
+2. **Paths Configuration**:
+   - `config.paths.data_dir`: Directory for data storage
+   - `config.paths.persistent_dir`: Directory for persistent storage
+   - `config.paths.async_results_dir`: Directory for async operation results
+   - ...
+
+3. **Conversation Configuration**:
+   - `config.conversation.max_history`: Maximum conversation turns to keep
+   - `config.conversation.max_context_tokens`: Maximum tokens for context
+   - ...
+
+4. **Tool Configuration**:
+   - `config.tools.enabled`: Whether tools are enabled
+   - `config.tools.timeout`: Default timeout for tool operations
+   - `config.tools.extraction_templates`: Templates for extraction
+   - ...
+
+5. **System Configuration**:
+   - `config.system.log_level`: Logging level
+   - `config.system.streaming`: Whether to stream responses
+   - `config.system.json_indent`: JSON indentation level
+   - ...
+
+All configuration values have sensible defaults, so you only need to specify the values you want to override.
 
 ### File Operations (`crud.py` and `tools/persistence_tool.py`)
 

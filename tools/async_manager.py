@@ -14,6 +14,7 @@ from typing import Dict, Any, Optional, List
 from api.llm_bridge import LLMBridge
 from tools.repo import ToolRepository
 from errors import ToolError, ErrorCode, error_context
+from config import config
 
 
 class TaskStatus:
@@ -104,7 +105,7 @@ class AsyncTaskManager:
         
         # Create directory for async results if it doesn't exist
         import os
-        os.makedirs("persistent/async_results", exist_ok=True)
+        os.makedirs(config.paths.async_results_dir, exist_ok=True)
         
         # Start worker thread
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
@@ -334,7 +335,7 @@ class AsyncTaskManager:
             Task execution result
         """
         # Maximum iterations to prevent infinite loops
-        max_iterations = 10
+        max_iterations = config.tools.max_background_iterations
         iterations = 0
         final_result = None
         
@@ -387,7 +388,7 @@ class AsyncTaskManager:
                                     # Log the successful result save
                                     self.logger.info(f"Task {task.task_id} saved result to {location}")
                                     # Store full path for reporting
-                                    full_path = f"persistent/{location}"
+                                    full_path = f"{config.paths.persistent_dir}/{location}"
                                     if not full_path.endswith('.json'):
                                         full_path += '.json'
                                     final_result = f"Task completed and result saved to {full_path}"
@@ -447,7 +448,7 @@ class AsyncTaskManager:
         
         return final_result
     
-    def cleanup_old_tasks(self, max_age_hours: int = 24) -> int:
+    def cleanup_old_tasks(self, max_age_hours: int = config.tools.max_async_age_hours) -> int:
         """
         Clean up old completed/failed tasks.
         
@@ -478,7 +479,7 @@ class AsyncTaskManager:
         
         # Wait for worker thread to finish
         if self.worker_thread.is_alive():
-            self.worker_thread.join(timeout=5)
+            self.worker_thread.join(timeout=config.tools.async_join_timeout)
             
             # If thread is still alive after timeout, log a warning
             if self.worker_thread.is_alive():

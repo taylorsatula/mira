@@ -68,7 +68,7 @@ def setup_logging(log_level: Optional[str] = None) -> None:
     Args:
         log_level: Optional override for the log level
     """
-    level = log_level or config.get('log_level', 'INFO')
+    level = log_level or config.system.log_level
     logging.basicConfig(
         level=getattr(logging, level),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -109,7 +109,7 @@ def initialize_system(args) -> Dict[str, Any]:
             setup_logging(args.log_level)
 
         # Initialize data directory
-        data_dir = Path(config.get('data_dir', 'data'))
+        data_dir = Path(config.paths.data_dir)
         os.makedirs(data_dir, exist_ok=True)
 
         # Initialize file operations
@@ -303,7 +303,7 @@ def main():
     system = initialize_system(args)
 
     # Determine streaming mode: use command-line flag if provided, otherwise use config
-    stream_mode = args.stream_mode if args.stream_mode is not None else config.get("streaming", False)
+    stream_mode = args.stream_mode if args.stream_mode is not None else config.system.streaming
 
     # Run in interactive mode with appropriate streaming setting
     try:

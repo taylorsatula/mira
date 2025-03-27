@@ -1,0 +1,29 @@
+⏺ I've identified the issue with the "task_done() called too many times" error in the AsyncTaskManager. The problem is likely happening in the _worker_loop method of the AsyncTaskManager class where there are
+  multiple calls to self.task_queue.task_done(). Let me fix this issue:
+
+⏺ Update(file_path: tools/async_manager.py)…
+  ⎿  Updated tools/async_manager.py with 2 additions and 2 removals
+     212 
+     213                      # Skip if task already completed or failed
+     214                      if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED]:
+     215                          self.task_queue.task_done()
+     215                          # Don't call task_done() here, will call it in finally block
+     216                          continue
+     217 
+     218                      # Mark task as running
+     ...
+     224                          task.status = TaskStatus.FAILED
+     225                          task.error = "Task manager not properly initialized (missing LLM Bridge or Tool Repository)"
+     226                          task.completed_at = time.time()
+     227                          self.task_queue.task_done()
+     227                          # Don't call task_done() here, will call it in finally block
+     228                          continue
+     229 
+     230                      # Use nested error context for task execution
+
+⏺ Now let's run the tests to make sure the fix works:
+
+⏺ Bash(cd /Users/taylut/Programming/GitHub/botwithmemory && python -m pytest tests/test_async_tools.py -v)…
+  ⎿  No (tell Claude what to do differently)
+
+

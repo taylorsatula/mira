@@ -7,7 +7,7 @@ for different types of errors that can occur within the system.
 from contextlib import contextmanager
 from enum import Enum
 import logging
-from typing import Optional, Dict, Any, Type, Callable
+from typing import Optional, Dict, Any, Type, Callable, Union
 
 
 class ErrorCode(Enum):
@@ -171,10 +171,10 @@ class StimulusError(AgentError):
 @contextmanager
 def error_context(
     component_name: str,
-    operation: str = None,
+    operation: Optional[str] = None,
     error_class: Type[AgentError] = AgentError,
     error_code: ErrorCode = ErrorCode.UNKNOWN_ERROR,
-    logger: logging.Logger = None
+    logger: Optional[logging.Logger] = None
 ):
     """
     Context manager for standardized error handling across the system.

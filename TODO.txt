@@ -4,8 +4,6 @@
 						To-do:
 
 
-NOTE: crud.py is actually barely doing anything and can be deleted with litle work
-
 TASK: Go through codebase and cull functionality that isn't relevant anymore or could be combined into single functionality without significant complexity
 
 TASK: Evaluate project through the lens of being an iOS app and a server API. What tasks should be handled within the app programmatically, which should be handled off-device on the server, and which functionality requires a hybrid approach

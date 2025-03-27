@@ -39,11 +39,11 @@ class LLMBridge:
 
         # Get API settings from config
         self.api_key = config.api_key
-        self.model = config.get("api.model", "claude-3-7-sonnet-20250219")
-        self.max_tokens = config.get("api.max_tokens", 1000)
-        self.temperature = config.get("api.temperature", 0.7)
-        self.max_retries = config.get("api.max_retries", 3)
-        self.timeout = config.get("api.timeout", 60)
+        self.model = config.api.model
+        self.max_tokens = config.api.max_tokens
+        self.temperature = config.api.temperature
+        self.max_retries = config.api.max_retries
+        self.timeout = config.api.timeout
 
         # Initialize the API client
         try:
@@ -55,7 +55,7 @@ class LLMBridge:
             )
 
         # Rate limiting variables
-        self.rate_limit_rpm = config.get("api.rate_limit_rpm", 10)
+        self.rate_limit_rpm = config.api.rate_limit_rpm
         self.min_request_interval = 60.0 / self.rate_limit_rpm
         self.last_request_time = 0.0
 

@@ -45,11 +45,14 @@ class PersistenceTool(Tool):
     def __init__(self):
         """Initialize the persistence tool."""
         super().__init__()
-        self.base_dir = Path(__file__).parent.parent / "persistent"
+        from config import config
+        
+        # Get directories from config
+        self.base_dir = Path(config.paths.persistent_dir)
         self.base_dir.mkdir(exist_ok=True)
 
         # Create async_results directory if it doesn't exist
-        self.async_results_dir = self.base_dir / "async_results"
+        self.async_results_dir = Path(config.paths.async_results_dir)
         self.async_results_dir.mkdir(exist_ok=True)
         self.logger.info(f"Persistence tool initialized with base dir: {self.base_dir}")
 
@@ -408,8 +411,9 @@ class PersistenceTool(Tool):
             file_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Write data to file with pretty printing
+            from config import config
             with open(file_path, 'w') as f:
-                json.dump(data, f, indent=2, sort_keys=True)
+                json.dump(data, f, indent=config.system.json_indent, sort_keys=True)
 
         except Exception as e:
             raise FileOperationError(

@@ -133,8 +133,9 @@ class FileOperations:
         file_path = self._get_file_path(file_name)
 
         try:
+            from config import config
             with open(file_path, 'w') as f:
-                json.dump(data, f, indent=2)
+                json.dump(data, f, indent=config.system.json_indent)
         except Exception as e:
             raise FileOperationError(
                 f"Error writing to file {file_path}: {e}",
