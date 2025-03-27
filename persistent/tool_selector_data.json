@@ -57,10 +57,14 @@
     ]
   },
   "tool_usage": {
-    "weather_tool": 1
+    "weather_tool": 3,
+    "schedule_async_task": 1,
+    "persistence": 1
   },
   "recent_tools": [
-    "weather_tool"
+    "weather_tool",
+    "persistence",
+    "schedule_async_task"
   ],
   "tool_misses": {}
 }

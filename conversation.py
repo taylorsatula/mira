@@ -268,16 +268,60 @@ class Conversation:
                 # Start response time tracking
                 start_time = time.time()
                 
+                # Reset sequence tracking at the start of a conversation turn
+                if tool_iterations == 0 and self.tool_repo and hasattr(self.tool_repo, 'reset_sequence_tracking'):
+                    self.tool_repo.reset_sequence_tracking()
+                
                 # Select appropriate tools based on iteration
-                # For initial message, use selected tools
-                # For subsequent iterations, use all tools
-                if tool_iterations == 0 and self.tool_repo and hasattr(self.tool_repo, 'select_tools_for_message'):
-                    # Get last user message for tool selection
-                    user_message = user_input
-                    selected_tools = self.tool_repo.select_tools_for_message(user_message)
-                    self.logger.debug(f"Using {len(selected_tools)} selected tools for initial response")
+                if self.tool_repo and hasattr(self.tool_repo, 'select_tools_for_message'):
+                    if tool_iterations == 0:
+                        # Initial message - use message-based selection
+                        user_message = user_input
+                        selected_tools = self.tool_repo.select_tools_for_message(user_message)
+                        self.logger.debug(f"Using {len(selected_tools)} selected tools for initial response")
+                    else:
+                        # Subsequent iterations - use sequence-based prediction if available
+                        last_tool_call = None
+                        
+                        # Try to find the last tool call from previous messages
+                        for i in range(len(self.messages) - 1, -1, -1):
+                            if self.messages[i].role == "assistant" and self.messages[i].metadata.get("has_tool_calls", False):
+                                # Extract tool calls from content
+                                tool_calls = self.llm_bridge.extract_tool_calls(self.messages[i].content) if hasattr(self.messages[i].content, 'content') else []
+                                if tool_calls:
+                                    last_tool_call = tool_calls[-1]["tool_name"]
+                                    break
+                        
+                        if last_tool_call and hasattr(self.tool_repo, 'get_likely_next_tools'):
+                            # Get likely next tools based on sequence data
+                            likely_tools = self.tool_repo.get_likely_next_tools(last_tool_call)
+                            
+                            if likely_tools:
+                                # We have predictions for next tools
+                                from config import config
+                                # Get essential tools + likely next tools + some additional slots
+                                essential_tools = config.tools.essential_tools
+                                predict_tools = set(essential_tools + likely_tools)
+                                
+                                # Select tools with both essential and predicted tools
+                                max_tools = config.tools.max_tools
+                                selected_tools = self.tool_repo.select_tools_for_message(
+                                    message=user_input,  # Still use message for additional context
+                                    min_tools=len(predict_tools),
+                                    max_tools=max_tools
+                                )
+                                
+                                self.logger.debug(f"Using predicted tools for follow-up response: {likely_tools}")
+                            else:
+                                # No predictions, use general selection
+                                selected_tools = self.tool_repo.select_tools_for_message(user_input)
+                                self.logger.debug("Using general selection for follow-up response")
+                        else:
+                            # Fallback - use general selection based on the current conversation state
+                            selected_tools = self.tool_repo.select_tools_for_message(user_input)
+                            self.logger.debug("Using general selection for follow-up response")
                 else:
-                    # For subsequent iterations, use all tools
+                    # Fallback - use all tools if selection isn't available
                     selected_tools = self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
                     self.logger.debug("Using all tools for follow-up response")
                 

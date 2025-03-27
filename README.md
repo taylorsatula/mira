@@ -9,7 +9,8 @@ This system provides a foundation for creating AI agents with tool-based capabil
 Key features:
 - Clean, modular architecture with clear separation of concerns
 - Anthropic Claude API integration with proper error handling and rate limiting
-- Extensible tool system for adding custom capabilities
+- Extensible tool system with Just-in-Time (JIT) tool selection and prediction
+- Optimized tool descriptions for improved AI understanding
 - Conversation management with history tracking
 - Persistent storage with dedicated data and file operations
 - Background task processing with reliable storage of results
@@ -236,6 +237,43 @@ file_ops.write(f"conversation_{conversation.conversation_id}", conversation_data
 # Load a conversation
 loaded_data = file_ops.read(f"conversation_{conversation_id}")
 loaded_conversation = Conversation.from_dict(loaded_data)
+```
+
+### Just-in-Time Tool Selection and Prediction
+
+The system includes an advanced Just-in-Time (JIT) tool selection system that dynamically selects only the most relevant tools for each user message, reducing token usage and improving response time:
+
+```python
+from config import config
+from tools.repo import ToolRepository
+
+# JIT selection is enabled by default
+print(f"JIT selection enabled: {config.tools.selection_enabled}")
+
+# Configure essential tools that are always included
+config.tools.essential_tools = ["tool_finder", "persistence"]
+
+# Configure min and max tools for selection
+config.tools.min_tools = 3
+config.tools.max_tools = 7
+
+# The system automatically:
+# 1. Selects relevant tools based on the user's message
+# 2. Tracks which tools are used in sequence
+# 3. Predicts likely next tools for follow-up tool calls
+# 4. Builds a statistical model of tool usage patterns
+```
+
+The system also includes a tool description optimizer that improves tool descriptions for better AI understanding:
+
+```python
+# Run the description optimizer as a standalone script
+python tools/optimize_tool_descriptions.py --verify
+
+# Apply optimized descriptions to tools
+python tools/optimize_tool_descriptions.py --apply
+
+# The optimized descriptions are automatically loaded during startup
 ```
 
 ### Handling External Stimuli

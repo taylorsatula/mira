@@ -172,6 +172,9 @@ class ToolRepository:
         
         # Initialize tool selector and metrics
         self._discover_and_initialize_selection_components()
+        
+        # Load optimized tool descriptions if available
+        self._load_optimized_descriptions()
 
         # Register any initial dependencies after discovery
         if initial_dependencies:
@@ -640,13 +643,47 @@ class ToolRepository:
             if not self.selector:
                 return all_tools
                 
-            # Use selector to choose relevant tools
-            selected_tools = self.selector.select_tools(
-                message=message,
-                all_tools=all_tools,
-                min_tools=min_tools,
-                max_tools=max_tools
-            )
+            # Get essential tools that should always be included
+            from config import config
+            essential_tool_names = config.tools.essential_tools
+            
+            # Collect essential tools
+            essential_tools = []
+            for tool_name in essential_tool_names:
+                tool = self.get_tool(tool_name)
+                if tool:
+                    # Get tool definition
+                    if self.tool_instances.get(tool_name, False):
+                        # It's an instance
+                        tool_def = tool.get_tool_definition()
+                    else:
+                        # It's a class
+                        tool_def = tool.get_tool_definition()
+                    essential_tools.append(tool_def)
+            
+            # Let selector choose additional tools
+            remaining_slots = max_tools - len(essential_tools)
+            if remaining_slots <= 0:
+                # If essential tools fill all slots, just use those
+                selected_tools = essential_tools
+            else:
+                # Filter out essential tools from candidates
+                essential_names = [t["name"] for t in essential_tools]
+                candidate_tools = [t for t in all_tools if t["name"] not in essential_names]
+                
+                # Use selector to choose additional tools
+                if candidate_tools:
+                    additional_tools = self.selector.select_tools(
+                        message=message,
+                        all_tools=candidate_tools,
+                        min_tools=min(min_tools, remaining_slots),
+                        max_tools=remaining_slots
+                    )
+                    
+                    # Combine essential and selected tools
+                    selected_tools = essential_tools + additional_tools
+                else:
+                    selected_tools = essential_tools
             
             # Record selection metrics if metrics collector is available
             if self.metrics:
@@ -659,12 +696,13 @@ class ToolRepository:
             self.logger.error(f"Error in tool selection: {e}")
             return all_tools
             
-    def record_tool_usage(self, tool_name: str) -> None:
+    def record_tool_usage(self, tool_name: str, conversation_id: str = None) -> None:
         """
         Record tool usage for metrics and learning.
         
         Args:
             tool_name: Name of the tool that was used
+            conversation_id: Optional conversation ID for tracking
         """
         # Skip if selector or metrics are not available
         if not self.selector and not self.metrics:
@@ -676,7 +714,7 @@ class ToolRepository:
             # Check if metrics is available to determine if tool was in selection
             if self.metrics:
                 was_in_selection = self.metrics.is_tool_in_current_selection(tool_name)
-                self.metrics.record_tool_usage(tool_name, was_in_selection)
+                self.metrics.record_tool_usage(tool_name, was_in_selection, conversation_id)
             
             # Update selector learning data
             if self.selector:
@@ -685,6 +723,28 @@ class ToolRepository:
         except Exception as e:
             self.logger.error(f"Error recording tool usage: {e}")
             # Continue normal operation even if metrics fail
+            
+    def reset_sequence_tracking(self) -> None:
+        """
+        Reset the tool sequence tracking for a new conversation turn.
+        """
+        if self.metrics:
+            self.metrics.reset_sequence_tracking()
+            
+    def get_likely_next_tools(self, tool_name: str, limit: int = 3) -> List[str]:
+        """
+        Get the most likely tools to be used after a specific tool.
+        
+        Args:
+            tool_name: Name of the tool to get likely next tools for
+            limit: Maximum number of tools to return
+            
+        Returns:
+            List of tool names sorted by likelihood
+        """
+        if self.metrics:
+            return self.metrics.get_likely_next_tools(tool_name, limit)
+        return []
             
     def get_selection_metrics_report(self) -> Dict[str, Any]:
         """
@@ -701,3 +761,52 @@ class ToolRepository:
         except Exception as e:
             self.logger.error(f"Error generating metrics report: {e}")
             return {"error": f"Failed to generate metrics report: {e}"}
+            
+    def _load_optimized_descriptions(self) -> None:
+        """
+        Load optimized tool descriptions from file and apply them to tools.
+        
+        This replaces the default descriptions with optimized ones that follow
+        Anthropic's guidelines for better tool understanding.
+        """
+        from config import config
+        import json
+        import os
+        
+        # Path to optimized descriptions file
+        descriptions_path = os.path.join(config.paths.persistent_dir, "optimized_tool_descriptions.json")
+        
+        if not os.path.exists(descriptions_path):
+            self.logger.debug("No optimized tool descriptions file found")
+            return
+            
+        try:
+            # Load optimized descriptions
+            with open(descriptions_path, 'r') as f:
+                optimized_descriptions = json.load(f)
+                
+            # Count of applied descriptions
+            applied_count = 0
+            
+            # Apply descriptions to tools
+            for tool_name, description in optimized_descriptions.items():
+                tool = self.get_tool(tool_name)
+                if tool:
+                    # Update the description at the class level
+                    if self.tool_instances.get(tool_name, False):
+                        # It's an instance, get its class
+                        tool_class = tool.__class__
+                    else:
+                        # It's already a class
+                        tool_class = tool
+                        
+                    # Replace the description
+                    tool_class.description = description
+                    applied_count += 1
+            
+            if applied_count > 0:
+                self.logger.info(f"Applied {applied_count} optimized tool descriptions")
+                
+        except Exception as e:
+            self.logger.error(f"Error loading optimized tool descriptions: {e}")
+            # Continue without optimized descriptions

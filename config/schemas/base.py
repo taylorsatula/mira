@@ -108,6 +108,10 @@ class ToolConfig(BaseModel):
         default=7, 
         description="Maximum number of tools to include in selection"
     )
+    essential_tools: List[str] = Field(
+        default=["tool_finder"],
+        description="Tools that are always included in the selection"
+    )
     # Extraction tool settings
     extraction_temperature: float = Field(
         default=0.3,
@@ -146,7 +150,7 @@ class SystemConfig(BaseModel):
     """System-level configuration settings."""
     
     log_level: str = Field(
-        default="INFO",
+        default="ERROR",
         description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
     )
     streaming: bool = Field(

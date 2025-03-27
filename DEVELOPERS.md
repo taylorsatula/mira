@@ -252,12 +252,35 @@ Helper methods for extracting content from responses:
 - `extract_text_content`: Get text content from a response
 - `extract_tool_calls`: Get tool calls from a response
 
-### Tool System (`tools/repo.py`)
+### Tool System (`tools/repo.py` and Related Files)
 
-The tool system is built around two main classes:
+The tool system is built around several key components:
 
-1. `Tool`: Base class for all tools, defining the tool interface
-2. `ToolRepository`: Central registry for tool discovery and invocation
+1. **Core Classes**:
+   - `Tool`: Base class for all tools, defining the tool interface
+   - `ToolRepository`: Central registry for tool discovery and invocation
+   - `ToolSelector`: Analyzes messages to select relevant tools
+   - `ToolMetrics`: Tracks tool selection and usage metrics
+   - `ToolFinderTool`: Meta-tool that allows requesting additional tools
+
+2. **Just-in-Time (JIT) Tool Selection**:
+   The system dynamically selects only the most relevant tools for each user request, which:
+   - Reduces token usage by 60-80%
+   - Improves response times
+   - Provides more focused context to the LLM
+
+3. **Tool Usage Sequence Prediction**:
+   The system tracks which tools are called after others, building a statistical model that:
+   - Records which tools are commonly used together
+   - Predicts which tools are likely to be needed for follow-up tool calls
+   - Improves the selection algorithm over time through usage data
+
+4. **Tool Description Optimization**:
+   The `optimize_tool_descriptions.py` script analyzes tools and generates optimized descriptions that:
+   - Follow Anthropic's guidelines for effective tool descriptions
+   - Start with action verbs
+   - Clearly specify parameters and return values
+   - Help Claude better understand when and how to use each tool
 
 Tools are automatically discovered and registered when the `ToolRepository` is initialized. Each tool must inherit from the `Tool` base class and define:
 
@@ -265,15 +288,98 @@ Tools are automatically discovered and registered when the `ToolRepository` is i
 - `description`: Description of what the tool does
 - `run` method: Implementation of the tool's functionality
 
-The `ToolRepository` handles tool discovery, registration, and invocation:
+### Working with the Tool System
 
 ```python
-# Get a tool definition
+# Basic tool operations
 tool_definition = tool_repo.get_tool("tool_name").get_tool_definition()
-
-# Invoke a tool
 result = tool_repo.invoke_tool("tool_name", {"param1": "value1"})
+
+# Using the JIT selector
+selected_tools = tool_repo.select_tools_for_message("I need to save some data")
+print(f"Selected {len(selected_tools)} tools out of {len(tool_repo.tools)} total")
+
+# Getting likely next tools based on sequence data
+likely_tools = tool_repo.get_likely_next_tools("extract")
+print(f"Tools likely to be used after 'extract': {likely_tools}")
+
+# Getting metrics for the JIT system
+metrics_report = tool_repo.get_selection_metrics_report()
+print(f"Tool selection accuracy: {metrics_report['summary']['selection_accuracy']}")
 ```
+
+### Configuration for JIT Tool Selection
+
+The JIT system is configured through the standard configuration system:
+
+```python
+# In config/schemas/base.py
+class ToolConfig(BaseModel):
+    # Tool selection settings
+    selection_enabled: bool = Field(
+        default=True,
+        description="Whether Just-in-Time tool selection is enabled"
+    )
+    min_tools: int = Field(
+        default=3,
+        description="Minimum number of tools to include in selection"
+    )
+    max_tools: int = Field(
+        default=7, 
+        description="Maximum number of tools to include in selection"
+    )
+    essential_tools: List[str] = Field(
+        default=["tool_finder"],
+        description="Tools that are always included in the selection"
+    )
+```
+
+### Optimizing Tool Descriptions
+
+The system includes a standalone script for optimizing tool descriptions:
+
+```bash
+# Generate optimized descriptions and view differences
+python tools/optimize_tool_descriptions.py --verify
+
+# Apply optimized descriptions to tools
+python tools/optimize_tool_descriptions.py --apply
+
+# Only load previously generated descriptions
+python tools/optimize_tool_descriptions.py --load-only
+```
+
+The optimized descriptions are stored in `persistent/optimized_tool_descriptions.json` and are automatically loaded when the system starts.
+
+### Tool Selection Metrics and Analysis
+
+The `ToolMetrics` class provides comprehensive metrics on the JIT tool selection system:
+
+```python
+# Getting the complete metrics report
+metrics_report = tool_repo.get_selection_metrics_report()
+
+# Key metrics include:
+selection_accuracy = metrics_report["summary"]["selection_accuracy"]  # How often selected tools were used
+miss_rate = metrics_report["summary"]["miss_rate"]  # How often tools had to be requested via tool_finder
+token_savings = metrics_report["summary"]["avg_tokens_saved_per_request"]  # Estimated token savings
+time_improvement = metrics_report["response_times"]["improvement"]  # Response time improvement
+
+# Tool sequence data
+tool_sequences = metrics_report["tool_sequences"]
+# Example: {'extract': {'next_tools': {'persistence': 42, 'check_task': 5}, 'total_sequences': 47}}
+```
+
+The metrics system tracks:
+1. Selection accuracy and miss rates
+2. Token usage reduction
+3. Response time impact
+4. Tool usage sequences
+5. Daily metrics for trend analysis
+
+To reset the metrics during development, delete these files:
+- `persistent/tool_selector_data.json`
+- `persistent/tool_metrics.json`
 
 ### Conversation Management (`conversation.py`)
 

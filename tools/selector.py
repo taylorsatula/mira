@@ -37,7 +37,8 @@ class ToolSelector:
         self.storage_path = storage_path or Path(config.paths.selector_data_path)
         
         # Initialize data structures
-        self.essential_tools = ["tool_finder"]  # Always include these tools
+        # Load essential tools from config
+        self.essential_tools = config.tools.essential_tools
         self.keyword_map = {}  # Maps words to relevant tools
         self.tool_usage = {}  # Tracks tool usage frequency
         self.recent_tools = []  # Tracks recently used tools

@@ -53,12 +53,18 @@ class ToolMetrics:
                 "total_tokens_saved": 0,
                 "average_tokens_per_request": 0
             },
-            "daily_metrics": {}
+            "daily_metrics": {},
+            "tool_sequences": {
+                # Dictionary recording which tools are called after others
+                # Format: {"tool1": {"tool2": 5, "tool3": 10}, ...}
+                # Meaning: tool2 was called 5 times after tool1, tool3 was called 10 times after tool1
+            }
         }
         
         # Runtime tracking
         self.current_selection: Set[str] = set()
         self.current_day = self._get_current_day()
+        self.last_used_tool = None  # Track last used tool for sequence tracking
         
         # Load existing data
         self._load_data()
@@ -111,13 +117,14 @@ class ToolMetrics:
         if total_selections % 10 == 0:
             self._save_data()
     
-    def record_tool_usage(self, tool_name: str, was_in_selection: bool) -> None:
+    def record_tool_usage(self, tool_name: str, was_in_selection: bool, conversation_id: str = None) -> None:
         """
         Record metrics about tool usage.
         
         Args:
             tool_name: Name of the tool that was used
             was_in_selection: Whether the tool was in the initial selection
+            conversation_id: Optional ID to track tools within same conversation
         """
         # Update usage counts
         self.metrics["usage_counts"]["tools_used"] += 1
@@ -131,6 +138,24 @@ class ToolMetrics:
         self._update_daily_metrics("tools_used", 1)
         if not was_in_selection:
             self._update_daily_metrics("tools_missed", 1)
+            
+        # Track tool sequences
+        if self.last_used_tool is not None:
+            # We have a previous tool, so record this sequence
+            tool_sequences = self.metrics["tool_sequences"]
+            
+            # Initialize if this is the first time seeing the previous tool
+            if self.last_used_tool not in tool_sequences:
+                tool_sequences[self.last_used_tool] = {}
+                
+            # Increment the count for this sequence
+            next_tools = tool_sequences[self.last_used_tool]
+            next_tools[tool_name] = next_tools.get(tool_name, 0) + 1
+            
+            self.logger.debug(f"Recorded sequence: {self.last_used_tool} -> {tool_name}")
+            
+        # Update last used tool
+        self.last_used_tool = tool_name
         
         self.logger.debug(f"Recorded usage of tool: {tool_name}, was_in_selection: {was_in_selection}")
         
@@ -217,6 +242,17 @@ class ToolMetrics:
                     "avg_response_time": metrics.get("total_response_time", 0) / metrics.get("response_time_count", 1)
                 }
         
+        # Process tool sequence data for the report
+        tool_sequence_data = {}
+        for first_tool, next_tools in self.metrics.get("tool_sequences", {}).items():
+            if next_tools:
+                # Get top 3 most common next tools
+                sorted_next = sorted(next_tools.items(), key=lambda x: x[1], reverse=True)[:3]
+                tool_sequence_data[first_tool] = {
+                    "next_tools": {t: c for t, c in sorted_next},
+                    "total_sequences": sum(next_tools.values())
+                }
+        
         # Build report
         report = {
             "summary": {
@@ -232,7 +268,8 @@ class ToolMetrics:
                 "all_tools": avg_time_all_tools,
                 "improvement": avg_time_all_tools - avg_time_with_selection if all_tools_times and with_selection_times else 0
             },
-            "daily_summary": daily_summary
+            "daily_summary": daily_summary,
+            "tool_sequences": tool_sequence_data
         }
         
         return report
@@ -323,3 +360,34 @@ class ToolMetrics:
             True if the tool is in the current selection, False otherwise
         """
         return tool_name in self.current_selection
+        
+    def reset_sequence_tracking(self) -> None:
+        """
+        Reset the tool sequence tracking for a new conversation turn.
+        """
+        self.last_used_tool = None
+        self.logger.debug("Reset tool sequence tracking")
+        
+    def get_likely_next_tools(self, tool_name: str, limit: int = 3) -> List[str]:
+        """
+        Get the most likely tools to be used after a specific tool.
+        
+        Args:
+            tool_name: Name of the tool to get likely next tools for
+            limit: Maximum number of tools to return
+            
+        Returns:
+            List of tool names sorted by likelihood
+        """
+        tool_sequences = self.metrics.get("tool_sequences", {})
+        
+        # If we don't have data for this tool, return empty list
+        if tool_name not in tool_sequences:
+            return []
+            
+        # Get the tools used after this one and their counts
+        next_tools = tool_sequences[tool_name]
+        
+        # Sort by count (descending) and return the top N
+        sorted_tools = sorted(next_tools.items(), key=lambda x: x[1], reverse=True)
+        return [tool for tool, count in sorted_tools[:limit]]
