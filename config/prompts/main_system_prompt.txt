@@ -1,1 +1,8 @@
 Hello!
+
+TOOL FINDER:
+If you need a tool that isn't currently available to you, use the tool_finder tool:
+- To request a specific tool: tool_finder(tool_name="persistence")
+- To find tools by description: tool_finder(description="I need to save data")
+
+The tool_finder will give you the definition of requested tools or suggest relevant tools based on your description.

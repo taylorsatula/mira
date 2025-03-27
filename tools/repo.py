@@ -154,6 +154,10 @@ class ToolRepository:
 
         # Store both tool classes and instances
         self.tools: Dict[str, Union[Type[Tool], Tool]] = {}
+        
+        # Initialize tool selection components
+        self.selector = None
+        self.metrics = None
 
         # Track whether each entry is an instance or a class
         self.tool_instances: Dict[str, bool] = {}
@@ -165,6 +169,9 @@ class ToolRepository:
 
         # Discover and register tools as classes first
         self.discover_tools()
+        
+        # Initialize tool selector and metrics
+        self._discover_and_initialize_selection_components()
 
         # Register any initial dependencies after discovery
         if initial_dependencies:
@@ -416,6 +423,9 @@ class ToolRepository:
             # Run the tool with the provided parameters
             result = tool_instance.run(**tool_params)
             
+            # Record tool usage for metrics and learning
+            self.record_tool_usage(tool_name)
+            
             # Log successful execution
             self.logger.info(f"Tool {tool_name} executed successfully")
             
@@ -556,3 +566,138 @@ class ToolRepository:
             self.logger.error(f"Failed to initialize tool {tool_name}: {e}")
             self.initialization_status[tool_name] = "failed"
             return False
+            
+    def _discover_and_initialize_selection_components(self) -> None:
+        """
+        Initialize tool selection components.
+        
+        This sets up the selector, metrics, and tool_finder tools
+        that enable the Just-in-Time tool selection system.
+        """
+        try:
+            # Import selection components
+            from tools.selector import ToolSelector
+            from tools.metrics import ToolMetrics
+            from tools.tool_finder import ToolFinderTool
+            
+            # Initialize the selector
+            self.selector = ToolSelector()
+            self.logger.info("Tool selector initialized")
+            
+            # Initialize metrics collector
+            self.metrics = ToolMetrics()
+            self.logger.info("Tool metrics collector initialized")
+            
+            # Initialize and register the tool finder
+            tool_finder = ToolFinderTool(self)
+            self.register_tool(tool_finder)
+            self.logger.info("Tool finder registered")
+            
+        except Exception as e:
+            self.logger.error(f"Error initializing tool selection components: {e}")
+            # Fallback to standard operation without selection
+            self.selector = None
+            self.metrics = None
+    
+    def select_tools_for_message(
+        self, 
+        message: str, 
+        min_tools: Optional[int] = None, 
+        max_tools: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Select the most relevant tools for a user message.
+        
+        Args:
+            message: User message text
+            min_tools: Minimum number of tools to select (defaults to config value)
+            max_tools: Maximum number of tools to select (defaults to config value)
+            
+        Returns:
+            List of selected tool definitions
+            
+        Note:
+            Falls back to all tools if selector is not available or selection is disabled
+        """
+        # Get all tool definitions
+        all_tools = self.get_all_tool_definitions()
+        
+        try:
+            # Get config values
+            from config import config
+            
+            # Check if tool selection is enabled
+            if not config.tools.selection_enabled:
+                return all_tools
+                
+            # Get min/max values from config if not provided
+            if min_tools is None:
+                min_tools = config.tools.min_tools
+            if max_tools is None:
+                max_tools = config.tools.max_tools
+            
+            # If selector is not initialized, return all tools
+            if not self.selector:
+                return all_tools
+                
+            # Use selector to choose relevant tools
+            selected_tools = self.selector.select_tools(
+                message=message,
+                all_tools=all_tools,
+                min_tools=min_tools,
+                max_tools=max_tools
+            )
+            
+            # Record selection metrics if metrics collector is available
+            if self.metrics:
+                self.metrics.record_tool_selection(message, selected_tools, all_tools)
+                
+            return selected_tools
+            
+        except Exception as e:
+            # Log error and fall back to returning all tools
+            self.logger.error(f"Error in tool selection: {e}")
+            return all_tools
+            
+    def record_tool_usage(self, tool_name: str) -> None:
+        """
+        Record tool usage for metrics and learning.
+        
+        Args:
+            tool_name: Name of the tool that was used
+        """
+        # Skip if selector or metrics are not available
+        if not self.selector and not self.metrics:
+            return
+            
+        try:
+            was_in_selection = True
+            
+            # Check if metrics is available to determine if tool was in selection
+            if self.metrics:
+                was_in_selection = self.metrics.is_tool_in_current_selection(tool_name)
+                self.metrics.record_tool_usage(tool_name, was_in_selection)
+            
+            # Update selector learning data
+            if self.selector:
+                self.selector.record_usage(tool_name, was_in_selection)
+                
+        except Exception as e:
+            self.logger.error(f"Error recording tool usage: {e}")
+            # Continue normal operation even if metrics fail
+            
+    def get_selection_metrics_report(self) -> Dict[str, Any]:
+        """
+        Generate a report of tool selection metrics.
+        
+        Returns:
+            Dictionary with metrics data, or empty dict if metrics not available
+        """
+        if not self.metrics:
+            return {"error": "Metrics collector not available"}
+            
+        try:
+            return self.metrics.generate_report()
+        except Exception as e:
+            self.logger.error(f"Error generating metrics report: {e}")
+            return {"error": f"Failed to generate metrics report: {e}"}

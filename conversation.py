@@ -265,6 +265,22 @@ class Conversation:
                 # Get current messages for the API
                 messages = self.get_formatted_messages()
                 
+                # Start response time tracking
+                start_time = time.time()
+                
+                # Select appropriate tools based on iteration
+                # For initial message, use selected tools
+                # For subsequent iterations, use all tools
+                if tool_iterations == 0 and self.tool_repo and hasattr(self.tool_repo, 'select_tools_for_message'):
+                    # Get last user message for tool selection
+                    user_message = user_input
+                    selected_tools = self.tool_repo.select_tools_for_message(user_message)
+                    self.logger.debug(f"Using {len(selected_tools)} selected tools for initial response")
+                else:
+                    # For subsequent iterations, use all tools
+                    selected_tools = self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
+                    self.logger.debug("Using all tools for follow-up response")
+                
                 # Generate response (streaming or standard)
                 if stream:
                     response = self.llm_bridge.generate_response(
@@ -272,7 +288,7 @@ class Conversation:
                         system_prompt=self.system_prompt,
                         temperature=temperature,
                         max_tokens=max_tokens,
-                        tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None,
+                        tools=selected_tools,
                         stream=True,
                         callback=_handle_streaming_response
                     )
@@ -287,7 +303,15 @@ class Conversation:
                         system_prompt=self.system_prompt,
                         temperature=temperature,
                         max_tokens=max_tokens,
-                        tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
+                        tools=selected_tools
+                    )
+                
+                # Record response time if metrics are available
+                if self.tool_repo and hasattr(self.tool_repo, 'metrics') and self.tool_repo.metrics:
+                    end_time = time.time()
+                    self.tool_repo.metrics.record_response_time(
+                        end_time - start_time,
+                        used_selection=(tool_iterations == 0)  # Only first iteration uses selection
                     )
                 
                 # Extract text content for final return value

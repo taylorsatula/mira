@@ -1,0 +1,66 @@
+{
+  "essential_tools": [
+    "tool_finder"
+  ],
+  "keyword_map": {
+    "save": [
+      "persistence"
+    ],
+    "store": [
+      "persistence"
+    ],
+    "remember": [
+      "persistence"
+    ],
+    "retrieve": [
+      "persistence"
+    ],
+    "get": [
+      "persistence"
+    ],
+    "extract": [
+      "extract"
+    ],
+    "find": [
+      "tool_finder"
+    ],
+    "analyze": [
+      "extract"
+    ],
+    "weather": [
+      "weather_tool"
+    ],
+    "forecast": [
+      "weather_tool"
+    ],
+    "temperature": [
+      "weather_tool"
+    ],
+    "async": [
+      "async_task"
+    ],
+    "background": [
+      "async_task"
+    ],
+    "later": [
+      "async_task"
+    ],
+    "task": [
+      "async_task",
+      "check_task"
+    ],
+    "tool": [
+      "tool_finder"
+    ],
+    "help": [
+      "tool_finder"
+    ]
+  },
+  "tool_usage": {
+    "weather_tool": 1
+  },
+  "recent_tools": [
+    "weather_tool"
+  ],
+  "tool_misses": {}
+}

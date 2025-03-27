@@ -57,6 +57,14 @@ class PathConfig(BaseModel):
         default="config/prompts",
         description="Directory containing prompt templates"
     )
+    selector_data_path: str = Field(
+        default="persistent/tool_selector_data.json",
+        description="Path to store tool selector data"
+    )
+    metrics_data_path: str = Field(
+        default="persistent/tool_metrics.json",
+        description="Path to store tool metrics data"
+    )
 
 
 class ConversationConfig(BaseModel):
@@ -87,6 +95,20 @@ class ToolConfig(BaseModel):
         default=30,
         description="Default timeout in seconds for tool operations"
     )
+    # Tool selection settings
+    selection_enabled: bool = Field(
+        default=True,
+        description="Whether Just-in-Time tool selection is enabled"
+    )
+    min_tools: int = Field(
+        default=3,
+        description="Minimum number of tools to include in selection"
+    )
+    max_tools: int = Field(
+        default=7, 
+        description="Maximum number of tools to include in selection"
+    )
+    # Extraction tool settings
     extraction_temperature: float = Field(
         default=0.3,
         description="Temperature setting for extraction operations"
