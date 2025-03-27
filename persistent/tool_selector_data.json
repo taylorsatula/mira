@@ -1,6 +1,7 @@
 {
   "essential_tools": [
-    "tool_finder"
+    "tool_finder",
+    "questionnaire_tool"
   ],
   "keyword_map": {
     "save": [
@@ -50,21 +51,76 @@
       "check_task"
     ],
     "tool": [
-      "tool_finder"
+      "tool_finder",
+      "questionnaire_tool"
     ],
     "help": [
       "tool_finder"
+    ],
+    "questionnaire": [
+      "questionnaire_tool"
+    ],
+    "preferences": [
+      "questionnaire_tool"
+    ],
+    "survey": [
+      "questionnaire_tool"
+    ],
+    "questionnaire_tool": [
+      "questionnaire_tool"
+    ],
+    "interactive": [
+      "questionnaire_tool"
+    ],
+    "multiple": [
+      "questionnaire_tool"
+    ],
+    "questions": [
+      "questionnaire_tool"
+    ],
+    "collects": [
+      "questionnaire_tool"
+    ],
+    "their": [
+      "questionnaire_tool"
+    ],
+    "responses": [
+      "questionnaire_tool"
+    ],
+    "locally": [
+      "questionnaire_tool"
+    ],
+    "returns": [
+      "questionnaire_tool"
+    ],
+    "structured": [
+      "questionnaire_tool"
+    ],
+    "result": [
+      "questionnaire_tool"
+    ],
+    "recipe": [
+      "questionnaire_tool"
+    ],
+    "food": [
+      "questionnaire_tool"
     ]
   },
   "tool_usage": {
     "weather_tool": 3,
     "schedule_async_task": 1,
-    "persistence": 1
+    "persistence": 1,
+    "tool_finder": 4,
+    "questionnaire_tool": 3
   },
   "recent_tools": [
+    "questionnaire_tool",
+    "tool_finder",
     "weather_tool",
     "persistence",
     "schedule_async_task"
   ],
-  "tool_misses": {}
+  "tool_misses": {
+    "questionnaire_tool": 1
+  }
 }

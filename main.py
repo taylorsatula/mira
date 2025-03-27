@@ -124,6 +124,9 @@ def initialize_system(args) -> Dict[str, Any]:
         # Task notification queue
         task_notifications = []
 
+        # Register llm_bridge as a dependency for tools that need it
+        tool_repo.register_dependency("llm_bridge", llm_bridge)
+
         # Initialize async task manager
         async_manager = AsyncTaskManager(tool_repo=tool_repo, llm_bridge=llm_bridge)
 

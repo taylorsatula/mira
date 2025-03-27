@@ -109,7 +109,7 @@ class ToolConfig(BaseModel):
         description="Maximum number of tools to include in selection"
     )
     essential_tools: List[str] = Field(
-        default=["tool_finder"],
+        default=["tool_finder", "questionnaire_tool"],
         description="Tools that are always included in the selection"
     )
     # Extraction tool settings
@@ -150,7 +150,7 @@ class SystemConfig(BaseModel):
     """System-level configuration settings."""
     
     log_level: str = Field(
-        default="ERROR",
+        default="INFO",
         description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
     )
     streaming: bool = Field(
