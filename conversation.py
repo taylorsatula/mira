@@ -8,7 +8,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Union, Set
+from typing import List, Dict, Any, Optional, Union
 
 from errors import ConversationError, ErrorCode, error_context
 from config import config
@@ -247,7 +247,6 @@ class Conversation:
             error_code=ErrorCode.UNKNOWN_ERROR,  # Will be updated if context overflow is detected
             logger=self.logger
         ):
-            
             # Initialize streaming handler if needed
             def _handle_streaming_response(text_chunk):
                 # Call user-provided callback with each chunk
@@ -266,15 +265,6 @@ class Conversation:
                 # Get current messages for the API
                 messages = self.get_formatted_messages()
                 
-                # Select relevant tools for this message context
-                if tool_iterations == 0:
-                    # Only select tools for initial message
-                    selected_tools = self.tool_repo.select_tools_for_message(user_input)
-                else:
-                    # In subsequent iterations, use previously selected tools
-                    # (they're already in context from first call)
-                    selected_tools = self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
-                
                 # Generate response (streaming or standard)
                 if stream:
                     response = self.llm_bridge.generate_response(
@@ -282,7 +272,7 @@ class Conversation:
                         system_prompt=self.system_prompt,
                         temperature=temperature,
                         max_tokens=max_tokens,
-                        tools=selected_tools,
+                        tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None,
                         stream=True,
                         callback=_handle_streaming_response
                     )
@@ -297,7 +287,7 @@ class Conversation:
                         system_prompt=self.system_prompt,
                         temperature=temperature,
                         max_tokens=max_tokens,
-                        tools=selected_tools
+                        tools=self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
                     )
                 
                 # Extract text content for final return value
@@ -358,11 +348,6 @@ class Conversation:
                     self.add_message("assistant", 
                                     f"{final_response}\n\n[Note: Maximum tool iterations reached]")
             
-            # Record total response time
-            if hasattr(self.tool_repo, 'metrics') and self.tool_repo.metrics:
-                end_time = time.time()
-                self.tool_repo.metrics.record_response_time(end_time - start_time)
-            
             # In streaming mode with callback, return None as content was already sent
             if stream and stream_callback:
                 return None
@@ -395,14 +380,6 @@ class Conversation:
                 logger=self.logger
             ):
                 try:
-                    # Track if this tool was in the initial selection
-                    # This helps us learn which tools are commonly missed
-                    if hasattr(self.tool_repo, 'selector') and self.tool_repo.selector:
-                        # Check if we have previously selected tools
-                        was_selected = tool_name in self.tool_repo.selector.recent_tools
-                        # Record tool usage in the selector
-                        self.tool_repo.selector.record_usage(tool_name, was_selected=was_selected)
-                    
                     # Invoke the tool
                     result = self.tool_repo.invoke_tool(tool_name, tool_input)
                     tool_results[tool_id] = {
