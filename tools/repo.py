@@ -423,11 +423,40 @@ class ToolRepository:
             # Log the tool invocation
             self.logger.info(f"Invoking tool: {tool_name} with parameters: {tool_params}")
             
+            # Check if we have a conversation context with the last user message
+            # This will be used later for learning from tool usage patterns
+            last_user_message = None
+            
+            try:
+                # Try to get the user message if available
+                from conversation import Conversation
+                import inspect
+                
+                # Look for conversation in the call stack frames
+                for frame_info in inspect.stack():
+                    frame = frame_info.frame
+                    for var_name, var_val in frame.f_locals.items():
+                        if isinstance(var_val, Conversation) and hasattr(var_val, 'messages'):
+                            # Found a conversation, look for the last user message
+                            for msg in reversed(var_val.messages):
+                                if msg.role == 'user' and isinstance(msg.content, str):
+                                    last_user_message = msg.content
+                                    break
+                            if last_user_message:
+                                break
+                    if last_user_message:
+                        break
+                        
+                if last_user_message:
+                    self.logger.info(f"Found last user message for learning: {last_user_message[:50]}...")
+            except Exception as e:
+                self.logger.warning(f"Could not extract user message for learning: {e}")
+            
             # Run the tool with the provided parameters
             result = tool_instance.run(**tool_params)
             
             # Record tool usage for metrics and learning
-            self.record_tool_usage(tool_name)
+            self.record_tool_usage(tool_name, conversation_id=None, message=last_user_message)
             
             # Log successful execution
             self.logger.info(f"Tool {tool_name} executed successfully")
@@ -696,32 +725,60 @@ class ToolRepository:
             self.logger.error(f"Error in tool selection: {e}")
             return all_tools
             
-    def record_tool_usage(self, tool_name: str, conversation_id: str = None) -> None:
+    def record_tool_usage(self, tool_name: str, conversation_id: str = None, message: str = None) -> None:
         """
         Record tool usage for metrics and learning.
         
         Args:
             tool_name: Name of the tool that was used
             conversation_id: Optional conversation ID for tracking
+            message: Optional user message that led to this tool use
         """
         # Skip if selector or metrics are not available
         if not self.selector and not self.metrics:
+            self.logger.warning("Neither selector nor metrics available for tool usage recording")
             return
             
         try:
+            self.logger.info(f"Recording usage of tool: {tool_name}")
             was_in_selection = True
             
             # Check if metrics is available to determine if tool was in selection
             if self.metrics:
                 was_in_selection = self.metrics.is_tool_in_current_selection(tool_name)
+                self.logger.info(f"Tool '{tool_name}' was in selection: {was_in_selection}")
+                
+                # Record the usage with sequence tracking
                 self.metrics.record_tool_usage(tool_name, was_in_selection, conversation_id)
+                
+                # Force save metrics after each tool usage to ensure sequence data persists
+                if hasattr(self.metrics, '_save_data'):
+                    self.logger.info("Forcing metrics save to persist sequence data")
+                    self.metrics._save_data()
             
             # Update selector learning data
             if self.selector:
-                self.selector.record_usage(tool_name, was_in_selection)
+                self.logger.info(f"Updating selector data for tool: {tool_name}")
+                self.selector.record_usage(tool_name, was_in_selection, message=message)
+                
+                # Ensure keyword mapping is added for this tool
+                if not was_in_selection:
+                    # Get the tool description to extract keywords
+                    tool = self.get_tool(tool_name)
+                    if tool and hasattr(tool, 'description'):
+                        description = tool.description
+                        import re
+                        # Extract words from description
+                        words = re.findall(r'\b\w+\b', description.lower())
+                        for word in words:
+                            if len(word) >= 5:  # Only use longer words
+                                self.logger.info(f"Adding keyword mapping: {word} -> {tool_name}")
+                                self.selector.add_keyword_mapping(word, tool_name)
                 
         except Exception as e:
             self.logger.error(f"Error recording tool usage: {e}")
+            import traceback
+            self.logger.error(f"Detailed error: {traceback.format_exc()}")
             # Continue normal operation even if metrics fail
             
     def reset_sequence_tracking(self) -> None:

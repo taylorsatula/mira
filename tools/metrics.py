@@ -318,21 +318,40 @@ class ToolMetrics:
         Load metrics data from disk.
         """
         try:
-            if os.path.exists(self.storage_path):
-                with open(self.storage_path, 'r') as f:
-                    stored_metrics = json.load(f)
+            storage_path_str = str(self.storage_path)
+            self.logger.info(f"Looking for metrics data at: {storage_path_str}")
+            
+            if os.path.exists(storage_path_str):
+                self.logger.info(f"Metrics file found, loading data")
+                try:
+                    with open(storage_path_str, 'r') as f:
+                        stored_metrics = json.load(f)
+                        
+                    # Update metrics with stored data, preserving new metrics structure
+                    for category in self.metrics:
+                        if category in stored_metrics:
+                            if isinstance(self.metrics[category], dict) and isinstance(stored_metrics[category], dict):
+                                self.metrics[category].update(stored_metrics[category])
+                            else:
+                                self.metrics[category] = stored_metrics[category]
                     
-                # Update metrics with stored data, preserving new metrics structure
-                for category in self.metrics:
-                    if category in stored_metrics:
-                        if isinstance(self.metrics[category], dict) and isinstance(stored_metrics[category], dict):
-                            self.metrics[category].update(stored_metrics[category])
-                        else:
-                            self.metrics[category] = stored_metrics[category]
+                    self.logger.info(f"Successfully loaded metrics data from {storage_path_str}")
+                except json.JSONDecodeError as je:
+                    self.logger.error(f"Metrics file contains invalid JSON: {je}")
+                    self.logger.info("Creating new metrics file with default values")
+                    # Save default metrics to create a valid file
+                    self._save_data()
+            else:
+                self.logger.info(f"No metrics file found at {storage_path_str}, creating new one")
+                # Ensure directory exists
+                os.makedirs(os.path.dirname(storage_path_str), exist_ok=True)
+                # Save current (default) metrics
+                self._save_data()
                 
-                self.logger.info(f"Loaded metrics data from {self.storage_path}")
         except Exception as e:
             self.logger.error(f"Error loading metrics data: {e}")
+            import traceback
+            self.logger.error(f"Detailed error: {traceback.format_exc()}")
     
     def _save_data(self) -> None:
         """
@@ -342,12 +361,30 @@ class ToolMetrics:
             # Create directory if it doesn't exist
             os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
             
-            with open(self.storage_path, 'w') as f:
-                json.dump(self.metrics, f, indent=2)
+            # Debug: Print the full path and ensure it's properly formed
+            self.logger.info(f"Attempting to save metrics data to: {self.storage_path}")
+            self.logger.info(f"Directory exists: {os.path.exists(os.path.dirname(self.storage_path))}")
+            
+            # Convert Path object to string if needed
+            storage_path_str = str(self.storage_path)
+            
+            with open(storage_path_str, 'w') as f:
+                # Debug: Log metrics data size
+                metrics_json = json.dumps(self.metrics, indent=2)
+                self.logger.info(f"Metrics data size: {len(metrics_json)} bytes")
+                f.write(metrics_json)
                 
-            self.logger.debug(f"Saved metrics data to {self.storage_path}")
+            # Verify file was created
+            if os.path.exists(storage_path_str):
+                self.logger.info(f"Successfully saved metrics data to {storage_path_str}")
+            else:
+                self.logger.error(f"Failed to save metrics data - file not found after save operation")
+                
         except Exception as e:
             self.logger.error(f"Error saving metrics data: {e}")
+            # Print complete exception info for debugging
+            import traceback
+            self.logger.error(f"Detailed error: {traceback.format_exc()}")
     
     def is_tool_in_current_selection(self, tool_name: str) -> bool:
         """
@@ -379,15 +416,32 @@ class ToolMetrics:
         Returns:
             List of tool names sorted by likelihood
         """
+        self.logger.info(f"Looking for likely tools after: {tool_name}")
+        
         tool_sequences = self.metrics.get("tool_sequences", {})
         
         # If we don't have data for this tool, return empty list
         if tool_name not in tool_sequences:
+            self.logger.info(f"No sequence data found for tool: {tool_name}")
             return []
             
         # Get the tools used after this one and their counts
         next_tools = tool_sequences[tool_name]
         
+        # Debug: show what we found
+        self.logger.info(f"Found sequence data: {next_tools}")
+        
+        # Only consider tools with significant usage (more than 1 occurrence)
+        significant_tools = {t: count for t, count in next_tools.items() if count > 1}
+        
+        if not significant_tools and next_tools:
+            # If no significant patterns but some data exists, use what we have
+            self.logger.info(f"No significant patterns, using all available data")
+            significant_tools = next_tools
+        
         # Sort by count (descending) and return the top N
-        sorted_tools = sorted(next_tools.items(), key=lambda x: x[1], reverse=True)
-        return [tool for tool, count in sorted_tools[:limit]]
+        sorted_tools = sorted(significant_tools.items(), key=lambda x: x[1], reverse=True)
+        result = [tool for tool, count in sorted_tools[:limit]]
+        
+        self.logger.info(f"Returning likely next tools: {result}")
+        return result

@@ -1,0 +1,502 @@
+Context-Aware Tool Tracking System: Implementation Guide
+
+  Overview and Motivation
+
+  The current system uses a single track for tool usage statistics, causing background tasks to influence main thread tool suggestions. This creates suboptimal user experiences where:
+
+  - Background tasks bias tool suggestions in the main conversation
+  - Recurring background operations skew suggestion algorithms
+  - Tool selection accuracy for user interactions decreases over time
+
+  By implementing context-aware tool tracking, we will:
+  - Maintain separate suggestion algorithms for foreground and background tasks
+  - Improve tool suggestion relevance in the main conversation
+  - Preserve background task efficiency with appropriate tool selection
+  - Create foundation for context-specific optimizations
+
+  System Architecture
+
+  Components
+
+  1. ContextTracker - Added to ToolRepository to maintain execution context
+  2. ContextualMetrics - Enhanced metrics for separate context tracking
+  3. AsyncContextBridge - Integration with async tasks
+
+  Integration Points
+
+  - ToolRepository - Track current context and provide context switching
+  - ToolMetrics - Record and retrieve metrics based on context
+  - AsyncTaskManager - Set background context during tool execution
+  - Conversation - Remain in foreground context by default
+
+  Detailed Implementation Plan
+
+  Phase 1: ToolRepository Context Tracking
+
+  Step 1: Add Context State to ToolRepository
+
+  # Additions to tools/repo.py
+  class ToolRepository:
+      def __init__(self, tools_package="tools", initial_dependencies=None):
+          # Existing initialization code...
+
+          # Add context tracking
+          self.current_context = "foreground"  # Default context
+          self.logger.debug("Initialized with default 'foreground' context")
+
+  Step 2: Implement Context Manager for Safe Switching
+
+  # Add to tools/repo.py
+  @contextmanager
+  def with_context(self, context: str) -> ContextManager[None]:
+      """
+      Temporarily set the current context for tool operations.
+      
+      Args:
+          context: Context to set (e.g., "foreground", "background")
+          
+      Yields:
+          None - use as a context manager
+      
+      Example:
+          with tool_repo.with_context("background"):
+              # All tool operations in this block use background context
+              result = tool_repo.invoke_tool("some_tool", tool_input)
+      """
+      if context not in ["foreground", "background"]:
+          self.logger.warning(f"Unrecognized context '{context}', using 'foreground'")
+          context = "foreground"
+
+      previous_context = self.current_context
+      self.current_context = context
+      self.logger.debug(f"Switched context: {previous_context} -> {context}")
+
+      try:
+          yield
+      finally:
+          self.logger.debug(f"Restored context: {context} -> {previous_context}")
+          self.current_context = previous_context
+
+  Step 3: Update Tool Usage Recording
+
+  # Update in tools/repo.py
+  def record_tool_usage(self, tool_name: str, conversation_id: str = None) -> None:
+      """
+      Record tool usage for metrics and learning.
+      
+      Args:
+          tool_name: Name of the tool that was used
+          conversation_id: Optional conversation ID for tracking
+      """
+      # Skip if selector or metrics are not available
+      if not self.selector and not self.metrics:
+          return
+
+      try:
+          was_in_selection = True
+
+          # Check if metrics is available to determine if tool was in selection
+          if self.metrics:
+              was_in_selection = self.metrics.is_tool_in_current_selection(tool_name)
+              # Pass current context to metrics
+              self.metrics.record_tool_usage(
+                  tool_name=tool_name,
+                  was_in_selection=was_in_selection,
+                  conversation_id=conversation_id,
+                  context=self.current_context
+              )
+
+          # Update selector learning data only for foreground context
+          # This prevents background tasks from influencing tool suggestions
+          if self.selector and self.current_context == "foreground":
+              self.selector.record_usage(tool_name, was_in_selection)
+              self.logger.debug(f"Updated selector data for foreground tool: {tool_name}")
+
+      except Exception as e:
+          self.logger.error(f"Error recording tool usage: {e}")
+          # Continue normal operation even if metrics fail
+
+  Phase 2: ToolMetrics Enhancement
+
+  Step 1: Modify Metrics Data Structure
+
+  # Update in tools/metrics.py
+  def __init__(self, storage_path=None):
+      # Existing initialization...
+
+      # Initialize metrics storage with context-specific sections
+      self.metrics = {
+          "selection_counts": {
+              "total_selections": 0,
+              "selected_tools": 0,
+              "available_tools": 0
+          },
+          "usage_counts": {
+              "tools_used": 0,
+              "tools_used_from_selection": 0,
+              "tools_used_from_finder": 0
+          },
+          "response_times": {
+              "with_selection": [],
+              "all_tools": []
+          },
+          "estimated_savings": {
+              "total_tokens_saved": 0,
+              "average_tokens_per_request": 0
+          },
+          "daily_metrics": {},
+          "tool_sequences": {
+              # Format: {"tool1": {"tool2": 5, "tool3": 10}, ...}
+              "foreground": {},  # Foreground-specific sequences
+              "background": {}   # Background-specific sequences (optional tracking)
+          },
+          "context_usage": {     # New section for context-specific metrics
+              "foreground": {
+                  "tools_used": 0,
+                  "sequence_count": 0
+              },
+              "background": {
+                  "tools_used": 0,
+                  "sequence_count": 0
+              }
+          }
+      }
+
+      # Runtime tracking
+      self.current_selection = set()
+      self.current_day = self._get_current_day()
+      self.last_used_tool = {"foreground": None, "background": None}  # Context-specific last tools
+
+  Step 2: Update Tool Usage Recording
+
+  # Update in tools/metrics.py
+  def record_tool_usage(
+      self, 
+      tool_name: str, 
+      was_in_selection: bool, 
+      conversation_id: str = None, 
+      context: str = "foreground"
+  ) -> None:
+      """
+      Record metrics about tool usage.
+      
+      Args:
+          tool_name: Name of the tool that was used
+          was_in_selection: Whether the tool was in the initial selection
+          conversation_id: Optional ID to track tools within same conversation
+          context: The context in which the tool was used ("foreground" or "background")
+      """
+      # Normalize context value
+      if context not in ["foreground", "background"]:
+          self.logger.warning(f"Unknown context '{context}', using 'foreground'")
+          context = "foreground"
+
+      # Update global usage counts
+      self.metrics["usage_counts"]["tools_used"] += 1
+
+      if was_in_selection:
+          self.metrics["usage_counts"]["tools_used_from_selection"] += 1
+      else:
+          self.metrics["usage_counts"]["tools_used_from_finder"] += 1
+
+      # Update context-specific usage counts
+      self.metrics["context_usage"][context]["tools_used"] += 1
+
+      # Update daily metrics
+      self._update_daily_metrics("tools_used", 1)
+      self._update_daily_metrics(f"{context}_tools_used", 1)  # Track by context
+
+      if not was_in_selection:
+          self._update_daily_metrics("tools_missed", 1)
+
+      # Track tool sequences - context-aware
+      # Get the last tool used in THIS context
+      last_tool = self.last_used_tool.get(context)
+
+      if last_tool is not None:
+          # We have a previous tool in this context, record the sequence
+          if context not in self.metrics["tool_sequences"]:
+              self.metrics["tool_sequences"][context] = {}
+
+          context_sequences = self.metrics["tool_sequences"][context]
+
+          # Initialize if this is the first time seeing the previous tool
+          if last_tool not in context_sequences:
+              context_sequences[last_tool] = {}
+
+          # Increment the count for this sequence
+          next_tools = context_sequences[last_tool]
+          next_tools[tool_name] = next_tools.get(tool_name, 0) + 1
+
+          # Update context sequence count
+          self.metrics["context_usage"][context]["sequence_count"] += 1
+
+          self.logger.debug(f"Recorded {context} sequence: {last_tool} -> {tool_name}")
+
+      # Update last used tool for THIS context only
+      self.last_used_tool[context] = tool_name
+
+      self.logger.debug(f"Recorded usage of tool: {tool_name}, context: {context}")
+
+      # Save after significant changes
+      if self.metrics["usage_counts"]["tools_used"] % 10 == 0:
+          self._save_data()
+
+  Step 3: Implement Context-Aware Tool Suggestions
+
+  # Update in tools/metrics.py
+  def get_likely_next_tools(
+      self, 
+      tool_name: str, 
+      limit: int = 3, 
+      context: str = "foreground"
+  ) -> List[str]:
+      """
+      Get the most likely tools to be used after a specific tool.
+      
+      Args:
+          tool_name: Name of the tool to get likely next tools for
+          limit: Maximum number of tools to return
+          context: The context to use for tool suggestions
+          
+      Returns:
+          List of tool names sorted by likelihood
+      """
+      # Normalize context value
+      if context not in ["foreground", "background"]:
+          context = "foreground"
+
+      # Get sequences for the specified context
+      context_sequences = self.metrics["tool_sequences"].get(context, {})
+
+      # If we don't have data for this tool in this context, return empty list
+      if tool_name not in context_sequences:
+          return []
+
+      # Get the tools used after this one and their counts in this context
+      next_tools = context_sequences[tool_name]
+
+      # Sort by count (descending) and return the top N
+      sorted_tools = sorted(next_tools.items(), key=lambda x: x[1], reverse=True)
+      return [tool for tool, count in sorted_tools[:limit]]
+
+  Step 4: Update Sequence Reset Method
+
+  # Update in tools/metrics.py
+  def reset_sequence_tracking(self, context: str = None) -> None:
+      """
+      Reset the tool sequence tracking for a new conversation turn.
+      
+      Args:
+          context: Optional specific context to reset. If None, resets all contexts.
+      """
+      if context is None:
+          # Reset all contexts
+          self.last_used_tool = {"foreground": None, "background": None}
+          self.logger.debug("Reset all tool sequence tracking")
+      elif context in self.last_used_tool:
+          # Reset specific context
+          self.last_used_tool[context] = None
+          self.logger.debug(f"Reset tool sequence tracking for {context} context")
+      else:
+          self.logger.warning(f"Unknown context '{context}' in reset_sequence_tracking")
+
+  Phase 3: AsyncTaskManager Integration
+
+  Step 1: Update ToolRepository Interface
+
+  # Update in tools/repo.py
+  def reset_sequence_tracking(self, context: str = None) -> None:
+      """
+      Reset the tool sequence tracking for a new conversation turn.
+      
+      Args:
+          context: Optional specific context to reset. If None, resets all contexts.
+      """
+      if self.metrics:
+          self.metrics.reset_sequence_tracking(context)
+
+  Step 2: Modify AsyncTaskManager Tool Execution
+
+  # Update in tools/async_manager.py
+  # In the _process_background_llm_response method, inside the tool call loop:
+
+  # Use error context for tool execution
+  with error_context(
+      component_name="AsyncTaskManager",
+      operation=f"executing background tool {tool_name}",
+      error_class=ToolError,
+      error_code=ErrorCode.TOOL_EXECUTION_ERROR,
+      logger=self.logger
+  ):
+      try:
+          # Set background context for all tool execution in async tasks
+          with self.tool_repo.with_context("background"):
+              # Invoke the tool within the background context
+              result = self.tool_repo.invoke_tool(tool_name, tool_input)
+              tool_results[tool_id] = {
+                  "content": str(result),
+                  "is_error": False
+              }
+
+              self.logger.debug(f"Background tool call successful: {tool_name}")
+
+              # Check if this was a persistence tool call saving the final result
+              # [... remaining persistence code ...]
+
+      except Exception as e:
+          # We still need to catch exceptions here to continue processing
+          # other tools even if one fails
+          self.logger.error(f"Background tool execution error: {tool_name}: {e}")
+          tool_results[tool_id] = {
+              "content": f"Error: {e}",
+              "is_error": True
+          }
+
+  Phase 4: Configuration and Metrics Reporting
+
+  Step 1: Update Metrics Report Generation
+
+  # Update in tools/metrics.py
+  def generate_report(self) -> Dict[str, Any]:
+      """
+      Generate a summary metrics report with context-specific data.
+      
+      Returns:
+          Dictionary with summary metrics
+      """
+      # Ensure data is up-to-date
+      self._check_day_rollover()
+
+      # [... existing report generation code ...]
+
+      # Add context-specific metrics to the report
+      context_metrics = {}
+      for context, usage in self.metrics["context_usage"].items():
+          tools_used = usage.get("tools_used", 0)
+          sequence_count = usage.get("sequence_count", 0)
+
+          if tools_used > 0:
+              context_metrics[context] = {
+                  "tools_used": tools_used,
+                  "sequence_count": sequence_count,
+                  "sequences_per_tool": sequence_count / tools_used if tools_used > 0 else 0
+              }
+
+      # Build report with context sections
+      report = {
+          # [... existing report sections ...]
+          "context_metrics": context_metrics,
+          "tool_sequences_by_context": {
+              context: {
+                  "total_sequences": sum(
+                      sum(next_tools.values())
+                      for tool, next_tools in sequences.items()
+                  ),
+                  "unique_start_tools": len(sequences),
+                  "unique_sequence_pairs": sum(
+                      len(next_tools)
+                      for tool, next_tools in sequences.items()
+                  )
+              }
+              for context, sequences in self.metrics["tool_sequences"].items()
+              if sequences  # Only include non-empty contexts
+          }
+      }
+
+      return report
+
+  Step 2: Add Configuration Options
+
+  # Add to config/schemas/base.py in the ToolsConfig class
+  class ToolsConfig(BaseModel):
+      # [... existing configuration ...]
+
+      # Context configuration
+      context_aware_tracking: bool = True  # Enable/disable context-aware tracking
+      background_influence_suggestions: bool = False  # Allow background tool usage to influence suggestions
+
+  Testing and Validation
+
+  Required Tests
+
+  1. Context Separation Verification
+    - Verify foreground and background tool sequences are tracked separately
+    - Check that get_likely_next_tools() returns different results per context
+  2. Context Manager Tests
+    - Verify context is properly restored after with_context() block
+    - Test nested context switching
+  3. AsyncTaskManager Integration
+    - Verify background task tools are recorded with "background" context
+    - Check that tool sequences in background tasks don't influence main conversation
+  4. Metrics Validation
+    - Verify metrics correctly track and separate usage by context
+    - Test report generation with context-specific sections
+
+  Test Implementation
+
+  # Example test for context separation
+  def test_context_separation():
+      tool_repo = ToolRepository()
+
+      # Simulate foreground tool usage
+      with tool_repo.with_context("foreground"):
+          tool_repo.record_tool_usage("tool1")
+          tool_repo.record_tool_usage("tool2")
+          tool_repo.record_tool_usage("tool3")
+
+      # Simulate background tool usage
+      with tool_repo.with_context("background"):
+          tool_repo.record_tool_usage("toolA")
+          tool_repo.record_tool_usage("toolB")
+
+      # Check suggestion results differ by context
+      foreground_suggestions = tool_repo.get_likely_next_tools("tool2", context="foreground")
+      background_suggestions = tool_repo.get_likely_next_tools("toolA", context="background")
+
+      # Verify separation
+      assert "tool3" in foreground_suggestions
+      assert "tool3" not in background_suggestions
+      assert "toolB" in background_suggestions
+      assert "toolB" not in foreground_suggestions
+
+  Edge Cases and Error Handling
+
+  1. Invalid Context Values
+    - Normalize unknown contexts to "foreground"
+    - Log warnings but continue operation
+  2. Missing Context Data
+    - Initialize empty data structures for new contexts
+    - Return empty results if no data exists for a context
+  3. Context Restoration Failure
+    - Always restore previous context in finally block
+    - Log warnings if context restoration fails
+  4. Data Migration
+    - Handle upgrading existing metrics data that lacks context separation
+    - Move existing sequence data to "foreground" context
+
+  Future Extension Points
+
+  1. Multi-Context Tool Suggestion
+    - Weighted suggestions from multiple contexts
+    - Context-specific suggestion scoring algorithms
+  2. Context Performance Analysis
+    - Compare tool effectiveness between contexts
+    - Identify tools that perform differently in each context
+  3. Dynamic Context Detection
+    - Automatically detect and track additional contexts beyond foreground/background
+    - Task-specific context tracking for more targeted suggestions
+  4. Context Preference Learning
+    - Learn which tools are preferred in each context
+    - Context-specific essential tools lists
+
+  Performance Expectations
+
+  - Reduced Suggestion Noise: Background tasks won't bias foreground suggestions
+  - Improved Selection Accuracy: Context-appropriate tools selected for each context
+  - Minimal Overhead: Context tracking adds negligible performance impact
+  - Better Analytics: Context-aware metrics provide deeper insights into tool usage patterns
+
+  This implementation seamlessly integrates with the existing codebase while providing a clean separation between foreground and background tool tracking. It follows the project's existing patterns and
+  minimizes changes to the core architecture.
+

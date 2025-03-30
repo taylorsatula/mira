@@ -294,26 +294,69 @@ class Conversation:
                         
                         if last_tool_call and hasattr(self.tool_repo, 'get_likely_next_tools'):
                             # Get likely next tools based on sequence data
+                            self.logger.info(f"Getting likely next tools after: {last_tool_call}")
                             likely_tools = self.tool_repo.get_likely_next_tools(last_tool_call)
                             
                             if likely_tools:
                                 # We have predictions for next tools
+                                self.logger.info(f"Found likely next tools: {likely_tools}")
                                 from config import config
-                                # Get essential tools + likely next tools + some additional slots
+                                # Get essential tools + likely next tools
                                 essential_tools = config.tools.essential_tools
-                                predict_tools = set(essential_tools + likely_tools)
                                 
-                                # Select tools with both essential and predicted tools
+                                # Combine essential and predicted tools, ensuring no duplicates
+                                predict_tools = list(set(essential_tools + likely_tools))
+                                self.logger.info(f"Combined essential and predicted tools: {predict_tools}")
+                                
+                                # Calculate how many additional tools we can include
                                 max_tools = config.tools.max_tools
-                                selected_tools = self.tool_repo.select_tools_for_message(
-                                    message=user_input,  # Still use message for additional context
-                                    min_tools=len(predict_tools),
-                                    max_tools=max_tools
-                                )
+                                remaining_slots = max(0, max_tools - len(predict_tools))
                                 
-                                self.logger.debug(f"Using predicted tools for follow-up response: {likely_tools}")
+                                # Ensure all predicted tools are included
+                                # First, get all tool definitions (we'll filter later)
+                                all_tools = self.tool_repo.get_all_tool_definitions()
+                                
+                                # Create a priority dictionary for sorting
+                                priority_dict = {name: idx for idx, name in enumerate(predict_tools)}
+                                
+                                # Filter and prioritize tools based on prediction
+                                prioritized_tools = []
+                                additional_tools = []
+                                
+                                for tool in all_tools:
+                                    tool_name = tool.get("name", "")
+                                    if tool_name in priority_dict:
+                                        # Add to prioritized with its priority
+                                        prioritized_tools.append((priority_dict[tool_name], tool))
+                                    else:
+                                        # Add to additional tools
+                                        additional_tools.append(tool)
+                                
+                                # Sort prioritized tools by priority
+                                prioritized_tools.sort()
+                                # Extract just the tool definitions after sorting
+                                selected_tools = [tool for _, tool in prioritized_tools]
+                                
+                                # If we have slots remaining, get more tools based on the message
+                                if remaining_slots > 0 and additional_tools:
+                                    # Use message content to select remaining tools
+                                    selected_names = {tool.get("name", "") for tool in selected_tools}
+                                    candidate_tools = [t for t in additional_tools if t.get("name", "") not in selected_names]
+                                    
+                                    if candidate_tools and self.tool_repo.selector:
+                                        # Use selector for remaining tools
+                                        more_tools = self.tool_repo.selector.select_tools(
+                                            message=user_input,
+                                            all_tools=candidate_tools,
+                                            min_tools=0,  # We already have our essential tools
+                                            max_tools=remaining_slots
+                                        )
+                                        selected_tools.extend(more_tools)
+                                        
+                                self.logger.info(f"Final tools after prediction: {[t.get('name', '') for t in selected_tools]}")
                             else:
                                 # No predictions, use general selection
+                                self.logger.info("No prediction data, using general selection")
                                 selected_tools = self.tool_repo.select_tools_for_message(user_input)
                                 self.logger.debug("Using general selection for follow-up response")
                         else:

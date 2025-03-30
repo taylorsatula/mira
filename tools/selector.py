@@ -125,14 +125,17 @@ class ToolSelector:
         
         return selected_tools
     
-    def record_usage(self, tool_name: str, was_selected: bool = True) -> None:
+    def record_usage(self, tool_name: str, was_selected: bool = True, message: str = None) -> None:
         """
         Record tool usage statistics.
         
         Args:
             tool_name: Name of the tool that was used
             was_selected: Whether the tool was in the initial selection
+            message: Optional user message that led to this tool use
         """
+        self.logger.info(f"Recording usage of tool: {tool_name} (was_selected={was_selected})")
+        
         # Update usage count
         self.tool_usage[tool_name] = self.tool_usage.get(tool_name, 0) + 1
         
@@ -147,15 +150,37 @@ class ToolSelector:
         # Track misses (tools that were requested but not initially selected)
         if not was_selected:
             self.tool_misses[tool_name] = self.tool_misses.get(tool_name, 0) + 1
-            self.logger.info(f"Recorded tool miss for: {tool_name}")
+            self.logger.info(f"Recorded tool miss for: {tool_name} (miss count: {self.tool_misses[tool_name]})")
             
             # If a tool is frequently missed, add it to essential tools
-            if self.tool_misses.get(tool_name, 0) >= 3 and tool_name not in self.essential_tools:
+            if self.tool_misses.get(tool_name, 0) >= 2 and tool_name not in self.essential_tools:
                 self.essential_tools.append(tool_name)
                 self.logger.info(f"Added frequently missed tool to essential list: {tool_name}")
-        
+                
+            # If we have the message that led to this miss, try to extract keywords
+            if message:
+                self.logger.info(f"Analyzing message to learn keywords for missed tool: {tool_name}")
+                
+                # Extract potential keywords from the message
+                lower_message = message.lower()
+                words = re.findall(r'\b\w+\b', lower_message)
+                
+                # Find existing keywords for this tool
+                existing_keywords = []
+                for keyword, tools in self.keyword_map.items():
+                    if tool_name in tools:
+                        existing_keywords.append(keyword)
+                
+                # Find potential new keywords (words of sufficient length)
+                for word in words:
+                    # Only use words of sufficient length and not already mapped
+                    if len(word) >= 4 and word not in existing_keywords:
+                        self.add_keyword_mapping(word, tool_name)
+                        self.logger.info(f"Learned new keyword mapping from miss: '{word}' -> {tool_name}")
+                
         # Save updated data
         self._save_data()
+        self.logger.info(f"Saved updated selector data after recording usage of {tool_name}")
     
     def add_keyword_mapping(self, keyword: str, tool_name: str) -> None:
         """
@@ -188,17 +213,56 @@ class ToolSelector:
         # Extract words and phrases from the message
         words = re.findall(r'\b\w+\b', lower_message)
         
+        # Debug logging
+        self.logger.info(f"Analyzing message for keywords: {words[:10]}...")
+        
+        # Track matched keywords for logging
+        matched_keywords = {}
+        
         # Check for keyword matches
         for keyword, tools in self.keyword_map.items():
+            # Look for the keyword in the message
             if keyword in lower_message:
-                # Keyword found, increment scores for associated tools
+                # Calculate keyword importance by length and specificity
+                # Longer keywords are generally more specific and meaningful
+                keyword_importance = min(5, max(1, len(keyword) // 2))
+                
+                # Check if it's an exact word match (higher precision)
+                is_exact_match = keyword in words
+                
+                # Calculate position weight - keywords appearing earlier in the message
+                # are often more important to the user's intent
+                position_weight = 1.0
+                if is_exact_match:
+                    # Find the position of the first occurrence
+                    try:
+                        word_position = words.index(keyword)
+                        # Weight decreases as position increases (words appearing earlier matter more)
+                        position_weight = max(0.5, 1.0 - (word_position / len(words)))
+                    except ValueError:
+                        # This shouldn't happen but just in case
+                        position_weight = 0.5
+                
+                # Calculate final score for this keyword
+                base_score = 2 * keyword_importance
+                exact_match_bonus = 3 if is_exact_match else 0
+                position_score = int(position_weight * 3)
+                
+                keyword_score = base_score + exact_match_bonus + position_score
+                
+                # Apply scores to associated tools
                 for tool in tools:
                     if tool in tool_scores:
-                        tool_scores[tool] += 2  # Base score for keyword match
+                        tool_scores[tool] += keyword_score
                         
-                        # Higher score for exact word matches
-                        if keyword in words:
-                            tool_scores[tool] += 1
+                        # Track for logging
+                        if tool not in matched_keywords:
+                            matched_keywords[tool] = []
+                        matched_keywords[tool].append((keyword, keyword_score))
+        
+        # Log the keywords that were matched and their impact
+        if matched_keywords:
+            self.logger.info(f"Keyword matches: {matched_keywords}")
     
     def _score_recent_tools(self, tool_scores: Dict[str, int]) -> None:
         """

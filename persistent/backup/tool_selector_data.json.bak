@@ -1,0 +1,142 @@
+{
+  "essential_tools": [
+    "tool_finder",
+    "questionnaire_tool"
+  ],
+  "keyword_map": {
+    "save": [
+      "persistence"
+    ],
+    "store": [
+      "persistence"
+    ],
+    "remember": [
+      "persistence"
+    ],
+    "retrieve": [
+      "persistence"
+    ],
+    "get": [
+      "persistence"
+    ],
+    "extract": [
+      "extract"
+    ],
+    "find": [
+      "tool_finder"
+    ],
+    "analyze": [
+      "extract"
+    ],
+    "weather": [
+      "weather_tool"
+    ],
+    "forecast": [
+      "weather_tool"
+    ],
+    "temperature": [
+      "weather_tool"
+    ],
+    "async": [
+      "async_task"
+    ],
+    "background": [
+      "async_task"
+    ],
+    "later": [
+      "async_task"
+    ],
+    "task": [
+      "async_task",
+      "check_task"
+    ],
+    "tool": [
+      "tool_finder",
+      "questionnaire_tool"
+    ],
+    "help": [
+      "tool_finder"
+    ],
+    "questionnaire": [
+      "questionnaire_tool",
+      "check_async_task"
+    ],
+    "preferences": [
+      "questionnaire_tool"
+    ],
+    "survey": [
+      "questionnaire_tool"
+    ],
+    "questionnaire_tool": [
+      "questionnaire_tool"
+    ],
+    "interactive": [
+      "questionnaire_tool"
+    ],
+    "multiple": [
+      "questionnaire_tool"
+    ],
+    "questions": [
+      "questionnaire_tool"
+    ],
+    "collects": [
+      "questionnaire_tool"
+    ],
+    "their": [
+      "questionnaire_tool"
+    ],
+    "responses": [
+      "questionnaire_tool"
+    ],
+    "locally": [
+      "questionnaire_tool"
+    ],
+    "returns": [
+      "questionnaire_tool"
+    ],
+    "structured": [
+      "questionnaire_tool"
+    ],
+    "result": [
+      "questionnaire_tool"
+    ],
+    "recipe": [
+      "questionnaire_tool"
+    ],
+    "food": [
+      "questionnaire_tool"
+    ],
+    "options": [
+      "questionnaire_tool"
+    ],
+    "preference": [
+      "questionnaire_tool"
+    ],
+    "surveys": [
+      "questionnaire_tool"
+    ],
+    "available": [
+      "check_async_task"
+    ],
+    "list": [
+      "check_async_task"
+    ]
+  },
+  "tool_usage": {
+    "weather_tool": 4,
+    "schedule_async_task": 1,
+    "persistence": 1,
+    "tool_finder": 7,
+    "questionnaire_tool": 3
+  },
+  "recent_tools": [
+    "tool_finder",
+    "weather_tool",
+    "questionnaire_tool",
+    "persistence",
+    "schedule_async_task"
+  ],
+  "tool_misses": {
+    "questionnaire_tool": 1
+  }
+}

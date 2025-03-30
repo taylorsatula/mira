@@ -124,7 +124,11 @@ class ToolFinderTool(Tool):
         # Record that this tool was requested (miss)
         if self.selector:
             # Use False to indicate the tool wasn't in the initial selection
-            self.selector.record_usage(tool_name, was_selected=False)
+            # If we have a description parameter, include it as the "message" that triggered this request
+            message = None
+            if description:
+                message = description
+            self.selector.record_usage(tool_name, was_selected=False, message=message)
             
             # Try to extract keywords from the tool name and description
             self._learn_keywords_from_tool(tool)
