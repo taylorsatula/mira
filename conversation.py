@@ -265,108 +265,16 @@ class Conversation:
                 # Get current messages for the API
                 messages = self.get_formatted_messages()
                 
-                # Start response time tracking
-                start_time = time.time()
-                
-                # Reset sequence tracking at the start of a conversation turn
-                if tool_iterations == 0 and self.tool_repo and hasattr(self.tool_repo, 'reset_sequence_tracking'):
-                    self.tool_repo.reset_sequence_tracking()
-                
-                # Select appropriate tools based on iteration
+                # Select all tools for every request - no predictions yet
+                # TODO_BACKGROUND_LLM: Implement background LLM tool prediction here
                 if self.tool_repo and hasattr(self.tool_repo, 'select_tools_for_message'):
-                    if tool_iterations == 0:
-                        # Initial message - use message-based selection
-                        user_message = user_input
-                        selected_tools = self.tool_repo.select_tools_for_message(user_message)
-                        self.logger.debug(f"Using {len(selected_tools)} selected tools for initial response")
-                    else:
-                        # Subsequent iterations - use sequence-based prediction if available
-                        last_tool_call = None
-                        
-                        # Try to find the last tool call from previous messages
-                        for i in range(len(self.messages) - 1, -1, -1):
-                            if self.messages[i].role == "assistant" and self.messages[i].metadata.get("has_tool_calls", False):
-                                # Extract tool calls from content
-                                tool_calls = self.llm_bridge.extract_tool_calls(self.messages[i].content) if hasattr(self.messages[i].content, 'content') else []
-                                if tool_calls:
-                                    last_tool_call = tool_calls[-1]["tool_name"]
-                                    break
-                        
-                        if last_tool_call and hasattr(self.tool_repo, 'get_likely_next_tools'):
-                            # Get likely next tools based on sequence data
-                            self.logger.info(f"Getting likely next tools after: {last_tool_call}")
-                            likely_tools = self.tool_repo.get_likely_next_tools(last_tool_call)
-                            
-                            if likely_tools:
-                                # We have predictions for next tools
-                                self.logger.info(f"Found likely next tools: {likely_tools}")
-                                from config import config
-                                # Get essential tools + likely next tools
-                                essential_tools = config.tools.essential_tools
-                                
-                                # Combine essential and predicted tools, ensuring no duplicates
-                                predict_tools = list(set(essential_tools + likely_tools))
-                                self.logger.info(f"Combined essential and predicted tools: {predict_tools}")
-                                
-                                # Calculate how many additional tools we can include
-                                max_tools = config.tools.max_tools
-                                remaining_slots = max(0, max_tools - len(predict_tools))
-                                
-                                # Ensure all predicted tools are included
-                                # First, get all tool definitions (we'll filter later)
-                                all_tools = self.tool_repo.get_all_tool_definitions()
-                                
-                                # Create a priority dictionary for sorting
-                                priority_dict = {name: idx for idx, name in enumerate(predict_tools)}
-                                
-                                # Filter and prioritize tools based on prediction
-                                prioritized_tools = []
-                                additional_tools = []
-                                
-                                for tool in all_tools:
-                                    tool_name = tool.get("name", "")
-                                    if tool_name in priority_dict:
-                                        # Add to prioritized with its priority
-                                        prioritized_tools.append((priority_dict[tool_name], tool))
-                                    else:
-                                        # Add to additional tools
-                                        additional_tools.append(tool)
-                                
-                                # Sort prioritized tools by priority
-                                prioritized_tools.sort()
-                                # Extract just the tool definitions after sorting
-                                selected_tools = [tool for _, tool in prioritized_tools]
-                                
-                                # If we have slots remaining, get more tools based on the message
-                                if remaining_slots > 0 and additional_tools:
-                                    # Use message content to select remaining tools
-                                    selected_names = {tool.get("name", "") for tool in selected_tools}
-                                    candidate_tools = [t for t in additional_tools if t.get("name", "") not in selected_names]
-                                    
-                                    if candidate_tools and self.tool_repo.selector:
-                                        # Use selector for remaining tools
-                                        more_tools = self.tool_repo.selector.select_tools(
-                                            message=user_input,
-                                            all_tools=candidate_tools,
-                                            min_tools=0,  # We already have our essential tools
-                                            max_tools=remaining_slots
-                                        )
-                                        selected_tools.extend(more_tools)
-                                        
-                                self.logger.info(f"Final tools after prediction: {[t.get('name', '') for t in selected_tools]}")
-                            else:
-                                # No predictions, use general selection
-                                self.logger.info("No prediction data, using general selection")
-                                selected_tools = self.tool_repo.select_tools_for_message(user_input)
-                                self.logger.debug("Using general selection for follow-up response")
-                        else:
-                            # Fallback - use general selection based on the current conversation state
-                            selected_tools = self.tool_repo.select_tools_for_message(user_input)
-                            self.logger.debug("Using general selection for follow-up response")
+                    # Use the simplified tool selection method
+                    selected_tools = self.tool_repo.select_tools_for_message(user_input)
+                    self.logger.debug(f"Using {len(selected_tools)} selected tools for response")
                 else:
-                    # Fallback - use all tools if selection isn't available
+                    # Fallback - use all tools if selection method isn't available
                     selected_tools = self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
-                    self.logger.debug("Using all tools for follow-up response")
+                    self.logger.debug("Using all tools for response")
                 
                 # Generate response (streaming or standard)
                 if stream:
@@ -393,13 +301,6 @@ class Conversation:
                         tools=selected_tools
                     )
                 
-                # Record response time if metrics are available
-                if self.tool_repo and hasattr(self.tool_repo, 'metrics') and self.tool_repo.metrics:
-                    end_time = time.time()
-                    self.tool_repo.metrics.record_response_time(
-                        end_time - start_time,
-                        used_selection=(tool_iterations == 0)  # Only first iteration uses selection
-                    )
                 
                 # Extract text content for final return value
                 assistant_response = self.llm_bridge.extract_text_content(response)

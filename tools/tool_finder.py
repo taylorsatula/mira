@@ -53,9 +53,6 @@ class ToolFinderTool(Tool):
         super().__init__()
         self.tool_repo = tool_repo
         self.tool_summaries = self._generate_tool_summaries()
-        
-        # Get a reference to the selector if available
-        self.selector = getattr(self.tool_repo, 'selector', None)
     
     def run(
         self, 
@@ -121,18 +118,6 @@ class ToolFinderTool(Tool):
         # Get the tool definition
         tool_definition = tool.get_tool_definition()
         
-        # Record that this tool was requested (miss)
-        if self.selector:
-            # Use False to indicate the tool wasn't in the initial selection
-            # If we have a description parameter, include it as the "message" that triggered this request
-            message = None
-            if description:
-                message = description
-            self.selector.record_usage(tool_name, was_selected=False, message=message)
-            
-            # Try to extract keywords from the tool name and description
-            self._learn_keywords_from_tool(tool)
-        
         return {"tool": tool_definition}
     
     def _find_tools_by_description(self, description: str) -> Dict[str, Any]:
@@ -187,16 +172,6 @@ class ToolFinderTool(Tool):
                 "available_tools": self._list_available_tools()
             }
         
-        # Learn keywords from the description if selector exists
-        if self.selector and description:
-            keywords = description_tokens
-            if matching_tools:
-                # Associate keywords with the top matching tool
-                top_tool = matching_tools[0]["name"]
-                for keyword in keywords:
-                    if len(keyword) >= 4:  # Only use keywords of sufficient length
-                        self.selector.add_keyword_mapping(keyword, top_tool)
-        
         return {"matching_tools": matching_tools[:5]}  # Return top 5 matches
     
     def _list_available_tools(self) -> List[Dict[str, str]]:
@@ -236,27 +211,3 @@ class ToolFinderTool(Tool):
             
         return summaries
     
-    def _learn_keywords_from_tool(self, tool: Union[Tool, type]) -> None:
-        """
-        Extract and learn keywords from a tool's name and description.
-        
-        Args:
-            tool: Tool instance or class
-        """
-        if not self.selector:
-            return
-            
-        tool_name = getattr(tool, 'name', '')
-        description = getattr(tool, 'description', '')
-        
-        # Extract keywords from tool name
-        name_parts = re.findall(r'\b\w+\b', tool_name.lower())
-        for part in name_parts:
-            if len(part) >= 3:  # Only use keywords of sufficient length
-                self.selector.add_keyword_mapping(part, tool_name)
-        
-        # Extract potential keywords from description
-        description_words = re.findall(r'\b\w+\b', description.lower())
-        for word in description_words:
-            if len(word) >= 5:  # Only use longer words from description
-                self.selector.add_keyword_mapping(word, tool_name)
