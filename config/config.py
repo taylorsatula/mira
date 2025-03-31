@@ -84,6 +84,10 @@ class ToolConfig(BaseModel):
         default=True,
         description="Whether tools are enabled"
     )
+    auto_discovery: bool = Field(
+        default=True,
+        description="Whether automatic tool discovery is enabled"
+    )
     timeout: int = Field(
         default=30,
         description="Default timeout in seconds for tool operations"

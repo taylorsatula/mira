@@ -132,6 +132,24 @@ def initialize_system(args) -> Dict[str, Any]:
 
         # Register task_manager as a dependency - this will initialize async tools
         tool_repo.register_dependency("task_manager", async_manager)
+        
+        # When auto-discovery is disabled, manually register essential tools
+        if not config.tools.auto_discovery:
+            # Import essential tools
+            from tools.async_tools import CheckAsyncTaskTool, ScheduleAsyncTaskTool
+            from tools.persistence_tool import PersistenceTool
+            
+            # Register only essential tools that aren't already registered
+            if 'check_async_task' not in tool_repo:
+                tool_repo.register_tool(CheckAsyncTaskTool(task_manager=async_manager))
+                
+            if 'schedule_async_task' not in tool_repo:
+                tool_repo.register_tool(ScheduleAsyncTaskTool(task_manager=async_manager))
+                
+            if 'persistence' not in tool_repo:
+                tool_repo.register_tool(PersistenceTool())
+                
+            logger.info(f"Auto-discovery disabled: manually registered essential tools ({len(tool_repo.tools)} total)")
 
         # Setup notification callback for async tasks
         def notify_task_completion(task):

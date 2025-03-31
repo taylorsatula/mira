@@ -163,13 +163,22 @@ class ToolRepository:
         self.tool_requirements: Dict[str, List[str]] = {}
         self.initialization_status: Dict[str, str] = {}  # "pending", "initialized", "failed"
 
-        # Discover and register tools as classes first
-        self.discover_tools()
-        
-        # Initialize tool finder
+        # Check if automatic tool discovery is enabled
+        from config import config
+        auto_discovery = config.tools.auto_discovery
+
+        if auto_discovery:
+            # Discover and register tools as classes first
+            self.discover_tools()
+            self.logger.info("Automatic tool discovery enabled")
+        else:
+            self.logger.info("Automatic tool discovery disabled - skipping tool auto-discovery")
+            
+        # Initialize tool finder and load optimized descriptions regardless
+        # Tool finder is a core component that should be available even with auto-discovery off
         self._initialize_tool_finder()
         
-        # Load optimized tool descriptions if available
+        # Load optimized tool descriptions for any tools that are registered
         self._load_optimized_descriptions()
 
         # Register any initial dependencies after discovery

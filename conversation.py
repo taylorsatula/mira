@@ -265,22 +265,30 @@ class Conversation:
                 # Get current messages for the API
                 messages = self.get_formatted_messages()
                 
-                # Selectively load tools based on iteration
+                # Determine tools to load based on auto_discovery setting
                 if self.tool_repo:
-                    if tool_iterations == 0:
-                        # For the first interaction, only include essential tools like tool_finder
-                        essential_tool_names = ["tool_finder"]
-                        selected_tools = [
-                            self.tool_repo.get_tool(name).get_tool_definition()
-                            for name in essential_tool_names
-                            if name in self.tool_repo
-                        ]
-                        self.logger.debug(f"Using {len(selected_tools)} essential tools for initial response")
+                    from config import config
+                    auto_discovery = config.tools.auto_discovery
+                    
+                    if auto_discovery:
+                        # When auto_discovery is enabled, use the progressive loading approach
+                        if tool_iterations == 0:
+                            # For the first interaction, only include essential tools like tool_finder
+                            essential_tool_names = ["tool_finder"]
+                            selected_tools = [
+                                self.tool_repo.get_tool(name).get_tool_definition()
+                                for name in essential_tool_names
+                                if name in self.tool_repo
+                            ]
+                            self.logger.debug(f"Using {len(selected_tools)} essential tools for initial response")
+                        else:
+                            # For subsequent iterations, include all available tools
+                            selected_tools = self.tool_repo.get_all_tool_definitions()
+                            self.logger.debug(f"Using all {len(selected_tools)} tools for subsequent response")
                     else:
-                        # For subsequent iterations within the same turn, include all tools
-                        # This allows tools discovered via tool_finder to be used immediately
+                        # When auto_discovery is disabled, just use whatever tools were manually registered
                         selected_tools = self.tool_repo.get_all_tool_definitions()
-                        self.logger.debug(f"Using all {len(selected_tools)} tools for subsequent response")
+                        self.logger.debug(f"Auto-discovery disabled: using only manually registered tools ({len(selected_tools)})")
                 else:
                     selected_tools = None
                 
