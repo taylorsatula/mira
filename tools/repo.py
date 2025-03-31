@@ -495,12 +495,13 @@ class ToolRepository:
         if initialized_count > 0:
             self.logger.info(f"Successfully initialized {initialized_count} tools with dependencies")
 
-    def _try_initialize_tool(self, tool_name: str) -> bool:
+    def _try_initialize_tool(self, tool_name: str, dependency_chain: Optional[List[str]] = None) -> bool:
         """
         Try to initialize a tool if all its dependencies are available.
 
         Args:
             tool_name: Name of the tool to try initializing
+            dependency_chain: Optional chain of dependencies being resolved to prevent cycles
 
         Returns:
             True if successfully initialized, False otherwise
@@ -510,7 +511,16 @@ class ToolRepository:
 
         # Skip if already an instance
         if self.tool_instances.get(tool_name, False):
+            return True  # Already initialized, return success
+
+        # Prevent circular dependencies
+        if dependency_chain is None:
+            dependency_chain = []
+        if tool_name in dependency_chain:
+            self.logger.error(f"Circular dependency detected: {' -> '.join(dependency_chain)} -> {tool_name}")
             return False
+            
+        dependency_chain = dependency_chain + [tool_name]
 
         # Get required dependencies for this tool
         required_deps = self.tool_requirements.get(tool_name, [])
@@ -530,7 +540,18 @@ class ToolRepository:
                 self.initialization_status[tool_name] = "failed"
                 return False
 
-        # Check if all dependencies are available
+        # Try to recursively initialize tool dependencies
+        for dep in required_deps:
+            if dep not in self.dependencies:
+                # Check if the dependency is another tool that can be initialized
+                if dep in self.tools and not self.tool_instances.get(dep, False):
+                    # Try to recursively initialize the dependency
+                    if self._try_initialize_tool(dep, dependency_chain):
+                        # If successful, register it as a dependency
+                        self.dependencies[dep] = self.tools[dep]
+                        self.logger.info(f"Registered initialized tool {dep} as a dependency")
+
+        # Check if all dependencies are available now
         missing_deps = [dep for dep in required_deps if dep not in self.dependencies]
 
         if missing_deps:
