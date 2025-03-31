@@ -265,9 +265,24 @@ class Conversation:
                 # Get current messages for the API
                 messages = self.get_formatted_messages()
                 
-                # Get all tools for now - will be replaced with predictive selection
-                selected_tools = self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
-                self.logger.debug(f"Using {len(selected_tools) if selected_tools else 0} tools for response")
+                # Selectively load tools based on iteration
+                if self.tool_repo:
+                    if tool_iterations == 0:
+                        # For the first interaction, only include essential tools like tool_finder
+                        essential_tool_names = ["tool_finder"]
+                        selected_tools = [
+                            self.tool_repo.get_tool(name).get_tool_definition()
+                            for name in essential_tool_names
+                            if name in self.tool_repo
+                        ]
+                        self.logger.debug(f"Using {len(selected_tools)} essential tools for initial response")
+                    else:
+                        # For subsequent iterations within the same turn, include all tools
+                        # This allows tools discovered via tool_finder to be used immediately
+                        selected_tools = self.tool_repo.get_all_tool_definitions()
+                        self.logger.debug(f"Using all {len(selected_tools)} tools for subsequent response")
+                else:
+                    selected_tools = None
                 
                 # Generate response (streaming or standard)
                 if stream:
