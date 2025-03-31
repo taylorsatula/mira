@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional, Union, List
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
-from config.schemas.base import (
+from config.config import (
     ApiConfig,
     PathConfig,
     ConversationConfig,

@@ -265,16 +265,9 @@ class Conversation:
                 # Get current messages for the API
                 messages = self.get_formatted_messages()
                 
-                # Select all tools for every request - no predictions yet
-                # TODO_BACKGROUND_LLM: Implement background LLM tool prediction here
-                if self.tool_repo and hasattr(self.tool_repo, 'select_tools_for_message'):
-                    # Use the simplified tool selection method
-                    selected_tools = self.tool_repo.select_tools_for_message(user_input)
-                    self.logger.debug(f"Using {len(selected_tools)} selected tools for response")
-                else:
-                    # Fallback - use all tools if selection method isn't available
-                    selected_tools = self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
-                    self.logger.debug("Using all tools for response")
+                # Get all tools for now - will be replaced with predictive selection
+                selected_tools = self.tool_repo.get_all_tool_definitions() if self.tool_repo else None
+                self.logger.debug(f"Using {len(selected_tools) if selected_tools else 0} tools for response")
                 
                 # Generate response (streaming or standard)
                 if stream:

@@ -18,6 +18,6 @@ Usage:
     api_key = config.require("api.key")
 """
 
-from config.app_config import AppConfig, config
+from config.config_manager import AppConfig, config
 
 __all__ = ["config", "AppConfig"]

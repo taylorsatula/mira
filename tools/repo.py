@@ -578,18 +578,7 @@ class ToolRepository:
         except Exception as e:
             self.logger.error(f"Error initializing tool finder: {e}")
     
-    def select_tools_for_message(self, message: str, *args, **kwargs) -> List[Dict[str, Any]]:
-        """
-        Returns all available tools without any selection logic.
-        
-        Args:
-            message: User message (unused)
-            *args, **kwargs: Ignored parameters for compatibility
-            
-        Returns:
-            List of all tool definitions
-        """
-        return self.get_all_tool_definitions()
+    # Tool selection will be reimplemented with predictive capabilities
     def _load_optimized_descriptions(self) -> None:
         """
         Load optimized tool descriptions from file and apply them to tools.

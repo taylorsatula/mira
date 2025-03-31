@@ -8,7 +8,7 @@ import tempfile
 import json
 
 from config import config
-from config.app_config import AppConfig
+from config.config_manager import AppConfig
 from errors import ConfigError, ErrorCode
 
 
@@ -96,7 +96,7 @@ def test_system_prompt_loading():
 def test_custom_config_direct_creation():
     """Test creating config by directly setting values."""
     # Create a custom config
-    from config.schemas.base import ApiConfig, SystemConfig
+    from config.config import ApiConfig, SystemConfig
     
     custom_api = ApiConfig(model="claude-test-model", max_tokens=2000)
     custom_system = SystemConfig(log_level="DEBUG")
@@ -123,7 +123,7 @@ def test_env_var_override():
         # Create a fresh instance to pick up env vars
         instance = AppConfig()
         # Load environment variables
-        from config.app_config import load_dotenv
+        from config.config_manager import load_dotenv
         load_dotenv()
         
         # Apply environment variables manually
