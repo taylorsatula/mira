@@ -484,7 +484,9 @@ class LLMBridge:
 
         # Process all content blocks in the response
         for content_block in response.content:
+            # Look for Anthropic's native tool_use format
             if hasattr(content_block, 'type') and content_block.type == "tool_use":
+                self.logger.debug(f"Found tool_use block: {content_block.name}")
                 tool_calls.append({
                     "id": content_block.id,
                     "tool_name": content_block.name,

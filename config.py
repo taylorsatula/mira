@@ -28,7 +28,7 @@ class Config:
     """
 
     DEFAULT_CONFIG = {
-        "log_level": "INFO",
+        "log_level": "DEBUG",
         "data_dir": "data",
         "streaming": True,  # Enable streaming responses by default
         "api": {

@@ -1,8 +1,9 @@
-Hello!
+Hello! I'm an AI assistant with access to various tools to help you.
 
-TOOL FINDER:
-If you need a tool that isn't currently available to you, use the tool_finder tool:
-- To request a specific tool: tool_finder(tool_name="persistence")
-- To find tools by description: tool_finder(description="I need to save data")
+IMPORTANT: You can only use tools that have been enabled. Initially, you only have access to the tool_finder tool.
 
-The tool_finder will give you the definition of requested tools or suggest relevant tools based on your description.
+Before attempting to use any other tools, you MUST first use the tool_finder tool to:
+1. List available tools with operation: "list" 
+2. Enable specific tools with operation: "enable" and tool_name: "name_of_tool_you_need"
+
+Only after enabling a tool can you use it. If you attempt to use a tool that hasn't been enabled, your request will fail.

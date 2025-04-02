@@ -124,33 +124,15 @@ def initialize_system(args) -> Dict[str, Any]:
         # Task notification queue
         task_notifications = []
 
-        # Register llm_bridge as a dependency for tools that need it
-        tool_repo.register_dependency("llm_bridge", llm_bridge)
-
         # Initialize async task manager
         async_manager = AsyncTaskManager(tool_repo=tool_repo, llm_bridge=llm_bridge)
-
-        # Register task_manager as a dependency - this will initialize async tools
-        tool_repo.register_dependency("task_manager", async_manager)
         
-        # When auto-discovery is disabled, manually register essential tools
-        if not config.tools.auto_discovery:
-            # Import essential tools
-            from tools.async_tools import CheckAsyncTaskTool, ScheduleAsyncTaskTool
-            from tools.persistence_tool import PersistenceTool
-            
-            # Register only essential tools that aren't already registered
-            if 'check_async_task' not in tool_repo:
-                tool_repo.register_tool(CheckAsyncTaskTool(task_manager=async_manager))
-                
-            if 'schedule_async_task' not in tool_repo:
-                tool_repo.register_tool(ScheduleAsyncTaskTool(task_manager=async_manager))
-                
-            if 'persistence' not in tool_repo:
-                tool_repo.register_tool(PersistenceTool())
-                
-            logger.info(f"Auto-discovery disabled: manually registered essential tools ({len(tool_repo.tools)} total)")
-
+        # Discover and register tools
+        tool_repo.discover_tools()
+        
+        # Enable tools from config
+        tool_repo.enable_tools_from_config()
+        
         # Setup notification callback for async tasks
         def notify_task_completion(task):
             # This will be called when an async task completes if notify_on_completion is True
@@ -238,9 +220,9 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
     print("\nAI Agent System - Interactive Mode")
     print(f"Conversation ID: {conversation.conversation_id}")
     print(f"Streaming mode: {'Enabled' if stream_mode else 'Disabled'}")
-    print("Type 'exit' or 'quit' to end the session")
-    print("Type 'save' to save the conversation")
-    print("Type 'clear' to clear the conversation history")
+    print("Type '/exit' to end the session")
+    print("Type '/save' to save the conversation")
+    print("Type '/clear' to clear the conversation history")
     print("-" * 50)
 
     def print_token(token: str):
@@ -259,20 +241,20 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
                 task_notifications.clear()
 
             # Get user input
-            user_input = input("\nYou: ")
+            user_input = input("\nUser: ")
 
             # Check for commands
-            if user_input.lower() in ['exit', 'quit']:
+            if user_input.lower() in ['/exit']:
                 save_conversation(file_ops, conversation)
                 print("Goodbye!")
                 break
 
-            elif user_input.lower() == 'save':
+            elif user_input.lower() == '/save':
                 save_conversation(file_ops, conversation)
                 print("Conversation saved.")
                 continue
 
-            elif user_input.lower() == 'clear':
+            elif user_input.lower() == '/clear':
                 conversation.clear_history()
                 print("Conversation history cleared.")
                 continue

@@ -12,7 +12,7 @@ from queue import Queue
 from typing import Dict, Any, Optional, List
 
 from api.llm_bridge import LLMBridge
-from tools.repo import ToolRepository
+from tools.repo import ToolRepository, Tool
 from errors import ToolError, ErrorCode, error_context
 from config import config
 

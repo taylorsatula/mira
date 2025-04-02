@@ -92,6 +92,10 @@ class ToolConfig(BaseModel):
         default=30,
         description="Default timeout in seconds for tool operations"
     )
+    essential_tools: List[str] = Field(
+        default=["check_async_task", "schedule_async_task", "tool_finder"],
+        description="List of essential tools to always load"
+    )
     # Extraction tool settings
     extraction_temperature: float = Field(
         default=0.3,

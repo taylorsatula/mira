@@ -4,6 +4,7 @@ Conversation management for the AI agent system.
 This module handles conversation turns, context tracking,
 tool result integration, and conversation history management.
 """
+import json
 import logging
 import time
 import uuid
@@ -267,28 +268,9 @@ class Conversation:
                 
                 # Determine tools to load based on auto_discovery setting
                 if self.tool_repo:
-                    from config import config
-                    auto_discovery = config.tools.auto_discovery
-                    
-                    if auto_discovery:
-                        # When auto_discovery is enabled, use the progressive loading approach
-                        if tool_iterations == 0:
-                            # For the first interaction, only include essential tools like tool_finder
-                            essential_tool_names = ["tool_finder"]
-                            selected_tools = [
-                                self.tool_repo.get_tool(name).get_tool_definition()
-                                for name in essential_tool_names
-                                if name in self.tool_repo
-                            ]
-                            self.logger.debug(f"Using {len(selected_tools)} essential tools for initial response")
-                        else:
-                            # For subsequent iterations, include all available tools
-                            selected_tools = self.tool_repo.get_all_tool_definitions()
-                            self.logger.debug(f"Using all {len(selected_tools)} tools for subsequent response")
-                    else:
-                        # When auto_discovery is disabled, just use whatever tools were manually registered
-                        selected_tools = self.tool_repo.get_all_tool_definitions()
-                        self.logger.debug(f"Auto-discovery disabled: using only manually registered tools ({len(selected_tools)})")
+                    # Get the current available tools that are enabled
+                    selected_tools = self.tool_repo.get_all_tool_definitions()
+                    self.logger.debug(f"Using {len(selected_tools)} tools for this interaction")
                 else:
                     selected_tools = None
                 
@@ -324,6 +306,14 @@ class Conversation:
                 
                 # Check for tool calls
                 tool_calls = self.llm_bridge.extract_tool_calls(response)
+                
+                # Log tool calls for debugging
+                if tool_calls:
+                    self.logger.info(f"Found {len(tool_calls)} tool call(s):")
+                    for i, tool_call in enumerate(tool_calls):
+                        self.logger.info(f"  Tool call {i+1}: {tool_call['tool_name']}")
+                else:
+                    self.logger.info("No tool calls detected in response")
                 
                 # If no tool calls, add the response to conversation and break the loop
                 if not tool_calls:
@@ -408,14 +398,22 @@ class Conversation:
                 logger=self.logger
             ):
                 try:
+                    # Log tool call information at INFO level for debugging
+                    self.logger.info(f"Tool call: {tool_name} with input: {json.dumps(tool_input, indent=2)}")
+                    
                     # Invoke the tool
                     result = self.tool_repo.invoke_tool(tool_name, tool_input)
+                    
+                    # Format the result for Claude's response
+                    result_str = str(result)
                     tool_results[tool_id] = {
-                        "content": str(result),
+                        "content": result_str,
                         "is_error": False
                     }
                     
-                    self.logger.debug(f"Tool call successful: {tool_name}")
+                    # Log successful result
+                    self.logger.info(f"Tool call successful: {tool_name} returned: {result_str[:100]}..." 
+                                    if len(result_str) > 100 else result_str)
                 
                 except Exception as e:
                     # We still need to catch exceptions here to continue processing
