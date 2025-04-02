@@ -28,11 +28,14 @@ class Tool(ABC):
         name (str): The unique name of the tool.
         description (str): A human-readable description of the tool's purpose.
         usage_examples (List[Dict]): Example usage of the tool.
+        background_capable (bool): Whether this tool should automatically run in the background.
+            If True, the tool execution will be automatically scheduled as an async task.
     """
     
     name = "base_tool"
     description = "Base class for all tools"
     usage_examples = []
+    background_capable = False
     
     def __init__(self):
         """Initialize a new tool instance."""
@@ -132,7 +135,8 @@ class Tool(ABC):
             "description": self.description,
             "parameters": parameters,
             "required_parameters": required_parameters,
-            "usage_examples": self.usage_examples
+            "usage_examples": self.usage_examples,
+            "background_capable": self.background_capable
         }
     
     def get_dependencies(self) -> List[str]:
@@ -339,6 +343,36 @@ class ToolRepository:
             tool = self.tools[name]
             self.logger.debug(f"Invoking tool: {name} with params: {params}")
             
+            # Check if tool should automatically run in the background
+            if tool.background_capable and 'schedule_async_task' in self.enabled_tools:
+                self.logger.info(f"Tool {name} is background_capable, scheduling as async task")
+                
+                # Get the async task manager tool
+                task_scheduler = self.tools['schedule_async_task']
+                
+                # Schedule the tool execution as an async task
+                async_params = {
+                    'task_type': 'tool_execution',
+                    'tool_name': name, 
+                    'tool_parameters': params,
+                    'description': f"Background execution of {name}",
+                    'notify_on_completion': True
+                }
+                
+                try:
+                    # Run the scheduler
+                    result = task_scheduler.run(**async_params)
+                    return {
+                        'task_id': result.get('task_id'),
+                        'status': 'scheduled',
+                        'message': f"Tool '{name}' is running in the background"
+                    }
+                except Exception as e:
+                    self.logger.error(f"Failed to schedule background task for '{name}': {e}")
+                    # Fall back to synchronous execution if scheduling fails
+                    self.logger.warning(f"Falling back to synchronous execution for '{name}'")
+            
+            # Normal synchronous execution
             try:
                 result = tool.run(**params)
                 return result
