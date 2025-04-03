@@ -1,838 +1,958 @@
-# Developer Documentation
+# DEVELOPERS.md
 
-This document provides detailed technical documentation for developers working with the AI Agent System.
+## Table of Contents
+1. [Architecture Overview](#architecture-overview)
+2. [Core Components](#core-components)
+3. [Setup & Development Environment](#setup--development-environment)
+4. [Configuration System](#configuration-system)
+5. [Tool Development Guide](#tool-development-guide)
+6. [Asynchronous Processing](#asynchronous-processing)
+7. [Testing Strategy](#testing-strategy)
+8. [Error Handling](#error-handling)
+9. [Performance Considerations](#performance-considerations)
+10. [Contributing Guidelines](#contributing-guidelines)
+11. [Troubleshooting Common Issues](#troubleshooting-common-issues)
+12. [Advanced Usage Patterns](#advanced-usage-patterns)
+13. [Contribution Best Practices](#contribution-best-practices)
 
-## Core Design Principles
+## Architecture Overview
 
-The AI Agent System is built on several core design principles:
+This project implements a conversational AI agent system with memory, tool integration, and background task processing. The architecture follows these core principles:
 
-1. **Single Responsibility**: Each module and class has a clear, single responsibility. This makes the code easier to understand, maintain, and extend.
+1. **Conversation-Driven Design**: The system maintains a conversation context that drives interactions with the LLM and tool execution.
 
-2. **Clean Interfaces**: Components interact through well-defined interfaces, which reduces coupling and makes it easier to replace or mock components for testing.
+2. **Tool Composition**: Functionality is implemented through composable tools with single responsibilities rather than monolithic features.
 
-3. **Minimal Dependencies**: The system minimizes external dependencies where possible, favoring the Python standard library.
+3. **Persistent Memory**: The system maintains state across sessions through file-based persistence.
 
-4. **Standardized Error Handling**: A comprehensive error handling system with custom exceptions, error codes, clear error messages, and a unified context manager approach for consistent error wrapping.
+4. **Asynchronous Processing**: Time-consuming tasks can be offloaded to a background service.
 
-5. **Typed Code**: The codebase uses type hints throughout to improve code clarity and enable static type checking.
+5. **Error Resilience**: Comprehensive error handling strategies protect against API failures, invalid inputs, and system errors.
 
-6. **No Unnecessary Abstractions**: The system avoids overly complex abstractions, focusing on simple, understandable code.
+The system operates in this general flow:
 
-## System Components
-
-### Error Handling (`errors.py`)
-
-The error system is built around the `AgentError` base class with specialized subclasses for different types of errors:
-
-- `ConfigError`: Configuration-related errors
-- `APIError`: API communication errors
-- `FileOperationError`: File operation errors
-- `ToolError`: Tool execution errors
-- `ConversationError`: Conversation management errors
-
-Error codes are defined in the `ErrorCode` enum, grouped by category:
-- 1xx: Configuration errors
-- 2xx: API errors
-- 3xx: File operation errors
-- 4xx: Tool errors
-- 5xx: Conversation errors
-- 9xx: Uncategorized/system errors
-
-#### Centralized Error Context Manager
-
-The system provides a centralized `error_context` context manager for standardized error handling:
-
-```python
-from errors import error_context, ToolError, ErrorCode
-
-# Use with any component
-with error_context(
-    component_name="my_component",
-    operation="specific operation",
-    error_class=ToolError,  # Or other appropriate error class
-    error_code=ErrorCode.TOOL_EXECUTION_ERROR,
-    logger=self.logger
-):
-    # Code that might raise exceptions
-    result = process_data(input)
+```
+User Input → Conversation Manager → LLM Bridge → Tool Selection → Tool Execution → Response Formation → User Output
+                      ↑                                   ↓
+                      └───────── Persistent Storage ──────┘
 ```
 
-This approach ensures consistent error handling, logging, and wrapping across all components.
+With background processing:
 
-#### Specialized Error Handling
-
-Some components extend this pattern with domain-specific error handling:
-
-- `LLMBridge` includes the `api_error_context` context manager with specialized API retry logic
-- `PersistenceTool` uses custom handling for file-specific errors
-
-The `handle_error` utility function provides standardized user-facing error messages.
-
-### Configuration Management (`config/`)
-
-The configuration system uses Pydantic models for type safety and validation. Configuration is loaded from multiple sources:
-
-1. Pydantic models with default values
-2. Configuration file (JSON format, optional)
-3. Environment variables prefixed with `AGENT_`
-
-Nested configuration keys in environment variables use double underscores (`__`). For example, `AGENT_API__MODEL` sets the `config.api.model` value.
-
-The global `config` instance can be imported and used throughout the application:
-
-```python
-from config import config
-
-# Access via attributes (recommended, type-safe)
-model_name = config.api.model
-log_level = config.system.log_level
-extraction_templates = config.tools.extraction_templates
-
-# Alternative access using dot notation
-model_name = config.get("api.model")
-log_level = config.get("system.log_level")
-
-# Special property for API key
-api_key = config.api_key
+```
+Task Request → Async Client → File Queue → Background Service → Tool Execution → Result Storage → Notification → Main Application
 ```
 
-Configuration is organized into logical sections:
+## Core Components
 
-1. **API Configuration**:
-   - `config.api.model`: LLM model to use
-   - `config.api.max_tokens`: Maximum tokens for responses
-   - `config.api.temperature`: Temperature setting
-   - ...
+### Conversation Manager (`conversation.py`)
 
-2. **Paths Configuration**:
-   - `config.paths.data_dir`: Directory for data storage
-   - `config.paths.persistent_dir`: Directory for persistent storage
-   - `config.paths.async_results_dir`: Directory for async operation results
-   - ...
+The conversation manager tracks message history and handles context management:
 
-3. **Conversation Configuration**:
-   - `config.conversation.max_history`: Maximum conversation turns to keep
-   - `config.conversation.max_context_tokens`: Maximum tokens for context
-   - ...
-
-4. **Tool Configuration**:
-   - `config.tools.enabled`: Whether tools are enabled
-   - `config.tools.timeout`: Default timeout for tool operations
-   - `config.tools.extraction_templates`: Templates for extraction
-   - ...
-
-5. **System Configuration**:
-   - `config.system.log_level`: Logging level
-   - `config.system.streaming`: Whether to stream responses
-   - `config.system.json_indent`: JSON indentation level
-   - ...
-
-All configuration values have sensible defaults, so you only need to specify the values you want to override.
-
-### File Operations (`crud.py` and `tools/persistence_tool.py`)
-
-#### Basic File Operations (`crud.py`)
-
-The `FileOperations` class provides CRUD operations for working with JSON files:
-
-- `create`: Create a new JSON file
-- `read`: Read data from a JSON file
-- `write`: Write data to a JSON file
-- `update`: Update data in a JSON file using a function
-- `delete`: Delete a JSON file
-- `list_files`: List JSON files in the data directory
-
-All methods include proper error handling and validation.
-
-#### Persistence Tool (`tools/persistence_tool.py`)
-
-The `PersistenceTool` provides a higher-level interface for data persistence with a clear separation between data and file operations:
-
-1. **Data Operations**:
-   - `get_data`: Retrieve a specific value from a JSON file
-   - `set_data`: Store a value in a JSON file
-   - `delete_data`: Remove a value from a JSON file
-   - `list_keys`: List all keys in a JSON file
-
-2. **File Operations**:
-   - `get_file`: Retrieve the entire contents of a JSON file
-   - `set_file`: Store complete data in a JSON file
-   - `list_files`: List all available JSON files
-
-Example usage:
-```python
-# Get a specific value
-result = persistence_tool.run(
-    operation="get_data",
-    location="preferences.json",
-    key="theme"
-)
-
-# Store a value
-result = persistence_tool.run(
-    operation="set_data",
-    location="preferences.json",
-    key="theme",
-    value="dark"
-)
-
-# Save an entire file
-result = persistence_tool.run(
-    operation="set_file",
-    location="async_results/task-123.json",
-    data={"task_id": "task-123", "result": {"data": "value"}}
-)
-
-# Load an entire file
-result = persistence_tool.run(
-    operation="get_file",
-    location="async_results/task-123.json"
-)
-```
-
-The persistence tool handles path resolution, directory creation, error handling, and provides a consistent interface for all persistence operations.
-
-#### Working with Asynchronous Task Results
-
-Asynchronous tasks store their results in the `persistent/async_results/` directory. To work with these results:
+- **Message Structure**: Messages are stored with role, content, and metadata
+- **Context Management**: Implements pruning strategies when context exceeds token limits
+- **Tool Integration**: Processes tool calls from LLM responses and integrates results
 
 ```python
-# Save async task result
-result = persistence_tool.run(
-    operation="set_file",
-    location="async_results/task-123.json",  # 'task-123' is the task ID
-    data={
-        "task_id": "task-123",
-        "status": "completed",
-        "result": {"data": "analysis results"}
-    }
-)
-
-# Retrieve async task result
-result = persistence_tool.run(
-    operation="get_file",
-    location="async_results/task-123.json"
-)
-# The value is in result["value"]
-
-# List all async results
-result = persistence_tool.run(
-    operation="list_files"
-)
-# Filter for async results
-async_files = [f for f in result["files"] if "async_results" in f]
+# Core methods
+add_message(role, content, metadata)
+get_formatted_messages(include_tools=True)
+process_tool_calls(tool_calls)
 ```
 
-The AsyncTaskManager automatically detects when the persistence tool is used to save results in the `async_results` directory and provides appropriate task completion messages.
+Interface contract requirements:
+- Messages must maintain their structure through serialization/deserialization
+- Tool results must be integrated in a format the LLM can process
+- Context pruning must preserve critical conversation elements
 
-### API Communication (`api/llm_bridge.py`)
+### LLM Bridge (`api/llm_bridge.py`)
 
-The `LLMBridge` class handles communication with the Anthropic API, including:
+The bridge handles all communication with the Anthropic API:
 
-- API authentication
-- Request formatting
-- Response parsing
-- Error handling
-- Rate limiting
-- Retries with exponential backoff
-
-The `generate_response` method sends a request to the API and returns the response:
+- **API Integration**: Manages authentication, request formation, and response parsing
+- **Rate Limiting**: Implements token bucket algorithm for respecting API rate limits
+- **Error Handling**: Provides comprehensive error handling with exponential backoff
 
 ```python
-response = llm_bridge.generate_response(
-    messages=[{"role": "user", "content": "Hello, world!"}],
-    system_prompt="You are a helpful assistant.",
-    temperature=0.7,
-    max_tokens=1000,
-    tools=tool_repo.get_all_tool_definitions()
-)
+# Core methods
+generate_response(messages, tools=None, stream=False)
+extract_text(response)
+extract_tool_calls(response)
 ```
 
-Helper methods for extracting content from responses:
-- `extract_text_content`: Get text content from a response
-- `extract_tool_calls`: Get tool calls from a response
+Critical specifications:
+- Request formation MUST follow Anthropic API specifications exactly
+- Rate limiting MUST respect both token-per-minute and requests-per-minute limits
+- Retry logic MUST use exponential backoff with jitter
+- API status codes MUST be mapped to appropriate error types
 
-### Tool System (`tools/repo.py` and Related Files)
+### Tool System (`tools/repo.py`, `tools/tool_finder.py`)
 
-The tool system is built around several key components:
+The tool system provides a framework for extending the agent's capabilities:
 
-1. **Core Classes**:
-   - `Tool`: Base class for all tools, defining the tool interface
-   - `ToolRepository`: Central registry for tool discovery and invocation
-   - `ToolSelector`: Analyzes messages to select relevant tools
-   - `ToolMetrics`: Tracks tool selection and usage metrics
-   - `ToolFinderTool`: Meta-tool that allows requesting additional tools
-
-2. **Just-in-Time (JIT) Tool Selection**:
-   The system dynamically selects only the most relevant tools for each user request, which:
-   - Reduces token usage by 60-80%
-   - Improves response times
-   - Provides more focused context to the LLM
-
-3. **Tool Usage Sequence Prediction**:
-   The system tracks which tools are called after others, building a statistical model that:
-   - Records which tools are commonly used together
-   - Predicts which tools are likely to be needed for follow-up tool calls
-   - Improves the selection algorithm over time through usage data
-
-4. **Tool Description Optimization**:
-   The `optimize_tool_descriptions.py` script analyzes tools and generates optimized descriptions that:
-   - Follow Anthropic's guidelines for effective tool descriptions
-   - Start with action verbs
-   - Clearly specify parameters and return values
-   - Help Claude better understand when and how to use each tool
-
-Tools are automatically discovered and registered when the `ToolRepository` is initialized. Each tool must inherit from the `Tool` base class and define:
-
-- `name`: Unique name for the tool
-- `description`: Description of what the tool does
-- `run` method: Implementation of the tool's functionality
-
-### Working with the Tool System
+- **Tool Repository**: Central registry for all available tools
+- **Tool Interface**: Common interface for all tools
+- **Tool Discovery**: Dynamic tool selection based on conversation
 
 ```python
-# Basic tool operations
-tool_definition = tool_repo.get_tool("tool_name").get_tool_definition()
-result = tool_repo.invoke_tool("tool_name", {"param1": "value1"})
-
-# Using the JIT selector
-selected_tools = tool_repo.select_tools_for_message("I need to save some data")
-print(f"Selected {len(selected_tools)} tools out of {len(tool_repo.tools)} total")
-
-# Getting likely next tools based on sequence data
-likely_tools = tool_repo.get_likely_next_tools("extract")
-print(f"Tools likely to be used after 'extract': {likely_tools}")
-
-# Getting metrics for the JIT system
-metrics_report = tool_repo.get_selection_metrics_report()
-print(f"Tool selection accuracy: {metrics_report['summary']['selection_accuracy']}")
+# Core interfaces
+class Tool(ABC):
+    @abstractmethod
+    def run(self, **kwargs):
+        pass
+        
+class ToolRepository:
+    register_tool(tool)
+    get_tool(name)
+    execute_tool(name, **kwargs)
 ```
 
-### Configuration for JIT Tool Selection
+Implementation requirements:
+- Tools MUST implement the Tool interface
+- Repository MUST handle tool dependencies
+- Tool errors MUST be properly propagated and handled
 
-The JIT system is configured through the standard configuration system:
+### Configuration System (`config/config.py`, `config/config_manager.py`)
+
+The configuration system manages application settings from multiple sources:
+
+- **Configuration Schema**: Pydantic models define and validate settings
+- **Loading Hierarchy**: Environment variables override file-based configuration
+- **Access Methods**: Dot notation and get/require methods
 
 ```python
-# In config/schemas/base.py
-class ToolConfig(BaseModel):
-    # Tool selection settings
-    selection_enabled: bool = Field(
-        default=True,
-        description="Whether Just-in-Time tool selection is enabled"
-    )
-    min_tools: int = Field(
-        default=3,
-        description="Minimum number of tools to include in selection"
-    )
-    max_tools: int = Field(
-        default=7, 
-        description="Maximum number of tools to include in selection"
-    )
-    essential_tools: List[str] = Field(
-        default=["tool_finder"],
-        description="Tools that are always included in the selection"
-    )
+# Core access patterns
+config.api.model                             # Direct attribute access
+config.get("api.model", default="claude-3")  # Get with default
+config.require("api.key")                    # Raises error if not found
 ```
 
-### Optimizing Tool Descriptions
+Critical specifications:
+- Configuration MUST be validated against Pydantic schemas
+- Environment variables MUST override file settings using AGENT__ prefix
+- Missing required values MUST raise appropriate exceptions
 
-The system includes a standalone script for optimizing tool descriptions:
+### Background Service (`background_service.py`, `async_client.py`)
+
+The background processing system handles asynchronous task execution:
+
+- **Task Queue**: File-based queue using directory structure
+- **Task Lifecycle**: Pending → Running → Completed/Failed
+- **Notification System**: Signals task completion status
+
+```
+Directories:
+- pending/      # Tasks waiting to be processed
+- running/      # Tasks currently being executed
+- completed/    # Successfully completed tasks
+- failed/       # Failed tasks with error information
+```
+
+Implementation requirements:
+- Task state transitions MUST be atomic when possible
+- Task results MUST be properly persisted
+- Background service MUST handle interruptions gracefully
+
+## Setup & Development Environment
+
+### Requirements
+
+- Python 3.10 or higher
+- Anthropic API key
+
+### Installation
 
 ```bash
-# Generate optimized descriptions and view differences
-python tools/optimize_tool_descriptions.py --verify
+# Clone the repository
+git clone https://github.com/your-org/botwithmemory.git
+cd botwithmemory
 
-# Apply optimized descriptions to tools
-python tools/optimize_tool_descriptions.py --apply
+# Install dependencies
+pip install -r requirements.txt
 
-# Only load previously generated descriptions
-python tools/optimize_tool_descriptions.py --load-only
+# Set up your API key
+export AGENT__API__KEY=your_anthropic_api_key
 ```
 
-The optimized descriptions are stored in `persistent/optimized_tool_descriptions.json` and are automatically loaded when the system starts.
+### Directory Structure
 
-### Tool Selection Metrics and Analysis
-
-The `ToolMetrics` class provides comprehensive metrics on the JIT tool selection system:
-
-```python
-# Getting the complete metrics report
-metrics_report = tool_repo.get_selection_metrics_report()
-
-# Key metrics include:
-selection_accuracy = metrics_report["summary"]["selection_accuracy"]  # How often selected tools were used
-miss_rate = metrics_report["summary"]["miss_rate"]  # How often tools had to be requested via tool_finder
-token_savings = metrics_report["summary"]["avg_tokens_saved_per_request"]  # Estimated token savings
-time_improvement = metrics_report["response_times"]["improvement"]  # Response time improvement
-
-# Tool sequence data
-tool_sequences = metrics_report["tool_sequences"]
-# Example: {'extract': {'next_tools': {'persistence': 42, 'check_task': 5}, 'total_sequences': 47}}
+```
+botwithmemory/
+│
+├── api/                  # API integration
+├── config/               # Configuration system
+│   └── prompts/          # System prompts
+├── tools/                # Tool implementations
+├── data/                 # Data storage
+├── persistent/           # Persisted tasks and conversations
+│   ├── pending/          # Pending background tasks
+│   ├── running/          # Currently executing tasks
+│   ├── completed/        # Completed tasks
+│   └── failed/           # Failed tasks with error info
+└── tests/                # Test suite
 ```
 
-The metrics system tracks:
-1. Selection accuracy and miss rates
-2. Token usage reduction
-3. Response time impact
-4. Tool usage sequences
-5. Daily metrics for trend analysis
+### Development Workflow
 
-To reset the metrics during development, delete these files:
-- `persistent/tool_selector_data.json`
-- `persistent/tool_metrics.json`
+1. Configure your environment:
+   ```bash
+   # Setup environment variables
+   export AGENT__API__KEY=your_anthropic_api_key
+   # For development
+   export AGENT__PATHS__DATA_DIR=./data
+   ```
 
-### Conversation Management (`conversation.py`)
+2. Run the application:
+   ```bash
+   python main.py
+   ```
 
-The `Conversation` class manages the conversation flow, including:
+3. Start the background service (separate terminal):
+   ```bash
+   python background_service.py
+   ```
 
-- Message history tracking
-- Context management
-- Tool result integration
-- Conversation persistence
+4. Running tests:
+   ```bash
+   pytest
+   # Specific test file
+   pytest tests/test_config.py
+   # Specific test
+   pytest tests/test_config.py::test_config_loading
+   ```
 
-The `Message` dataclass represents individual messages in the conversation.
+5. Code style enforcement:
+   ```bash
+   # Linting
+   flake8
+   # Type checking
+   mypy .
+   # Formatting
+   black .
+   ```
 
-### Main Control Flow (`main.py`)
+## Configuration System
 
-The `main.py` module provides the entry point for the application and handles:
+The configuration system uses Pydantic for schema validation and loads settings from multiple sources:
 
-- Command-line argument parsing
-- System initialization
-- Interactive command loop
-- Error handling
-- Conversation saving and loading
+### Configuration Structure
 
-### External Stimulus Handling (`stimuli.py`)
-
-The `stimuli.py` module provides interfaces and components for receiving and processing external triggers:
-
-- `StimulusType`: Enum of supported stimulus types (message, notification, event, etc.)
-- `Stimulus`: Dataclass representing an external stimulus with metadata
-- `StimulusHandler`: Central manager for routing stimuli to appropriate handlers
-- Helper functions for formatting stimuli for LLM prompts
-
-The stimulus system follows a publish-subscribe pattern, where handlers can register for specific stimulus types.
-
-#### Stimulus Implementation Patterns
-
-The stimulus system provides several patterns for integrating external triggers with conversations:
-
-##### 1. Basic Handler Registration
-
-Define functions that process specific types of stimuli:
-
-```python
-def handle_notification(stimulus: Stimulus) -> None:
-    # Process notification stimulus
-    print(f"Received notification: {stimulus.content}")
-    
-# Initialize the handler
-stimulus_handler = StimulusHandler()
-
-# Register the handler for notifications
-stimulus_handler.register_handler(StimulusType.NOTIFICATION, handle_notification)
+```
+AppConfig
+├── API
+│   ├── model
+│   ├── key
+│   └── api_url
+├── Paths
+│   ├── config_dir
+│   ├── data_dir
+│   └── prompts_dir
+├── Conversation
+│   ├── max_tokens
+│   ├── context_window
+│   └── temperature
+├── Tools
+│   └── [tool-specific configs]
+└── System
+    ├── default_background_delay
+    └── log_level
 ```
 
-##### 2. Stimulus Creation and Processing
+### Loading Hierarchy (highest precedence first)
 
-Generate stimuli from external triggers:
+1. Environment variables (prefixed with `AGENT__`)
+2. User configuration file
+3. Default configuration values
 
-```python
-# Create a stimulus directly
-notification = stimulus_handler.create_stimulus(
-    stimulus_type=StimulusType.NOTIFICATION,
-    content="New message received",
-    source="message_service",
-    metadata={"priority": "high"}
-)
+### Environment Variables
 
-# Process the stimulus
-stimulus_handler.process_stimulus(notification)
+Environment variables use double underscores to represent nested keys:
 
-# Or do both in one step
-stimulus_handler.create_and_process(
-    stimulus_type=StimulusType.NOTIFICATION,
-    content="New message received",
-    source="message_service",
-    metadata={"priority": "high"}
-)
+```bash
+# Examples:
+export AGENT__API__KEY=your_api_key
+export AGENT__API__MODEL=claude-3-sonnet-20240229
+export AGENT__CONVERSATION__MAX_TOKENS=4000
 ```
 
-##### 3. Conversation Integration
+### Configuration Files
 
-There are several ways to integrate stimuli with conversations:
+Configuration is stored in JSON format:
 
-**Method 1: Direct Attachment**
-
-The simplest approach is to attach a conversation to a stimulus handler:
-
-```python
-conversation = Conversation(system_prompt="You are a helpful assistant.")
-stimulus_handler = StimulusHandler()
-
-# Attach the conversation to the stimulus handler
-stimulus_handler.attach_conversation(conversation)
-
-# Now all stimuli will be automatically added to the conversation
-stimulus_handler.create_and_process(
-    stimulus_type=StimulusType.NOTIFICATION,
-    content="System update available",
-    source="update_service"
-)
+```json
+{
+  "api": {
+    "model": "claude-3-sonnet-20240229",
+    "key": "your_api_key"
+  },
+  "conversation": {
+    "max_tokens": 4000
+  }
+}
 ```
 
-**Method 2: Response Processing**
+### Extending Configuration
 
-For stimuli that require response handling:
+To add new configuration sections:
 
+1. Define a Pydantic model in `config/config.py`
+2. Add it to the main `AppConfig` class
+3. Provide defaults in the `get_defaults()` method
+
+Example pattern:
 ```python
-# Define a response callback
-def handle_response(stimulus: Stimulus, response: str) -> None:
-    print(f"AI responded to {stimulus.type.value}: {response}")
-    # Take programmatic action based on the response
-    if "update now" in response.lower():
-        start_update_process()
+class NewFeatureConfig(BaseModel):
+    enabled: bool = True
+    timeout: int = 30
 
-# Attach with response processing
-stimulus_handler.attach_conversation(
-    conversation, 
-    stimulus_types=[StimulusType.NOTIFICATION], 
-    response_callback=handle_response
-)
+class AppConfig(BaseModel):
+    # Existing sections...
+    new_feature: NewFeatureConfig
 ```
 
-**Method 3: Manual Conversion**
+## Tool Development Guide
 
-For more control over how stimuli are added to conversations:
+Tools extend the agent's capabilities by providing specific functionality through a consistent interface.
 
-```python
-def custom_handler(stimulus: Stimulus) -> None:
-    # Format the stimulus as needed
-    formatted_content = f"IMPORTANT ALERT: {stimulus.content}"
-    
-    # Add to conversation with custom metadata
-    add_stimulus_to_conversation(stimulus, conversation)
-    
-    # Generate a response if needed
-    response = conversation.generate_response("")
-    print(f"Response: {response}")
+### Tool Interface
 
-stimulus_handler.register_handler(StimulusType.ALARM, custom_handler)
-```
-
-##### 4. Utility Functions
-
-Several utility functions make it easier to work with stimuli in conversations:
+All tools must implement the `Tool` abstract base class:
 
 ```python
-# Check if a message originated from a stimulus
-if is_stimulus_message(message):
-    # Get stimulus metadata
-    metadata = get_stimulus_metadata(message)
-    print(f"Message from stimulus of type: {metadata['stimulus_type']}")
-
-# Process a stimulus through a conversation
-response = process_stimulus(
-    stimulus, 
-    conversation,
-    lambda s, r: print(f"Got response: {r}")
-)
-```
-
-##### 5. Extending Stimulus Types
-
-To add new stimulus types, extend the `StimulusType` enum:
-
-```python
-# Custom stimulus types
-class ExtendedStimulusType(StimulusType):
-    VOICE = "voice"  # Voice input stimulus
-    LOCATION = "location"  # Location change stimulus
-```
-
-##### Implementation Details
-
-- Stimuli are added to conversations as "user" messages (the API only accepts "user" and "assistant" roles)
-- Metadata is attached to messages to track their stimulus origin
-- Response handling can be automated through callbacks
-- The system supports both synchronous and event-driven patterns
-
-The stimulus system is designed to be flexible and extensible, allowing for integration with various external triggers while maintaining a consistent interface.
-
-## Developing New Tools
-
-### Step 1: Create a New Tool Class
-
-Create a new file in the `tools` directory, defining a class that inherits from `Tool`:
-
-```python
-# tools/my_tool.py
-from typing import Dict, Any
-from tools.repo import Tool
-
-class MyTool(Tool):
-    name = "my_tool"
-    description = "A tool that does something useful"
-    
-    def run(self, input_param: str, optional_param: int = 0) -> Dict[str, Any]:
-        """
-        Run the tool.
+class Tool(ABC):
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Unique identifier for the tool"""
         
-        Args:
-            input_param: The main input parameter
-            optional_param: An optional parameter with a default value
-            
-        Returns:
-            Result dictionary
-        """
-        # Tool implementation
-        result = {
-            "input": input_param,
-            "processed": f"Processed: {input_param} (optional: {optional_param})"
+    @property
+    @abstractmethod
+    def description(self) -> str:
+        """Human-readable description"""
+        
+    @property
+    @abstractmethod
+    def parameters(self) -> dict:
+        """Parameter schema"""
+        
+    @abstractmethod
+    def run(self, **kwargs):
+        """Execute the tool functionality"""
+```
+
+### Tool Development Process
+
+1. **Define tool specification**
+   - Unique name
+   - Clear description of functionality
+   - Parameter schema with types and descriptions
+   - Expected return value format
+
+2. **Implement tool class**
+   - Inherit from `Tool` base class
+   - Implement required properties and methods
+   - Include input validation
+   - Handle errors appropriately
+   - Return results in a consistent format
+
+3. **Register with repository**
+   - Tools are automatically discovered and registered if they inherit from `Tool`
+   - Custom registration can be done explicitly with `repository.register_tool(MyTool())`
+
+### Tool Implementation Pattern
+
+```python
+# Pseudocode for tool implementation
+class MyTool(Tool):
+    @property
+    def name(self) -> str:
+        return "my_tool"
+        
+    @property
+    def description(self) -> str:
+        return "Performs a specific function"
+        
+    @property
+    def parameters(self) -> dict:
+        return {
+            "parameter1": {
+                "type": "string",
+                "description": "Description of parameter1",
+                "required": True
+            },
+            # Additional parameters...
         }
-        return result
+    
+    def run(self, **kwargs):
+        # 1. Validate inputs
+        self._validate_inputs(kwargs)
+        
+        # 2. Process the core functionality
+        result = self._process(kwargs)
+        
+        # 3. Format the output
+        return self._format_output(result)
+        
+    def _validate_inputs(self, inputs):
+        # Validation logic
+        if "required_param" not in inputs:
+            raise ToolError("Missing required parameter")
+    
+    def _process(self, inputs):
+        # Core processing logic
+        pass
+        
+    def _format_output(self, result):
+        # Output formatting logic
+        return {
+            "status": "success",
+            "data": result
+        }
 ```
 
-### Step 2: Ensure Type Hints and Documentation
+### Background-Capable Tools
 
-For your tool to work properly with the parameter schema generation, ensure:
-
-1. All parameters to the `run` method have type hints
-2. The `run` method has a return type hint
-3. The `run` method has a proper docstring describing the parameters
-
-### Step 3: Handling Tool-Specific State
-
-If your tool needs to maintain state:
-
-1. Initialize the state in the `__init__` method
-2. Use instance variables to store the state
-3. Access the state in the `run` method
-
-Example:
+To make a tool background-capable:
 
 ```python
-def __init__(self):
-    super().__init__()
-    # Tool-specific state
-    self.counter = 0
-    self.results_cache = {}
-
-def run(self, input_param: str) -> Dict[str, Any]:
-    # Update state
-    self.counter += 1
-    
-    # Check cache
-    if input_param in self.results_cache:
-        return self.results_cache[input_param]
-    
-    # Process and cache result
-    result = self._process_input(input_param)
-    self.results_cache[input_param] = result
-    
-    return result
+class BackgroundCapableTool(Tool):
+    @property
+    def background_capable(self) -> bool:
+        return True
 ```
-
-### Step 4: Error Handling in Tools
-
-Tools should use the centralized error context manager for consistent error handling:
-
-```python
-from errors import error_context, ToolError, ErrorCode
-
-def run(self, input_param: str) -> Dict[str, Any]:
-    # Validate input
-    if not input_param:
-        raise ToolError(
-            "Input parameter cannot be empty",
-            ErrorCode.TOOL_INVALID_INPUT,
-            {"input": input_param}
-        )
-    
-    # Use error context for operation that might fail
-    with error_context(
-        component_name=self.name,
-        operation="processing input",
-        error_class=ToolError,
-        error_code=ErrorCode.TOOL_EXECUTION_ERROR,
-        logger=self.logger
-    ):
-        # Process input (any exceptions will be caught and properly wrapped)
-        result = self._process_input(input_param)
-        return result
-```
-
-This approach ensures:
-- Consistent error handling across all tools
-- Proper error wrapping with component name and operation context
-- Automatic logging of errors
-- Preservation of error details
-
-## Tool Interface Contract
-
-Tools must adhere to the following contract:
-
-1. **Class Attributes**:
-   - `name`: String, unique name for the tool
-   - `description`: String, description of what the tool does
-   - `usage_examples`: List, optional examples of how to use the tool
-
-2. **Required Methods**:
-   - `run(**kwargs)`: Execute the tool with the provided parameters
-
-3. **Parameter Schema**:
-   - Type hints on the `run` method's parameters are used to generate the parameter schema
-   - Return type hints are recommended for documentation
-   - Docstrings should describe parameters and return value
-
-4. **Return Values**:
-   - Tools should return JSON-serializable data (dict, list, str, int, float, bool, None)
-   - Complex objects should be converted to dictionaries
-   - Errors should be raised as exceptions, not returned as values
-
-## State Management Best Practices
-
-1. **Short-lived State**: Tools should generally avoid maintaining long-lived state. If state is needed, consider:
-   - Storing state in external storage (files, databases)
-   - Making state explicit in the tool's parameters and return values
-   - Using a state manager if state needs to be shared between tools
-
-2. **Conversation State**: For state that needs to persist across conversation turns:
-   - Use the conversation's metadata for tool-specific state
-   - Store the state in the tool's return value and extract it from future calls
-
-3. **External Resources**: For tools that interact with external resources:
-   - Open and close resources within a single tool call when possible
-   - Use context managers to ensure resources are properly closed
-   - If resources must persist, manage them carefully with proper error handling
-
-## Testing Recommendations
-
-1. **Unit Tests**: Write unit tests for all tools and components:
-   - Test normal operation
-   - Test edge cases
-   - Test error conditions
-
-2. **Mock External Dependencies**: Use mocks for external dependencies:
-   - API calls
-   - File operations
-   - External services
-
-3. **Parameterized Tests**: Use parameterized tests for testing different input variations.
-
-4. **Integration Tests**: Write integration tests for the full system flow.
-
-Example test for a tool:
-
-```python
-import pytest
-from tools.my_tool import MyTool
-from errors import ToolError
-
-def test_my_tool_normal_operation():
-    tool = MyTool()
-    result = tool.run(input_param="test")
-    assert "processed" in result
-    assert result["processed"] == "Processed: test (optional: 0)"
-
-def test_my_tool_with_optional_param():
-    tool = MyTool()
-    result = tool.run(input_param="test", optional_param=42)
-    assert "processed" in result
-    assert result["processed"] == "Processed: test (optional: 42)"
-
-def test_my_tool_with_empty_input():
-    tool = MyTool()
-    with pytest.raises(ToolError) as exc_info:
-        tool.run(input_param="")
-    assert "Invalid input" in str(exc_info.value)
-```
-
-## Common Pitfalls and Solutions
-
-### API Rate Limiting
-
-The `LLMBridge` class includes rate limiting, but be careful when:
-- Running multiple instances of the application
-- Making API calls outside of the `LLMBridge`
-
-Solution: Use a centralized rate limiter or implement distributed rate limiting.
-
-### Tool Discovery Issues
-
-If tools aren't being discovered:
-- Ensure the tool class inherits from `Tool`
-- Ensure the tool is in a module in the `tools` package
-- Check for import errors in the tool module
-
-### Error Handling in Tool Calls
-
-If a tool raises an uncaught exception, it will be caught by the `ToolRepository` and wrapped in a `ToolError`. However, it's better to handle errors within the tool and raise appropriate `ToolError` exceptions.
-
-### Context Length Management
-
-The conversation manager tries to manage context length by limiting the history, but for complex tools or long conversations, you may need additional measures:
-- Implement message summarization
-- Implement more aggressive history pruning
-- Use embeddings or retrieval for handling long-term context
-
-## Integration Patterns
 
 ### Tool Composition
 
-Tools can be composed by having one tool call another:
+Tools should be designed for composition. Example of composing tools:
 
 ```python
-def run(self, input_param: str) -> Dict[str, Any]:
-    # Get the tool repository
-    from tools.repo import ToolRepository
-    tool_repo = ToolRepository()
+def run(self, **kwargs):
+    # Extract information using extraction tool
+    extracted_data = self.tool_repository.execute_tool(
+        "extraction_tool", 
+        text=kwargs["text"],
+        extraction_type="addresses"
+    )
     
-    # Call another tool
-    pre_process_result = tool_repo.invoke_tool("preprocessor", {"input": input_param})
-    
-    # Process the result
-    final_result = self._process_result(pre_process_result)
-    
-    return final_result
+    # Store results using persistence tool
+    return self.tool_repository.execute_tool(
+        "persistence_tool",
+        operation="set_data",
+        file_name="addresses.json",
+        data=extracted_data
+    )
 ```
 
-However, use this pattern sparingly to avoid circular dependencies.
+## Asynchronous Processing
 
-### External Services Integration
+The system supports offloading time-consuming tasks to a background service.
 
-For tools that integrate with external services:
+### Task Lifecycle
 
-1. Use a separate class for the service client:
+1. **Task Creation**: Main application creates a task with:
+   - Unique ID
+   - Tool name and parameters
+   - Priority and metadata
+
+2. **Task Submission**: Async client writes task to pending directory
+
+3. **Task Execution**: Background service:
+   - Moves task from pending to running
+   - Executes specified tool with parameters
+   - Writes results or errors to disk
+   - Moves task to completed or failed directory
+
+4. **Result Retrieval**: Main application:
+   - Checks task status
+   - Retrieves results when complete
+
+### Directory Structure
+
+The background service uses a directory-based queue:
+
+```
+persistent/
+├── pending/      # Tasks waiting to be processed
+├── running/      # Tasks currently being executed
+├── completed/    # Successfully completed tasks
+└── failed/       # Failed tasks with error information
+```
+
+Each task is stored as a JSON file containing:
+- Task ID
+- Creation timestamp
+- Tool name and parameters
+- Execution result or error information
+- Completion timestamp
+
+### Using the Async Client
+
+```python
+# Pseudocode for submitting and checking background tasks
+from async_client import AsyncClient
+
+# Initialize client
+async_client = AsyncClient()
+
+# Submit task
+task_id = async_client.submit_task(
+    tool_name="long_running_tool",
+    parameters={"param1": "value1"}
+)
+
+# Check status
+status = async_client.get_task_status(task_id)
+
+# Get results when complete
+if status == "completed":
+    results = async_client.get_task_results(task_id)
+```
+
+### Implementation Considerations
+
+- Tasks must be serializable to JSON
+- Background tasks should be idempotent when possible
+- Long-running tasks should provide progress updates
+- Error handling should be comprehensive
+
+## Testing Strategy
+
+The project uses pytest for testing with a focus on unit and integration tests.
+
+### Test Structure
+
+```
+tests/
+├── unit/               # Unit tests for individual components
+├── integration/        # Tests for component interactions
+├── fixtures/           # Test fixtures and data
+└── conftest.py         # Pytest configuration
+```
+
+### Test Categories
+
+1. **Unit Tests**: Test individual components in isolation
+   - Config system
+   - Tool implementations
+   - LLM bridge
+   - Conversation manager
+
+2. **Integration Tests**: Test component interactions
+   - Tool composition
+   - Background task execution
+   - End-to-end conversation flow
+
+3. **Mock Tests**: Test with mock LLM responses
+   - Conversation dynamics
+   - Tool call handling
+   - Error scenarios
+
+### LLM Response Mocking
+
+```python
+# Pseudocode for mocking LLM responses
+def test_tool_call_handling(mocker):
+    # Mock LLM response with tool calls
+    mock_llm_response = {
+        "content": [],
+        "tool_calls": [
+            {
+                "name": "test_tool",
+                "parameters": {"param1": "value1"}
+            }
+        ]
+    }
+    
+    # Apply mock
+    mocker.patch("api.llm_bridge.LLMBridge.generate_response", 
+                 return_value=mock_llm_response)
+    
+    # Run conversation with input that should trigger tool
+    conversation = Conversation(config, tool_repository)
+    conversation.add_user_message("Use the test tool")
+    response = conversation.get_assistant_response()
+    
+    # Verify tool was called with expected parameters
+    assert "test_tool was called" in response
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run specific test file
+pytest tests/test_config.py
+
+# Run specific test
+pytest tests/test_config.py::test_config_loading
+
+# Run with coverage
+pytest --cov=.
+```
+
+## Error Handling
+
+The project implements a comprehensive error handling strategy.
+
+### Error Types
+
+```
+BaseError
+├── ConfigError
+│   ├── ConfigFileError
+│   └── ConfigValidationError
+├── APIError
+│   ├── RateLimitError
+│   ├── AuthenticationError
+│   └── ServiceUnavailableError
+├── ToolError
+│   ├── ToolNotFoundError
+│   ├── ToolExecutionError
+│   └── ToolParameterError
+├── ConversationError
+├── PersistenceError
+└── BackgroundServiceError
+```
+
+### Error Handling Patterns
+
+1. **Specific Exception Types**: Use the most specific exception type
+
    ```python
-   # tools/services/weather_service.py
-   class WeatherService:
-       def get_weather(self, location: str) -> Dict[str, Any]:
-           # Implementation...
-   
-   # tools/weather_tool.py
-   from tools.services.weather_service import WeatherService
-   
-   class WeatherTool(Tool):
-       def __init__(self):
-           super().__init__()
-           self.service = WeatherService()
+   if not os.path.exists(config_file):
+       raise ConfigFileError(f"Configuration file not found: {config_file}")
+   ```
+
+2. **Contextual Information**: Include relevant context in error messages
+
+   ```python
+   try:
+       response = requests.post(url, json=payload, timeout=30)
+       response.raise_for_status()
+   except requests.exceptions.RequestException as e:
+       raise APIError(f"API request failed: {str(e)}", status_code=getattr(e.response, 'status_code', None))
+   ```
+
+3. **Error Codes**: Include error codes for programmatic handling
+
+   ```python
+   class APIError(BaseError):
+       def __init__(self, message, status_code=None, error_code=None):
+           self.status_code = status_code
+           self.error_code = error_code or "API_ERROR"
+           super().__init__(message)
+   ```
+
+4. **Recovery Strategies**: Implement appropriate recovery mechanisms
+
+   ```python
+   # Pseudocode for retry logic
+   def make_api_request_with_retry(payload, max_retries=3):
+       retries = 0
+       while retries < max_retries:
+           try:
+               return make_api_request(payload)
+           except RateLimitError:
+               # Exponential backoff
+               sleep_time = 2 ** retries
+               time.sleep(sleep_time)
+               retries += 1
+           except AuthenticationError:
+               # Don't retry auth errors
+               raise
        
-       def run(self, location: str) -> Dict[str, Any]:
-           return self.service.get_weather(location)
+       # If we get here, we've exhausted retries
+       raise APIError("Maximum retries exceeded")
    ```
 
-2. Handle service errors appropriately:
-   ```python
-   def run(self, location: str) -> Dict[str, Any]:
-       try:
-           return self.service.get_weather(location)
-       except ServiceError as e:
-           raise ToolError(f"Weather service error: {e}", ErrorCode.TOOL_EXECUTION_ERROR)
-   ```
+### Logging
 
-3. Consider implementing retry logic for flaky services.
+- Use Python's logging module consistently
+- Log at appropriate severity levels
+- Include contextual information in log messages
+- Avoid logging sensitive data
 
-## Conclusion
+```python
+logger = logging.getLogger(__name__)
 
-This document covers the core technical aspects of the AI Agent System. For further questions or clarifications, please consult the code documentation or open an issue on the project repository.
+try:
+    # Potentially failing operation
+    result = risky_operation()
+except Exception as e:
+    logger.error(f"Operation failed: {str(e)}", exc_info=True)
+    raise OperationError(f"Failed to complete operation: {str(e)}")
+```
+
+## Performance Considerations
+
+### Token Usage Optimization
+
+1. **Context Pruning**: Implement strategies to keep context within token limits
+   - Summarize older messages
+   - Remove redundant information
+   - Prioritize recent and relevant context
+
+2. **Prompt Engineering**: Design efficient prompts
+   - Clear instructions with minimal token usage
+   - Structured formats that are easy to parse
+   - Examples that demonstrate concise patterns
+
+3. **Tool Result Management**: Handle tool results efficiently
+   - Return only necessary data
+   - Format results to minimize token usage
+   - Consider truncating verbose outputs
+
+### Rate Limiting
+
+The system uses a token bucket algorithm to manage API rate limits:
+
+- Respects token-per-minute limits
+- Manages request-per-minute limits
+- Supports burst requests when capacity is available
+- Implements backoff strategies when limits are reached
+
+### Memory Management
+
+Strategies for managing conversation memory:
+
+1. **Selective Persistence**: Store only necessary information
+2. **Garbage Collection**: Clean up completed/failed tasks
+3. **Disk Usage Monitoring**: Track and limit persistent storage
+
+### Caching
+
+Implement caching for frequently accessed data:
+
+1. **Configuration Caching**: Cache loaded configuration
+2. **Tool Results Caching**: Cache results of deterministic tools
+3. **LLM Response Caching**: Consider caching for identical inputs
+
+## Contributing Guidelines
+
+### Code Review Process
+
+1. Pull requests require at least one reviewer approval
+2. Automated tests must pass
+3. Code must follow style guidelines
+4. Documentation must be updated
+
+### Pull Request Template
+
+```markdown
+## Description
+<!-- Describe the changes and the motivation -->
+
+## Type of change
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Documentation update
+- [ ] Refactoring
+- [ ] Other (please describe)
+
+## Checklist
+- [ ] Tests added/updated
+- [ ] Documentation updated
+- [ ] Code follows style guidelines
+- [ ] Error handling implemented
+```
+
+### Documentation Requirements
+
+- Update relevant documentation for new features
+- Include docstrings for all public methods and classes
+- Provide examples for new functionality
+- Document configuration changes
+
+### Testing Expectations
+
+- Unit tests for all new functionality
+- Integration tests for component interactions
+- Edge cases and error scenarios covered
+- No decrease in code coverage
+
+## Troubleshooting Common Issues
+
+### API Connection Issues
+
+**Symptoms:**
+- API requests failing with connection errors
+- Timeouts when generating responses
+
+**Potential Solutions:**
+1. Verify API key is set correctly
+2. Check API endpoint URL is correct
+3. Ensure network connectivity
+4. Verify service status with Anthropic
+
+### Configuration Problems
+
+**Symptoms:**
+- Application fails during startup with configuration errors
+- Unexpected behavior due to misconfiguration
+
+**Potential Solutions:**
+1. Check environment variables are set correctly
+2. Verify configuration file format
+3. Use configuration validation methods
+4. Check directory permissions
+
+### Tool Execution Failures
+
+**Symptoms:**
+- Tools failing with execution errors
+- Missing tool dependencies
+
+**Potential Solutions:**
+1. Check tool parameters are correct
+2. Verify tool dependencies are registered
+3. Review tool error messages for specific issues
+4. Check permissions for file operations
+
+### Background Service Issues
+
+**Symptoms:**
+- Tasks stuck in pending or running state
+- Background service not processing tasks
+
+**Potential Solutions:**
+1. Verify background service is running
+2. Check file permissions in task directories
+3. Review service logs for errors
+4. Restart background service if necessary
+
+## Advanced Usage Patterns
+
+### Multi-Tool Composition
+
+Create complex workflows by composing multiple tools:
+
+```python
+# Pseudocode for multi-tool composition
+def process_document(document_text):
+    # Extract entities
+    entities = tool_repository.execute_tool(
+        "extraction_tool",
+        text=document_text,
+        extraction_type="entities"
+    )
+    
+    # Categorize entities
+    categorized = tool_repository.execute_tool(
+        "classification_tool",
+        items=entities,
+        categories=["person", "organization", "location"]
+    )
+    
+    # Store results
+    tool_repository.execute_tool(
+        "persistence_tool",
+        operation="set_data",
+        file_name="processed_entities.json",
+        data=categorized
+    )
+    
+    return categorized
+```
+
+### Custom System Prompt Strategies
+
+Tailor system prompts for specific use cases:
+
+1. **Specialized Agent Roles**: Create domain-specific agents
+2. **Task-Specific Instructions**: Optimize prompts for particular tasks
+3. **Dynamic Prompts**: Modify prompts based on conversation state
+
+Example prompt pattern:
+```
+You are a specialized agent focusing on {domain}.
+Your primary task is to {main_task}.
+When providing information, prioritize {priority_aspect}.
+Use the following tools when appropriate: {available_tools}.
+```
+
+### Advanced Background Processing
+
+Patterns for complex background task management:
+
+1. **Task Dependencies**: Create workflows with dependent tasks
+2. **Priority Queues**: Implement task prioritization
+3. **Resource Allocation**: Limit concurrent tasks based on resource usage
+4. **Progress Reporting**: Provide real-time progress updates
+
+### Memory Optimization Techniques
+
+Advanced strategies for memory management:
+
+1. **Conversation Summarization**: Dynamically summarize conversation history
+2. **Selective Context**: Include only relevant parts of history based on current query
+3. **Information Extraction**: Extract and store key information separate from full context
+4. **Memory Hierarchies**: Implement short-term and long-term memory structures
+
+## Contribution Best Practices
+
+These principles guide effective contributions to the project:
+
+### Problem Diagnosis
+
+1. **Root Cause Analysis**: Focus on underlying issues rather than symptoms
+   - Trace errors to their source using logs and stack traces
+   - Consider system interactions that might contribute to issues
+   - Test hypotheses systematically
+
+2. **Context Gathering**: Understand the surrounding code before making changes
+   - Review related files and dependencies
+   - Understand the design patterns in use
+   - Consider the historical context of the code
+
+### Implementation Approach
+
+1. **Minimal Changes**: Prefer targeted edits over large refactors
+   - Limit scope to the specific issue
+   - Avoid changing interfaces unless necessary
+   - Make the smallest change that solves the problem
+
+2. **Pattern Consistency**: Follow established patterns in the codebase
+   - Match code style and approach
+   - Use existing abstractions when available
+   - Maintain architectural boundaries
+
+3. **Step-by-Step Testing**: Verify changes incrementally
+   - Test each logical change separately
+   - Add tests before implementing changes when possible
+   - Ensure tests cover the specific issue being addressed
+
+### Code Quality
+
+1. **Interface Preservation**: Maintain backwards compatibility
+   - Preserve function signatures when possible
+   - Add deprecation warnings before removing functionality
+   - Document interface changes thoroughly
+
+2. **Error Handling**: Implement comprehensive error management
+   - Use appropriate exception types
+   - Include contextual information in error messages
+   - Handle edge cases explicitly
+
+3. **Dependency Management**: Be cautious with dependencies
+   - Prefer standard library solutions when possible
+   - Justify new dependencies with specific benefits
+   - Consider the maintenance burden of dependencies
+
+### Review and Reflection
+
+1. **Self-Review**: Critically evaluate your own changes
+   - Review diffs before submitting
+   - Question assumptions in your implementation
+   - Consider potential failure modes
+
+2. **Documentation**: Update documentation to reflect changes
+   - Update inline documentation
+   - Revise relevant developer documentation
+   - Include examples for new functionality
+
+3. **Knowledge Transfer**: Share insights from your work
+   - Document non-obvious decisions
+   - Update contribution guidelines with new learnings
+   - Share patterns that were effective
