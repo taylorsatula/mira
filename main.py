@@ -15,9 +15,9 @@ from config import config
 from errors import handle_error, AgentError, error_context, ErrorCode
 from api.llm_bridge import LLMBridge
 from tools.repo import ToolRepository
-from tools.async_manager import AsyncTaskManager
 from conversation import Conversation
 from crud import FileOperations
+from async_client import AsyncClient
 
 
 def parse_arguments():
@@ -120,12 +120,6 @@ def initialize_system(args) -> Dict[str, Any]:
 
         # Initialize tool repository
         tool_repo = ToolRepository()
-
-        # Task notification queue
-        task_notifications = []
-
-        # Initialize async task manager
-        async_manager = AsyncTaskManager(tool_repo=tool_repo, llm_bridge=llm_bridge)
         
         # Discover and register tools
         tool_repo.discover_tools()
@@ -133,16 +127,6 @@ def initialize_system(args) -> Dict[str, Any]:
         # Enable tools from config
         tool_repo.enable_tools_from_config()
         
-        # Setup notification callback for async tasks
-        def notify_task_completion(task):
-            # This will be called when an async task completes if notify_on_completion is True
-            logging.info(f"Task completed: {task.task_id} - {task.description}")
-            # Add to notification queue if notify_on_completion is True
-            if task.notify_on_completion:
-                task_notifications.append(f"Task completed: {task.description}")
-
-        async_manager.set_notification_callback(notify_task_completion)
-
         # Initialize or load conversation
         if args.conversation:
             # Use error context specifically for loading the conversation
@@ -172,6 +156,25 @@ def initialize_system(args) -> Dict[str, Any]:
                 llm_bridge=llm_bridge,
                 tool_repo=tool_repo
             )
+            
+        # Create AsyncClient for background tasks - AFTER conversation is initialized
+        from async_client import AsyncClient
+        async_client = AsyncClient(conversation_id=conversation.conversation_id)
+        
+        # Register the async tools that use the client
+        from tools.async_client_tools import ScheduleAsyncTaskTool, CheckAsyncTaskTool
+        
+        # Create and register async tools
+        schedule_tool = ScheduleAsyncTaskTool(async_client=async_client)
+        check_tool = CheckAsyncTaskTool(async_client=async_client)
+        
+        # Register and enable these tools
+        tool_repo.register_tool(schedule_tool)
+        tool_repo.register_tool(check_tool)
+        tool_repo.enable_tool(schedule_tool.name)
+        tool_repo.enable_tool(check_tool.name)
+        
+        logger.info("Registered and enabled async client tools")
 
         logger.info(f"System initialized with conversation ID: {conversation.conversation_id}")
 
@@ -180,9 +183,8 @@ def initialize_system(args) -> Dict[str, Any]:
             'file_ops': file_ops,
             'llm_bridge': llm_bridge,
             'tool_repo': tool_repo,
-            'async_task_manager': async_manager,
             'conversation': conversation,
-            'task_notifications': task_notifications
+            'async_client': async_client
         }
 
 
@@ -215,7 +217,7 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
     """
     conversation = system['conversation']
     file_ops = system['file_ops']
-    task_notifications = system['task_notifications']
+    async_client = system.get('async_client')
 
     print("\nAI Agent System - Interactive Mode")
     print(f"Conversation ID: {conversation.conversation_id}")
@@ -231,14 +233,24 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
 
     while True:
         try:
-            # Display any pending task notifications
-            if task_notifications:
-                print("\n" + "-" * 30)
-                for notification in task_notifications:
-                    print(notification)
-                print("-" * 30)
-                # Clear notifications after displaying them
-                task_notifications.clear()
+            # Check for notifications from background service
+            if async_client:
+                notifications = async_client.get_notifications()
+                if notifications:
+                    print("\n" + "-" * 30)
+                    print("Background Task Notifications:")
+                    for notification in notifications:
+                        status = notification.get("status", "unknown").upper()
+                        description = notification.get("description", "No description")
+                        result = notification.get("result_summary", "")
+                        error = notification.get("error")
+                        
+                        print(f"Task {status}: {description}")
+                        if result:
+                            print(f"Result: {result}")
+                        if error:
+                            print(f"Error: {error}")
+                    print("-" * 30)
 
             # Get user input
             user_input = input("\nUser: ")
@@ -318,19 +330,20 @@ def main():
         ):
             interactive_mode(system, stream_mode=stream_mode)
     finally:
-        # Display any pending notifications before exit
-        task_notifications = system.get('task_notifications', [])
-        if task_notifications:
-            print("\n" + "-" * 30)
-            print("Pending task notifications:")
-            for notification in task_notifications:
-                print(notification)
-            print("-" * 30)
-
-        # Ensure async task manager is properly shut down
-        if 'async_task_manager' in system:
-            system['async_task_manager'].shutdown()
-            logging.info("Async task manager has been shut down")
+        # Check for final notifications from background service
+        if 'async_client' in system:
+            async_client = system['async_client']
+            notifications = async_client.get_notifications()
+            if notifications:
+                print("\n" + "-" * 30)
+                print("Final task notifications:")
+                for notification in notifications:
+                    status = notification.get("status", "unknown").upper()
+                    description = notification.get("description", "No description")
+                    print(f"Task {status}: {description}")
+                print("-" * 30)
+            
+            logging.info("Background task client session ended")
 
     return 0
 

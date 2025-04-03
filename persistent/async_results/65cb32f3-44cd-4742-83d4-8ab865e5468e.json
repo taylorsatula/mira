@@ -1,5 +1,0 @@
-{
-  "error_details": "Error: [TOOL_EXECUTION_ERROR] Error executing tool weather_tool: 'ToolRepository' object has no attribute 'record_tool_usage'",
-  "result": "Error executing weather tool for New York",
-  "task_id": "65cb32f3-44cd-4742-83d4-8ab865e5468e"
-}
