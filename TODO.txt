@@ -4,12 +4,9 @@
 						To-do:
 
 
-TASK: Go through codebase and cull functionality that isn't relevant anymore or could be combined into single functionality without significant complexity
-
 TASK: Evaluate project through the lens of being an iOS app and a server API. What tasks should be handled within the app programmatically, which should be handled off-device on the server, and which functionality requires a hybrid approach
 ^^ on that note evaluate if having a single external facing API interface is worthwhile.
 
-TASK: Evaluate ways to call the API less often such as devising a system to have the main LLM return a unique string (not a tool call) and have that output trigger and kick off a task on the background llm.
 
 TASK: Schedule the equivalent of cron jobs where the background llm can do sentiment analysis on the main conversation or continuously truncate the response.
 
