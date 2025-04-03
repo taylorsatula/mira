@@ -21,15 +21,61 @@ from config import config
 from errors import ToolError, ErrorCode, error_context
 
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("background_service.log")
-    ]
+# Configure logging with colors
+# High-viz theme with bold and italics
+COLORS = {
+    'DEBUG': '\033[3;36m',    # Italic Cyan
+    'INFO': '\033[1;32m',     # Bold Green
+    'WARNING': '\033[1;33m',  # Bold Yellow
+    'ERROR': '\033[1;31m',    # Bold Red
+    'CRITICAL': '\033[1;37;41m', # Bold White on Red Background
+    'RESET': '\033[0m'        # Reset
+}
+
+class ColoredFormatter(logging.Formatter):
+    """Custom formatter with color for macOS bash."""
+    
+    def format(self, record):
+        # Add color directly to the entire log message for maximum compatibility
+        levelname = record.levelname
+        color = COLORS.get(levelname, '')
+        reset = COLORS['RESET']
+        
+        # Format the record normally first
+        message = super().format(record)
+        
+        # Then wrap the entire message with color codes
+        return f"{color}{message}{reset}"
+
+# Create formatters for console (colored, no timestamp) and file (with timestamp)
+colored_formatter = ColoredFormatter('%(levelname)s │ %(name)s │ %(message)s')
+
+# Keep timestamps in log file for troubleshooting
+file_formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
+
+# Set up handlers - use stderr for console logs to prevent mixing with program output
+console_handler = logging.StreamHandler(sys.stderr)
+console_handler.setFormatter(colored_formatter)
+
+file_handler = logging.FileHandler("background_service.log")
+file_handler.setFormatter(file_formatter)
+
+# Configure root logger - remove existing handlers first
+root = logging.getLogger()
+for handler in root.handlers[:]:
+    root.removeHandler(handler)
+
+root.setLevel(logging.INFO)
+root.addHandler(console_handler)
+root.addHandler(file_handler)
+
+# Disable noisy HTTP library loggers
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('requests').setLevel(logging.WARNING)
 
 
 class BackgroundService:

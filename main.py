@@ -63,19 +63,64 @@ def parse_arguments():
 
 def setup_logging(log_level: Optional[str] = None) -> None:
     """
-    Set up logging configuration.
+    Set up logging configuration with colored output.
 
     Args:
         log_level: Optional override for the log level
     """
     level = log_level or config.system.log_level
-    logging.basicConfig(
-        level=getattr(logging, level),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
+    
+    # High-viz theme with bold and italics
+    COLORS = {
+        'DEBUG': '\033[3;36m',    # Italic Cyan
+        'INFO': '\033[1;32m',     # Bold Green
+        'WARNING': '\033[1;33m',  # Bold Yellow
+        'ERROR': '\033[1;31m',    # Bold Red
+        'CRITICAL': '\033[1;37;41m', # Bold White on Red Background
+        'RESET': '\033[0m'        # Reset
+    }
+    
+    class ColoredFormatter(logging.Formatter):
+        """Custom formatter with color for macOS bash."""
+        
+        def format(self, record):
+            # Add color directly to the entire log message for maximum compatibility
+            levelname = record.levelname
+            color = COLORS.get(levelname, '')
+            reset = COLORS['RESET']
+            
+            # Format the record normally first
+            message = super().format(record)
+            
+            # Then wrap the entire message with color codes
+            return f"{color}{message}{reset}"
+    
+    # Configure root logger with a fresh handler
+    root = logging.getLogger()
+    root.setLevel(getattr(logging, level))
+    
+    # Remove any existing handlers
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+    
+    # Create simple formatter without timestamps
+    formatter = logging.Formatter('%(levelname)s [%(name)s] %(message)s')
+    
+    # Create colored formatter with better visual separation
+    colored_formatter = ColoredFormatter('%(levelname)s │ %(name)s │ %(message)s')
+    
+    # Use stderr for logs to prevent mixing with conversation output
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(colored_formatter)
+    root.addHandler(handler)
+    
+    # Disable noisy HTTP library loggers
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('requests').setLevel(logging.WARNING)
+    
+    # Add a print separator to cleanly show where log setup ends
+    print("\nLogging initialized. Starting conversation...\n")
 
 
 def initialize_system(args) -> Dict[str, Any]:
@@ -137,7 +182,11 @@ def initialize_system(args) -> Dict[str, Any]:
                 logger=logger
             ):
                 try:
-                    conversation_data = file_ops.read(f"conversation_{args.conversation}")
+                    # Load from the conversation history directory
+                    conversation_dir = Path(config.paths.conversation_history_dir)
+                    os.makedirs(conversation_dir, exist_ok=True)
+                    conversation_ops = FileOperations(conversation_dir)
+                    conversation_data = conversation_ops.read(f"conversation_{args.conversation}")
                     conversation = Conversation.from_dict(
                         conversation_data,
                         llm_bridge=llm_bridge,
@@ -203,7 +252,11 @@ def save_conversation(file_ops: FileOperations, conversation: Conversation) -> N
         logger=logging.getLogger("main")
     ):
         conversation_data = conversation.to_dict()
-        file_ops.write(f"conversation_{conversation.conversation_id}", conversation_data)
+        # Create conversation history directory FileOperations
+        conversation_dir = Path(config.paths.conversation_history_dir)
+        os.makedirs(conversation_dir, exist_ok=True)
+        conversation_ops = FileOperations(conversation_dir)
+        conversation_ops.write(f"conversation_{conversation.conversation_id}", conversation_data)
         logging.info(f"Saved conversation: {conversation.conversation_id}")
 
 

@@ -14,7 +14,7 @@ class ApiConfig(BaseModel):
     
     model: str = Field(
 #       default="claude-3-7-sonnet-20250219",
-        default="claude-3-5-haiku-20241022",
+        default="claude-3-5-haiku-20241022", # Haiku is much faster and still skilled for common tasks
         description="LLM model to use for API requests"
     )
     max_tokens: int = Field(
@@ -53,6 +53,10 @@ class PathConfig(BaseModel):
     persistent_dir: str = Field(
         default="persistent",
         description="Directory for persistent storage"
+    )
+    conversation_history_dir: str = Field(
+        default="persistent/conversation_history",
+        description="Directory for storing conversation history"
     )
     async_results_dir: str = Field(
         default="persistent/async_results",
