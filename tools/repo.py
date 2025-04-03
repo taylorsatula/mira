@@ -611,9 +611,6 @@ class ToolRepository:
                                     dependencies[param_name] = LLMBridge()
                                 elif param_type.__name__ == 'ToolRepository':
                                     dependencies[param_name] = self
-                                elif param_type.__name__ == 'AsyncTaskManager':
-                                    from tools.async_manager import AsyncTaskManager
-                                    dependencies[param_name] = AsyncTaskManager(self)
                         
                         # Instantiate with dependencies
                         tool_instance = attr(**dependencies)

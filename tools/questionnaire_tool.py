@@ -87,19 +87,53 @@ class QuestionnaireTool(Tool):
                 
             # Load questions - either from custom_questions or from file
             if custom_questions:
-                questions = custom_questions
-                self.logger.debug(f"Using custom questions for questionnaire {questionnaire_id}")
-            else:
+                # Handle different types of custom_questions input
+                if isinstance(custom_questions, str):
+                    self.logger.warning(f"Custom questions provided as string, not supported. Falling back to file lookup.")
+                    # Fall through to file lookup instead of using custom_questions
+                else:
+                    questions = custom_questions
+                    self.logger.debug(f"Using custom questions for questionnaire {questionnaire_id}")
+                    
+            # If no valid custom_questions, load from file
+            if not custom_questions or isinstance(custom_questions, str):
                 # Load predefined questionnaire
                 # Try both with and without .json extension
                 questionnaire_id_clean = questionnaire_id.replace('.json', '')
                 questionnaire_path = os.path.join(self.data_dir, f"{questionnaire_id_clean}.json")
+                
+                self.logger.info(f"Trying to load questionnaire from: {questionnaire_path}")
+                
                 if not os.path.exists(questionnaire_path):
-                    raise ToolError(
-                        f"Questionnaire not found: {questionnaire_id_clean}",
-                        ErrorCode.TOOL_INVALID_INPUT,
-                        {"questionnaire_id": questionnaire_id_clean}
-                    )
+                    # List available questionnaires to help user choose
+                    try:
+                        available_files = os.listdir(self.data_dir)
+                        questionnaires = [f.replace('.json', '') for f in available_files if f.endswith('.json')]
+                        self.logger.info(f"Available questionnaires: {questionnaires}")
+                        
+                        # Return a helpful error message with available options
+                        available_msg = ", ".join(questionnaires) if questionnaires else "none found"
+                        error_message = (
+                            f"Questionnaire not found: '{questionnaire_id_clean}'. "
+                            f"Available questionnaires: {available_msg}. "
+                            f"Please try again with one of these questionnaire IDs."
+                        )
+                        
+                        raise ToolError(
+                            error_message,
+                            ErrorCode.TOOL_INVALID_INPUT,
+                            {
+                                "questionnaire_id": questionnaire_id_clean,
+                                "available_questionnaires": questionnaires
+                            }
+                        )
+                    except Exception as e:
+                        self.logger.error(f"Error listing available questionnaires: {e}")
+                        raise ToolError(
+                            f"Questionnaire not found: {questionnaire_id_clean}",
+                            ErrorCode.TOOL_INVALID_INPUT,
+                            {"questionnaire_id": questionnaire_id_clean}
+                        )
                 
                 try:
                     with open(questionnaire_path, 'r') as f:

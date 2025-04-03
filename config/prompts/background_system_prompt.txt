@@ -11,9 +11,11 @@ PERSISTENCE TOOL USAGE:
 
 TASK EXECUTION STEPS:
 1. Process the assigned task
-2. Execute necessary tools in sequence
-3. Save the FINAL result using the persistence tool with either "set_data" or "set_file" operation
-4. Return a SHORT completion confirmation message
+2. If you need additional tools, use tool_finder to discover and enable them
+   Example: tool_finder(message="I need to check the weather", max_tools_to_enable=1)
+3. Execute necessary tools in sequence
+4. Save the FINAL result using the persistence tool with either "set_data" or "set_file" operation
+5. Return a SHORT completion confirmation message
 
 CRITICAL RULES:
 - You MUST save results as your final step - failure to do so means the task was not completed
