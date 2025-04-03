@@ -14,16 +14,17 @@ class QuestionnaireTool(Tool):
 
     This tool conducts a sequential question-answer session with the user,
     keeping the interaction local (not sending responses to LLM) until all
-    questions are answered. At the end, it collects and returns all responses.
+    questions are answered. It can load predefined questionnaires from files
+    or use custom questions provided at runtime.
     """
 
     name = "questionnaire_tool"
     description = "Runs an interactive questionnaire with multiple questions for the user, collects their responses locally, and returns a structured result"
     usage_examples = [
         {
-            "input": {"questionnaire_id": "preferences"},
+            "input": {"questionnaire_id": "recipe"},
             "output": {
-                "questionnaire_id": "preferences",
+                "questionnaire_id": "recipe",
                 "completed": True,
                 "responses": {
                     "Cuisine": "Italian",
@@ -46,10 +47,12 @@ class QuestionnaireTool(Tool):
         super().__init__()
         # Tool-specific state
         self.data_dir = config.paths.data_dir
+        self.questionnaire_dir = os.path.join(self.data_dir, "tools", "questionnaire_tool")
         self.llm_bridge = llm_bridge
         
-        # Ensure the data directory exists
+        # Ensure directories exist
         os.makedirs(self.data_dir, exist_ok=True)
+        os.makedirs(self.questionnaire_dir, exist_ok=True)
 
     def run(
         self,
@@ -61,7 +64,7 @@ class QuestionnaireTool(Tool):
         Run an interactive questionnaire session with the user.
 
         Args:
-            questionnaire_id: ID of the predefined questionnaire to use, or custom ID for custom questions
+            questionnaire_id: ID of the questionnaire to use (e.g., "recipe") or natural language request
             custom_questions: Optional list of custom questions to use instead of a predefined questionnaire
             context_data: Optional contextual data to use for dynamic question generation
 
@@ -86,79 +89,21 @@ class QuestionnaireTool(Tool):
                 context_data = {}
                 
             # Load questions - either from custom_questions or from file
-            if custom_questions:
-                # Handle different types of custom_questions input
-                if isinstance(custom_questions, str):
-                    self.logger.warning(f"Custom questions provided as string, not supported. Falling back to file lookup.")
-                    # Fall through to file lookup instead of using custom_questions
-                else:
-                    questions = custom_questions
-                    self.logger.debug(f"Using custom questions for questionnaire {questionnaire_id}")
-                    
-            # If no valid custom_questions, load from file
-            if not custom_questions or isinstance(custom_questions, str):
-                # Load predefined questionnaire
-                # Try both with and without .json extension
-                questionnaire_id_clean = questionnaire_id.replace('.json', '')
-                questionnaire_path = os.path.join(self.data_dir, f"{questionnaire_id_clean}.json")
+            questions = None
+            
+            if custom_questions and not isinstance(custom_questions, str):
+                # Use provided custom questions
+                questions = custom_questions
+                self.logger.debug(f"Using custom questions for questionnaire {questionnaire_id}")
+            else:
+                # Load from file - handle natural language requests using LLM
+                questions = self._load_questionnaire_file(questionnaire_id)
                 
-                self.logger.info(f"Trying to load questionnaire from: {questionnaire_path}")
-                
-                if not os.path.exists(questionnaire_path):
-                    # List available questionnaires to help user choose
-                    try:
-                        available_files = os.listdir(self.data_dir)
-                        questionnaires = [f.replace('.json', '') for f in available_files if f.endswith('.json')]
-                        self.logger.info(f"Available questionnaires: {questionnaires}")
-                        
-                        # Return a helpful error message with available options
-                        available_msg = ", ".join(questionnaires) if questionnaires else "none found"
-                        error_message = (
-                            f"Questionnaire not found: '{questionnaire_id_clean}'. "
-                            f"Available questionnaires: {available_msg}. "
-                            f"Please try again with one of these questionnaire IDs."
-                        )
-                        
-                        raise ToolError(
-                            error_message,
-                            ErrorCode.TOOL_INVALID_INPUT,
-                            {
-                                "questionnaire_id": questionnaire_id_clean,
-                                "available_questionnaires": questionnaires
-                            }
-                        )
-                    except Exception as e:
-                        self.logger.error(f"Error listing available questionnaires: {e}")
-                        raise ToolError(
-                            f"Questionnaire not found: {questionnaire_id_clean}",
-                            ErrorCode.TOOL_INVALID_INPUT,
-                            {"questionnaire_id": questionnaire_id_clean}
-                        )
-                
-                try:
-                    with open(questionnaire_path, 'r') as f:
-                        questionnaire_data = json.load(f)
-                        
-                    # Check if file contains valid questionnaire format
-                    if not isinstance(questionnaire_data, list) or not questionnaire_data:
-                        raise ToolError(
-                            f"Invalid questionnaire format for {questionnaire_id}",
-                            ErrorCode.TOOL_INVALID_INPUT
-                        )
-                    
-                    questions = questionnaire_data
-                    self.logger.debug(f"Loaded {len(questions)} questions for questionnaire {questionnaire_id}")
-                except json.JSONDecodeError:
-                    raise ToolError(
-                        f"Invalid JSON in questionnaire file: {questionnaire_id}",
-                        ErrorCode.TOOL_INVALID_INPUT
-                    )
-
-            # Process dynamic questions if LLM bridge is available
+            # Process dynamic questions if needed
             if self.llm_bridge:
                 questions = self._process_dynamic_questions(questions, context_data)
 
-            # Run the questionnaire
+            # Run the interactive questionnaire
             responses = self._run_interactive_questionnaire(questions, context_data)
             
             # Format and return the results
@@ -171,6 +116,120 @@ class QuestionnaireTool(Tool):
             self.logger.info(f"Completed questionnaire: {questionnaire_id}")
             return result
             
+    def _load_questionnaire_file(self, questionnaire_id: str) -> List[Dict[str, Any]]:
+        """
+        Load a questionnaire file, with support for natural language mapping.
+        
+        Args:
+            questionnaire_id: The ID or natural language description of the questionnaire
+            
+        Returns:
+            List of question dictionaries
+            
+        Raises:
+            ToolError: If questionnaire file is not found or has invalid format
+        """
+        # Clean up the questionnaire ID
+        questionnaire_id_clean = questionnaire_id.replace('.json', '').lower()
+        
+        # Check if this is a natural language request
+        if self.llm_bridge and len(questionnaire_id_clean.split()) > 1:
+            # Try to match the natural language request to a questionnaire
+            try:
+                # Get available questionnaires
+                available_files = os.listdir(self.questionnaire_dir)
+                questionnaire_files = [f for f in available_files if f.endswith('_questionnaire.json')]
+                
+                if questionnaire_files:
+                    # Extract topics
+                    questionnaire_topics = []
+                    for f in questionnaire_files:
+                        topic = f.replace('_questionnaire.json', '')
+                        questionnaire_topics.append(topic)
+                    
+                    # Ask LLM to match the request to a questionnaire
+                    prompt = f"""Based on this request: "{questionnaire_id}", 
+which of these questionnaire topics is the most appropriate match?
+Available topics: {', '.join(questionnaire_topics)}
+
+Return only the exact name of the best matching topic from the list."""
+                    
+                    messages = [{"role": "user", "content": prompt}]
+                    response = self.llm_bridge.generate_response(messages)
+                    matched_topic = self.llm_bridge.extract_text_content(response).strip().lower()
+                    
+                    self.logger.info(f"LLM matched request '{questionnaire_id}' to topic: {matched_topic}")
+                    questionnaire_id_clean = matched_topic
+            except Exception as e:
+                self.logger.error(f"Error during LLM topic matching: {e}")
+        
+        # Construct the questionnaire file path
+        questionnaire_filename = f"{questionnaire_id_clean}_questionnaire.json"
+        questionnaire_path = os.path.join(self.questionnaire_dir, questionnaire_filename)
+        
+        self.logger.info(f"Looking for questionnaire file: {questionnaire_path}")
+        
+        # Check if the file exists
+        if not os.path.exists(questionnaire_path):
+            # List available questionnaires
+            try:
+                available_files = os.listdir(self.questionnaire_dir)
+                questionnaire_topics = []
+                for f in available_files:
+                    if f.endswith('_questionnaire.json'):
+                        topic = f.replace('_questionnaire.json', '')
+                        questionnaire_topics.append(topic)
+                
+                self.logger.info(f"Available questionnaires: {questionnaire_topics}")
+                
+                # Return a helpful error message with available options
+                available_msg = ", ".join(questionnaire_topics) if questionnaire_topics else "none found"
+                error_message = (
+                    f"Questionnaire not found for: '{questionnaire_id_clean}'. "
+                    f"Available questionnaires: {available_msg}. "
+                    f"Please try again with one of these topics."
+                )
+                
+                raise ToolError(
+                    error_message,
+                    ErrorCode.TOOL_INVALID_INPUT,
+                    {
+                        "questionnaire_id": questionnaire_id_clean,
+                        "available_questionnaires": questionnaire_topics
+                    }
+                )
+            except Exception as e:
+                if isinstance(e, ToolError):
+                    raise
+                
+                self.logger.error(f"Error listing available questionnaires: {e}")
+                raise ToolError(
+                    f"Questionnaire not found: {questionnaire_id_clean}",
+                    ErrorCode.TOOL_INVALID_INPUT,
+                    {"questionnaire_id": questionnaire_id_clean}
+                )
+        
+        # Read and parse the questionnaire file
+        try:
+            with open(questionnaire_path, 'r') as f:
+                questionnaire_data = json.load(f)
+                
+            # Validate questionnaire format
+            if not isinstance(questionnaire_data, list) or not questionnaire_data:
+                raise ToolError(
+                    f"Invalid questionnaire format for {questionnaire_id}",
+                    ErrorCode.TOOL_INVALID_INPUT
+                )
+            
+            self.logger.debug(f"Loaded {len(questionnaire_data)} questions for questionnaire {questionnaire_id}")
+            return questionnaire_data
+            
+        except json.JSONDecodeError:
+            raise ToolError(
+                f"Invalid JSON in questionnaire file: {questionnaire_id}",
+                ErrorCode.TOOL_INVALID_INPUT
+            )
+    
     def _process_dynamic_questions(
         self, 
         questions: List[Dict[str, Any]], 

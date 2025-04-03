@@ -5,6 +5,7 @@ from unittest.mock import patch, mock_open, MagicMock
 
 from tools.questionnaire_tool import QuestionnaireTool
 from errors import ToolError
+from api.llm_bridge import LLMBridge
 
 
 class TestQuestionnaireTool(unittest.TestCase):
@@ -12,7 +13,9 @@ class TestQuestionnaireTool(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        self.tool = QuestionnaireTool()
+        # Create a mock LLMBridge
+        self.mock_llm_bridge = MagicMock(spec=LLMBridge)
+        self.tool = QuestionnaireTool(llm_bridge=self.mock_llm_bridge)
         
         # Sample questionnaire data
         self.sample_questions = [
@@ -44,10 +47,10 @@ class TestQuestionnaireTool(unittest.TestCase):
         mock_input.side_effect = ["1", "Free text answer"]
         
         # Run tool
-        result = self.tool.run("test_questionnaire")
+        result = self.tool.run("test")
         
         # Verify results
-        self.assertEqual(result["questionnaire_id"], "test_questionnaire")
+        self.assertEqual(result["questionnaire_id"], "test")
         self.assertTrue(result["completed"])
         self.assertEqual(result["responses"]["q1"], "Option A")
         self.assertEqual(result["responses"]["q2"], "Free text answer")
@@ -87,7 +90,7 @@ class TestQuestionnaireTool(unittest.TestCase):
             self.tool.run("nonexistent")
             
         # Check error details
-        self.assertEqual(context.exception.error_code.name, "TOOL_INVALID_INPUT")
+        self.assertEqual(context.exception.code.name, "TOOL_INVALID_INPUT")
         self.assertIn("not found", str(context.exception))
 
     @patch('os.path.exists')
@@ -103,7 +106,7 @@ class TestQuestionnaireTool(unittest.TestCase):
             self.tool.run("invalid_json")
             
         # Check error details
-        self.assertEqual(context.exception.error_code.name, "TOOL_INVALID_INPUT")
+        self.assertEqual(context.exception.code.name, "TOOL_INVALID_INPUT")
         self.assertIn("Invalid JSON", str(context.exception))
 
     @patch('os.path.exists')
@@ -119,7 +122,7 @@ class TestQuestionnaireTool(unittest.TestCase):
             self.tool.run("invalid_format")
             
         # Check error details
-        self.assertEqual(context.exception.error_code.name, "TOOL_INVALID_INPUT")
+        self.assertEqual(context.exception.code.name, "TOOL_INVALID_INPUT")
         self.assertIn("Invalid questionnaire format", str(context.exception))
 
     @patch('builtins.print')
@@ -197,6 +200,40 @@ class TestQuestionnaireTool(unittest.TestCase):
         
         # Verify the option was selected by name
         self.assertEqual(result["responses"]["test"], "Option C")
+        
+    @patch('builtins.print')
+    @patch('builtins.input')
+    @patch('os.listdir')
+    @patch('os.path.exists')
+    @patch('builtins.open', new_callable=mock_open)
+    def test_natural_language_questionnaire_matching(self, mock_file, mock_exists, mock_listdir, mock_input, mock_print):
+        """Test matching natural language request to a questionnaire using LLM."""
+        # Setup mocks
+        mock_exists.return_value = True
+        mock_file.return_value.__enter__.return_value.read.return_value = self.sample_json
+        mock_input.side_effect = ["1", "Free text answer"]
+        mock_listdir.return_value = ["recipe_questionnaire.json", "personality_questionnaire.json"]
+        
+        # Mock LLM response to return "recipe" as the match
+        self.mock_llm_bridge.generate_response.return_value = {"content": [{"text": "recipe"}]}
+        self.mock_llm_bridge.extract_text_content.return_value = "recipe"
+        
+        # Run tool with natural language request
+        result = self.tool.run("I want to create a recipe")
+        
+        # Verify results
+        self.assertEqual(result["questionnaire_id"], "I want to create a recipe")
+        self.assertTrue(result["completed"])
+        self.assertEqual(result["responses"]["q1"], "Option A")
+        self.assertEqual(result["responses"]["q2"], "Free text answer")
+        
+        # Verify LLM was called to match the request
+        self.mock_llm_bridge.generate_response.assert_called_once()
+        
+        # Verify the correct file was opened
+        mock_file.assert_called_once()
+        file_path = mock_file.call_args[0][0]
+        self.assertTrue("recipe_questionnaire.json" in file_path)
 
 
 if __name__ == '__main__':
