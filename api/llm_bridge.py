@@ -58,24 +58,47 @@ class LLMBridge:
         self.rate_limit_rpm = config.api.rate_limit_rpm
         self.min_request_interval = 60.0 / self.rate_limit_rpm
         self.last_request_time = 0.0
+        
+        # Token bucket for burst handling
+        self.token_bucket_size = config.api.burst_limit if hasattr(config.api, "burst_limit") else 3
+        self.tokens = self.token_bucket_size  # Start with a full bucket
+        self.last_token_refill = time.time()
 
         self.logger.debug(f"LLM Bridge initialized with model {self.model}")
 
     def _enforce_rate_limit(self) -> None:
         """
-        Enforce API rate limiting by waiting if necessary.
-
-        Ensures that requests to the API don't exceed the rate limit.
+        Enforce API rate limiting with burst allowance using token bucket algorithm.
+        
+        This implementation allows for burst API calls while maintaining the overall
+        rate limit over time.
         """
         now = time.time()
+        
+        # Refill tokens based on time elapsed (at the rate of RPM)
+        time_since_refill = now - self.last_token_refill
+        new_tokens = time_since_refill * (self.rate_limit_rpm / 60.0)
+        
+        if new_tokens > 0:
+            self.tokens = min(self.token_bucket_size, self.tokens + new_tokens)
+            self.last_token_refill = now
+        
+        # If we have at least one token, allow the request immediately
+        if self.tokens >= 1:
+            self.tokens -= 1
+            self.last_request_time = now
+            self.logger.debug(f"Burst mode: using token, {self.tokens:.2f} tokens remaining")
+            return
+            
+        # If we're out of tokens, calculate wait time
         time_since_last_request = now - self.last_request_time
-
+        
         if time_since_last_request < self.min_request_interval:
             # Wait to respect rate limit
             wait_time = self.min_request_interval - time_since_last_request
             self.logger.debug(f"Rate limiting: waiting {wait_time:.2f} seconds")
             time.sleep(wait_time)
-
+        
         self.last_request_time = time.time()
 
     def _handle_api_error(self, error: Exception, attempt: int) -> None:

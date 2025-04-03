@@ -37,6 +37,10 @@ class ApiConfig(BaseModel):
         default=10,
         description="Maximum API requests per minute"
     )
+    burst_limit: int = Field(
+        default=5,
+        description="Maximum number of requests allowed in a burst"
+    )
 
 
 class PathConfig(BaseModel):
@@ -85,7 +89,7 @@ class ToolConfig(BaseModel):
         description="Whether tools are enabled"
     )
     auto_discovery: bool = Field(
-        default=True,
+        default=False,
         description="Whether automatic tool discovery is enabled"
     )
     timeout: int = Field(
@@ -95,6 +99,10 @@ class ToolConfig(BaseModel):
     essential_tools: List[str] = Field(
         default=["check_async_task", "schedule_async_task", "tool_finder"],
         description="List of essential tools to always load"
+    )
+    background_essential_tools: List[str] = Field(
+        default=["persistence", "extract", "tool_finder"],
+        description="List of essential tools for background LLM operations"
     )
     # Extraction tool settings
     extraction_temperature: float = Field(
