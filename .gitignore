@@ -36,3 +36,21 @@ env/
 data/*
 !data/.gitkeep
 .env
+
+# Persistent and generated data
+persistent/*
+!persistent/.gitkeep
+*.log
+background_service.log
+persistent/async_results/*
+persistent/tasks/pending/*
+persistent/tasks/running/*
+persistent/tasks/completed/*
+persistent/tasks/failed/*
+persistent/notifications/*
+
+# Backup/deprecated files
+*.dep
+*.bak
+*.old
+*.backup
