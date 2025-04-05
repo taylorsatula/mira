@@ -60,7 +60,7 @@ file_formatter = logging.Formatter(
 console_handler = logging.StreamHandler(sys.stderr)
 console_handler.setFormatter(colored_formatter)
 
-file_handler = logging.FileHandler("background_service.log")
+file_handler = logging.FileHandler("bg.log")
 file_handler.setFormatter(file_formatter)
 
 # Configure root logger - remove existing handlers first
@@ -110,7 +110,7 @@ class BackgroundService:
         self.tool_repo.enable_all_tools()
         
         self.running = True
-        self.logger = logging.getLogger("background_service")
+        self.logger = logging.getLogger("bg_service")
         self.logger.info("Background service initialized")
     
     def start(self):
