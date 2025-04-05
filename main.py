@@ -17,7 +17,6 @@ from api.llm_bridge import LLMBridge
 from tools.repo import ToolRepository
 from conversation import Conversation
 from crud import FileOperations
-from async_client import AsyncClient
 
 
 def parse_arguments():
@@ -206,24 +205,6 @@ def initialize_system(args) -> Dict[str, Any]:
                 tool_repo=tool_repo
             )
             
-        # Create AsyncClient for background tasks - AFTER conversation is initialized
-        from async_client import AsyncClient
-        async_client = AsyncClient(conversation_id=conversation.conversation_id)
-        
-        # Register the async tools that use the client
-        from tools.async_client_tools import ScheduleAsyncTaskTool, CheckAsyncTaskTool
-        
-        # Create and register async tools
-        schedule_tool = ScheduleAsyncTaskTool(async_client=async_client)
-        check_tool = CheckAsyncTaskTool(async_client=async_client)
-        
-        # Register and enable these tools
-        tool_repo.register_tool(schedule_tool)
-        tool_repo.register_tool(check_tool)
-        tool_repo.enable_tool(schedule_tool.name)
-        tool_repo.enable_tool(check_tool.name)
-        
-        logger.info("Registered and enabled async client tools")
 
         logger.info(f"System initialized with conversation ID: {conversation.conversation_id}")
 
@@ -232,8 +213,7 @@ def initialize_system(args) -> Dict[str, Any]:
             'file_ops': file_ops,
             'llm_bridge': llm_bridge,
             'tool_repo': tool_repo,
-            'conversation': conversation,
-            'async_client': async_client
+            'conversation': conversation
         }
 
 
@@ -270,7 +250,6 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
     """
     conversation = system['conversation']
     file_ops = system['file_ops']
-    async_client = system.get('async_client')
 
     print("\nAI Agent System - Interactive Mode")
     print(f"Conversation ID: {conversation.conversation_id}")
@@ -286,24 +265,6 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
 
     while True:
         try:
-            # Check for notifications from background service
-            if async_client:
-                notifications = async_client.get_notifications()
-                if notifications:
-                    print("\n" + "-" * 30)
-                    print("Background Task Notifications:")
-                    for notification in notifications:
-                        status = notification.get("status", "unknown").upper()
-                        description = notification.get("description", "No description")
-                        result = notification.get("result_summary", "")
-                        error = notification.get("error")
-                        
-                        print(f"Task {status}: {description}")
-                        if result:
-                            print(f"Result: {result}")
-                        if error:
-                            print(f"Error: {error}")
-                    print("-" * 30)
 
             # Get user input
             user_input = input("\nUser: ")
@@ -383,20 +344,8 @@ def main():
         ):
             interactive_mode(system, stream_mode=stream_mode)
     finally:
-        # Check for final notifications from background service
-        if 'async_client' in system:
-            async_client = system['async_client']
-            notifications = async_client.get_notifications()
-            if notifications:
-                print("\n" + "-" * 30)
-                print("Final task notifications:")
-                for notification in notifications:
-                    status = notification.get("status", "unknown").upper()
-                    description = notification.get("description", "No description")
-                    print(f"Task {status}: {description}")
-                print("-" * 30)
-            
-            logging.info("Background task client session ended")
+        # Final cleanup
+        logging.info("Session ended")
 
     return 0
 

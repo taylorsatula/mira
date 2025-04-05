@@ -15,7 +15,6 @@ class WeatherTool(Tool):
 
     name = "weather_tool"
     description = "Get current weather information for a location"
-    background_capable = True  # This tool will automatically run in background
     usage_examples = [
         {
             "input": {"location": "New York", "units": "celsius"},

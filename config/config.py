@@ -58,10 +58,6 @@ class PathConfig(BaseModel):
         default="persistent/conversation_history",
         description="Directory for storing conversation history"
     )
-    async_results_dir: str = Field(
-        default="persistent/async_results",
-        description="Directory for async operation results"
-    )
     prompts_dir: str = Field(
         default="config/prompts",
         description="Directory containing prompt templates"
@@ -101,12 +97,8 @@ class ToolConfig(BaseModel):
         description="Default timeout in seconds for tool operations"
     )
     essential_tools: List[str] = Field(
-        default=["check_async_task", "schedule_async_task", "tool_finder"],
+        default=["tool_finder"],
         description="List of essential tools to always load"
-    )
-    background_essential_tools: List[str] = Field(
-        default=["persistence", "extract", "tool_finder"],
-        description="List of essential tools for background LLM operations"
     )
     # Extraction tool settings
     extraction_temperature: float = Field(
@@ -127,18 +119,6 @@ class ToolConfig(BaseModel):
             "entities": "Extract named entities (people, places, organizations, products) from the message. Return only the entities in JSON format with appropriate type labels.",
         },
         description="Templates used for information extraction"
-    )
-    max_background_iterations: int = Field(
-        default=10,
-        description="Maximum iterations for background LLM tasks"
-    )
-    max_async_age_hours: int = Field(
-        default=24,
-        description="Maximum age in hours for async results before cleanup"
-    )
-    async_join_timeout: int = Field(
-        default=5,
-        description="Timeout in seconds for async thread joining"
     )
 
 
