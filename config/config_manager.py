@@ -179,8 +179,6 @@ class AppConfig(BaseModel):
         # Create persistent directory
         Path(config.paths.persistent_dir).mkdir(parents=True, exist_ok=True)
         
-        # Create async results directory
-        Path(config.paths.async_results_dir).mkdir(parents=True, exist_ok=True)
         
         # Create prompts directory
         Path(config.paths.prompts_dir).mkdir(parents=True, exist_ok=True)

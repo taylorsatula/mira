@@ -264,7 +264,7 @@ class KasaTool(Tool):
             
             result = {
                 "success": True,
-                "message": f"Device turned {'on' if state else 'off'}",
+                "message": f"Device turned {'on' if device.is_on else 'off'}",
                 "device_id": device_id,
                 "host": host,
                 "alias": device.alias,
