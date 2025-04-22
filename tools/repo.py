@@ -32,7 +32,7 @@ class Tool(ABC):
     
     name = "base_tool"
     description = "Base class for all tools"
-    usage_examples = []
+    usage_examples: List[Dict[str, Any]] = []
     
     def __init__(self):
         """Initialize a new tool instance."""
@@ -90,7 +90,9 @@ class Tool(ABC):
         
         # Get docstring information
         if self.run.__doc__:
-            doc_lines = inspect.getdoc(self.run).split('\n')
+            doc_content = inspect.getdoc(self.run)
+            if doc_content is not None:
+                doc_lines = doc_content.split('\n')
             
             # Extract parameter descriptions from docstring
             param_section = False
@@ -189,7 +191,7 @@ class ToolRepository:
         self.logger = logging.getLogger("tool_repository")
         self.tools: Dict[str, Tool] = {}
         self.enabled_tools: Set[str] = set()
-        self.tool_list_path = os.path.join(config.paths.data_dir, "tools", "tool_list.json")
+        self.tool_list_path: str = os.path.join(config.paths.data_dir, "tools", "tool_list.json")
     
     def register_tool(self, tool: Tool) -> None:
         """
@@ -339,6 +341,7 @@ class ToolRepository:
             tool = self.tools[name]
             self.logger.debug(f"Invoking tool: {name} with params: {params}")
             
+            
             # Execute the tool
             try:
                 result = tool.run(**params)
@@ -365,6 +368,15 @@ class ToolRepository:
         
         Returns:
             A list of tool names.
+        """
+        return list(self.enabled_tools)
+        
+    def get_enabled_tools(self) -> List[str]:
+        """
+        Get the names of all currently enabled tools.
+        
+        Returns:
+            A list of enabled tool names.
         """
         return list(self.enabled_tools)
     
@@ -575,9 +587,11 @@ class ToolRepository:
                                 # Add more dependency types as needed
                                 if param_type.__name__ == 'LLMBridge':
                                     from api.llm_bridge import LLMBridge
+                                    # Create LLMBridge instance
                                     dependencies[param_name] = LLMBridge()
                                 elif param_type.__name__ == 'ToolRepository':
-                                    dependencies[param_name] = self
+                                    # Pass self reference as ToolRepository
+                                    dependencies[param_name] = self  # type: ignore
                         
                         # Instantiate with dependencies
                         tool_instance = attr(**dependencies)

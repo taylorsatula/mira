@@ -35,49 +35,72 @@ class KasaTool(Tool):
     """
     
     name = "kasa_tool"
-    description = "Control TP-Link Kasa smart home devices on the local network"
+    description = """Controls TP-Link Kasa smart home devices on your local network with comprehensive management capabilities.
+
+This tool enables complete control of Kasa smart devices including:
+
+1. Device Discovery and Management:
+   - 'list_devices': Retrieve all configured Kasa devices on the network
+   - 'get_device_info': Get detailed status and capabilities of a specific device
+   - Each device has a unique identifier for consistent reference (e.g., 'living_room_lamp')
+
+2. Basic Device Control:
+   - 'set_device_state': Turn devices on or off (requires 'device_id' and 'state' parameters)
+   - Works with all Kasa device types including plugs, switches, and bulbs
+   - Returns confirmation of successful state changes
+
+3. Advanced Light Controls:
+   - 'set_brightness': Adjust light brightness levels from 0-100% (requires 'device_id' and 'brightness' parameters)
+   - 'set_color_temp': Change light color temperature in Kelvin (requires 'device_id' and 'color_temp' parameters)
+   - 'set_hsv': Set full color for RGB-capable bulbs using hue, saturation, value parameters
+
+4. Status Monitoring:
+   - Reports real-time device status (on/off state)
+   - For supported devices, provides power consumption and additional metrics
+
+Use this tool whenever you need to control or check the status of Kasa smart home devices on the local network."""
     usage_examples = [
-        {
-            "input": {
-                "operation": "list_devices"
-            },
-            "output": {
-                "devices": [
-                    {
-                        "identifier": "living_room_lamp",
-                        "alias": "Living Room Lamp", 
-                        "device_type": "Plug",
-                        "host": "192.168.1.100"
-                    }
-                ]
-            }
-        },
-        {
-            "input": {
-                "operation": "get_device_info",
-                "device_id": "living_room_lamp"
-            },
-            "output": {
-                "alias": "Living Room Lamp",
-                "host": "192.168.1.100",
-                "model": "HS103",
-                "device_type": "Plug",
-                "is_on": False
-            }
-        },
-        {
-            "input": {
-                "operation": "set_device_state",
-                "device_id": "living_room_lamp",
-                "state": True
-            },
-            "output": {
-                "success": True,
-                "message": "Device turned on",
-                "device_id": "living_room_lamp",
-                "alias": "Living Room Lamp"
-            }
-        }
+        # {
+        #     "input": {
+        #         "operation": "list_devices"
+        #     },
+        #     "output": {
+        #         "devices": [
+        #             {
+        #                 "identifier": "living_room_lamp",
+        #                 "alias": "Living Room Lamp", 
+        #                 "device_type": "Plug",
+        #                 "host": "192.168.1.100"
+        #             }
+        #         ]
+        #     }
+        # },
+        # {
+        #     "input": {
+        #         "operation": "get_device_info",
+        #         "device_id": "living_room_lamp"
+        #     },
+        #     "output": {
+        #         "alias": "Living Room Lamp",
+        #         "host": "192.168.1.100",
+        #         "model": "HS103",
+        #         "device_type": "Plug",
+        #         "is_on": False
+        #     }
+        # },
+        # {
+        #     "input": {
+        #         "operation": "set_device_state",
+        #         "device_id": "living_room_lamp",
+        #         "state": True
+        #     },
+        #     "output": {
+        #         "success": True,
+        #         "message": "Device turned on",
+        #         "device_id": "living_room_lamp",
+        #         "alias": "Living Room Lamp"
+        #     }
+        # }
     ]
     
     def __init__(self, username: Optional[str] = None, password: Optional[str] = None):

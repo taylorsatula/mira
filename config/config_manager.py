@@ -20,6 +20,12 @@ from config.config import (
     ConversationConfig,
     ToolConfig,
     SystemConfig,
+    SquareConfig,
+    GoogleMapsConfig,
+    EmailConfig,
+    CalendarConfig,
+    DatabaseConfig,
+    ToolRelevanceConfig,
 )
 from errors import ConfigError, ErrorCode
 
@@ -40,6 +46,12 @@ class AppConfig(BaseModel):
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     tools: ToolConfig = Field(default_factory=ToolConfig)
     system: SystemConfig = Field(default_factory=SystemConfig)
+    square: SquareConfig = Field(default_factory=SquareConfig)
+    google_maps: GoogleMapsConfig = Field(default_factory=GoogleMapsConfig)
+    email: EmailConfig = Field(default_factory=EmailConfig)
+    calendar: CalendarConfig = Field(default_factory=CalendarConfig)
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    tool_relevance: ToolRelevanceConfig = Field(default_factory=ToolRelevanceConfig)
     
     # Cache for system prompts (non-model field)
     prompt_cache: Dict[str, str] = Field(default_factory=dict, exclude=True)
@@ -179,6 +191,11 @@ class AppConfig(BaseModel):
         # Create persistent directory
         Path(config.paths.persistent_dir).mkdir(parents=True, exist_ok=True)
         
+        # Create conversation history directory
+        Path(config.paths.conversation_history_dir).mkdir(parents=True, exist_ok=True)
+        
+        # Create async_results directory
+        Path(config.paths.async_results_dir).mkdir(parents=True, exist_ok=True)
         
         # Create prompts directory
         Path(config.paths.prompts_dir).mkdir(parents=True, exist_ok=True)
@@ -249,6 +266,63 @@ class AppConfig(BaseModel):
                 ErrorCode.MISSING_ENV_VAR
             )
         return api_key
+        
+    @property
+    def square_api_key(self) -> str:
+        """
+        Get the Square API key.
+        
+        Returns:
+            Square API key string
+            
+        Raises:
+            ConfigError: If the API key is not set
+        """
+        api_key = os.getenv("SQUARE_API_KEY")
+        if not api_key:
+            raise ConfigError(
+                "Square API key not found. Set SQUARE_API_KEY environment variable.",
+                ErrorCode.MISSING_ENV_VAR
+            )
+        return api_key
+        
+    @property
+    def google_maps_api_key(self) -> str:
+        """
+        Get the Google Maps API key.
+        
+        Returns:
+            Google Maps API key string
+            
+        Raises:
+            ConfigError: If the API key is not set
+        """
+        api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+        if not api_key:
+            raise ConfigError(
+                "Google Maps API key not found. Set GOOGLE_MAPS_API_KEY environment variable.",
+                ErrorCode.MISSING_ENV_VAR
+            )
+        return api_key
+        
+    @property
+    def email_password(self) -> str:
+        """
+        Get the email account password.
+        
+        Returns:
+            Email password string
+            
+        Raises:
+            ConfigError: If the password is not set
+        """
+        password = os.getenv("EMAIL_PASSWORD")
+        if not password:
+            raise ConfigError(
+                "Email password not found. Set EMAIL_PASSWORD environment variable.",
+                ErrorCode.MISSING_ENV_VAR
+            )
+        return password
     
     def as_dict(self) -> Dict[str, Any]:
         """

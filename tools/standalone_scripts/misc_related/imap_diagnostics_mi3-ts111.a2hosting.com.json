@@ -1,0 +1,87 @@
+{
+  "server_info": {
+    "host": "mi3-ts111.a2hosting.com",
+    "port": 993,
+    "username": "hello@rocketcitywindowcleaning.com",
+    "use_ssl": true
+  },
+  "connection": {
+    "success": true,
+    "error": null
+  },
+  "capabilities": [
+    "IMAP4rev1",
+    "SASL-IR",
+    "LOGIN-REFERRALS",
+    "ID",
+    "ENABLE",
+    "IDLE",
+    "SORT",
+    "SORT=DISPLAY",
+    "THREAD=REFERENCES",
+    "THREAD=REFS",
+    "THREAD=ORDEREDSUBJECT",
+    "MULTIAPPEND",
+    "URL-PARTIAL",
+    "CATENATE",
+    "UNSELECT",
+    "CHILDREN",
+    "NAMESPACE",
+    "UIDPLUS",
+    "LIST-EXTENDED",
+    "I18NLEVEL=1",
+    "CONDSTORE",
+    "QRESYNC",
+    "ESEARCH",
+    "ESORT",
+    "SEARCHRES",
+    "WITHIN",
+    "CONTEXT=SEARCH",
+    "LIST-STATUS",
+    "BINARY",
+    "MOVE",
+    "SNIPPET=FUZZY",
+    "PREVIEW=FUZZY",
+    "PREVIEW",
+    "STATUS=SIZE",
+    "SAVEDATE",
+    "NAMESPACE",
+    "LITERAL+",
+    "NOTIFY",
+    "SPECIAL-USE",
+    "COMPRESS=DEFLATE",
+    "QUOTA"
+  ],
+  "mailbox_methods": {
+    "standard_list": false,
+    "list_with_quotes": true,
+    "lsub": true
+  },
+  "search_methods": {
+    "standard_search": true,
+    "search_utf-8": true,
+    "search_iso-8859-1": true,
+    "search_us-ascii": true,
+    "uid_search": true,
+    "raw_search": false
+  },
+  "fetch_methods": {
+    "standard_fetch_peek": true,
+    "uid_fetch_peek": true,
+    "standard_fetch_rfc822_header": true,
+    "uid_fetch_rfc822_header": true,
+    "full_fetch": true,
+    "uid_full_fetch": true
+  },
+  "working_methods": {
+    "list_mailboxes": "list_with_quotes",
+    "search_messages": "standard_search",
+    "message_preview": "standard_fetch_peek",
+    "full_message": "full_fetch"
+  },
+  "message_samples": [
+    1,
+    332,
+    167
+  ]
+}

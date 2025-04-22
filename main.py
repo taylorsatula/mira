@@ -69,14 +69,14 @@ def setup_logging(log_level: Optional[str] = None) -> None:
     """
     level = log_level or config.system.log_level
     
-    # High-viz theme with bold and italics
+    # Reduced opacity (70%) theme
     COLORS = {
-        'DEBUG': '\033[3;36m',    # Italic Cyan
-        'INFO': '\033[1;32m',     # Bold Green
-        'WARNING': '\033[1;33m',  # Bold Yellow
-        'ERROR': '\033[1;31m',    # Bold Red
-        'CRITICAL': '\033[1;37;41m', # Bold White on Red Background
-        'RESET': '\033[0m'        # Reset
+        'DEBUG': '\033[2;3;36m',    # Dim Italic Cyan
+        'INFO': '\033[2;32m',       # Dim Green
+        'WARNING': '\033[2;33m',    # Dim Yellow
+        'ERROR': '\033[2;31m',      # Dim Red
+        'CRITICAL': '\033[2;37;41m', # Dim White on Red Background
+        'RESET': '\033[0m'          # Reset
     }
     
     class ColoredFormatter(logging.Formatter):
@@ -171,6 +171,11 @@ def initialize_system(args) -> Dict[str, Any]:
         # Enable tools from config
         tool_repo.enable_tools_from_config()
         
+        # Initialize the ToolRelevanceEngine for just-in-time tool management
+        from tool_relevance_engine import ToolRelevanceEngine
+        tool_relevance_engine = ToolRelevanceEngine(tool_repo)
+        logger.info("Initialized ToolRelevanceEngine for dynamic tool management")
+        
         # Initialize or load conversation
         if args.conversation:
             # Use error context specifically for loading the conversation
@@ -189,7 +194,8 @@ def initialize_system(args) -> Dict[str, Any]:
                     conversation = Conversation.from_dict(
                         conversation_data,
                         llm_bridge=llm_bridge,
-                        tool_repo=tool_repo
+                        tool_repo=tool_repo,
+                        tool_relevance_engine=tool_relevance_engine
                     )
                     logger.info(f"Loaded conversation: {conversation.conversation_id}")
                 except Exception as e:
@@ -197,12 +203,14 @@ def initialize_system(args) -> Dict[str, Any]:
                     conversation = Conversation(
                         conversation_id=args.conversation,
                         llm_bridge=llm_bridge,
-                        tool_repo=tool_repo
+                        tool_repo=tool_repo,
+                        tool_relevance_engine=tool_relevance_engine
                     )
         else:
             conversation = Conversation(
                 llm_bridge=llm_bridge,
-                tool_repo=tool_repo
+                tool_repo=tool_repo,
+                tool_relevance_engine=tool_relevance_engine
             )
             
 
@@ -213,7 +221,8 @@ def initialize_system(args) -> Dict[str, Any]:
             'file_ops': file_ops,
             'llm_bridge': llm_bridge,
             'tool_repo': tool_repo,
-            'conversation': conversation
+            'conversation': conversation,
+            'tool_relevance_engine': tool_relevance_engine
         }
 
 
@@ -306,6 +315,7 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
                 else:
                     # Standard mode - print full response at once
                     response = conversation.generate_response(user_input)
+                    logging.info(f"Main display path: response={response}")
                     print(response)
 
         except KeyboardInterrupt:

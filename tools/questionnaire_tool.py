@@ -14,27 +14,79 @@ class QuestionnaireTool(Tool):
 
     This tool conducts a sequential question-answer session with the user,
     keeping the interaction local (not sending responses to LLM) until all
-    questions are answered. It can load predefined questionnaires from files
-    or use custom questions provided at runtime.
+    questions are answered. It can:
+    1. Use simple string questions provided directly in the 'questions' parameter
+    2. Load predefined questionnaires from files using 'questionnaire_id'
+    3. Accept custom structured question objects via 'custom_questions'
+    
+    The flexible interface allows for both quick ad-hoc questioning and more
+    complex structured questionnaires with advanced features.
     """
 
     name = "questionnaire_tool"
-    description = "Runs an interactive questionnaire with multiple questions for the user, collects their responses locally, and returns a structured result"
+    description = """Manages interactive multi-question surveys to collect structured information from users without sending intermediate responses to the LLM.
+
+This tool enables conducting comprehensive questionnaires with various customization options:
+
+1. Running Questionnaires:
+   - Use predefined questionnaires via 'questionnaire_id' parameter
+   - Create ad-hoc questionnaires with 'questions' parameter (simple string list)
+   - Design custom structured questionnaires with 'custom_questions' parameter
+   - Example: questionnaire_id="recipe" or questions=["What's your name?", "Where do you live?"]
+
+2. Question Types and Features:
+   - Simple text questions for free-form responses
+   - Multiple-choice questions with predefined options
+   - Dynamic question generation based on previous answers
+   - Preference key mapping for organizing responses with meaningful labels
+   - Automatic filtering of already-answered questions
+   
+3. Response Handling:
+   - Collects all responses locally without sending to LLM until complete
+   - Returns structured data with question/answer pairs
+   - Maps responses to semantic keys for easier preference management
+   - IMPORTANT: When presenting results, show only the raw data without interpretive commentary
+
+Use this tool whenever you need to gather multiple pieces of structured information from the user in a single interaction session."""
     usage_examples = [
-        {
-            "input": {"questionnaire_id": "recipe"},
-            "output": {
-                "questionnaire_id": "recipe",
-                "completed": True,
-                "responses": {
-                    "Cuisine": "Italian",
-                    "Ingredients to use": "Tomatoes",
-                    "Dietary restrictions": "No",
-                    "Cooking time": "Less than 30 minutes",
-                    "Difficulty": "Intermediate"
-                }
-            }
-        }
+#         {
+#             "input": {"questionnaire_id": "recipe"},
+#             "output": {
+#                 "questionnaire_id": "recipe",
+#                 "completed": True,
+#                 "responses": {
+#                     "Cuisine": "Italian",
+#                     "Ingredients to use": "Tomatoes",
+#                     "Dietary restrictions": "No",
+#                     "Cooking time": "Less than 30 minutes"
+#                 }
+#             },
+#             "response_example": """
+# ### Questionnaire Results: recipe
+# - Cuisine: Italian
+# - Ingredients to use: Tomatoes
+# - Dietary restrictions: No
+# - Cooking time: Less than 30 minutes
+# """
+#         },
+#         {
+#             "input": {"questionnaire_id": "quick_survey", "questions": ["What is your name?", "How old are you?", "Where do you live?"]},
+#             "output": {
+#                 "questionnaire_id": "quick_survey",
+#                 "completed": True,
+#                 "responses": {
+#                     "q1": "John Doe",
+#                     "q2": "30",
+#                     "q3": "New York"
+#                 }
+#             },
+#             "response_example": """
+# ### Questionnaire Results: quick_survey
+# - What is your name?: John Doe
+# - How old are you?: 30
+# - Where do you live?: New York
+# """
+#         }
     ]
 
     def __init__(self, llm_bridge: LLMBridge):
@@ -58,18 +110,39 @@ class QuestionnaireTool(Tool):
         self,
         questionnaire_id: str,
         custom_questions: Optional[List[Dict[str, Any]]] = None,
-        context_data: Optional[Dict[str, Any]] = None
+        context_data: Optional[Dict[str, Any]] = None,
+        questions: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Run an interactive questionnaire session with the user.
 
+        This method supports three ways to provide questions, in order of priority:
+        1. Simple questions via 'questions' parameter (highest priority)
+        2. Structured questions via 'custom_questions' parameter
+        3. Questions from a predefined file via 'questionnaire_id' (lowest priority)
+
         Args:
-            questionnaire_id: ID of the questionnaire to use (e.g., "recipe") or natural language request
-            custom_questions: Optional list of custom questions to use instead of a predefined questionnaire
+            questionnaire_id: ID of the questionnaire to use (e.g., "recipe") or a name/description 
+                             for a questionnaire created from simple questions
+            custom_questions: Optional list of custom structured question objects
+                             Each object should contain at least 'id' and 'text' keys
             context_data: Optional contextual data to use for dynamic question generation
+                         and to filter out already answered questions
+            questions: Optional list of question strings or a JSON string representing a list of strings
+                       for on-the-fly questionnaire creation.
+                       Examples:
+                       - List: ["What is your name?", "Where are you going?"]
+                       - JSON string: "[\"What is your name?\", \"Where are you going?\"]"
+                       This is the simplest way to use the tool - just provide questions
+                       and the tool will handle converting them to the proper format
 
         Returns:
-            Dictionary containing questionnaire results including all responses
+            Dictionary containing questionnaire results including all responses:
+            {
+                "questionnaire_id": str,
+                "completed": bool,
+                "responses": {question_id: response, ...}
+            }
 
         Raises:
             ToolError: If questionnaire file not found or has invalid format
@@ -88,10 +161,52 @@ class QuestionnaireTool(Tool):
             if context_data is None:
                 context_data = {}
                 
-            # Load questions - either from custom_questions or from file
-            questions = None
-            
-            if custom_questions and not isinstance(custom_questions, str):
+            # Load questions - priority: simple questions > custom_questions > file
+            if questions:
+                # Handle JSON string format
+                if isinstance(questions, str):
+                    try:
+                        import json
+                        parsed = json.loads(questions)
+                        
+                        if not isinstance(parsed, list):
+                            raise ToolError(
+                                "Questions parameter as JSON must represent a list of strings",
+                                ErrorCode.TOOL_INVALID_INPUT,
+                                {"parsed_type": type(parsed).__name__}
+                            )
+                        
+                        # Replace with parsed list
+                        self.logger.info("Converted questions from JSON string to list")
+                        questions = parsed
+                    except json.JSONDecodeError as e:
+                        raise ToolError(
+                            f"Failed to parse questions parameter as JSON: {str(e)}",
+                            ErrorCode.TOOL_INVALID_INPUT,
+                            {"error": str(e)}
+                        )
+                
+                # At this point, questions should be a list (either originally or after parsing)
+                if not isinstance(questions, list):
+                    raise ToolError(
+                        "The 'questions' parameter must be a list of strings or a JSON string representing a list",
+                        ErrorCode.TOOL_INVALID_INPUT,
+                        {"actual_type": type(questions).__name__}
+                    )
+                
+                # Validate all items are strings
+                for i, q in enumerate(questions):
+                    if not isinstance(q, str):
+                        raise ToolError(
+                            f"Each question must be a string. Question {i+1} is {type(q).__name__}",
+                            ErrorCode.TOOL_INVALID_INPUT,
+                            {"position": i, "type": type(q).__name__}
+                        )
+                
+                # Convert to question objects
+                questions = self._convert_simple_questions(questions)
+                self.logger.debug(f"Created questionnaire from {len(questions)} simple questions")
+            elif custom_questions and not isinstance(custom_questions, str):
                 # Use provided custom questions
                 questions = custom_questions
                 self.logger.debug(f"Using custom questions for questionnaire {questionnaire_id}")
@@ -102,6 +217,14 @@ class QuestionnaireTool(Tool):
             # Process dynamic questions if needed
             if self.llm_bridge:
                 questions = self._process_dynamic_questions(questions, context_data)
+                
+            # Filter out questions that have already been answered
+            if context_data and self.llm_bridge:
+                original_count = len(questions)
+                questions = self.filter_answered_questions(questions, context_data)
+                filtered_count = original_count - len(questions)
+                if filtered_count > 0:
+                    self.logger.info(f"Filtered out {filtered_count} already answered questions")
 
             # Run the interactive questionnaire
             responses = self._run_interactive_questionnaire(questions, context_data)
@@ -114,6 +237,7 @@ class QuestionnaireTool(Tool):
             }
             
             self.logger.info(f"Completed questionnaire: {questionnaire_id}")
+            self.logger.debug(f"Questionnaire responses: {responses}")
             return result
             
     def _load_questionnaire_file(self, questionnaire_id: str) -> List[Dict[str, Any]]:
@@ -230,6 +354,100 @@ Return only the exact name of the best matching topic from the list."""
                 ErrorCode.TOOL_INVALID_INPUT
             )
     
+    def _convert_simple_questions(self, question_strings: List[str]) -> List[Dict[str, Any]]:
+        """
+        Convert a list of simple question strings into properly formatted question objects.
+        
+        This method treats all simple questions as free-text questions, allowing users
+        to provide natural language responses without predefined options.
+        
+        Args:
+            question_strings: List of question strings
+            
+        Returns:
+            List of properly formatted question objects
+        """
+        questions = []
+        
+        for i, question_text in enumerate(question_strings):
+            # Clean up the question text
+            question_text = question_text.strip()
+            if not question_text:
+                continue
+                
+            # Create a unique ID for the question
+            question_id = f"q{i+1}"
+            
+            # Create the question object as a free-text question
+            # No options are provided to allow for natural language responses
+            question = {
+                "id": question_id,
+                "text": question_text
+            }
+            
+            questions.append(question)
+            
+        self.logger.debug(f"Converted {len(questions)} simple questions to question objects")
+        return questions
+        
+    def filter_answered_questions(
+        self, 
+        questions: List[Dict[str, Any]], 
+        context_data: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Filter out questions that have already been answered based on context data.
+        
+        Uses LLM to determine if a question has already been answered.
+        
+        Args:
+            questions: List of question objects
+            context_data: Contextual data containing potential answers
+            
+        Returns:
+            List of questions that still need to be answered
+        """
+        if not context_data or not self.llm_bridge:
+            return questions
+            
+        # Create a combined context string
+        context_str = "\n".join([f"{k}: {v}" for k, v in context_data.items()])
+        
+        filtered_questions = []
+        for question in questions:
+            question_text = question.get("text", "")
+            
+            if not question_text:
+                continue
+                
+            # Ask LLM if this question is already answered in the context
+            prompt = f"""
+Context Information:
+{context_str}
+
+Question: {question_text}
+
+Based ONLY on the context information provided above, is this question already answered?
+Answer with ONLY "yes" or "no".
+"""
+            
+            try:
+                messages = [{"role": "user", "content": prompt}]
+                response = self.llm_bridge.generate_response(messages)
+                content = self.llm_bridge.extract_text_content(response).strip().lower()
+                
+                # If the answer is not clearly "yes", include the question
+                if content != "yes":
+                    filtered_questions.append(question)
+                else:
+                    self.logger.debug(f"Filtered out already answered question: {question_text}")
+            except Exception as e:
+                self.logger.error(f"Error checking if question is answered: {e}")
+                # Include the question if there's an error
+                filtered_questions.append(question)
+        
+        return filtered_questions
+        
     def _process_dynamic_questions(
         self, 
         questions: List[Dict[str, Any]], 

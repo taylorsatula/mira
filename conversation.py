@@ -6,10 +6,16 @@ tool result integration, and conversation history management.
 """
 import json
 import logging
+import os
 import time
 import uuid
+import datetime
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tool_relevance_engine import ToolRelevanceEngine
+from zoneinfo import ZoneInfo
 
 from errors import ConversationError, ErrorCode, error_context
 from config import config
@@ -92,7 +98,8 @@ class Conversation:
         conversation_id: Optional[str] = None,
         system_prompt: Optional[str] = None,
         llm_bridge: Optional[LLMBridge] = None,
-        tool_repo: Optional[ToolRepository] = None
+        tool_repo: Optional[ToolRepository] = None,
+        tool_relevance_engine: Optional['ToolRelevanceEngine'] = None
     ):
         """
         Initialize a new conversation.
@@ -113,9 +120,13 @@ class Conversation:
         # Set up conversation history
         self.messages: List[Message] = []
         
+        # Set up metadata storage (including location data)
+        self.metadata: Dict[str, Any] = {}
+        
         # Set up conversation components
         self.llm_bridge = llm_bridge or LLMBridge()
         self.tool_repo = tool_repo or ToolRepository()
+        self.tool_relevance_engine = tool_relevance_engine
         
         # Set up conversation config
         self.max_history = config.conversation.max_history
@@ -240,6 +251,12 @@ class Conversation:
         # Add user message to conversation
         self.add_message("user", user_input)
         
+        # Just-in-time tool enablement based on user input
+        if self.tool_relevance_engine:
+            enabled_tools = self.tool_relevance_engine.enable_relevant_tools(user_input)
+            if enabled_tools:
+                self.logger.info(f"Enabled relevant tools for message: {', '.join(enabled_tools)}")
+        
         # Use centralized error context manager for standardized error handling
         with error_context(
             component_name="Conversation",
@@ -270,15 +287,31 @@ class Conversation:
                 if self.tool_repo:
                     # Get the current available tools that are enabled
                     selected_tools = self.tool_repo.get_all_tool_definitions()
-                    self.logger.debug(f"Using {len(selected_tools)} tools for this interaction")
+                    self.logger.info(f"Using {len(selected_tools)} tools for this interaction: {', '.join([t.get('name', 'unknown') for t in selected_tools])}")
                 else:
                     selected_tools = None
+                
+                # Add current time information to system prompt
+                central_tz = ZoneInfo("America/Chicago")
+                now = datetime.datetime.now(central_tz)
+                time_info = f"Current datetime: {now.strftime('%Y-%m-%d %I:%M:%S %p')} Central Time (America/Chicago)\n\n"
+                
+                # Build enhanced system prompt
+                enhanced_system_prompt = time_info + self.system_prompt
+                
+                # Add guidance for tool selection if multiple tools are enabled
+                if self.tool_repo and len(self.tool_repo.get_enabled_tools()) > 1:
+                    enabled_tools = self.tool_repo.get_enabled_tools()
+                    tool_list = ", ".join([t.replace("_tool", "") for t in enabled_tools])
+                    tool_guidance = f"\nMultiple tools are currently available: {tool_list}. "
+                    tool_guidance += "If the user's request is ambiguous about which tool to use, ask for clarification."
+                    enhanced_system_prompt += tool_guidance
                 
                 # Generate response (streaming or standard)
                 if stream:
                     response = self.llm_bridge.generate_response(
                         messages=messages,
-                        system_prompt=self.system_prompt,
+                        system_prompt=enhanced_system_prompt,
                         temperature=temperature,
                         max_tokens=max_tokens,
                         tools=selected_tools,
@@ -293,7 +326,7 @@ class Conversation:
                 else:
                     response = self.llm_bridge.generate_response(
                         messages=messages,
-                        system_prompt=self.system_prompt,
+                        system_prompt=enhanced_system_prompt,
                         temperature=temperature,
                         max_tokens=max_tokens,
                         tools=selected_tools
@@ -365,6 +398,9 @@ class Conversation:
                 if final_response:
                     self.add_message("assistant", 
                                     f"{final_response}\n\n[Note: Maximum tool iterations reached]")
+            
+            # Extra diagnostic logging for response path tracing
+            self.logger.info(f"Final return path: stream={stream}, has_callback={stream_callback is not None}, final_response={final_response}")
             
             # In streaming mode with callback, return None as content was already sent
             if stream and stream_callback:
@@ -456,7 +492,8 @@ class Conversation:
         cls,
         data: Dict[str, Any],
         llm_bridge: Optional[LLMBridge] = None,
-        tool_repo: Optional[ToolRepository] = None
+        tool_repo: Optional[ToolRepository] = None,
+        tool_relevance_engine: Optional['ToolRelevanceEngine'] = None
     ) -> 'Conversation':
         """
         Create a conversation from a dictionary representation.
@@ -473,7 +510,8 @@ class Conversation:
             conversation_id=data["conversation_id"],
             system_prompt=data.get("system_prompt"),
             llm_bridge=llm_bridge,
-            tool_repo=tool_repo
+            tool_repo=tool_repo,
+            tool_relevance_engine=tool_relevance_engine
         )
         
         # Load messages
