@@ -17,6 +17,7 @@ from api.llm_bridge import LLMBridge
 from tools.repo import ToolRepository
 from conversation import Conversation
 from crud import FileOperations
+from onload_checker import OnLoadChecker, add_stimuli_to_conversation
 
 
 def parse_arguments():
@@ -214,6 +215,16 @@ def initialize_system(args) -> Dict[str, Any]:
             )
             
 
+        # Run on-load checks
+        onload_checker = OnLoadChecker()
+        logger.info("Running on-load checks...")
+        onload_stimuli = onload_checker.run_all_checks(conversation)
+        
+        # Add any notifications from checks to the conversation
+        if onload_stimuli:
+            logger.info(f"Found {len(onload_stimuli)} notification(s) from on-load checks")
+            add_stimuli_to_conversation(onload_stimuli, conversation)
+        
         logger.info(f"System initialized with conversation ID: {conversation.conversation_id}")
 
         # Return system components
@@ -222,7 +233,8 @@ def initialize_system(args) -> Dict[str, Any]:
             'llm_bridge': llm_bridge,
             'tool_repo': tool_repo,
             'conversation': conversation,
-            'tool_relevance_engine': tool_relevance_engine
+            'tool_relevance_engine': tool_relevance_engine,
+            'onload_checker': onload_checker
         }
 
 
@@ -267,6 +279,11 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
     print("Type '/save' to save the conversation")
     print("Type '/clear' to clear the conversation history")
     print("-" * 50)
+    
+    # Display any initial messages (like reminders) that were added during initialization
+    for message in conversation.messages:
+        if message.role == "assistant" and message.metadata.get("is_notification"):
+            print(f"\nAssistant: {message.content}")
 
     def print_token(token: str):
         """Print token by token for streaming effect."""
