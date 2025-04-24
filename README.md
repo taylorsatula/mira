@@ -1,21 +1,25 @@
-# BotWithMemory
-
+# Mira
+## Machine Intellegence Resource Assistant
 A Python-based AI agent system with persistent memory capabilities, asynchronous task processing, and extensible tool architecture.
 
 ## Purpose
 
-BotWithMemory is a framework for building conversational AI agents that can:
-- Maintain persistent conversation history across sessions
-- Execute tasks in the background while continuing conversations
-- Access specialized tools for data extraction, persistent storage, and more
+Mira is a framework for building conversational AI agents that can:
+- (Autonomously) Maintain persistent knowledge history across sessions
+- Use and invoke a whole host of tools
+  - MIRA can zero-shot generate tools by dropping an open-source API into a special foloder and running a 'create tool' command! full system integration on next startup. zero oversight.
 - Adapt to user preferences through memory capabilities
+- Generate and curate its own training data
+- interact with local SQLite databases
+- Do self-directed async tasks (both cron-style and directive-style)
+
 
 ## Installation
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/botwithmemory.git
-   cd botwithmemory
+   git clone https://github.com/yourusername/mira.git
+   cd mira
    ```
 
 2. Install dependencies:
@@ -170,23 +174,23 @@ The API uses a simple, direct API key authentication to secure all endpoints.
 
 - **Persistent Conversations**: Save and resume conversations with unique IDs
 - **Streaming Responses**: See AI responses as they are generated 
-- **Background Tasks**: Run long-running operations asynchronously
+- **The Ability to Fashion Its Own Tools**: This one is the kicker. The Reminders tool was created for $0.98 in API tokens and a one line prompt describing what I wanted out of the tool. No code edits, no training data, no creating directories or configs,,. just speak a tool into existance (you should review the code eventually tho lol). It returned a well-formed SQLite integrated tool with Read/Write/Update/Delete/Manage. Proper documentation and all. 
 - **Configurable System**: Configure via environment variables, files, or command line
 
 ### Tool Architecture
 
 The system includes several powerful tools:
 
-- **Extraction Tool**: Parse and extract specific data from text
-- **Persistence Tool**: Store and retrieve data persistently
-- **Questionnaire Tool**: Create and process user questionnaires
-- **Repository Tool**: Access and search file repositories
-- **Asynchronous Task Tools**: Schedule and monitor background tasks
+- **Reminders Tool**: Create intellegent reminders using natural language
 - **Calendar Tool**: Manage calendar events and appointments
-- **Email Tool**: Send and receive emails
+- **Email Tool**: Send and receive emails, process inboxes, summerize, flag, move.
+- **Maps Tool**: Get location information using unstructured spacial queries
+- **Questionnaire Tool**: Create and process questionnaires for gathering information.
 - **HTTP Tool**: Make HTTP requests to external services
-- **Maps Tool**: Get location and navigation information
+
 - **Kasa Tool**: Control smart home devices
+- **Square Tool**: Interact with the full Square API
+- **Customer Database Tool** Interact with a local SQLite database of customer imformation. Use this data within other tools.
 
 #### Automatic Tool Classifier Examples
 
@@ -195,16 +199,26 @@ The system automatically generates training examples for tool discovery when a t
 - The tool relevance engine checks for classifier examples
 - If no examples exist, it generates synthetic examples using LLM-based analysis
 - Synthetic examples are saved as `autogen_classifier_examples.json`
+- The new classifier data triggers a relearn and the tool integrates into convo
 - The system still works with manually created examples (preferred) or auto-generated ones
 
 ## Architecture
 
-BotWithMemory follows a modular architecture:
+Mira follows a modular architecture:
 
 - **Main Process**: Handles user interaction and conversation management
-- **Background Service**: Processes asynchronous tasks independently
-- **LLM Bridge**: Provides a unified interface to the Claude AI model
+- **LLM Bridge**: Provides a unified interface to the Anthropic API
 - **Tool Repository**: Manages discovery and execution of specialized tools
+- **ToolRelevanceEngine**: Manages (add/remove) the tools in the context window autonomously.
 - **Configuration System**: Centralizes configuration from multiple sources
 
-The system uses a file-based persistence mechanism for conversations, background tasks, and tool data storage, enabling persistent memory across sessions.
+The system uses a file-based persistence mechanism for conversationn tool data storage, enabling persistent memory across sessions.
+
+## Neat Stuff It Can Do
+- "Mira, whats the email address of the customer I just drove by?"
+- "Mira, which customer lives by Southerland Photo south of the hospital?"
+- "Mira, next week I'll need you to hound me every day till I initiate the return of those eBay items. The return codes are in an email in the Orders mailbox."
+- "Mira, please summerize all my notification emails from this week and show me emails from real people that came in today"
+- "Mira, set aside the email from John till we're done going through the others,, I want to get back to him but we've gotta work through this inbox first. Are any of the remaining emails particularly important or time-sensitive?"
+
+## It blows my mind that I've built it in a way where all of these requests reliably complete using a cpu-classifier and Haiku.
