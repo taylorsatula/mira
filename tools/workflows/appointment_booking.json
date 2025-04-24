@@ -1,0 +1,39 @@
+{
+  "id": "appointment_booking",
+  "name": "Book an Appointment",
+  "description": "Process for scheduling customer appointments with calendar integration",
+  "trigger_examples": [
+    "I need to book an appointment",
+    "Schedule a meeting with a customer",
+    "Create a booking",
+    "Make a reservation",
+    "Set up a customer appointment",
+    "Book a time slot"
+  ],
+  "steps": [
+    {
+      "id": "customer_info",
+      "description": "Collect customer information",
+      "tools": ["customerdatabase_tool"],
+      "guidance": "Collect the name of the customer. Search for the customers name in the customerdatabase_tool. The search will return information such as their customer ID and address."
+    },
+    {
+      "id": "get_appointment_info",
+      "description": "Get additional details for the booking",
+      "tools": ["questionnaire_tool"],
+      "guidance": "You need to generate a dynamic questionnaire to collect key parameters. Collect these from the user before continuing: price, service, duration, and ask the user if they have a specific date and time in mind. If they specify a date use that. Otherwise continue without it for now."
+    },
+    {
+      "id": "confirmation_before_booking",
+      "description": "Confirm appointment details",
+      "tools": ["customerdatabase_tool", "square_tool"],
+      "guidance": "Review all appointment details with the user and confirm they are correct before proceeding. If no date and time has been provided use square_tool to look for the next open timeslot that is large enough to accomodate the booking."
+    },
+    {
+      "id": "book_the_appointment",
+      "description": "Book the appointment",
+      "tools": ["square_tool"],
+      "guidance": "Create the appointment in Square with all collected information."
+    }
+  ]
+}
