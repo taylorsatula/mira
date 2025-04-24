@@ -336,13 +336,15 @@ class AppConfig(BaseModel):
     def get_system_prompt(
             self,
             prompt_name: str,
-            replacements: Optional[Dict[str, str]] = None) -> str:
+            replacements: Optional[Dict[str, str]] = None,
+            reload: bool = False) -> str:
         """
         Get a system prompt by name.
         
         Args:
             prompt_name: Name of the prompt file (without .txt extension)
             replacements: Optional dictionary of placeholder replacements
+            reload: Whether to reload the prompt from disk even if cached
             
         Returns:
             The prompt text with any replacements applied
@@ -350,8 +352,8 @@ class AppConfig(BaseModel):
         Raises:
             ConfigError: If the prompt file is not found
         """
-        # Check cache first
-        if prompt_name in self.prompt_cache:
+        # Check cache first (unless reload is True)
+        if not reload and prompt_name in self.prompt_cache:
             prompt_text = self.prompt_cache[prompt_name]
         else:
             # Construct file path

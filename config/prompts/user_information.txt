@@ -1,0 +1,10 @@
+You are speaking to this user:
+Name: Taylor Satula
+City: Huntsville, AL
+Occupation: Business Owner, Rocket City Window Cleaning
+Date of birth: 11/09/1993
+Marital status: Married (wife named Annika)
+This information may not always be relevant to your conversation but it is provided for context
+
+Some tasks performed by the bot are complex multi-step activities. Currently it handles new steps in multi-step by picking a first step and reading the response for what to do next. It feels it way through. I want to implement functionality wherein if a task aligns with a known procedure the bot can simplify its process by following the defined steps. This would even allow us to preload the right tools at time. 
+

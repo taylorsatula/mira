@@ -210,14 +210,14 @@ class ToolConfig(BaseModel):
     # Synthetic data generator settings
     synthetic_data_analysis_model: str = Field(
         default="claude-3-7-sonnet-20250219",
-        description="LLM model to use for code analysis in synthetic data generation"
+        description="LLM model to use for code analysis and example review in synthetic data analysis"
     )
     synthetic_data_generation_model: str = Field(
         default="claude-3-5-haiku-20241022",
         description="LLM model to use for example generation in synthetic data generation"
     )
     synthetic_data_embedding_model: str = Field(
-        default="all-MiniLM-L6-v2",
+        default="all-MiniLM-L12-v2",
         description="Embedding model to use for synthetic data deduplication"
     )
 
@@ -305,7 +305,7 @@ class ToolRelevanceConfig(BaseModel):
         description="Threshold for secondary tool selection (0.0-1.0)"
     )
     max_tools: int = Field(
-        default=2,
+        default=3,
         description="Maximum number of tools to enable at once"
     )
     thread_limit: int = Field(

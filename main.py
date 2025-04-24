@@ -177,6 +177,11 @@ def initialize_system(args) -> Dict[str, Any]:
         tool_relevance_engine = ToolRelevanceEngine(tool_repo)
         logger.info("Initialized ToolRelevanceEngine for dynamic tool management")
         
+        # Initialize the WorkflowManager for predefined workflows
+        from tools.workflows.workflow_manager import WorkflowManager
+        workflow_manager = WorkflowManager(tool_repo)
+        logger.info("Initialized WorkflowManager for predefined workflows")
+        
         # Initialize or load conversation
         if args.conversation:
             # Use error context specifically for loading the conversation
@@ -196,7 +201,8 @@ def initialize_system(args) -> Dict[str, Any]:
                         conversation_data,
                         llm_bridge=llm_bridge,
                         tool_repo=tool_repo,
-                        tool_relevance_engine=tool_relevance_engine
+                        tool_relevance_engine=tool_relevance_engine,
+                        workflow_manager=workflow_manager
                     )
                     logger.info(f"Loaded conversation: {conversation.conversation_id}")
                 except Exception as e:
@@ -205,13 +211,15 @@ def initialize_system(args) -> Dict[str, Any]:
                         conversation_id=args.conversation,
                         llm_bridge=llm_bridge,
                         tool_repo=tool_repo,
-                        tool_relevance_engine=tool_relevance_engine
+                        tool_relevance_engine=tool_relevance_engine,
+                        workflow_manager=workflow_manager
                     )
         else:
             conversation = Conversation(
                 llm_bridge=llm_bridge,
                 tool_repo=tool_repo,
-                tool_relevance_engine=tool_relevance_engine
+                tool_relevance_engine=tool_relevance_engine,
+                workflow_manager=workflow_manager
             )
             
 
@@ -234,6 +242,7 @@ def initialize_system(args) -> Dict[str, Any]:
             'tool_repo': tool_repo,
             'conversation': conversation,
             'tool_relevance_engine': tool_relevance_engine,
+            'workflow_manager': workflow_manager,
             'onload_checker': onload_checker
         }
 
@@ -278,6 +287,7 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
     print("Type '/exit' to end the session")
     print("Type '/save' to save the conversation")
     print("Type '/clear' to clear the conversation history")
+    print("Type '/reload_user' to reload user information")
     print("-" * 50)
     
     # Display any initial messages (like reminders) that were added during initialization
@@ -309,6 +319,11 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
             elif user_input.lower() == '/clear':
                 conversation.clear_history()
                 print("Conversation history cleared.")
+                continue
+                
+            elif user_input.lower() == '/reload_user':
+                conversation.reload_user_information()
+                print("User information reloaded.")
                 continue
 
             # Generate response

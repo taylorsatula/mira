@@ -7,6 +7,7 @@ tool result integration, and conversation history management.
 import json
 import logging
 import os
+import re
 import time
 import uuid
 import datetime
@@ -15,6 +16,7 @@ from typing import List, Dict, Any, Optional, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tool_relevance_engine import ToolRelevanceEngine
+    from tools.workflows.workflow_manager import WorkflowManager
 from zoneinfo import ZoneInfo
 
 from errors import ConversationError, ErrorCode, error_context
@@ -99,7 +101,8 @@ class Conversation:
         system_prompt: Optional[str] = None,
         llm_bridge: Optional[LLMBridge] = None,
         tool_repo: Optional[ToolRepository] = None,
-        tool_relevance_engine: Optional['ToolRelevanceEngine'] = None
+        tool_relevance_engine: Optional['ToolRelevanceEngine'] = None,
+        workflow_manager: Optional['WorkflowManager'] = None
     ):
         """
         Initialize a new conversation.
@@ -109,6 +112,8 @@ class Conversation:
             system_prompt: Optional system prompt for the conversation
             llm_bridge: Optional LLM bridge instance
             tool_repo: Optional tool repository instance
+            tool_relevance_engine: Optional tool relevance engine instance
+            workflow_manager: Optional workflow manager instance
         """
         # Set up logging
         self.logger = logging.getLogger("conversation")
@@ -127,6 +132,7 @@ class Conversation:
         self.llm_bridge = llm_bridge or LLMBridge()
         self.tool_repo = tool_repo or ToolRepository()
         self.tool_relevance_engine = tool_relevance_engine
+        self.workflow_manager = workflow_manager
         
         # Set up conversation config
         self.max_history = config.conversation.max_history
@@ -138,9 +144,21 @@ class Conversation:
         else:
             # Load system prompt from file
             self.system_prompt = config.get_system_prompt("main_system_prompt")
+        
+        # Load user information once and store in memory
+        try:
+            self.user_info = config.get_system_prompt("user_information")
+            self.user_info = f"USER INFORMATION:\n{self.user_info}\n\n"
+            self.logger.info("Successfully loaded user information")
+        except Exception as e:
+            self.logger.warning(f"Failed to load user information: {e}")
+            self.user_info = ""
             
         # Initialize error tracking
         self.last_error = None
+        
+        # Initialize workflow tracking
+        self._detected_workflow_id = None
     
     def add_message(self, role: str, content: Union[str, List[Dict[str, Any]]], metadata: Optional[Dict[str, Any]] = None) -> Message:
         """
@@ -251,8 +269,24 @@ class Conversation:
         # Add user message to conversation
         self.add_message("user", user_input)
         
-        # Just-in-time tool enablement based on user input
-        if self.tool_relevance_engine:
+        # Workflow detection and processing
+        if self.workflow_manager and not self.workflow_manager.get_active_workflow():
+            # Try to detect a workflow (only if no workflow is currently active)
+            workflow_id, confidence = self.workflow_manager.detect_workflow(user_input)
+            if workflow_id:
+                self.logger.info(f"Detected potential workflow: {workflow_id} (confidence: {confidence:.2f})")
+                # Store the detected workflow ID for the system prompt
+                self._detected_workflow_id = workflow_id
+                # We'll continue with normal processing and let the LLM handle confirmation
+        
+        # If workflow is active, suspend tool relevance engine and enable workflow tools
+        if self.workflow_manager and self.workflow_manager.get_active_workflow():
+            if self.tool_relevance_engine:
+                self.tool_relevance_engine.suspend()
+                self.logger.info("Suspended tool relevance engine due to active workflow")
+            # Tools are enabled by the workflow manager when the workflow advances
+        # Otherwise use just-in-time tool enablement
+        elif self.tool_relevance_engine:
             enabled_tools = self.tool_relevance_engine.enable_relevant_tools(user_input)
             if enabled_tools:
                 self.logger.info(f"Enabled relevant tools for message: {', '.join(enabled_tools)}")
@@ -296,16 +330,31 @@ class Conversation:
                 now = datetime.datetime.now(central_tz)
                 time_info = f"Current datetime: {now.strftime('%Y-%m-%d %I:%M:%S %p')} Central Time (America/Chicago)\n\n"
                 
-                # Build enhanced system prompt
-                enhanced_system_prompt = time_info + self.system_prompt
+                # Build enhanced system prompt with cached user information
+                enhanced_system_prompt = time_info + self.user_info + self.system_prompt
+                
+                # Add workflow guidance if a workflow is active
+                if self.workflow_manager and self.workflow_manager.get_active_workflow():
+                    workflow_guidance = self.workflow_manager.get_system_prompt_extension()
+                    enhanced_system_prompt += workflow_guidance
                 
                 # Add guidance for tool selection if multiple tools are enabled
-                if self.tool_repo and len(self.tool_repo.get_enabled_tools()) > 1:
+                elif self.tool_repo and len(self.tool_repo.get_enabled_tools()) > 1:
                     enabled_tools = self.tool_repo.get_enabled_tools()
                     tool_list = ", ".join([t.replace("_tool", "") for t in enabled_tools])
                     tool_guidance = f"\nMultiple tools are currently available: {tool_list}. "
                     tool_guidance += "If the user's request is ambiguous about which tool to use, ask for clarification."
                     enhanced_system_prompt += tool_guidance
+                
+                # Add workflow detection guidance if we detected a potential workflow but none is active
+                detected_workflow_id = getattr(self, '_detected_workflow_id', None)
+                if self.workflow_manager and not self.workflow_manager.get_active_workflow() and detected_workflow_id:
+                    workflow = self.workflow_manager.workflows.get(detected_workflow_id)
+                    if workflow:
+                        workflow_hint = f"\n\nI've detected that the user might want help with: {workflow['name']}. "
+                        workflow_hint += "If this seems correct, you can confirm and start this workflow process by including this exact text in your response: "
+                        workflow_hint += f"<!-- START_WORKFLOW:{detected_workflow_id} -->"
+                        enhanced_system_prompt += workflow_hint
                 
                 # Generate response (streaming or standard)
                 if stream:
@@ -336,6 +385,40 @@ class Conversation:
                 # Extract text content for final return value
                 assistant_response = self.llm_bridge.extract_text_content(response)
                 final_response = assistant_response
+                
+                # Check for workflow commands
+                if self.workflow_manager:
+                    # Check for workflow commands (start, complete, cancel)
+                    command_found, command_type, command_params = self.workflow_manager.check_for_workflow_commands(assistant_response)
+                    
+                    if command_found:
+                        if command_type == "start" and not self.workflow_manager.get_active_workflow():
+                            workflow_id = command_params
+                            try:
+                                self.workflow_manager.start_workflow(workflow_id)
+                                self.logger.info(f"Started workflow: {workflow_id}")
+                                # Suspend tool relevance engine
+                                if self.tool_relevance_engine:
+                                    self.tool_relevance_engine.suspend()
+                            except Exception as e:
+                                self.logger.error(f"Error starting workflow {workflow_id}: {e}")
+                        
+                        elif command_type == "complete" and self.workflow_manager.get_active_workflow():
+                            try:
+                                self.workflow_manager.advance_workflow()
+                                self.logger.info("Advanced workflow to next step")
+                            except Exception as e:
+                                self.logger.error(f"Error advancing workflow: {e}")
+                        
+                        elif command_type == "cancel" and self.workflow_manager.get_active_workflow():
+                            try:
+                                self.workflow_manager.cancel_workflow()
+                                self.logger.info("Cancelled workflow")
+                                # Resume tool relevance engine
+                                if self.tool_relevance_engine:
+                                    self.tool_relevance_engine.resume()
+                            except Exception as e:
+                                self.logger.error(f"Error cancelling workflow: {e}")
                 
                 # Check for tool calls
                 tool_calls = self.llm_bridge.extract_tool_calls(response)
@@ -398,9 +481,6 @@ class Conversation:
                 if final_response:
                     self.add_message("assistant", 
                                     f"{final_response}\n\n[Note: Maximum tool iterations reached]")
-            
-            # Extra diagnostic logging for response path tracing
-            self.logger.info(f"Final return path: stream={stream}, has_callback={stream_callback is not None}, final_response={final_response}")
             
             # In streaming mode with callback, return None as content was already sent
             if stream and stream_callback:
@@ -471,6 +551,22 @@ class Conversation:
         """
         self.messages = []
         self.logger.debug(f"Cleared conversation history for {self.conversation_id}")
+        
+    def reload_user_information(self) -> None:
+        """
+        Reload user information from file.
+        
+        Call this method when the user information file has been updated
+        and you want to refresh the cached information without restarting
+        the application.
+        """
+        try:
+            self.user_info = config.get_system_prompt("user_information", reload=True)
+            self.user_info = f"USER INFORMATION:\n{self.user_info}\n\n"
+            self.logger.info("Successfully reloaded user information")
+        except Exception as e:
+            self.logger.warning(f"Failed to reload user information: {e}")
+            # Keep existing user_info if refresh fails
     
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -479,13 +575,20 @@ class Conversation:
         Returns:
             Dictionary representation of the conversation
         """
-        return {
+        data = {
             "conversation_id": self.conversation_id,
             "system_prompt": self.system_prompt,
             "messages": [message.to_dict() for message in self.messages],
             "created_at": self.messages[0].created_at if self.messages else time.time(),
             "updated_at": self.messages[-1].created_at if self.messages else time.time(),
+            "_detected_workflow_id": self._detected_workflow_id,
         }
+        
+        # Add workflow state if we have a workflow manager
+        if self.workflow_manager:
+            data["workflow_state"] = self.workflow_manager.to_dict()
+            
+        return data
     
     @classmethod
     def from_dict(
@@ -493,7 +596,8 @@ class Conversation:
         data: Dict[str, Any],
         llm_bridge: Optional[LLMBridge] = None,
         tool_repo: Optional[ToolRepository] = None,
-        tool_relevance_engine: Optional['ToolRelevanceEngine'] = None
+        tool_relevance_engine: Optional['ToolRelevanceEngine'] = None,
+        workflow_manager: Optional['WorkflowManager'] = None
     ) -> 'Conversation':
         """
         Create a conversation from a dictionary representation.
@@ -502,6 +606,8 @@ class Conversation:
             data: Dictionary representation of the conversation
             llm_bridge: Optional LLM bridge instance
             tool_repo: Optional tool repository instance
+            tool_relevance_engine: Optional tool relevance engine instance
+            workflow_manager: Optional workflow manager instance
             
         Returns:
             Conversation object
@@ -511,7 +617,8 @@ class Conversation:
             system_prompt=data.get("system_prompt"),
             llm_bridge=llm_bridge,
             tool_repo=tool_repo,
-            tool_relevance_engine=tool_relevance_engine
+            tool_relevance_engine=tool_relevance_engine,
+            workflow_manager=workflow_manager
         )
         
         # Load messages
@@ -519,5 +626,17 @@ class Conversation:
             Message.from_dict(message_data)
             for message_data in data.get("messages", [])
         ]
+        
+        # Restore detected workflow ID
+        conversation._detected_workflow_id = data.get("_detected_workflow_id")
+        
+        # Restore workflow state if we have a workflow manager and saved state
+        if conversation.workflow_manager and "workflow_state" in data:
+            conversation.workflow_manager.from_dict(data["workflow_state"])
+            
+            # If there's an active workflow, suspend the tool relevance engine
+            if (conversation.workflow_manager.get_active_workflow() and 
+                conversation.tool_relevance_engine):
+                conversation.tool_relevance_engine.suspend()
         
         return conversation

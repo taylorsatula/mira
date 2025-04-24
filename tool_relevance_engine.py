@@ -43,6 +43,7 @@ class ToolRelevanceEngine:
         tool_activation_history: Tracks when each tool was last activated
         tool_persistence_messages: Minimum messages to keep a tool enabled
         message_counter: Counter for tracking message sequence
+        suspended: Flag indicating whether automatic tool suggestion is suspended
     """
     
     def __init__(self, tool_repo: ToolRepository):
@@ -78,6 +79,9 @@ class ToolRelevanceEngine:
         self.tool_persistence_messages = config.tool_relevance.tool_persistence_messages
         self.tool_activation_history: Dict[str, int] = {}  # Maps tool_name to last_activation_message_id
         self.message_counter = 0  # Incremented for each analyzed message
+        
+        # Flag to suspend automatic tool suggestion
+        self.suspended = False
         
         # Load the tool examples and prepare classifier
         self._load_tool_examples()
@@ -485,6 +489,11 @@ class ToolRelevanceEngine:
         start_time = time.time()
         self.logger.info("Managing tool relevance based on message")
         
+        # Check if engine is suspended
+        if self.suspended:
+            self.logger.info("Tool relevance engine is suspended, skipping tool analysis")
+            return []
+        
         # Increment message counter for each new message
         self.message_counter += 1
         current_message_id = self.message_counter
@@ -614,6 +623,7 @@ class ToolRelevanceEngine:
         
         This method is provided for backward compatibility. It calls
         manage_tool_relevance() which handles both enabling and disabling tools.
+        If the engine is suspended, it returns an empty list without doing analysis.
         
         Args:
             message: User message to analyze
@@ -621,7 +631,30 @@ class ToolRelevanceEngine:
         Returns:
             List of enabled tool names
         """
+        if self.suspended:
+            self.logger.info("Tool relevance engine is suspended, skipping tool analysis")
+            return []
+            
         return self.manage_tool_relevance(message)
+        
+    def suspend(self) -> None:
+        """
+        Suspend automatic tool suggestion.
+        
+        When suspended, the engine will not analyze messages or enable tools.
+        This is useful for workflows where tools are managed explicitly.
+        """
+        self.suspended = True
+        self.logger.info("Tool relevance engine suspended")
+        
+    def resume(self) -> None:
+        """
+        Resume automatic tool suggestion.
+        
+        This re-enables the engine's analysis of messages and automatic tool enabling.
+        """
+        self.suspended = False
+        self.logger.info("Tool relevance engine resumed")
 
 
 class MultiLabelClassifier:
