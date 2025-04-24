@@ -80,24 +80,34 @@ class OnLoadChecker:
 
             if today_result.get("count", 0) > 0:
                 reminders = today_result.get("reminders", [])
-                content = f"You have {len(reminders)} reminder(s) for today:\n"
-                for idx, reminder in enumerate(reminders, 1):
-                    date_str = datetime.fromisoformat(
-                        reminder['reminder_date']
-                    ).strftime('%I:%M %p')
-                    content += f"{idx}. {reminder['title']} at {date_str}\n"
+                # Filter out completed reminders
+                active_reminders = [
+                    r for r in reminders if not r.get('completed', False)
+                ]
 
-                stimuli.append(
-                    Stimulus(
-                        type=StimulusType.NOTIFICATION,
-                        content=content.strip(),
-                        source="reminder_system",
-                        metadata={
-                            "priority": "high",
-                            "check_type": "today_reminders"
-                        }
+                if active_reminders:
+                    content = (f"You have {len(active_reminders)} "
+                               f"reminder(s) for today:\n")
+                    for idx, reminder in enumerate(active_reminders, 1):
+                        date_str = datetime.fromisoformat(
+                            reminder['reminder_date']
+                        ).strftime('%I:%M %p')
+                        content += (f"{idx}. {reminder['title']} "
+                                   f"at {date_str}\n")
+
+                # Only add a stimulus if there are active reminders
+                if active_reminders:
+                    stimuli.append(
+                        Stimulus(
+                            type=StimulusType.NOTIFICATION,
+                            content=content.strip(),
+                            source="reminder_system",
+                            metadata={
+                                "priority": "high",
+                                "check_type": "today_reminders"
+                            }
+                        )
                     )
-                )
 
             # Check upcoming reminders (next 3 days)
             today = datetime.now()
@@ -113,40 +123,50 @@ class OnLoadChecker:
             if upcoming_result.get("count", 0) > 0:
                 reminders = upcoming_result.get("reminders", [])
 
-                # Group reminders by date
-                grouped_reminders = {}
-                for reminder in reminders:
-                    reminder_date = datetime.fromisoformat(
-                        reminder['reminder_date']
-                    )
-                    date_str = reminder_date.strftime("%A, %B %d")
-                    if date_str not in grouped_reminders:
-                        grouped_reminders[date_str] = []
-                    grouped_reminders[date_str].append(reminder)
+                # Filter out completed reminders
+                active_reminders = [
+                    r for r in reminders if not r.get('completed', False)
+                ]
 
-                # Format content with grouping
-                content = "Upcoming reminders for the next few days:\n"
-                for date_str, date_reminders in grouped_reminders.items():
-                    content += f"\n{date_str}:\n"
-                    for idx, reminder in enumerate(date_reminders, 1):
+                # Only continue if there are active reminders
+                if active_reminders:
+                    # Group reminders by date
+                    grouped_reminders = {}
+                    for reminder in active_reminders:
                         reminder_date = datetime.fromisoformat(
                             reminder['reminder_date']
                         )
-                        time_str = reminder_date.strftime('%I:%M %p')
-                        content += (f"{idx}. {reminder['title']} at "
-                                    f"{time_str}\n")
+                        date_str = reminder_date.strftime("%A, %B %d")
+                        if date_str not in grouped_reminders:
+                            grouped_reminders[date_str] = []
+                        grouped_reminders[date_str].append(reminder)
 
-                stimuli.append(
-                    Stimulus(
-                        type=StimulusType.NOTIFICATION,
-                        content=content.strip(),
-                        source="reminder_system",
-                        metadata={
-                            "priority": "medium",
-                            "check_type": "upcoming_reminders"
-                        }
+                # Only continue with creating the stimulus if we have active reminders
+                if active_reminders:
+                    # Format content with grouping
+                    content = ("Upcoming reminders for the next few "
+                               "days:\n")
+                    for date_str, date_reminders in grouped_reminders.items():
+                        content += f"\n{date_str}:\n"
+                        for idx, reminder in enumerate(date_reminders, 1):
+                            reminder_date = datetime.fromisoformat(
+                                reminder['reminder_date']
+                            )
+                            time_str = reminder_date.strftime('%I:%M %p')
+                            content += (f"{idx}. {reminder['title']} at "
+                                        f"{time_str}\n")
+
+                    stimuli.append(
+                        Stimulus(
+                            type=StimulusType.NOTIFICATION,
+                            content=content.strip(),
+                            source="reminder_system",
+                            metadata={
+                                "priority": "medium",
+                                "check_type": "upcoming_reminders"
+                            }
+                        )
                     )
-                )
 
         return stimuli
 
