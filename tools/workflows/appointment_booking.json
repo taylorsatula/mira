@@ -15,7 +15,7 @@
       "id": "customer_info",
       "description": "Collect customer information",
       "tools": ["customerdatabase_tool"],
-      "guidance": "Collect the name of the customer. Search for the customers name in the customerdatabase_tool. The search will return information such as their customer ID and address."
+      "guidance": "Collect just the name of the customer. Search for the customers name in the customerdatabase_tool. The search will return information such as their customer ID and address and will prevent you from needing to ask for it in the next step."
     },
     {
       "id": "get_appointment_info",

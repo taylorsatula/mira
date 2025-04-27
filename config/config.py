@@ -34,8 +34,8 @@ class ApiConfig(BaseModel):
     """API configuration settings."""
     
     model: str = Field(
-#       default="claude-3-7-sonnet-20250219",
         default="claude-3-5-haiku-20241022", # Haiku is much faster and still skilled for common tasks
+#       default="claude-3-7-sonnet-20250219",
         description="LLM model to use for API requests"
     )
     max_tokens: int = Field(

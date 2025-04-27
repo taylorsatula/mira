@@ -33,7 +33,7 @@
 - **Full Tool Reference**: For creating new tools, refer to `HOW_TO_BUILD_A_TOOL.md` for step-by-step guidance and best practices
 
 ## Todo lists
-- If the user asks "What is on my todo list" reference TODO.md
+- If the user asks "What is on my project todo list?" reference TODO.md
 
 ## Dependency Management
 - **Minimal Dependencies**: Prefer standard library solutions over adding new dependencies; only introduce external libraries when absolutely necessary
@@ -41,7 +41,7 @@
 
 ## Interface Guidelines
 - **Interface Correctness**: Ensure interfaces are used as designed. When encountering incorrect usage patterns, correct the calling code rather than adapting interfaces to accommodate misuse
-- **Interface Preservation**: When existing interface designs are correct and established, maintain them when refactoring internals to ensure backward compatibility
+- **Interface Preservation**: When existing interface designs are correct and established, maintain them when refactoring internals to ensure backward compatibility but notify the user **before** executing the change.
 - **Tool Interface Consistency**: Ensure all tool implementations follow the same patterns for input/output handling and error management
 - **Response Formatting**: Adhere to established response structures and formatting conventions when modifying or adding agent outputs
 - **Type Enforcement**: Honor type annotations as contracts. If a parameter is defined as a specific type (e.g., List[str]), enforce that type rather than accepting alternative formats
@@ -50,11 +50,11 @@
 - **Tool Composition**: Compose existing tools rather than creating new ones. Example: Combine extraction and persistence tools for preference management instead of building a dedicated tool.
 - **Single Responsibility**: Design tools with focused functionality. Extraction tools should extract, persistence tools should store - separating concerns improves flexibility and reuse.
 - **Logic Placement**: Use system prompts for business logic (like detecting preference statements) rather than hardcoding it in tools. This keeps the codebase cleaner and more adaptable.
-- **Tool Creation Test**: Before creating a new tool, ask: "Can existing tools solve this problem?" Only create new tools when composition is insufficient or a particular combination will be used repeatedly.
+- **Tool Creation Test**: Before creating a new tool, ask: "Can existing tools solve this problem?". Only create new tools when composition is insufficient or a particular combination will be used repeatedly.
 - **Reference Implementation**: Use `tools/sample_tool.py` as a blueprint when creating new tools. It demonstrates the proper structure, error handling, testing approach, and documentation style.
 - **Data Management**: Store persistent tool data in `data/tools/{tool_name}/` directory to maintain consistency with project structure.
 - **Error Handling**: Always use the `error_context` manager from `errors.py` and raise the appropriate `ToolError` with a specific `ErrorCode` to ensure consistent error reporting across tools.
-- **Tool Documentation**: Write detailed tool descriptions (see `TOOL_DEF_BESTPRACTICE.md`) that clearly explain what the tool does, when it should be used, all parameters, and any limitations.
+- **Tool Documentation**: Write detailed tool descriptions (see `supporting_files/TOOL_DEF_BESTPRACTICE.md`) that clearly explain what the tool does, when it should be used, all parameters, and any limitations.
 - **Comprehensive Testing**: For new tools, create corresponding test files in `tests/` that verify both success paths and error conditions, following patterns in existing test files.
 
 ## Continuous Improvement

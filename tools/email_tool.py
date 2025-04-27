@@ -668,9 +668,11 @@ class EmailTool(Tool):
                         ErrorCode.TOOL_EXECUTION_ERROR
                     )
             
-            # Set default max_emails if not provided
+            # Set default max_emails if not provided and convert to int if it's a string
             if max_emails is None:
                 max_emails = self.default_max_emails
+            elif isinstance(max_emails, str):
+                max_emails = int(max_emails)
             
             # Handle each operation type
             if operation == "get_emails":
@@ -1242,6 +1244,11 @@ class EmailTool(Tool):
                 
                 # Execute search and fetch emails
                 message_ids = self._search_messages(search_criteria)
+                
+                # Make sure max_emails is an integer
+                if isinstance(max_emails, str):
+                    max_emails = int(max_emails)
+                    
                 emails = self._fetch_message_headers(message_ids, max_emails, load_content)
                 
                 # LLM handling note for search results

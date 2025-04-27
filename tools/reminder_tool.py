@@ -88,6 +88,8 @@ class ReminderTool(Tool):
     Manages scheduled reminders with contact information integration. Use this tool when the user
     wants to create, view, or manage reminders about tasks, follow-ups, or appointments.
     
+    IMPORTANT: This tool requires parameters to be passed as a JSON string in the "kwargs" field.
+    
     The tool supports these operations:
     
     1. add_reminder: Create a new reminder with a date, description, and optional contact info.
@@ -124,10 +126,7 @@ class ReminderTool(Tool):
         {
             "input": {
                 "operation": "add_reminder",
-                "title": "Window cleaning follow-up",
-                "date": "in 3 weeks",
-                "description": "Call to schedule window cleaning service",
-                "contact_name": "John Smith"
+                "kwargs": "{\"title\": \"Window cleaning follow-up\", \"date\": \"in 3 weeks\", \"description\": \"Call to schedule window cleaning service\", \"contact_name\": \"John Smith\"}"
             },
             "output": {
                 "reminder": {
@@ -144,7 +143,7 @@ class ReminderTool(Tool):
         {
             "input": {
                 "operation": "get_reminders",
-                "date_type": "upcoming"
+                "kwargs": "{\"date_type\": \"upcoming\"}"
             },
             "output": {
                 "reminders": [

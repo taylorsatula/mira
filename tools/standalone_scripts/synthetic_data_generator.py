@@ -1773,9 +1773,13 @@ class SyntheticDataGenerator:
             logger=self.logger
         )
         
-        # Initialize embedding model
-        self.logger.info(f"Loading embedding model: {self.config.embedding_model}")
-        self.embedding_model = SentenceTransformer(self.config.embedding_model)
+        # Initialize embedding model or use provided one
+        self.embedding_model = kwargs.get('embedding_model')
+        if self.embedding_model is None:
+            self.logger.info(f"Loading embedding model: {self.config.embedding_model}")
+            self.embedding_model = SentenceTransformer(self.config.embedding_model)
+        else:
+            self.logger.info(f"Using provided embedding model")
         
         # Initialize components with specialized clients
         self.tool_analyzer = ToolAnalyzer(self.analysis_client, logger=self.logger)

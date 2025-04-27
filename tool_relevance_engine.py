@@ -46,20 +46,22 @@ class ToolRelevanceEngine:
         suspended: Flag indicating whether automatic tool suggestion is suspended
     """
     
-    def __init__(self, tool_repo: ToolRepository):
+    def __init__(self, tool_repo: ToolRepository, model=None):
         """
         Initialize the ToolRelevanceEngine.
         
         Args:
             tool_repo: Repository of available tools
+            model: Optional pre-loaded SentenceTransformer model to use (for sharing)
         """
         self.logger = logging.getLogger("tool_relevance_engine")
         self.tool_repo = tool_repo
         
-        # Initialize the classifier manager with config parameters
+        # Initialize the classifier manager with config parameters and shared model
         self.classifier = MultiLabelClassifier(
             thread_limit=config.tool_relevance.thread_limit,
-            cache_dir=os.path.join(config.paths.data_dir, "classifier")
+            cache_dir=os.path.join(config.paths.data_dir, "classifier"),
+            model=model
         )
         
         # Tool training examples
@@ -178,41 +180,63 @@ class ToolRelevanceEngine:
             
             # Generate synthetic examples for tools that need them
             if tools_needing_examples:
-                self._generate_synthetic_examples(tools_needing_examples)
+                # Check if we have existing file hashes to detect changes
+                hashes_file = os.path.join(self.tools_data_dir, "classifier_file_hashes.json")
+                old_hashes = {}
                 
-                # Add the newly generated examples to our tool_examples
-                for tool_name in tools_needing_examples:
-                    tool_dir = os.path.join(self.tools_data_dir, tool_name)
-                    autogen_examples_file = os.path.join(tool_dir, "autogen_classifier_examples.json")
+                if os.path.exists(hashes_file):
+                    try:
+                        with open(hashes_file, 'r') as f:
+                            old_hashes = json.load(f)
+                    except Exception as e:
+                        self.logger.warning(f"Error reading old file hashes: {e}")
+                
+                # Check for changed or deleted files that would require regeneration
+                needs_regen = False
+                # New tools always need generation
+                if not old_hashes:
+                    needs_regen = True
+                    self.logger.info("No previous hash file found, will generate examples")
+                else:
+                    for file_path, old_hash in old_hashes.items():
+                        if file_path not in file_hashes:
+                            self.logger.info(f"File deleted: {file_path}")
+                            needs_regen = True
+                            break
+                        if file_hashes[file_path] != old_hash:
+                            self.logger.info(f"File changed: {file_path}")
+                            needs_regen = True
+                            break
+                
+                # Generate examples if needed
+                if needs_regen:
+                    self._generate_synthetic_examples(tools_needing_examples)
                     
-                    if os.path.exists(autogen_examples_file):
-                        try:
-                            file_hash = self._calculate_file_hash(autogen_examples_file)
-                            file_hashes[autogen_examples_file] = file_hash
-                            
-                            with open(autogen_examples_file, 'r') as f:
-                                examples = json.load(f)
-                            
-                            self.logger.info(f"Using {len(examples)} newly generated examples for {tool_name}")
-                            
-                            self.tool_examples[tool_name] = {
-                                "examples": examples,
-                                "file_hash": file_hash,
-                                "is_autogen": True
-                            }
-                        except Exception as e:
-                            self.logger.error(f"Error loading newly generated examples for {tool_name}: {e}")
-            
-            # Check if we have existing file hashes to detect changes
-            hashes_file = os.path.join(self.tools_data_dir, "classifier_file_hashes.json")
-            old_hashes = {}
-            
-            if os.path.exists(hashes_file):
-                try:
-                    with open(hashes_file, 'r') as f:
-                        old_hashes = json.load(f)
-                except Exception as e:
-                    self.logger.warning(f"Error reading old file hashes: {e}")
+                    # Add the newly generated examples to our tool_examples
+                    for tool_name in tools_needing_examples:
+                        tool_dir = os.path.join(self.tools_data_dir, tool_name)
+                        autogen_examples_file = os.path.join(tool_dir, "autogen_classifier_examples.json")
+                        
+                        if os.path.exists(autogen_examples_file):
+                            try:
+                                file_hash = self._calculate_file_hash(autogen_examples_file)
+                                file_hashes[autogen_examples_file] = file_hash
+                                
+                                with open(autogen_examples_file, 'r') as f:
+                                    examples = json.load(f)
+                                
+                                self.logger.info(f"Using {len(examples)} newly generated examples for {tool_name}")
+                                
+                                self.tool_examples[tool_name] = {
+                                    "examples": examples,
+                                    "file_hash": file_hash,
+                                    "is_autogen": True
+                                }
+                            except Exception as e:
+                                self.logger.error(f"Error loading newly generated examples for {tool_name}: {e}")
+                else:
+                    self.logger.info(f"Skipping synthetic example generation for {len(tools_needing_examples)} tools "
+                                   f"because no hash changes were detected")
             
             # Determine if we need to retrain
             needs_retrain = False
@@ -259,12 +283,15 @@ class ToolRelevanceEngine:
         self.logger.info(f"Generating synthetic examples for {len(tool_names)} tools")
         
         try:
-            # Import the synthetic data generator
-            try:
-                from tools.standalone_scripts.synthetic_data_generator import SyntheticDataGenerator
-            except ImportError as imp_err:
-                self.logger.error(f"Failed to import SyntheticDataGenerator: {imp_err}")
-                return
+            # Defer importing SyntheticDataGenerator until needed
+            # to save startup time when generation isn't necessary
+            from tools.standalone_scripts.synthetic_data_generator import SyntheticDataGenerator
+            
+            # Use the shared embedding model if available
+            embedding_model = None
+            if hasattr(self.classifier, 'model') and self.classifier.model is not None:
+                embedding_model = self.classifier.model
+                self.logger.info("Using shared embedding model for synthetic data generation")
             
             # Get the tools directory from the config
             # Default to 'tools' if not explicitly defined
@@ -297,7 +324,8 @@ class ToolRelevanceEngine:
                     examples_per_temp=20,  # Initial value, will be adjusted based on complexity
                     temperatures=[0.2, 0.8],  # More effective temperature range
                     similarity_threshold=0.85,  # More aggressive deduplication
-                    skip_llm_review=False  # Keep LLM review for quality control
+                    skip_llm_review=False,  # Keep LLM review for quality control
+                    embedding_model=embedding_model  # Pass the shared embedding model if available
                 )
                 
                 for tool_name in tool_names:
@@ -674,20 +702,19 @@ class MultiLabelClassifier:
         examples: Training examples for all tools
     """
     
-    def __init__(self, thread_limit: int = 2, cache_dir: str = "data/classifier"):
+    def __init__(self, thread_limit: int = 2, cache_dir: str = "data/classifier", model=None):
         """
         Initialize the MultiLabelClassifier.
         
         Args:
             thread_limit: Maximum number of threads to use for classifier operations
             cache_dir: Directory for storing cached classifier data
+            model: Optional pre-loaded SentenceTransformer model to use (for sharing)
         """
-        # Import here to avoid circular imports
-        from sentence_transformers import SentenceTransformer
         self.logger = logging.getLogger("multi_label_classifier")
         self.cache_dir = cache_dir
         self.thread_limit = thread_limit
-        self.model = None
+        self.model = model
         self.thread_semaphore = threading.Semaphore(thread_limit)
         self.classifiers: Dict[str, Dict[str, Any]] = {}
         self.embedding_cache: Dict[str, List[float]] = {}
@@ -696,8 +723,9 @@ class MultiLabelClassifier:
         # Create the cache directory if it doesn't exist
         os.makedirs(self.cache_dir, exist_ok=True)
         
-        # Initialize the model
-        self._initialize_model()
+        # Initialize the model if not provided
+        if self.model is None:
+            self._initialize_model()
     
     def _initialize_model(self) -> None:
         """
@@ -706,8 +734,7 @@ class MultiLabelClassifier:
         This method loads the sentence-transformers model with int8 quantization
         for reduced memory usage.
         """
-        # Disable tokenizers parallelism to prevent warnings when process is forked
-        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        # TOKENIZERS_PARALLELISM is now set globally in main.py before any imports
         
         try:
             # Import the required libraries

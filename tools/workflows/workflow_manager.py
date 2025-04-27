@@ -36,6 +36,7 @@ class WorkflowManager:
         self, 
         tool_repo: ToolRepository,
         workflows_dir: Optional[str] = None,
+        model=None
     ):
         """
         Initialize the workflow manager.
@@ -43,6 +44,7 @@ class WorkflowManager:
         Args:
             tool_repo: Repository of available tools
             workflows_dir: Directory containing workflow definition files
+            model: Optional pre-loaded SentenceTransformer model to use (for sharing)
         """
         self.logger = logging.getLogger("workflow_manager")
         self.tool_repo = tool_repo
@@ -71,14 +73,17 @@ class WorkflowManager:
         # Cache for workflow example embeddings
         self.workflow_embeddings: Dict[str, Dict[str, Any]] = {}
         
-        # Load natural language processing model for semantic matching
-        self.model = None
-        self.logger.info(f"Loading SentenceTransformer model: {self.embedding_model}")
-        try:
-            self.model = SentenceTransformer(self.embedding_model)
-            self.logger.info("SentenceTransformer model loaded successfully")
-        except Exception as e:
-            self.logger.error(f"Error loading SentenceTransformer model: {e}")
+        # Use provided model or load a new one if not provided
+        self.model = model
+        if self.model is None:
+            self.logger.info(f"Loading SentenceTransformer model: {self.embedding_model}")
+            try:
+                self.model = SentenceTransformer(self.embedding_model)
+                self.logger.info("SentenceTransformer model loaded successfully")
+            except Exception as e:
+                self.logger.error(f"Error loading SentenceTransformer model: {e}")
+        else:
+            self.logger.info("Using provided SentenceTransformer model")
         
         # Load workflow definitions
         self.load_workflows()
@@ -582,7 +587,7 @@ class WorkflowManager:
             "2. When you believe the current step is complete, explicitly mark it as complete by including this exact text in your response:",
             "   <!-- WORKFLOW_STEP_COMPLETE -->",
             "3. If the user gets sidetracked, gently guide them back to the workflow when appropriate",
-            "4. To cancel the workflow at any time, include this exact text:",
+            "3b. To cancel the workflow at any time, include this exact text:",
             "   <!-- WORKFLOW_CANCEL -->",
             "",
             "## Workflow Checklist:",

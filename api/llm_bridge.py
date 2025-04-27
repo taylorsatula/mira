@@ -398,7 +398,7 @@ class LLMBridge:
 
                 # Log the response
                 self._log_response(response)
-
+                
                 return response
 
     def _process_stream_with_callback(self, stream, callback):

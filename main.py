@@ -8,13 +8,20 @@ import argparse
 import logging
 import os
 import sys
+import functools
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
+
+# Set this environment variable before importing any libraries that might use tokenizers
+# This prevents deadlocks when the process is forked
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 from config import config
 from errors import handle_error, AgentError, error_context, ErrorCode
 from api.llm_bridge import LLMBridge
+from anthropic.types import Usage
 from tools.repo import ToolRepository
+from tools.tool_feedback import save_tool_feedback
 from conversation import Conversation
 from crud import FileOperations
 from onload_checker import OnLoadChecker, add_stimuli_to_conversation
@@ -160,8 +167,10 @@ def initialize_system(args) -> Dict[str, Any]:
         # Initialize file operations
         file_ops = FileOperations(data_dir)
 
-        # Initialize LLM bridge
+        # Initialize LLM bridge with token tracking
         llm_bridge = LLMBridge()
+        
+        # We'll apply the token tracking decorator later once the conversation is created
 
         # Initialize tool repository
         tool_repo = ToolRepository()
@@ -172,14 +181,22 @@ def initialize_system(args) -> Dict[str, Any]:
         # Enable tools from config
         tool_repo.enable_tools_from_config()
         
-        # Initialize the ToolRelevanceEngine for just-in-time tool management
+        # Import necessary modules
         from tool_relevance_engine import ToolRelevanceEngine
-        tool_relevance_engine = ToolRelevanceEngine(tool_repo)
+        from tools.workflows.workflow_manager import WorkflowManager
+        from sentence_transformers import SentenceTransformer
+        
+        # Load SentenceTransformer model once to share between components
+        logger.info("Loading shared SentenceTransformer model")
+        shared_model = SentenceTransformer(config.tool_relevance.embedding_model)
+        logger.info("Shared SentenceTransformer model loaded successfully")
+        
+        # Initialize the ToolRelevanceEngine with shared model
+        tool_relevance_engine = ToolRelevanceEngine(tool_repo, shared_model)
         logger.info("Initialized ToolRelevanceEngine for dynamic tool management")
         
-        # Initialize the WorkflowManager for predefined workflows
-        from tools.workflows.workflow_manager import WorkflowManager
-        workflow_manager = WorkflowManager(tool_repo)
+        # Initialize the WorkflowManager with shared model
+        workflow_manager = WorkflowManager(tool_repo, model=shared_model)
         logger.info("Initialized WorkflowManager for predefined workflows")
         
         # Initialize or load conversation
@@ -234,6 +251,37 @@ def initialize_system(args) -> Dict[str, Any]:
             add_stimuli_to_conversation(onload_stimuli, conversation)
         
         logger.info(f"System initialized with conversation ID: {conversation.conversation_id}")
+        
+        # Now that we have a conversation, add token tracking to the LLM bridge
+        def token_tracking_decorator(func: Callable) -> Callable:
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                response = func(*args, **kwargs)
+                
+                # For non-streaming response with usage info
+                if hasattr(response, 'usage') and isinstance(response.usage, Usage):
+                    if hasattr(conversation, 'tokens_in') and hasattr(conversation, 'tokens_out'):
+                        conversation.tokens_in += response.usage.input_tokens
+                        conversation.tokens_out += response.usage.output_tokens
+                        logger.debug(f"Tracked tokens: {response.usage.input_tokens} in, {response.usage.output_tokens} out")
+                
+                # For streaming response, we need to get usage from the final_message
+                elif kwargs.get('stream') and hasattr(response, 'get_final_message'):
+                    try:
+                        final_message = response.get_final_message()
+                        if hasattr(final_message, 'usage') and isinstance(final_message.usage, Usage):
+                            conversation.tokens_in += final_message.usage.input_tokens
+                            conversation.tokens_out += final_message.usage.output_tokens
+                            logger.debug(f"Tracked tokens (stream): {final_message.usage.input_tokens} in, {final_message.usage.output_tokens} out")
+                    except Exception as e:
+                        logger.debug(f"Failed to get usage from stream: {e}")
+                
+                return response
+            return wrapper
+            
+        # Patch the LLM bridge's generate_response method
+        original_generate_response = llm_bridge.generate_response
+        llm_bridge.generate_response = token_tracking_decorator(original_generate_response)
 
         # Return system components
         return {
@@ -288,6 +336,8 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
     print("Type '/save' to save the conversation")
     print("Type '/clear' to clear the conversation history")
     print("Type '/reload_user' to reload user information")
+    print("Type '/tokens' to show token usage counts")
+    print("Type '/toolfeedback [feedback]' to save feedback about tool activation")
     print("-" * 50)
     
     # Display any initial messages (like reminders) that were added during initialization
@@ -324,6 +374,37 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
             elif user_input.lower() == '/reload_user':
                 conversation.reload_user_information()
                 print("User information reloaded.")
+                continue
+                
+            elif user_input.lower() == '/tokens':
+                tokens_in = getattr(conversation, 'tokens_in', 0)
+                tokens_out = getattr(conversation, 'tokens_out', 0)
+                print(f"Tokens in: {tokens_in}")
+                print(f"Tokens out: {tokens_out}")
+                print(f"Total tokens: {tokens_in + tokens_out}")
+                continue
+                
+            elif user_input.lower().startswith('/toolfeedback'):
+                feedback_text = user_input[len('/toolfeedback'):].strip()
+                if not feedback_text:
+                    print("Please provide feedback text after /toolfeedback")
+                    continue
+                
+                # Save tool feedback and get analysis
+                print("Saving feedback and generating analysis...")
+                success, analysis = save_tool_feedback(system, feedback_text, conversation)
+                
+                if success:
+                    print("Tool feedback saved successfully.")
+                    
+                    # Display analysis if available
+                    if analysis:
+                        print(f"Analysis: {analysis}")
+                    else:
+                        print("No analysis available.")
+                else:
+                    print("Error saving tool feedback.")
+                
                 continue
 
             # Generate response

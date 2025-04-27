@@ -65,6 +65,9 @@ Once running, you can use these commands:
 - `/exit` - End the session and save conversation
 - `/save` - Save the current conversation
 - `/clear` - Clear the conversation history
+- `/reload_user` - Reload user information
+- `/tokens` - Show token usage counts
+- `/toolfeedback [feedback]` - Save feedback about tool activation with LLM analysis to improve tool classification
 
 ### Web API Mode
 
@@ -175,6 +178,7 @@ The API uses a simple, direct API key authentication to secure all endpoints.
 - **Persistent Conversations**: Save and resume conversations with unique IDs
 - **Streaming Responses**: See AI responses as they are generated 
 - **The Ability to Fashion Its Own Tools**: This one is the kicker. The Reminders tool was created for $0.98 in API tokens and a one line prompt describing what I wanted out of the tool. No code edits, no training data, no creating directories or configs,,. just speak a tool into existance (you should review the code eventually tho lol). It returned a well-formed SQLite integrated tool with Read/Write/Update/Delete/Manage. Proper documentation and all. 
+- **Tool Feedback Collection**: Capture user feedback about tool activations with AI-powered analysis to improve classification accuracy. The system analyzes feedback, examines related training examples, and provides technical insights for improving tool selection.
 - **Configurable System**: Configure via environment variables, files, or command line
 
 ### Tool Architecture
@@ -202,6 +206,20 @@ The system automatically generates training examples for tool discovery when a t
 - The new classifier data triggers a relearn and the tool integrates into convo
 - The system still works with manually created examples (preferred) or auto-generated ones
 
+#### Tool Classification Feedback and Analysis
+
+The system includes an AI-powered feedback mechanism to improve tool classification over time:
+
+- Users can provide feedback on tool activations using the `/toolfeedback` command
+- The system captures context including recent messages and active tools
+- An LLM analyzes the feedback and provides technical insights including:
+  - Root cause analysis of classification issues
+  - Pattern recognition in training examples vs. user requests
+  - Specific suggestions for improving classification accuracy
+  - Implementation plans for addressing the issue
+- Feedback and analysis are stored for future tool training improvements
+- This helps refine the classification system through user interaction
+
 ## Architecture
 
 Mira follows a modular architecture:
@@ -209,7 +227,8 @@ Mira follows a modular architecture:
 - **Main Process**: Handles user interaction and conversation management
 - **LLM Bridge**: Provides a unified interface to the Anthropic API
 - **Tool Repository**: Manages discovery and execution of specialized tools
-- **ToolRelevanceEngine**: Manages (add/remove) the tools in the context window autonomously.
+- **ToolRelevanceEngine**: Manages (add/remove) the tools in the context window autonomously
+- **Tool Feedback System**: Captures and stores user feedback about tool activations with contextual information
 - **Configuration System**: Centralizes configuration from multiple sources
 
 The system uses a file-based persistence mechanism for conversationn tool data storage, enabling persistent memory across sessions.

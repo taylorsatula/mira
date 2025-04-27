@@ -55,7 +55,7 @@ This tool enables interaction with Square's platform through the following opera
    - retrieve_customer: Get detailed information about a specific customer
      - Required parameter: 'customer_id'
    - create_customer: Add a new customer to your Square account
-     - Required parameter: 'body' containing customer information (name, email, phone, etc.)
+     - Required parameter: 'body' containing customer fields (given_name, family_name, email_address, phone_number, etc.)
    - update_customer: Modify an existing customer's information
      - Required parameters: 'customer_id', 'body' with fields to update
    - delete_customer: Remove a customer from your Square account
@@ -433,7 +433,7 @@ For creating a booking:
         Returns:
             Dict containing customer information
         """
-        result = self.client.customers.retrieve_customer(customer_id=customer_id)
+        result = self.client.customers.get(customer_id)
         return self._handle_response(result, "retrieve_customer")
 
     def create_customer(self, body):
@@ -441,35 +441,30 @@ For creating a booking:
         Create a new customer profile.
 
         Args:
-            body (dict): The create request with customer data
-                Structure:
-                {
-                    "given_name": str,
-                    "family_name": str,
-                    "company_name": str,
-                    "nickname": str,
-                    "email_address": str,
-                    "address": {
-                        "address_line_1": str,
-                        "address_line_2": str,
-                        "locality": str,
-                        "administrative_district_level_1": str,
-                        "postal_code": str,
-                        "country": str
-                    },
-                    "phone_number": str,
-                    "reference_id": str,
-                    "note": str,
-                    "birthday": str,  # YYYY-MM-DD format
-                    "tax_ids": {
-                        "eu_vat": str
-                    }
-                }
+            body (dict): The customer data with fields like:
+                - given_name: First name
+                - family_name: Last name
+                - company_name: Business name
+                - nickname: Customer nickname
+                - email_address: Email
+                - address: Dict with address details
+                - phone_number: Phone number
+                - reference_id: External reference ID
+                - note: Customer note
+                - birthday: Birth date (YYYY-MM-DD format)
+                - idempotency_key: Optional key for idempotent requests
 
         Returns:
             Dict containing created customer information
         """
-        result = self.client.customers.create_customer(body=body)
+        # Extract idempotency_key if present
+        idempotency_key = body.pop("idempotency_key", None)
+        
+        # Call the SDK's create method with unpacked parameters
+        result = self.client.customers.create(
+            idempotency_key=idempotency_key,
+            **body  # Pass customer fields as keyword arguments
+        )
         return self._handle_response(result, "create_customer")
 
     def update_customer(self, customer_id, body):

@@ -159,6 +159,10 @@ class Conversation:
         
         # Initialize workflow tracking
         self._detected_workflow_id = None
+        
+        # Initialize token tracking
+        self.tokens_in = 0
+        self.tokens_out = 0
     
     def add_message(self, role: str, content: Union[str, List[Dict[str, Any]]], metadata: Optional[Dict[str, Any]] = None) -> Message:
         """
@@ -368,6 +372,12 @@ class Conversation:
                         callback=_handle_streaming_response
                     )
                     
+                    # Update token counts if available in the response object
+                    if hasattr(response, 'usage'):
+                        usage = response.usage
+                        self.tokens_in += getattr(usage, 'input_tokens', 0)
+                        self.tokens_out += getattr(usage, 'output_tokens', 0)
+                    
                     # For stream responses, get the final message
                     if hasattr(response, 'get_final_message'):
                         final_message = response.get_final_message()
@@ -380,6 +390,12 @@ class Conversation:
                         max_tokens=max_tokens,
                         tools=selected_tools
                     )
+                    
+                    # Update token counts if available in the response object
+                    if hasattr(response, 'usage'):
+                        usage = response.usage
+                        self.tokens_in += getattr(usage, 'input_tokens', 0)
+                        self.tokens_out += getattr(usage, 'output_tokens', 0)
                 
                 
                 # Extract text content for final return value
@@ -582,6 +598,8 @@ class Conversation:
             "created_at": self.messages[0].created_at if self.messages else time.time(),
             "updated_at": self.messages[-1].created_at if self.messages else time.time(),
             "_detected_workflow_id": self._detected_workflow_id,
+            "tokens_in": self.tokens_in,
+            "tokens_out": self.tokens_out,
         }
         
         # Add workflow state if we have a workflow manager
@@ -629,6 +647,10 @@ class Conversation:
         
         # Restore detected workflow ID
         conversation._detected_workflow_id = data.get("_detected_workflow_id")
+        
+        # Restore token counts
+        conversation.tokens_in = data.get("tokens_in", 0)
+        conversation.tokens_out = data.get("tokens_out", 0)
         
         # Restore workflow state if we have a workflow manager and saved state
         if conversation.workflow_manager and "workflow_state" in data:
