@@ -39,7 +39,7 @@ class MapsTool(Tool):
     """
 
     name = "maps_tool"
-    description = """Provides comprehensive location intelligence and geographical services through Maps API integration.
+    description = """Provides comprehensive location intelligence and geographical services through Maps API integration. Use this tool when the user needs details of a place, geocoding, or relative information compared to another place.
 
 This tool enables interaction with mapping services for various location-based operations including:
 

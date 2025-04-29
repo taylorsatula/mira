@@ -89,7 +89,6 @@ class ReminderTool(Tool):
     wants to create, view, or manage reminders about tasks, follow-ups, or appointments.
     
     IMPORTANT: This tool requires parameters to be passed as a JSON string in the "kwargs" field.
-    
     The tool supports these operations:
     
     1. add_reminder: Create a new reminder with a date, description, and optional contact info.

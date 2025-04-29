@@ -21,8 +21,8 @@ class HTTPTool(Tool):
     
     name = "http_tool"
     description = """
-    Makes HTTP requests to external APIs and web services. This tool lets you interact with 
-    web APIs and services by sending HTTP requests with various methods, parameters, and headers.
+    Makes HTTP requests to external APIs and web services. This tool lets you directly interact with 
+    web APIs and services by sending HTTP requests with various methods, parameters, and headers. Use this tool when you need to contact a remote server that is not handled by another tool AND you know the correct API format for the service. If you are unsure of the format but confident that you need this tool please ask the user for the proper format and then try again.
     
     OPERATIONS:
     - GET: Retrieve data from a specified URL

@@ -22,10 +22,9 @@ class CalendarTool(Tool):
 
     name = "calendar_tool"
     description = """
-    Manages personal calendar events via CalDAV protocol. This tool lets you interact with standard calendar servers
-    to schedule, view, and manage personal calendar events. Use this tool ONLY when the user explicitly needs to work 
-    with their personal CalDAV-compatible calendar system (like Google Calendar, Apple Calendar, etc.),
-    including checking availability, creating personal appointments, or managing existing calendar events.
+    Manages personal calendar events via CalDAV protocol. This tool lets you interact with calendar servers
+    to schedule, view, and manage personal calendar events. Use this tool ONLY when the user explicitly needs to interact 
+    with their personal CalDAV calendar system including checking availability, creating personal appointments, or managing existing calendar events. This tool is NOT for business appointments or bookings.
     
     OPERATIONS:
     - list_calendars: Lists available calendars on the server

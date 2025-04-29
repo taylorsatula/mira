@@ -33,32 +33,33 @@ def analyze_feedback_with_llm(
     """
     # Create a prompt for the LLM
     prompt = f"""
-# Tool Classification Feedback Analysis
+    # Tool Classification Feedback Analysis
+    
+    ## User Feedback
+    "{feedback_data['feedback']}"
+    
+    ## Recent Messages
+    {json.dumps(feedback_data['last_messages'], indent=2)}
+    
+    ## Active Tools
+    {', '.join(feedback_data['active_tools']) if feedback_data['active_tools'] else 'None'}
+    
+    ## Tool Classification Thresholds
+    {json.dumps(feedback_data.get('tool_thresholds', {}), indent=2)}
+    
+    ## Similar Training Examples
+    {json.dumps(feedback_data['nearest_examples'], indent=2)}
+    
+    """
 
-## User Feedback
-"{feedback_data['feedback']}"
-
-## Recent Messages
-{json.dumps(feedback_data['last_messages'], indent=2)}
-
-## Active Tools
-{', '.join(feedback_data['active_tools']) if feedback_data['active_tools'] else 'None'}
-
-## Tool Classification Thresholds
-{json.dumps(feedback_data.get('tool_thresholds', {}), indent=2)}
-
-## Similar Training Examples
-{json.dumps(feedback_data['nearest_examples'], indent=2)}
-
-Provide a VERY CONCISE analysis (2-3 sentences maximum) that includes:
-1. COMPARE: Specifically compare words in the user message with the closest matching examples
-2. SUGGEST: Recommend a specific training example to add OR a precise threshold adjustment
-
-Be extremely specific and actionable. Mention exact similarity scores, specific words that caused incorrect matches, 
-and suggest concrete examples like: "Add example: 'Check my Square bookings for next week' to square_tool".
-
-Your entire analysis must be under 50 words and focus solely on this specific case.
-"""
+# Provide a VERY CONCISE analysis (2-3 sentences maximum) that includes:
+# 1. COMPARE: Specifically compare words in the user message with the closest matching examples
+# 2. SUGGEST: Recommend a specific training example to add OR a precise threshold adjustment
+# 
+# Be extremely specific and actionable. Mention exact similarity scores, specific words that caused incorrect matches, 
+# and suggest concrete examples like: "Add example: 'Check my Square bookings for next week' to square_tool".
+# 
+# Your entire analysis must be under 50 words and focus solely on this specific case.
 
     try:
         # Create a message structure for the LLM Bridge
@@ -67,7 +68,7 @@ Your entire analysis must be under 50 words and focus solely on this specific ca
         # Make the API call
         response = llm_bridge.generate_response(
             messages=messages,
-            system_prompt="You are an expert AI system analyzer specializing in tool classification systems. Analyze semantic similarity patterns between queries and examples. Provide ONLY concrete suggestions like 'Add training example X' or 'Adjust threshold for tool Y from 0.8 to 0.7'. Focus on specific words/phrases that caused matching issues. Use 2-3 sentences maximum.",
+            system_prompt="""You are an expert AI system analyzer specializing in tool classification systems. Analyze semantic similarity patterns between queries and examples. Provide ONLY concrete suggestions like 'Add training example X' or 'Adjust threshold for tool Y from 0.8 to 0.7'. Focus on specific words/phrases that caused matching issues. Use 2-3 sentences maximum. Be extremely specific and actionable. Mention exact similarity scores, specific words that caused incorrect matches, and suggest concrete examples like: "Add example: 'Check my Square bookings for next week' to square_tool".""",
             temperature=0.2  # Lower temperature for more precise response
         )
         
@@ -219,7 +220,7 @@ def save_tool_feedback(system: Dict[str, Any], feedback_text: str, conversation:
         return (False, None)
 
 
-def get_feedback_summary() -> Dict[str, Any]:
+def get_feedback_summary() -> Dict[str, Any]: #ANNOTATION <- Question: Where is this used outside this file?
     """
     Generate a summary of collected tool feedback.
     

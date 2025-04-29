@@ -45,7 +45,7 @@ class SquareTool(Tool):
     """
 
     name = "square_tool"
-    description = """Provides comprehensive access to Square's business management APIs for customer, booking, and catalog operations.
+    description = """Provides comprehensive access to Square's business management APIs for customer creation, appointment booking, and catalog query operations.
 
 This tool enables interaction with Square's platform through the following operations:
 
