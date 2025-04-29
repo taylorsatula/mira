@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional, Union, List
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
-from config.config import (
+from config.config import ( #ANNOTATION is there a reliable way to query what is in the config itself to dynamically load these? My thought is that after we realize our goal of having it so that you can drop a tool into tools/ and it works automagically next load adding and removing tools from this line will become a single manual step.
     ApiConfig,
     PathConfig,
     ConversationConfig,
@@ -30,7 +30,7 @@ from config.config import (
 from errors import ConfigError, ErrorCode
 
 
-class AppConfig(BaseModel):
+class AppConfig(BaseModel): #ANNOTATION Same goes for AppConfig. I'd like to be able to dynamically load the tools that exist in tools/ and unless specified in a manual field (within this file) all tools start with a predictable default_factory
     """
     Central configuration manager for the application.
     
@@ -137,13 +137,11 @@ class AppConfig(BaseModel):
     def _load_from_env(cls) -> Dict[str, Dict[str, Any]]:
         """
         Load configuration from environment variables.
-        
-        Environment variables should be prefixed with 'AGENT_'.
         Nested keys are separated by '__'.
         
         Examples:
-            AGENT_SYSTEM__LOG_LEVEL=DEBUG
-            AGENT_API__MODEL=claude-3-7-sonnet-20250219
+            API_KEY=skBEEPBOOP_HEYKID+IMMAC0MPUTER
+            EMAIL_PASSWORD=stopA11TheDownloadin'!
             
         Returns:
             Nested dictionary of configuration values from environment
@@ -164,7 +162,7 @@ class AppConfig(BaseModel):
                     if section not in config:
                         config[section] = {}
                     
-                    # Try to parse value as JSON for complex types
+                    # Try to parse value as JSON for complex types #ANNOTATION are there complex types? What is the usecase for this?
                     try:
                         parsed_value = json.loads(value)
                         config[section][setting] = parsed_value
@@ -248,7 +246,7 @@ class AppConfig(BaseModel):
             )
         return value
     
-    @property
+    @property #ANNOTATION why do all of these need to be redundantly specified? Is there a good reason? Can't we just look for things that should have had an environmental variable and crash out if none is specified or a non-empty-string default is not given? Like,, if we don't have an Anthropic key we aren't getting off the ground but if we don't have a Square key that tool just won't work. This would also reduce our dependance on having to update a bunch of code sections when adding new tools or w/e.
     def api_key(self) -> str:
         """
         Get the Anthropic API key.
@@ -396,7 +394,7 @@ class AppConfig(BaseModel):
 
 # Create the global configuration instance
 try:
-    # Create a config instance with default values, overridden by environment variables
+    # Create a config instance with default values, overridden by environment variables #ANNOTATION does this leak environmental details? Can someone theoretically snatch the environmental variables from here or no?
     config = AppConfig.load()
     
     # Set up logging

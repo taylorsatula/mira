@@ -52,7 +52,7 @@ class ToolRelevanceEngine:
         
         Args:
             tool_repo: Repository of available tools
-            model: Optional pre-loaded SentenceTransformer model to use (for sharing)
+            model: Optional pre-loaded SentenceTransformer model to use (for sharing) #ANNOTATION - The SentenceTransformer should not be optional. ToolRelevanceEngine doesn't work without it.
         """
         self.logger = logging.getLogger("tool_relevance_engine")
         self.tool_repo = tool_repo
@@ -72,7 +72,7 @@ class ToolRelevanceEngine:
         
         # Configure context window for conversation history from config
         self.context_window_size = config.tool_relevance.context_window_size
-        self.message_history: deque[str] = deque(maxlen=self.context_window_size)
+        self.message_history: deque[str] = deque(maxlen=self.context_window_size) #ANNOTATION If we aren't using the whole context window to determine do we need to keep track of the full conversation history and/or is there any performance hit to this?
         
         # Set topic coherence threshold from config
         self.topic_coherence_threshold = config.tool_relevance.topic_coherence_threshold
@@ -152,6 +152,8 @@ class ToolRelevanceEngine:
                 elif os.path.exists(autogen_examples_file):
                     try:
                         # Get file hash
+                        # This is still worthwhile because in the future some jabronis might edit 
+                        #              the autogen file directly and wonder why it isn't updating.
                         file_hash = self._calculate_file_hash(autogen_examples_file)
                         file_hashes[autogen_examples_file] = file_hash
                         
@@ -236,7 +238,7 @@ class ToolRelevanceEngine:
                                 self.logger.error(f"Error loading newly generated examples for {tool_name}: {e}")
                 else:
                     self.logger.info(f"Skipping synthetic example generation for {len(tools_needing_examples)} tools "
-                                   f"because no hash changes were detected")
+                                   f"because no hash changes were detected") #ANNOTATION when would this happen in practice?
             
             # Determine if we need to retrain
             needs_retrain = False
@@ -287,7 +289,7 @@ class ToolRelevanceEngine:
             # to save startup time when generation isn't necessary
             from tools.standalone_scripts.synthetic_data_generator import SyntheticDataGenerator
             
-            # Use the shared embedding model if available
+            # Use the shared embedding model if available #ANNOTATION Operate under the assumption that the embedding model is always available.
             embedding_model = None
             if hasattr(self.classifier, 'model') and self.classifier.model is not None:
                 embedding_model = self.classifier.model
@@ -317,14 +319,14 @@ class ToolRelevanceEngine:
                         generation_model = config.tools.synthetic_data_generation_model
                 
                 # Create generator instance
-                generator = SyntheticDataGenerator(
+                generator = SyntheticDataGenerator( #ANNOTATION these values should be in the ToolRelevanceEngine config
                     api_key=api_key,
                     analysis_model=analysis_model,  # Sonnet for code analysis
                     generation_model=generation_model,  # Haiku for example generation
-                    examples_per_temp=20,  # Initial value, will be adjusted based on complexity
+                    examples_per_temp=20,  # Initial value, will be adjusted based on complexity #ANNOTATION so why is this a value if its just going to change midstream?
                     temperatures=[0.2, 0.8],  # More effective temperature range
-                    similarity_threshold=0.85,  # More aggressive deduplication
-                    skip_llm_review=False,  # Keep LLM review for quality control
+                    similarity_threshold=0.97,  # More aggressive deduplication
+                    skip_llm_review=False,  # Keep LLM review for quality control #ANNOTATION The llm review should not be an optional step
                     embedding_model=embedding_model  # Pass the shared embedding model if available
                 )
                 
@@ -479,7 +481,7 @@ class ToolRelevanceEngine:
             component_name="ToolRelevanceEngine",
             operation="analyzing message",
             error_class=AgentError,
-            error_code=ErrorCode.UNKNOWN_ERROR,
+            error_code=ErrorCode.UNKNOWN_ERROR, #ANNOTATION this is a perfect example of why we need to update errors.py
             logger=self.logger
         ):
             # Build contextual message
@@ -545,7 +547,7 @@ class ToolRelevanceEngine:
             
             if not tools_to_enable:
                 self.logger.info("No relevant or persistent tools found")
-                # Don't disable any tools with the empty list - use explicitly defined empty list []
+                # Don't disable any tools with the empty list - use explicitly defined empty list [] #ANNOTATION what does this mean?
                 self._disable_irrelevant_tools([])
                 return []
             
@@ -591,7 +593,7 @@ class ToolRelevanceEngine:
         
         return persistent_tools
     
-    def _enable_tools(self, tools_to_enable: List[str]) -> List[str]:
+    def _enable_tools(self, tools_to_enable: List[str]) -> List[str]: #ANNOTATION this appears to be a private method for enabling tools. Why not use a globally available enable/disable functionality?
         """
         Enable the specified tools in the tool repository.
         
@@ -616,7 +618,7 @@ class ToolRelevanceEngine:
         
         return enabled_tools
     
-    def _disable_irrelevant_tools(self, current_relevant_tools: List[str]) -> None:
+    def _disable_irrelevant_tools(self, current_relevant_tools: List[str]) -> None: #ANNOTATION same goes for this private method. Why not have them globally available? Is there something special that these ones need to be private?
         """
         Disable tools that are no longer relevant to the conversation.
         
@@ -645,7 +647,7 @@ class ToolRelevanceEngine:
                 except Exception as e:
                     self.logger.error(f"Error disabling tool {tool_name}: {e}")
     
-    def enable_relevant_tools(self, message: str) -> List[str]:
+    def enable_relevant_tools(self, message: str) -> List[str]: #ANNOTATION as the comment below says this appears to be left behind for backwards compatibility. Do we need it anymore? Is there a better unified solution we can use?
         """
         Enable the most relevant tools for a given user message.
         
@@ -734,7 +736,6 @@ class MultiLabelClassifier:
         This method loads the sentence-transformers model with int8 quantization
         for reduced memory usage.
         """
-        # TOKENIZERS_PARALLELISM is now set globally in main.py before any imports
         
         try:
             # Import the required libraries
@@ -755,7 +756,7 @@ class MultiLabelClassifier:
             # Convert to int8
             try:
                 if self.model is not None:
-                    self.model.half()  # Convert to fp16 first (may help with quantization)
+                    self.model.half()  # Convert to fp16 first (may help with quantization) #ANNOTATION I see errors during startup in this step. Is this correctly coded?
                     self.model = torch.quantization.quantize_dynamic(
                         self.model, {torch.nn.Linear}, dtype=torch.qint8
                     )

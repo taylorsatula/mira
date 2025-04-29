@@ -10,3 +10,5 @@ numpy>=1.24.0
 sentence-transformers>=2.2.2
 torch>=2.0.0
 pydantic>=2.0.0
+flask>=2.0.0
+gunicorn>=20.1.0

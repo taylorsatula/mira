@@ -107,7 +107,7 @@ class Conversation:
         """
         Initialize a new conversation.
         
-        Args:
+        Args: #ANNOTATION Every one of these should be required and fail loudly if it doesn't have one.
             conversation_id: Optional unique identifier for the conversation
             system_prompt: Optional system prompt for the conversation
             llm_bridge: Optional LLM bridge instance
@@ -129,8 +129,8 @@ class Conversation:
         self.metadata: Dict[str, Any] = {}
         
         # Set up conversation components
-        self.llm_bridge = llm_bridge or LLMBridge()
-        self.tool_repo = tool_repo or ToolRepository()
+        self.llm_bridge = llm_bridge or LLMBridge() #ANNOTATION why do we need llm_bridge or LLMBridge() shouldn't one or the other work?
+        self.tool_repo = tool_repo or ToolRepository() #ANNOTATION same goes for this one. Am I missing something?
         self.tool_relevance_engine = tool_relevance_engine
         self.workflow_manager = workflow_manager
         
@@ -182,7 +182,7 @@ class Conversation:
         # Validate role is either 'user' or 'assistant'
         if role not in ["user", "assistant"]:
             self.logger.warning(f"Invalid role: {role}. Converting to 'user' role.")
-            role = "user"  # For backwards compatibility, convert invalid roles to 'user'
+            role = "user"  # For backwards compatibility, convert invalid roles to 'user' #ANNOTATION Throw a warning
             
         # Create a new message
         message = Message(role=role, content=content, metadata=metadata or {})
@@ -190,7 +190,7 @@ class Conversation:
         # Add the message to the conversation
         self.messages.append(message)
         
-        # Prune history if needed
+        # Prune history if needed #ANNOTATION We should keep a complete conversation history stored somewhere outside the context window so that when the conversation is complete and saves we can go through it.
         if self.max_history and len(self.messages) > self.max_history * 2:
             # Keep only the most recent messages
             self.messages = self.messages[-self.max_history*2:]
@@ -212,7 +212,7 @@ class Conversation:
         for message in self.messages:
             # Validate that the message role is 'user' or 'assistant'
             if message.role not in ["user", "assistant"]:
-                self.logger.warning(f"Skipping message with invalid role: {message.role}")
+                self.logger.warning(f"Skipping message with invalid role: {message.role}") #ANNOTATION Directly above it says it converts all messages into user or assistant, no?
                 continue
                 
             # Handle assistant messages with tool_use blocks
@@ -253,7 +253,7 @@ class Conversation:
             user_input: User input text
             temperature: Optional temperature parameter
             max_tokens: Optional maximum tokens for the response
-            stream: Whether to stream the response (default: False)
+            stream: Whether to stream the response (default: False) #ANNOTATION I thought that stream /was/ enabled by default. Am I wrong?
             stream_callback: Optional callback function for processing streamed tokens
             max_tool_iterations: Maximum number of tool call iterations
             
@@ -315,7 +315,7 @@ class Conversation:
             # Tool iteration counter
             tool_iterations = 0
             
-            # Continue processing responses until no more tool calls are made
+            # Continue processing responses until no more tool calls are made #ANNOTATION Shouldn't we be using the official Anthropic stop_reason = tool_use? This edit may go past tool responses
             # or we reach the maximum number of iterations
             while tool_iterations < max_tool_iterations:
                 # Get current messages for the API
@@ -335,7 +335,7 @@ class Conversation:
                 time_info = f"Current datetime: {now.strftime('%Y-%m-%d %I:%M:%S %p')} Central Time (America/Chicago)\n\n"
                 
                 # Build enhanced system prompt with cached user information
-                enhanced_system_prompt = time_info + self.user_info + self.system_prompt
+                enhanced_system_prompt = time_info + self.user_info + self.system_prompt #ANNOTATION This is kinda where I mean when I say we should have a centralized method for adding and removing data from the system prompt mid-conversation.
                 
                 # Add workflow guidance if a workflow is active
                 if self.workflow_manager and self.workflow_manager.get_active_workflow():
@@ -357,7 +357,7 @@ class Conversation:
                     if workflow:
                         workflow_hint = f"\n\nI've detected that the user might want help with: {workflow['name']}. "
                         workflow_hint += "If this seems correct, you can confirm and start this workflow process by including this exact text in your response: "
-                        workflow_hint += f"<!-- START_WORKFLOW:{detected_workflow_id} -->"
+                        workflow_hint += f"<workflow_start:{detected_workflow_id} />"
                         enhanced_system_prompt += workflow_hint
                 
                 # Generate response (streaming or standard)

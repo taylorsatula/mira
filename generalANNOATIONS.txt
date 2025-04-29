@@ -1,0 +1,10 @@
+#ANNOTATION We should implement a multi-file config setup with config parameters being appended to the main config.py (at startup so that we can always reference a unified "config" object). Stay in config.py: SystemConfig, ToolRelevanceConfig, DatabaseConfig, ToolConfig,ConversationConfig, PathConfig, ApiConfig. Move to tool_config.py: EmailConfig, CalendarConfig, SquareConfig, GoogleMapsConfig.
+#ANNOTATION Workflows should have the option to skip steps if MIRA deems the step already completed and has enough information to proceed to the following step.
+#ANNOTATION We aren't really using the docs/ folder. Are there markdown files that would be better suited to being in that directory vs where they currently are?
+#ANNOTATION tool_finder.py used to be a standalone tool that could be called in conversation but that is no longer its role. Now it needs to transition to a programmatically called tool when <tool_needed /> is returned
+#ANNOTATION Now that the codebase is built out way more than it was last time we edited errors.py I think it is high time to create more descriptive error codes that cover our current implementation usecase. We can start with instances of UNKNOWN_ERROR and then make a second pass to check errors other error code usage that could be clearer
+#ANNOTATION do we still need stimulus.py? It hasn't been updated in a long time. Are there other ways to interact with our application (outside the flask api) or is the file fine as-is?
+#ANNOTATION Is crud.py worth keeping in the application? Are the abilities it contains used often enough that it isn't worth just hardcoding them in-place.
+#ANNOTATION We need to review db.py and determine if it can/should be refactored to be more flexible or if its better to let sleeping dogs lie.
+#ANNOTATION We should have a standardized way to add and remove dynamic data from the system message. Right now we use a piecemeal system where every section implements it their own way.
+#ANNOTATION I'd like to implement a feature wherein the active tools are passed when an API message is sent so the user (or receiving app) can see which tools were sent and which is active.

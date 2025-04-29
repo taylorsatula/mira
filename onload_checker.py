@@ -13,7 +13,7 @@ from stimuli import Stimulus, StimulusType
 from tools.reminder_tool import ReminderTool
 
 
-class OnLoadChecker:
+class OnLoadChecker: #ANNOTATION I've noticed that though I can ask questions against the onload text it doesn't have the right amount of hidden detail. For example if there is a notification I can't say "Check the first one completed" even if reminder_tool successfully activates.
     """
     Manager for checks that should run when the application starts.
 
@@ -51,7 +51,7 @@ class OnLoadChecker:
 
         return all_stimuli
 
-    def check_reminders(self) -> List[Stimulus]:
+    def check_reminders(self) -> List[Stimulus]: #ANNOTATION we should have a section for overdue reminders and add them to the system message so Mira hassles the user to complete them during the conversation
         """
         Check for upcoming reminders.
 
@@ -109,15 +109,15 @@ class OnLoadChecker:
                         )
                     )
 
-            # Check upcoming reminders (next 3 days)
+            # Check upcoming reminders (next X days)
             today = datetime.now()
-            three_days_later = today + timedelta(days=3)
+            three_days_later = today + timedelta(days=3) #ANNOTATION Lookahead X days should be able to be specified in the config
 
             upcoming_result = reminder_tool.run(
                 operation="get_reminders",
                 date_type="range",
                 start_date=(today + timedelta(days=1)).strftime("%Y-%m-%d"),
-                end_date=three_days_later.strftime("%Y-%m-%d")
+                end_date=three_days_later.strftime("%Y-%m-%d") #ANNOTATION If we're updating it to not be a fixed amount of future days we should update this name
             )
 
             if upcoming_result.get("count", 0) > 0:
@@ -191,3 +191,6 @@ def add_stimuli_to_conversation(stimuli: List[Stimulus], conversation) -> None:
             stimulus.content,
             {"is_notification": True, **stimulus.metadata}
         )
+
+
+#ANNOTATION As mentioned in the other annotation we should have the ability to add overdue reminders to the system message so Mira can continuously hassle us to complete them during the conversation

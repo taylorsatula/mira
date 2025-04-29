@@ -44,7 +44,7 @@ class WorkflowManager:
         Args:
             tool_repo: Repository of available tools
             workflows_dir: Directory containing workflow definition files
-            model: Optional pre-loaded SentenceTransformer model to use (for sharing)
+            model: Optional pre-loaded SentenceTransformer model to use (for sharing) #ANNOTATION <-- "for sharing"? Sharing what?
         """
         self.logger = logging.getLogger("workflow_manager")
         self.tool_repo = tool_repo
@@ -64,7 +64,7 @@ class WorkflowManager:
         
         # Get configuration values
         self.embedding_model = config.tool_relevance.embedding_model
-        self.match_threshold = 0.65  # Default, can be overridden from config
+        self.match_threshold = 0.65  # Default, can be overridden from config #ANNOTATION <- This should be a config only value
         
         # State for the current workflow (if any)
         self.active_workflow_id: Optional[str] = None
@@ -73,7 +73,7 @@ class WorkflowManager:
         # Cache for workflow example embeddings
         self.workflow_embeddings: Dict[str, Dict[str, Any]] = {}
         
-        # Use provided model or load a new one if not provided
+        # Use provided model or load a new one if not provided #ANNOTATION This is redundant. The SentenceTransformer is always available or else the whole application has critical game-breaking issues
         self.model = model
         if self.model is None:
             self.logger.info(f"Loading SentenceTransformer model: {self.embedding_model}")
@@ -97,7 +97,7 @@ class WorkflowManager:
         
         This method discovers and loads all workflow definition files in the
         workflows directory, checking file hashes to avoid unnecessarily
-        reloading unchanged files.
+        reloading unchanged files. 
         """
         self.logger.info(f"Loading workflows from {self.workflows_dir}")
         
@@ -147,7 +147,7 @@ class WorkflowManager:
         
         self.logger.info(f"Loaded {len(self.workflows)} workflows")
     
-    def _calculate_file_hash(self, file_path: str) -> str:
+    def _calculate_file_hash(self, file_path: str) -> str: #ANNOTATION We should create one global file hash checker function and use it throughout the codebase instead of each python file handling its own hashing function.
         """
         Calculate a hash of the file contents.
         
@@ -276,7 +276,7 @@ class WorkflowManager:
                 
                 # Calculate similarity scores
                 # Ensure embeddings are normalized for proper cosine similarity
-                message_norm = np.linalg.norm(message_embedding)
+                message_norm = np.linalg.norm(message_embedding) #ANNOTATION explain this normalizing process to me and tell me why it is necessary.
                 if message_norm > 0:
                     message_embedding_norm = message_embedding / message_norm
                 else:
@@ -311,7 +311,7 @@ class WorkflowManager:
                 self.logger.debug(f"No workflow detected (best confidence: {best_match_score:.4f})")
                 return None, 0.0
     
-    def start_workflow(self, workflow_id: str) -> Dict[str, Any]:
+    def start_workflow(self, workflow_id: str) -> Dict[str, Any]: #ANNOTATION Recently I have experienced an issue where MIRA (incorrectly) guesses on what the name of the workflow. We should either improve the prompt that gives direction on how to pick a workflow ID ~or~ build in a programmatic matcher. I think option 1 would be better.
         """
         Start a workflow.
         
@@ -365,7 +365,7 @@ class WorkflowManager:
             ValueError: If no workflow is active
         """
         if not self.active_workflow_id:
-            raise ValueError("No active workflow")
+            raise ValueError("No active workflow! How the h e c k did we get here?")
         
         workflow = self.workflows[self.active_workflow_id]
         
@@ -413,7 +413,7 @@ class WorkflowManager:
             "status": "completed"
         }
         
-        # Disable all workflow tools before clearing workflow state
+        # Disable all workflow tools before clearing workflow state #ANNOTATION 
         currently_enabled_tools = self.tool_repo.get_enabled_tools()
         for tool_name in currently_enabled_tools:
             try:
@@ -453,7 +453,7 @@ class WorkflowManager:
             "status": "cancelled"
         }
         
-        # Disable all workflow tools before clearing workflow state
+        # Disable all workflow tools before clearing workflow state #ANNOTATION I worry that this could cause the next message after a canceled workflow to have access to no tools. Please investigate if the workflow tool wipe happens BEFORE or AFTER the message analysis that enables tools in normal conversation.
         currently_enabled_tools = self.tool_repo.get_enabled_tools()
         for tool_name in currently_enabled_tools:
             try:
@@ -524,7 +524,7 @@ class WorkflowManager:
                 except Exception as e:
                     self.logger.error(f"Error disabling tool {tool_name}: {e}")
         
-        # Then, enable each tool needed for this step
+        # Then, enable each tool needed for this step #ANNOTATION does this attempt to reload tools that are already in tools_for_current_step?
         for tool_name in tools_for_current_step:
             try:
                 if not self.tool_repo.is_tool_enabled(tool_name):
@@ -585,10 +585,10 @@ class WorkflowManager:
             "As you assist the user:",
             "1. Focus on completing the current step before moving to the next",
             "2. When you believe the current step is complete, explicitly mark it as complete by including this exact text in your response:",
-            "   <!-- WORKFLOW_STEP_COMPLETE -->",
+            "<workflow_step_complete />",
             "3. If the user gets sidetracked, gently guide them back to the workflow when appropriate",
             "3b. To cancel the workflow at any time, include this exact text:",
-            "   <!-- WORKFLOW_CANCEL -->",
+            "<workflow_cancel />",
             "",
             "## Workflow Checklist:",
             checklist_text
@@ -610,17 +610,17 @@ class WorkflowManager:
             command_params: Additional parameters for the command (e.g., workflow_id for "start"), None if not applicable
         """
         # Check for workflow start command
-        start_match = re.search(r'<!--\s*START_WORKFLOW:(\w+)\s*-->', message)
+        start_match = re.search(r'<\s*workflow_start:(\w+)\s* />', message) #ANNOTATION this used to be called "<!--\s*START_WORKFLOW:(\w+)\s*-->" but I edited it manually and don't know where else in the codebase I need to edit
         if start_match:
             workflow_id = start_match.group(1)
             return True, "start", workflow_id
         
         # Check for step completion command
-        if "<!-- WORKFLOW_STEP_COMPLETE -->" in message:
+        if "<workflow_step_complete />" in message:
             return True, "complete", None
         
         # Check for workflow cancellation command
-        if "<!-- WORKFLOW_CANCEL -->" in message:
+        if "<workflow_cancel />" in message:
             return True, "cancel", None
         
         return False, None, None
@@ -653,7 +653,7 @@ class WorkflowManager:
         if self.active_workflow_id:
             self._enable_tools_for_current_step()
     
-    def to_json(self) -> str:
+    def to_json(self) -> str: #ANNOTATION shouldn't to_json and from_json be created and used at a global level? I could be wrong though.
         """
         Convert workflow manager state to a JSON string.
         
@@ -662,7 +662,7 @@ class WorkflowManager:
         """
         return json.dumps(self.to_dict(), indent=2)
     
-    def from_json(self, json_str: str) -> None:
+    def from_json(self, json_str: str) -> None: #ANNOTATION same goes for this one
         """
         Load workflow manager state from a JSON string.
         

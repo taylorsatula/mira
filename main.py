@@ -14,7 +14,7 @@ from typing import Dict, Any, Optional, Callable
 
 # Set this environment variable before importing any libraries that might use tokenizers
 # This prevents deadlocks when the process is forked
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["TOKENIZERS_PARALLELISM"] = "false" #ANNOTATION Is this the most appropriate place for this declaration?
 
 from config import config
 from errors import handle_error, AgentError, error_context, ErrorCode
@@ -81,8 +81,8 @@ def setup_logging(log_level: Optional[str] = None) -> None:
     COLORS = {
         'DEBUG': '\033[2;3;36m',    # Dim Italic Cyan
         'INFO': '\033[2;32m',       # Dim Green
-        'WARNING': '\033[2;33m',    # Dim Yellow
-        'ERROR': '\033[2;31m',      # Dim Red
+        'WARNING': '\033[38;5;208m',# Bright Orange
+        'ERROR': '\033[31m',      # Dim Red
         'CRITICAL': '\033[2;37;41m', # Dim White on Red Background
         'RESET': '\033[0m'          # Reset
     }
@@ -116,7 +116,7 @@ def setup_logging(log_level: Optional[str] = None) -> None:
     # Create colored formatter with better visual separation
     colored_formatter = ColoredFormatter('%(levelname)s │ %(name)s │ %(message)s')
     
-    # Use stderr for logs to prevent mixing with conversation output
+    # Use stderr for logs to prevent mixing with conversation output #ANNOTATION In addition to stderr.log we should build functionality that allows us to see logging happening in realtime. I struggle to see what is happening on the server when testing the app.
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(colored_formatter)
     root.addHandler(handler)
@@ -169,8 +169,6 @@ def initialize_system(args) -> Dict[str, Any]:
 
         # Initialize LLM bridge with token tracking
         llm_bridge = LLMBridge()
-        
-        # We'll apply the token tracking decorator later once the conversation is created
 
         # Initialize tool repository
         tool_repo = ToolRepository()
@@ -280,7 +278,7 @@ def initialize_system(args) -> Dict[str, Any]:
             return wrapper
             
         # Patch the LLM bridge's generate_response method
-        original_generate_response = llm_bridge.generate_response
+        original_generate_response = llm_bridge.generate_response #ANNOTATION what is 'original_generate_response? Is this a backwards compatibility thing?'
         llm_bridge.generate_response = token_tracking_decorator(original_generate_response)
 
         # Return system components
