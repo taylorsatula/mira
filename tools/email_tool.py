@@ -21,9 +21,59 @@ from datetime import datetime
 from email.message import EmailMessage, Message
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-from config.config_manager import config
+from pydantic import BaseModel, Field
 from errors import ErrorCode, ToolError, error_context
 from tools.repo import Tool
+from config.registry import registry
+
+# Define configuration class for EmailTool
+class EmailToolConfig(BaseModel):
+    """Configuration for the email_tool."""
+    enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
+    imap_server: str = Field(
+        default="mi3-ts111.a2hosting.com",
+        description="IMAP server hostname"
+    )
+    imap_port: int = Field(
+        default=993,
+        description="IMAP server port (typically 993 for SSL/TLS)"
+    )
+    smtp_server: str = Field(
+        default="mi3-ts111.a2hosting.com",
+        description="SMTP server hostname (often same as IMAP server)"
+    )
+    smtp_port: int = Field(
+        default=465,
+        description="SMTP server port (typically 465 for SSL/TLS)"
+    )
+    email_address: str = Field(
+        default="taylor@rocketcitywindowcleaning.com",
+        description="Email address to use for IMAP/SMTP connections"
+    )
+    use_ssl: bool = Field(
+        default=True,
+        description="Whether to use SSL/TLS for connections"
+    )
+    max_emails_to_fetch: int = Field(
+        default=50,
+        description="Maximum number of emails to fetch in a single request"
+    )
+    max_preview_length: int = Field(
+        default=10,
+        description="Maximum length of email body preview text"
+    )
+    default_folders: Dict[str, str] = Field(
+        default={
+            "inbox": "INBOX", 
+            "sent": "Sent", 
+            "drafts": "Drafts", 
+            "trash": "Trash"
+        },
+        description="Default folder names mapping"
+    )
+
+# Register with registry
+registry.register("email_tool", EmailToolConfig)
 
 
 class EmailTool(Tool):
@@ -133,13 +183,17 @@ class EmailTool(Tool):
     def __init__(self):
         """Initialize the email tool with configuration."""
         super().__init__()
-        self.imap_server = config.email.imap_server
-        self.imap_port = config.email.imap_port
-        self.smtp_server = config.email.smtp_server
-        self.smtp_port = config.email.smtp_port
-        self.email_address = config.email.email_address
+        
+        # Import config when needed (avoids circular imports)
+        from config import config
+        
+        self.imap_server = config.email_tool.imap_server
+        self.imap_port = config.email_tool.imap_port
+        self.smtp_server = config.email_tool.smtp_server
+        self.smtp_port = config.email_tool.smtp_port
+        self.email_address = config.email_tool.email_address
         self.password = config.email_password
-        self.use_ssl = config.email.use_ssl
+        self.use_ssl = config.email_tool.use_ssl
         
         # Session state
         self.connection = None
@@ -602,6 +656,41 @@ class EmailTool(Tool):
             self.logger.error(f"Error setting flag {flag} for message {message_id}: {e}")
             return False
     
+    def _parse_email_addresses(self, email_param: Optional[str]) -> Optional[str]:
+        """
+        Parse email address string that might be in JSON array format.
+        
+        Args:
+            email_param: Email address string that might be a JSON array
+            
+        Returns:
+            Properly formatted email string or None if input was None
+        """
+        if not email_param:
+            return None
+            
+        # Check if the input might be a JSON array
+        if email_param.startswith('[') and email_param.endswith(']'):
+            try:
+                import json
+                emails = json.loads(email_param)
+                # Ensure we have a list of strings
+                if isinstance(emails, list):
+                    # Filter empty values and join with commas
+                    valid_emails = [e.strip() for e in emails if e and isinstance(e, str) and e.strip()]
+                    if valid_emails:
+                        return ", ".join(valid_emails)
+                    return None
+            except json.JSONDecodeError:
+                # If not valid JSON, continue with original value
+                pass
+                
+        # Process as comma-separated string, filtering empty addresses
+        valid_emails = [addr.strip() for addr in email_param.split(",") if addr and addr.strip()]
+        if valid_emails:
+            return ", ".join(valid_emails)
+        return None
+    
     def run(
         self,
         operation: str,
@@ -981,17 +1070,28 @@ class EmailTool(Tool):
                     )
                 
                 try:
+                    # Parse the email addresses before creating the message
+                    parsed_to = self._parse_email_addresses(to)
+                    if not parsed_to:
+                        raise ToolError(
+                            "No valid email addresses in 'to' field",
+                            ErrorCode.TOOL_INVALID_INPUT
+                        )
+                    
+                    parsed_cc = self._parse_email_addresses(cc) if cc else None
+                    parsed_bcc = self._parse_email_addresses(bcc) if bcc else None
+                    
                     # Create the message
                     msg = EmailMessage()
                     msg["Subject"] = subject
                     msg["From"] = self.email_address
-                    msg["To"] = to
+                    msg["To"] = parsed_to
                     
-                    if cc:
-                        msg["Cc"] = cc
+                    if parsed_cc:
+                        msg["Cc"] = parsed_cc
                     
-                    if bcc:
-                        msg["Bcc"] = bcc
+                    if parsed_bcc:
+                        msg["Bcc"] = parsed_bcc
                     
                     # Set the date
                     msg["Date"] = email.utils.formatdate(localtime=True)
@@ -1005,12 +1105,19 @@ class EmailTool(Tool):
                     
                     # Build list of recipients
                     recipients = []
-                    if to:
-                        recipients.extend([addr.strip() for addr in to.split(",")])
-                    if cc:
-                        recipients.extend([addr.strip() for addr in cc.split(",")])
-                    if bcc:
-                        recipients.extend([addr.strip() for addr in bcc.split(",")])
+                    
+                    # Use our helper method to parse the addresses
+                    parsed_to = self._parse_email_addresses(to)
+                    if parsed_to:
+                        recipients.extend([addr.strip() for addr in parsed_to.split(",") if addr.strip()])
+                    
+                    parsed_cc = self._parse_email_addresses(cc)
+                    if parsed_cc:
+                        recipients.extend([addr.strip() for addr in parsed_cc.split(",") if addr.strip()])
+                    
+                    parsed_bcc = self._parse_email_addresses(bcc)
+                    if parsed_bcc:
+                        recipients.extend([addr.strip() for addr in parsed_bcc.split(",") if addr.strip()])
                     
                     # Connect to SMTP server
                     context = ssl.create_default_context()
@@ -1097,14 +1204,23 @@ class EmailTool(Tool):
                     
                     # Override To if specified
                     if to:
-                        msg["To"] = to
+                        # Parse email addresses 
+                        parsed_to = self._parse_email_addresses(to)
+                        if parsed_to:
+                            msg["To"] = parsed_to
+                        else:
+                            msg["To"] = original_msg.get("From", "")
                     
                     # Add CC/BCC if specified
                     if cc:
-                        msg["Cc"] = cc
+                        parsed_cc = self._parse_email_addresses(cc)
+                        if parsed_cc:
+                            msg["Cc"] = parsed_cc
                     
                     if bcc:
-                        msg["Bcc"] = bcc
+                        parsed_bcc = self._parse_email_addresses(bcc)
+                        if parsed_bcc:
+                            msg["Bcc"] = parsed_bcc
                     
                     # Set the date
                     msg["Date"] = email.utils.formatdate(localtime=True)
@@ -1184,13 +1300,25 @@ class EmailTool(Tool):
                     msg = EmailMessage()
                     msg["Subject"] = subject
                     msg["From"] = self.email_address
-                    msg["To"] = to
+                    # Parse email addresses
+                    parsed_to = self._parse_email_addresses(to)
+                    if parsed_to:
+                        msg["To"] = parsed_to
+                    else:
+                        raise ToolError(
+                            "No valid email addresses in 'to' field",
+                            ErrorCode.TOOL_INVALID_INPUT
+                        )
                     
                     if cc:
-                        msg["Cc"] = cc
+                        parsed_cc = self._parse_email_addresses(cc)
+                        if parsed_cc:
+                            msg["Cc"] = parsed_cc
                     
                     if bcc:
-                        msg["Bcc"] = bcc
+                        parsed_bcc = self._parse_email_addresses(bcc)
+                        if parsed_bcc:
+                            msg["Bcc"] = parsed_bcc
                     
                     # Set the date
                     msg["Date"] = email.utils.formatdate(localtime=True)

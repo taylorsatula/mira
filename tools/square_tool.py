@@ -15,10 +15,27 @@ import time
 import sys
 from typing import Dict, List, Any, Optional, Union, Set, Tuple
 import json
+from pydantic import BaseModel, Field
 
 from tools.repo import Tool
 from errors import ToolError, ErrorCode, error_context
-from config import config
+from config.registry import registry
+
+# Define configuration class for SquareTool
+class SquareToolConfig(BaseModel):
+    """Configuration for the square_tool."""
+    enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
+    # Add configuration fields specific to Square
+    api_key: str = Field(default="", description="Square API key")
+    environment: str = Field(default="sandbox", description="Square API environment (sandbox or production)")
+    timeout: int = Field(default=60, description="Timeout in seconds for Square API requests")
+    max_retries: int = Field(default=3, description="Maximum number of retries for failed Square API requests")
+    backoff_factor: float = Field(default=2.0, description="Backoff factor for retries")
+    default_team_member_id: str = Field(default="TMjY-uYPS-Wb2hDU", description="Default team member ID to use for bookings when not specified")
+    timezone: str = Field(default="America/Chicago", description="Default timezone for booking operations (Central Time)")
+
+# Register with registry
+registry.register("square_tool", SquareToolConfig)
 
 
 class SquareTool(Tool):
@@ -247,9 +264,11 @@ For creating a booking:
             # Create a direct Square client using the simplest approach
             try:
                 from square.client import Client
+                # Import config when needed (avoids circular imports)
+                from config import config
 
                 # Get API key from config
-                api_key = config.square_api_key
+                api_key = config.square_tool.api_key
                 if not api_key:
                     raise ToolError(
                         "Square API key not found in configuration.",
@@ -260,7 +279,7 @@ For creating a booking:
                 self.logger.info(f"Creating Square client with API key")
                 self._client = Client(
                     access_token=api_key,
-                    environment="production",  # Use production environment by default
+                    environment=config.square_tool.environment,  # Use configured environment
                 )
             except Exception as e:
                 self.logger.error(f"Failed to initialize Square client: {e}")
@@ -1311,8 +1330,10 @@ For creating a booking:
                     for idx, segment in enumerate(segments):
                         # Apply default team member ID if not provided
                         if not segment.get("team_member_id"):
+                            # Import config when needed (avoids circular imports)
+                            from config import config
                             self.logger.info(f"Using default team member ID for segment {idx}")
-                            segment["team_member_id"] = config.square.default_team_member_id
+                            segment["team_member_id"] = config.square_tool.default_team_member_id
                         
                         # Check for other required fields
                         if not segment.get("service_variation_id"):

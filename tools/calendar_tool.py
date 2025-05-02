@@ -5,9 +5,42 @@ from datetime import datetime, timedelta
 import caldav
 import uuid
 
+from pydantic import BaseModel, Field
 from tools.repo import Tool
 from errors import ErrorCode, error_context, ToolError
-from config import config
+from config.registry import registry
+
+# Define configuration class for CalendarTool
+class CalendarToolConfig(BaseModel):
+    """Configuration for the calendar_tool."""
+    enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
+    default_url: str = Field(
+        default="https://caldav.example.com",
+        description="Default CalDAV server URL"
+    )
+    default_username: str = Field(
+        default="user@example.com",
+        description="Default CalDAV username"
+    )
+    default_calendar_id: str = Field(
+        default="personal",
+        description="Default calendar ID to use when not specified"
+    )
+    timeout: int = Field(
+        default=30,
+        description="Timeout in seconds for CalDAV requests"
+    )
+    max_events: int = Field(
+        default=100,
+        description="Maximum number of events to return in a single request"
+    )
+    default_event_duration: int = Field(
+        default=60,
+        description="Default event duration in minutes if not specified"
+    )
+
+# Register with registry
+registry.register("calendar_tool", CalendarToolConfig)
 
 
 class CalendarTool(Tool):
@@ -153,11 +186,14 @@ class CalendarTool(Tool):
             error_code=ErrorCode.TOOL_EXECUTION_ERROR,
             logger=self.logger
         ):
+            # Import config when needed (avoids circular imports)
+            from config import config
+            
             # Get configuration values
-            url = config.calendar.default_url
-            username = config.calendar.default_username
+            url = config.calendar_tool.default_url
+            username = config.calendar_tool.default_username
             password = os.environ.get("CALDAV_ACCOUNT_PASSWORD")
-            calendar_id = config.calendar.default_calendar_id
+            calendar_id = config.calendar_tool.default_calendar_id
             
             # Validate common parameters
             self._validate_common_params(url, username, password)

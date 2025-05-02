@@ -13,9 +13,22 @@ import os
 import json
 from typing import Dict, List, Any, Optional, Union
 
+from pydantic import BaseModel, Field
 from tools.repo import Tool
 from errors import ToolError, ErrorCode, error_context
-from config import config
+from config.registry import registry
+
+# Define configuration class for MapsTool
+class MapsToolConfig(BaseModel):
+    """Configuration for the maps_tool."""
+    enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
+    timeout: int = Field(default=60, description="Timeout in seconds for Google Maps API requests")
+    max_retries: int = Field(default=3, description="Maximum number of retries for failed requests")
+    backoff_factor: float = Field(default=2.0, description="Backoff factor for retries")
+    cache_timeout: int = Field(default=86400, description="Cache timeout in seconds (default: 24 hours)")
+
+# Register with registry
+registry.register("maps_tool", MapsToolConfig)
 
 
 class MapsTool(Tool):
@@ -215,6 +228,7 @@ Use this tool for any task requiring location resolution, place discovery, geoco
                 from googlemaps import Client
 
                 # Get API key from config
+                from config import config
                 api_key = config.google_maps_api_key
                 if not api_key:
                     raise ToolError(
@@ -659,6 +673,8 @@ Use this tool for any task requiring location resolution, place discovery, geoco
            - Required: lat1, lng1, lat2, lng2 (coordinates in decimal degrees)
            - Returns: Distance in meters between the points
         """
+        # Import config when needed (avoids circular imports)
+        from config import config
         with error_context(
             component_name=self.name,
             operation=f"executing {operation}",
