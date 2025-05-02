@@ -252,21 +252,67 @@ def _save_data(self, data: Dict[str, Any]) -> None:
         json.dump(data, f, indent=2)
 ```
 
+### Tool Configuration
+
+The system uses a registry-based configuration system that enables true drag-and-drop functionality. To add configuration to your tool:
+
+1. Define a Pydantic configuration class in your tool module:
+
+```python
+from pydantic import BaseModel, Field
+from config.registry import registry
+
+class MyToolConfig(BaseModel):
+    """Configuration for my_tool."""
+    enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
+    timeout: int = Field(default=30, description="Timeout in seconds for operations")
+    api_key: str = Field(default="", description="API key for external service")
+```
+
+2. Register your configuration with the registry:
+
+```python
+# Register with the registry
+registry.register("my_tool", MyToolConfig)
+```
+
+3. Access your tool's configuration in your tool implementation:
+
+```python
+def run(self, query: str) -> Dict[str, Any]:
+    # Import config when needed (avoids circular imports)
+    from config import config
+    
+    # Access tool-specific configuration
+    timeout = config.my_tool.timeout
+    
+    # Use configuration values in your code
+    response = requests.get(
+        f"https://api.example.com/search?q={query}",
+        timeout=timeout
+    )
+    # ...
+```
+
+That's it! No additional steps are required. The configuration system will automatically detect and use your tool's configuration.
+
+For more details on the configuration system, see `docs/Tool_Configuration_System.md`.
+
 ### Integration with External APIs
 
 For tools that connect to external services:
 
-1. Add configuration in `config/config.py` (for API keys, etc.)
+1. Use the tool's configuration class for API keys and settings
 2. Implement graceful error handling for API failures
 3. Use appropriate timeouts and retries
 
 ```python
 def run(self, query: str) -> Dict[str, Any]:
     try:
-        # API call with appropriate timeout
+        # API call with appropriate timeout from tool's config
         response = requests.get(
             f"https://api.example.com/search?q={query}",
-            timeout=config.my_api.timeout
+            timeout=config.my_tool.timeout
         )
         response.raise_for_status()
         return {"results": response.json()}
