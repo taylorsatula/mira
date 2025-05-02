@@ -326,7 +326,9 @@ class LLMBridge:
         max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
-        callback: Optional[Callable] = None
+        callback: Optional[Callable] = None,
+        cache_control: Optional[Dict[str, str]] = None,
+        dynamic_content: Optional[str] = None
     ) -> Union[Dict[str, Any], Any]:
         """
         Generate a response from the LLM.
@@ -339,6 +341,8 @@ class LLMBridge:
             tools: Optional list of tool definitions
             stream: Whether to stream the response (default: False)
             callback: Optional callback function to process streaming chunks
+            cache_control: Optional cache control parameters for prompt caching
+            dynamic_content: Optional dynamic content to append after cached system prompt
 
         Returns:
             If stream=False: API response as a dictionary
@@ -361,8 +365,26 @@ class LLMBridge:
 
         # Add optional parameters if provided
         if system_prompt:
-            params["system"] = system_prompt
-
+            # Format system content as structured blocks with caching
+            if dynamic_content and cache_control:
+                # Create structured system blocks
+                system_blocks = [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": cache_control
+                    },
+                    {
+                        "type": "text",
+                        "text": dynamic_content
+                    }
+                ]
+                params["system"] = system_blocks
+                self.logger.debug("Using structured system blocks with caching")
+            else:
+                # Simple string system prompt without caching
+                params["system"] = system_prompt
+        
         if tools:
             params["tools"] = tools
 
