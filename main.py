@@ -5,25 +5,22 @@ This module handles central control flow, system initialization,
 and provides a clean, readable entry point with minimal complexity.
 """
 import argparse
+import json
 import logging
 import os
 import sys
+import uuid
 import functools
 from pathlib import Path
-from typing import Dict, Any, Optional, Callable
-
-# Set this environment variable before importing any libraries that might use tokenizers
-# This prevents deadlocks when the process is forked
-os.environ["TOKENIZERS_PARALLELISM"] = "false" #ANNOTATION Is this the most appropriate place for this declaration?
+from typing import Dict, Any, Optional, Callable, Union, List
 
 from config import config
-from errors import handle_error, AgentError, error_context, ErrorCode
+from errors import handle_error, AgentError, error_context, ErrorCode, FileOperationError
 from api.llm_bridge import LLMBridge
 from anthropic.types import Usage
 from tools.repo import ToolRepository
 from tools.tool_feedback import save_tool_feedback
 from conversation import Conversation
-from crud import FileOperations
 from onload_checker import OnLoadChecker, add_stimuli_to_conversation
 
 
@@ -164,9 +161,6 @@ def initialize_system(args) -> Dict[str, Any]:
         data_dir = Path(config.paths.data_dir)
         os.makedirs(data_dir, exist_ok=True)
 
-        # Initialize file operations
-        file_ops = FileOperations(data_dir)
-
         # Initialize LLM bridge with token tracking
         llm_bridge = LLMBridge()
 
@@ -210,8 +204,27 @@ def initialize_system(args) -> Dict[str, Any]:
                     # Load from the conversation history directory
                     conversation_dir = Path(config.paths.conversation_history_dir)
                     os.makedirs(conversation_dir, exist_ok=True)
-                    conversation_ops = FileOperations(conversation_dir)
-                    conversation_data = conversation_ops.read(f"conversation_{args.conversation}")
+                    file_path = conversation_dir / f"conversation_{args.conversation}.json"
+                    
+                    if not file_path.exists():
+                        raise FileOperationError(
+                            f"File not found: {file_path}",
+                            ErrorCode.FILE_NOT_FOUND
+                        )
+                    
+                    try:
+                        with open(file_path, 'r') as f:
+                            conversation_data = json.load(f)
+                    except json.JSONDecodeError as e:
+                        raise FileOperationError(
+                            f"Invalid JSON in file {file_path}: {e}",
+                            ErrorCode.INVALID_JSON
+                        )
+                    except Exception as e:
+                        raise FileOperationError(
+                            f"Error reading file {file_path}: {e}",
+                            ErrorCode.FILE_READ_ERROR
+                        )
                     conversation = Conversation.from_dict(
                         conversation_data,
                         llm_bridge=llm_bridge,
@@ -222,15 +235,23 @@ def initialize_system(args) -> Dict[str, Any]:
                     logger.info(f"Loaded conversation: {conversation.conversation_id}")
                 except Exception as e:
                     logger.warning(f"Failed to load conversation, creating new one: {e}")
+                    # Get default system prompt
+                    system_prompt = config.get_system_prompt("main_system_prompt")
                     conversation = Conversation(
                         conversation_id=args.conversation,
+                        system_prompt=system_prompt,
                         llm_bridge=llm_bridge,
                         tool_repo=tool_repo,
                         tool_relevance_engine=tool_relevance_engine,
                         workflow_manager=workflow_manager
                     )
         else:
+            # Generate a unique conversation ID and get default system prompt
+            conversation_id = str(uuid.uuid4())
+            system_prompt = config.get_system_prompt("main_system_prompt")
             conversation = Conversation(
+                conversation_id=conversation_id,
+                system_prompt=system_prompt,
                 llm_bridge=llm_bridge,
                 tool_repo=tool_repo,
                 tool_relevance_engine=tool_relevance_engine,
@@ -283,7 +304,6 @@ def initialize_system(args) -> Dict[str, Any]:
 
         # Return system components
         return {
-            'file_ops': file_ops,
             'llm_bridge': llm_bridge,
             'tool_repo': tool_repo,
             'conversation': conversation,
@@ -293,12 +313,11 @@ def initialize_system(args) -> Dict[str, Any]:
         }
 
 
-def save_conversation(file_ops: FileOperations, conversation: Conversation) -> None:
+def save_conversation(conversation: Conversation) -> None:
     """
     Save the current conversation to a file.
 
     Args:
-        file_ops: File operations handler
         conversation: Conversation to save
     """
     with error_context(
@@ -308,12 +327,24 @@ def save_conversation(file_ops: FileOperations, conversation: Conversation) -> N
         logger=logging.getLogger("main")
     ):
         conversation_data = conversation.to_dict()
-        # Create conversation history directory FileOperations
+        
+        # Create conversation history directory
         conversation_dir = Path(config.paths.conversation_history_dir)
         os.makedirs(conversation_dir, exist_ok=True)
-        conversation_ops = FileOperations(conversation_dir)
-        conversation_ops.write(f"conversation_{conversation.conversation_id}", conversation_data)
-        logging.info(f"Saved conversation: {conversation.conversation_id}")
+        
+        # Define the file path for the conversation
+        file_path = conversation_dir / f"conversation_{conversation.conversation_id}.json"
+        
+        # Write the conversation data to the file
+        try:
+            with open(file_path, 'w') as f:
+                json.dump(conversation_data, f, indent=config.system.json_indent)
+            logging.info(f"Saved conversation: {conversation.conversation_id}")
+        except Exception as e:
+            raise FileOperationError(
+                f"Error writing to file {file_path}: {e}",
+                ErrorCode.FILE_WRITE_ERROR
+            )
 
 
 def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
@@ -325,7 +356,6 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
         stream_mode: Whether to enable streaming responses
     """
     conversation = system['conversation']
-    file_ops = system['file_ops']
 
     print("\nAI Agent System - Interactive Mode")
     print(f"Conversation ID: {conversation.conversation_id}")
@@ -355,12 +385,12 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
 
             # Check for commands
             if user_input.lower() in ['/exit']:
-                save_conversation(file_ops, conversation)
+                save_conversation(conversation)
                 print("Goodbye!")
                 break
 
             elif user_input.lower() == '/save':
-                save_conversation(file_ops, conversation)
+                save_conversation(conversation)
                 print("Conversation saved.")
                 continue
 
@@ -431,7 +461,7 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
 
         except KeyboardInterrupt:
             print("\nInterrupted. Saving conversation...")
-            save_conversation(file_ops, conversation)
+            save_conversation(conversation)
             print("Goodbye!")
             break
 
