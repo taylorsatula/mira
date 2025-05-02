@@ -4,6 +4,7 @@ Flask application for exposing the AI agent system via a web API.
 This module creates a minimal Flask adapter that reuses the same core system
 as the CLI interface, ensuring durability and consistency.
 """
+import json
 import logging
 import os
 import sys
@@ -15,7 +16,7 @@ from functools import wraps
 # Project imports - reusing the same code as the CLI
 from main import initialize_system, parse_arguments, save_conversation
 from conversation import Conversation
-from errors import error_context, AgentError, handle_error
+from errors import error_context, AgentError, handle_error, ErrorCode, FileOperationError
 from tools.tool_feedback import save_tool_feedback
 
 
@@ -102,14 +103,32 @@ def create_app() -> Flask:
             if conversation_id and conversation_id != conversation.conversation_id:
                 # Process in the same way main.py does for the --conversation flag
                 from config import config
-                from crud import FileOperations
+                # Direct file operations
                 
                 conversation_dir = Path(config.paths.conversation_history_dir)
                 os.makedirs(conversation_dir, exist_ok=True)
-                conversation_ops = FileOperations(conversation_dir)
+                file_path = conversation_dir / f"conversation_{conversation_id}.json"
                 
                 try:
-                    conversation_data = conversation_ops.read(f"conversation_{conversation_id}")
+                    if not file_path.exists():
+                        raise FileOperationError(
+                            f"File not found: {file_path}",
+                            ErrorCode.FILE_NOT_FOUND
+                        )
+                    
+                    try:
+                        with open(file_path, 'r') as f:
+                            conversation_data = json.load(f)
+                    except json.JSONDecodeError as e:
+                        raise FileOperationError(
+                            f"Invalid JSON in file {file_path}: {e}",
+                            ErrorCode.INVALID_JSON
+                        )
+                    except Exception as e:
+                        raise FileOperationError(
+                            f"Error reading file {file_path}: {e}",
+                            ErrorCode.FILE_READ_ERROR
+                        )
                     # Create a new conversation with the loaded data
                     conversation = Conversation.from_dict(
                         conversation_data,
@@ -184,7 +203,7 @@ def create_app() -> Flask:
                 response = conversation.generate_response(message)
             
             # Save conversation using the same function as the CLI
-            save_conversation(system['file_ops'], conversation)
+            save_conversation(conversation)
             
             return jsonify({
                 "response": response,
@@ -230,14 +249,32 @@ def create_app() -> Flask:
             if conversation_id and conversation_id != conversation.conversation_id:
                 # Process in the same way main.py does for the --conversation flag
                 from config import config
-                from crud import FileOperations
+                # Direct file operations
                 
                 conversation_dir = Path(config.paths.conversation_history_dir)
                 os.makedirs(conversation_dir, exist_ok=True)
-                conversation_ops = FileOperations(conversation_dir)
+                file_path = conversation_dir / f"conversation_{conversation_id}.json"
                 
                 try:
-                    conversation_data = conversation_ops.read(f"conversation_{conversation_id}")
+                    if not file_path.exists():
+                        raise FileOperationError(
+                            f"File not found: {file_path}",
+                            ErrorCode.FILE_NOT_FOUND
+                        )
+                    
+                    try:
+                        with open(file_path, 'r') as f:
+                            conversation_data = json.load(f)
+                    except json.JSONDecodeError as e:
+                        raise FileOperationError(
+                            f"Invalid JSON in file {file_path}: {e}",
+                            ErrorCode.INVALID_JSON
+                        )
+                    except Exception as e:
+                        raise FileOperationError(
+                            f"Error reading file {file_path}: {e}",
+                            ErrorCode.FILE_READ_ERROR
+                        )
                     # Create a new conversation with the loaded data
                     conversation = Conversation.from_dict(
                         conversation_data,
@@ -289,7 +326,7 @@ def create_app() -> Flask:
                         yield f"data: {token}\n\n"
                     
                     # Save conversation after streaming completes
-                    save_conversation(system['file_ops'], conversation)
+                    save_conversation(conversation)
                     
                     # Final event to indicate completion
                     yield f"event: done\n"
