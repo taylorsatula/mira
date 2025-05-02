@@ -129,8 +129,33 @@ Mira follows a modular architecture:
 - **ToolRelevanceEngine**: Manages (add/remove) the tools in the context window autonomously
 - **Tool Feedback System**: Captures and stores user feedback about tool activations with contextual information
 - **Configuration System**: Centralizes configuration from multiple sources
+  - **Dynamic Tool Configuration**: Automatically discovers and configures tools
+  - **Tool-Specific Settings**: Each tool has its own configuration class
+- **Serialization System**: Provides consistent JSON serialization/deserialization across the codebase
 
-The system uses a file-based persistence mechanism for conversationn tool data storage, enabling persistent memory across sessions.
+The system uses a file-based persistence mechanism for conversation and tool data storage, enabling persistent memory across sessions. The serialization module handles complex data types and provides a unified interface for converting objects to and from JSON. 
+
+### True Drag-and-Drop Tool Architecture
+
+The system features a true drag-and-drop tool architecture:
+
+1. Simply add your tool to the `tools/` directory
+2. Define and register a configuration class in your tool module:
+   ```python
+   from pydantic import BaseModel, Field
+   from config.registry import registry
+   
+   class MyToolConfig(BaseModel):
+       enabled: bool = Field(default=True)
+       api_key: str = Field(default="")
+   
+   # Register with registry
+   registry.register("my_tool", MyToolConfig)
+   ```
+3. Access configuration in your tool via `config.my_tool`
+4. **No manual steps required** - no scripts to run or files to modify
+
+See `docs/Tool_Configuration_System.md` for more details on this architecture.
 
 ## Neat Stuff It Can Do
 - "Mira, whats the email address of the customer I just drove by?"
