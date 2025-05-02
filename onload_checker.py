@@ -55,7 +55,8 @@ class OnLoadChecker: #ANNOTATION I've noticed that though I can ask questions ag
         """
         Check for upcoming reminders.
 
-        Looks for reminders scheduled for today and the next three days.
+        Looks for reminders scheduled for today and the next few days based on
+        the configured reminder_lookahead_days value.
 
         Returns:
             List of notification stimuli for upcoming reminders
@@ -111,13 +112,15 @@ class OnLoadChecker: #ANNOTATION I've noticed that though I can ask questions ag
 
             # Check upcoming reminders (next X days)
             today = datetime.now()
-            three_days_later = today + timedelta(days=3) #ANNOTATION Lookahead X days should be able to be specified in the config
+            from config import config
+            lookahead_days = config.onload_checker.reminder_lookahead_days
+            lookahead_end_date = today + timedelta(days=lookahead_days)
 
             upcoming_result = reminder_tool.run(
                 operation="get_reminders",
                 date_type="range",
                 start_date=(today + timedelta(days=1)).strftime("%Y-%m-%d"),
-                end_date=three_days_later.strftime("%Y-%m-%d") #ANNOTATION If we're updating it to not be a fixed amount of future days we should update this name
+                end_date=lookahead_end_date.strftime("%Y-%m-%d")
             )
 
             if upcoming_result.get("count", 0) > 0:
