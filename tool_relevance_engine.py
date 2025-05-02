@@ -46,13 +46,13 @@ class ToolRelevanceEngine:
         suspended: Flag indicating whether automatic tool suggestion is suspended
     """
     
-    def __init__(self, tool_repo: ToolRepository, model=None):
+    def __init__(self, tool_repo: ToolRepository, model):
         """
         Initialize the ToolRelevanceEngine.
         
         Args:
             tool_repo: Repository of available tools
-            model: Optional pre-loaded SentenceTransformer model to use (for sharing) #ANNOTATION - The SentenceTransformer should not be optional. ToolRelevanceEngine doesn't work without it.
+            model: Pre-loaded SentenceTransformer model to use
         """
         self.logger = logging.getLogger("tool_relevance_engine")
         self.tool_repo = tool_repo
@@ -84,6 +84,9 @@ class ToolRelevanceEngine:
         
         # Flag to suspend automatic tool suggestion
         self.suspended = False
+        
+        # Flag to track topic changes from LLM responses
+        self.topic_changed = False
         
         # Load the tool examples and prepare classifier
         self._load_tool_examples()
@@ -193,22 +196,30 @@ class ToolRelevanceEngine:
                     except Exception as e:
                         self.logger.warning(f"Error reading old file hashes: {e}")
                 
-                # Check for changed or deleted files that would require regeneration
+                # Check for changed, deleted, or new files that would require regeneration
                 needs_regen = False
                 # New tools always need generation
                 if not old_hashes:
                     needs_regen = True
                     self.logger.info("No previous hash file found, will generate examples")
                 else:
-                    for file_path, old_hash in old_hashes.items():
-                        if file_path not in file_hashes:
-                            self.logger.info(f"File deleted: {file_path}")
-                            needs_regen = True
-                            break
-                        if file_hashes[file_path] != old_hash:
-                            self.logger.info(f"File changed: {file_path}")
-                            needs_regen = True
-                            break
+                    # Check for new tools that weren't in the old hashes
+                    new_files = set(tools_needing_examples) - set([os.path.basename(os.path.dirname(f)) for f in old_hashes.keys() if os.path.basename(os.path.dirname(f)) in tools_needing_examples])
+                    if new_files:
+                        self.logger.info(f"New tools detected: {new_files}, will generate examples")
+                        needs_regen = True
+                    
+                    # Check for changed or deleted existing files
+                    if not needs_regen:
+                        for file_path, old_hash in old_hashes.items():
+                            if file_path not in file_hashes:
+                                self.logger.info(f"File deleted: {file_path}")
+                                needs_regen = True
+                                break
+                            if file_hashes[file_path] != old_hash:
+                                self.logger.info(f"File changed: {file_path}")
+                                needs_regen = True
+                                break
                 
                 # Generate examples if needed
                 if needs_regen:
@@ -289,11 +300,9 @@ class ToolRelevanceEngine:
             # to save startup time when generation isn't necessary
             from tools.standalone_scripts.synthetic_data_generator import SyntheticDataGenerator
             
-            # Use the shared embedding model if available #ANNOTATION Operate under the assumption that the embedding model is always available.
-            embedding_model = None
-            if hasattr(self.classifier, 'model') and self.classifier.model is not None:
-                embedding_model = self.classifier.model
-                self.logger.info("Using shared embedding model for synthetic data generation")
+            # Use the shared embedding model
+            embedding_model = self.classifier.model
+            self.logger.info("Using shared embedding model for synthetic data generation")
             
             # Get the tools directory from the config
             # Default to 'tools' if not explicitly defined
@@ -323,10 +332,10 @@ class ToolRelevanceEngine:
                     api_key=api_key,
                     analysis_model=analysis_model,  # Sonnet for code analysis
                     generation_model=generation_model,  # Haiku for example generation
-                    examples_per_temp=20,  # Initial value, will be adjusted based on complexity #ANNOTATION so why is this a value if its just going to change midstream?
+                    examples_per_temp=0,  # Zero indicates value will be determined by the algorithm at runtime
                     temperatures=[0.2, 0.8],  # More effective temperature range
                     similarity_threshold=0.97,  # More aggressive deduplication
-                    skip_llm_review=False,  # Keep LLM review for quality control #ANNOTATION The llm review should not be an optional step
+                    skip_llm_review=False,  # LLM review is required for quality control
                     embedding_model=embedding_model  # Pass the shared embedding model if available
                 )
                 
@@ -391,9 +400,8 @@ class ToolRelevanceEngine:
         """
         Build a contextual message by considering recent message history.
         
-        This method checks for topic coherence with previous messages and
-        selectively incorporates contextual information. Uses an exponential
-        decay with a steeper initial drop for weighting previous messages.
+        This method uses the topic_changed flag set by the conversation manager
+        to determine whether to maintain conversation context or start fresh.
         
         Args:
             message: Current user message
@@ -406,65 +414,28 @@ class ToolRelevanceEngine:
             self.message_history.append(message)
             return message
         
-        # Check topic coherence with most recent message
-        prev_message = self.message_history[-1]
-        
-        # Calculate semantic similarity between messages
-        coherence_score = self.classifier.calculate_text_similarity(message, prev_message)
-        self.logger.info(f"Topic coherence score with previous message: {coherence_score:.4f}")
-        
-        # If coherence is high, incorporate context; otherwise treat as new topic
-        if coherence_score >= self.topic_coherence_threshold:
-            self.logger.info("High topic coherence detected - incorporating context")
-            
-            # Add current message to history
+        # Check if topic has changed based on the flag
+        # If topic has not changed, add to history; otherwise clear history
+        if not self.topic_changed:
+            self.logger.info("Topic continuing - maintaining conversation context")
             self.message_history.append(message)
-            
-            # Build contextual message with recent history
-            # Base decay factor for exponential weighting
-            base_decay = 0.6  # Gives a more aggressive decay compared to 0.8 or 0.9
-            
-            contextual_parts = []
-            history_list = list(self.message_history)
-            
-            for i in range(len(history_list)-1, -1, -1):
-                if i == len(history_list)-1:
-                    # Current message always has weight 1.0
-                    weight = 1.0
-                    contextual_parts.append(history_list[i])
-                else:
-                    # Calculate weight with exponential decay
-                    position = len(history_list)-1 - i
-                    
-                    # Natural exponential decay
-                    natural_weight = pow(base_decay, position)
-                    
-                    # Apply manual step down for the first previous message (position=1)
-                    if position == 1:
-                        weight = natural_weight - 0.2
-                        weight = max(0.1, weight)  # Ensure it doesn't go below 0.1
-                    else:
-                        weight = natural_weight
-                    
-                    # Add previous message with context marker
-                    hist_message = history_list[i] 
-                    contextual_parts.append(f"[Previous context (weight={weight:.2f}): {hist_message}]")
-            
-            contextual_message = " ".join(contextual_parts)
-            return contextual_message
+            return message
         else:
-            # Low coherence - treat as topic change, clear history and start fresh
-            self.logger.info("Low topic coherence - treating as new topic")
+            # Topic has changed - treat as topic change, clear history and start fresh
+            self.logger.info("Topic changed - starting new conversation context")
             self.message_history.clear()
             self.message_history.append(message)
+            # Reset the flag after handling the topic change
+            self.topic_changed = False
             return message
     
     def analyze_message(self, message: str) -> List[Tuple[str, float]]:
         """
         Analyze a user message to find the most relevant tools with confidence scores.
         
-        This method uses the multi-label classifier with contextual awareness
-        to determine which tools are most relevant to the user message.
+        This method uses the multi-label classifier to determine which tools
+        are most relevant to the user message, while maintaining the conversation
+        context management via topic change detection.
         
         Args:
             message: User message to analyze
@@ -481,16 +452,19 @@ class ToolRelevanceEngine:
             component_name="ToolRelevanceEngine",
             operation="analyzing message",
             error_class=AgentError,
-            error_code=ErrorCode.UNKNOWN_ERROR, #ANNOTATION this is a perfect example of why we need to update errors.py
+            error_code=ErrorCode.UNKNOWN_ERROR,
             logger=self.logger
         ):
-            # Build contextual message
+            # Get the message to use for classification (with any context management)
+            # Still using _build_contextual_message but now it manages context via topic_changed flag
             contextual_message = self._build_contextual_message(message)
+            
+            # Track if we're using a different message than the input
             if contextual_message != message:
                 truncated_contextual = contextual_message[:75] + "..." if len(contextual_message) > 75 else contextual_message
                 self.logger.info(f"Using contextual message: {truncated_contextual}")
             
-            # Classify the message to determine relevant tools with confidence scores
+            # Use the classifier as before to determine relevant tools
             relevant_tools = self.classifier.classify_message_with_scores(contextual_message)
             
             if not relevant_tools:
@@ -647,13 +621,12 @@ class ToolRelevanceEngine:
                 except Exception as e:
                     self.logger.error(f"Error disabling tool {tool_name}: {e}")
     
-    def enable_relevant_tools(self, message: str) -> List[str]: #ANNOTATION as the comment below says this appears to be left behind for backwards compatibility. Do we need it anymore? Is there a better unified solution we can use?
+    def enable_relevant_tools(self, message: str) -> List[str]:
         """
         Enable the most relevant tools for a given user message.
         
-        This method is provided for backward compatibility. It calls
-        manage_tool_relevance() which handles both enabling and disabling tools.
-        If the engine is suspended, it returns an empty list without doing analysis.
+        DEPRECATED: This method will be removed in a future version.
+        Use manage_tool_relevance() instead.
         
         Args:
             message: User message to analyze
@@ -661,6 +634,14 @@ class ToolRelevanceEngine:
         Returns:
             List of enabled tool names
         """
+        import warnings
+        warnings.warn(
+            "ToolRelevanceEngine.enable_relevant_tools() is deprecated and will be removed in a future version. "
+            "Use ToolRelevanceEngine.manage_tool_relevance() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
         if self.suspended:
             self.logger.info("Tool relevance engine is suspended, skipping tool analysis")
             return []
@@ -685,6 +666,19 @@ class ToolRelevanceEngine:
         """
         self.suspended = False
         self.logger.info("Tool relevance engine resumed")
+        
+    def set_topic_changed(self, topic_changed: bool) -> None:
+        """
+        Set the topic changed flag based on LLM response.
+        
+        This method is called by the conversation manager after analyzing
+        the LLM's response for topic change tags.
+        
+        Args:
+            topic_changed: Boolean indicating whether the topic has changed
+        """
+        self.topic_changed = topic_changed
+        self.logger.info(f"Topic change flag set to: {topic_changed}")
 
 
 class MultiLabelClassifier:
@@ -711,7 +705,7 @@ class MultiLabelClassifier:
         Args:
             thread_limit: Maximum number of threads to use for classifier operations
             cache_dir: Directory for storing cached classifier data
-            model: Optional pre-loaded SentenceTransformer model to use (for sharing)
+            model: Pre-loaded SentenceTransformer model to use (for sharing)
         """
         self.logger = logging.getLogger("multi_label_classifier")
         self.cache_dir = cache_dir

@@ -7,7 +7,6 @@ tool result integration, and conversation history management.
 import json
 import logging
 import os
-import re
 import time
 import uuid
 import datetime
@@ -23,6 +22,7 @@ from errors import ConversationError, ErrorCode, error_context
 from config import config
 from api.llm_bridge import LLMBridge
 from tools.repo import ToolRepository
+from utils.tag_parser import parser as tag_parser
 
 
 @dataclass
@@ -97,29 +97,29 @@ class Conversation:
     
     def __init__(
         self,
-        conversation_id: Optional[str] = None,
-        system_prompt: Optional[str] = None,
-        llm_bridge: Optional[LLMBridge] = None,
-        tool_repo: Optional[ToolRepository] = None,
-        tool_relevance_engine: Optional['ToolRelevanceEngine'] = None,
-        workflow_manager: Optional['WorkflowManager'] = None
+        conversation_id: str,
+        system_prompt: str,
+        llm_bridge: LLMBridge,
+        tool_repo: ToolRepository,
+        tool_relevance_engine: 'ToolRelevanceEngine',
+        workflow_manager: 'WorkflowManager'
     ):
         """
         Initialize a new conversation.
         
-        Args: #ANNOTATION Every one of these should be required and fail loudly if it doesn't have one.
-            conversation_id: Optional unique identifier for the conversation
-            system_prompt: Optional system prompt for the conversation
-            llm_bridge: Optional LLM bridge instance
-            tool_repo: Optional tool repository instance
-            tool_relevance_engine: Optional tool relevance engine instance
-            workflow_manager: Optional workflow manager instance
+        Args:
+            conversation_id: Unique identifier for the conversation
+            system_prompt: System prompt for the conversation
+            llm_bridge: LLM bridge instance
+            tool_repo: Tool repository instance
+            tool_relevance_engine: Tool relevance engine instance
+            workflow_manager: Workflow manager instance
         """
         # Set up logging
         self.logger = logging.getLogger("conversation")
         
         # Initialize conversation ID
-        self.conversation_id = conversation_id or str(uuid.uuid4())
+        self.conversation_id = conversation_id
         self.logger.debug(f"Created conversation with ID: {self.conversation_id}")
         
         # Set up conversation history
@@ -129,8 +129,8 @@ class Conversation:
         self.metadata: Dict[str, Any] = {}
         
         # Set up conversation components
-        self.llm_bridge = llm_bridge or LLMBridge() #ANNOTATION why do we need llm_bridge or LLMBridge() shouldn't one or the other work?
-        self.tool_repo = tool_repo or ToolRepository() #ANNOTATION same goes for this one. Am I missing something?
+        self.llm_bridge = llm_bridge
+        self.tool_repo = tool_repo
         self.tool_relevance_engine = tool_relevance_engine
         self.workflow_manager = workflow_manager
         
@@ -139,11 +139,7 @@ class Conversation:
         self.max_context_tokens = config.conversation.max_context_tokens
         
         # Store system prompt as a property (not as a message)
-        if system_prompt:
-            self.system_prompt = system_prompt
-        else:
-            # Load system prompt from file
-            self.system_prompt = config.get_system_prompt("main_system_prompt")
+        self.system_prompt = system_prompt
         
         # Load user information once and store in memory
         try:
@@ -163,6 +159,10 @@ class Conversation:
         # Initialize token tracking
         self.tokens_in = 0
         self.tokens_out = 0
+        
+        # Initialize tag handling state
+        self._tried_loading_all_tools = False
+        self._previously_enabled_tools = set()
     
     def add_message(self, role: str, content: Union[str, List[Dict[str, Any]]], metadata: Optional[Dict[str, Any]] = None) -> Message:
         """
@@ -182,7 +182,7 @@ class Conversation:
         # Validate role is either 'user' or 'assistant'
         if role not in ["user", "assistant"]:
             self.logger.warning(f"Invalid role: {role}. Converting to 'user' role.")
-            role = "user"  # For backwards compatibility, convert invalid roles to 'user' #ANNOTATION Throw a warning
+            role = "user"  # For backwards compatibility, convert invalid roles to 'user'
             
         # Create a new message
         message = Message(role=role, content=content, metadata=metadata or {})
@@ -210,10 +210,11 @@ class Conversation:
         formatted_messages = []
         
         for message in self.messages:
-            # Validate that the message role is 'user' or 'assistant'
+            # This should never happen since add_message already converts invalid roles to 'user'
             if message.role not in ["user", "assistant"]:
-                self.logger.warning(f"Skipping message with invalid role: {message.role}") #ANNOTATION Directly above it says it converts all messages into user or assistant, no?
-                continue
+                self.logger.error(f"Inconsistent state: found message with invalid role: {message.role} after role validation in add_message")
+                # Convert to 'user' role for backwards compatibility
+                message.role = "user"
                 
             # Handle assistant messages with tool_use blocks
             if message.role == "assistant" and message.metadata.get("has_tool_calls", False):
@@ -237,12 +238,46 @@ class Conversation:
         
         return formatted_messages
     
+    def extract_topic_changed_tag(self, response_text: str) -> bool:
+        """
+        Extract topic change status from response text.
+        
+        Looks for the <topic_changed=true/> or <topic_changed=false/> tag in the response.
+        
+        Args:
+            response_text: The text response from the LLM
+            
+        Returns:
+            Boolean indicating whether the topic has changed (True) or not (False)
+        """
+        # Use the tag parser module
+        return tag_parser.extract_topic_changed(response_text)
+        
+    def _load_all_tools(self) -> None:
+        """
+        Enable all available tools in the tool repository.
+        
+        This method is called when the <need_tool /> marker is detected,
+        to make all possible tools available for the next response.
+        """
+        self.logger.info("Loading all available tools due to <need_tool /> marker")
+        if self.tool_repo:
+            # Store currently enabled tools to restore later if needed
+            self._previously_enabled_tools = set(self.tool_repo.get_enabled_tools())
+            
+            # Enable all tools
+            self.tool_repo.enable_all_tools()
+            
+            # Log the newly enabled tools
+            all_tools = self.tool_repo.get_enabled_tools()
+            self.logger.info(f"Enabled all {len(all_tools)} tools: {', '.join(all_tools)}")
+    
     def generate_response(
         self,
         user_input: str,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        stream: bool = False,
+        stream: bool = config.system.streaming,
         stream_callback: Optional[callable] = None,
         max_tool_iterations: int = config.conversation.max_tool_iterations  # Limit iterations to prevent infinite loops
     ) -> Union[str, None]:
@@ -253,7 +288,7 @@ class Conversation:
             user_input: User input text
             temperature: Optional temperature parameter
             max_tokens: Optional maximum tokens for the response
-            stream: Whether to stream the response (default: False) #ANNOTATION I thought that stream /was/ enabled by default. Am I wrong?
+            stream: Whether to stream the response (default: from config.system.streaming)
             stream_callback: Optional callback function for processing streamed tokens
             max_tool_iterations: Maximum number of tool call iterations
             
@@ -291,7 +326,7 @@ class Conversation:
             # Tools are enabled by the workflow manager when the workflow advances
         # Otherwise use just-in-time tool enablement
         elif self.tool_relevance_engine:
-            enabled_tools = self.tool_relevance_engine.enable_relevant_tools(user_input)
+            enabled_tools = self.tool_relevance_engine.manage_tool_relevance(user_input)
             if enabled_tools:
                 self.logger.info(f"Enabled relevant tools for message: {', '.join(enabled_tools)}")
         
@@ -329,18 +364,21 @@ class Conversation:
                 else:
                     selected_tools = None
                 
-                # Add current time information to system prompt
+                # Get current time information 
                 central_tz = ZoneInfo("America/Chicago")
                 now = datetime.datetime.now(central_tz)
                 time_info = f"Current datetime: {now.strftime('%Y-%m-%d %I:%M:%S %p')} Central Time (America/Chicago)\n\n"
                 
-                # Build enhanced system prompt with cached user information
-                enhanced_system_prompt = time_info + self.user_info + self.system_prompt #ANNOTATION This is kinda where I mean when I say we should have a centralized method for adding and removing data from the system prompt mid-conversation.
+                # Static content for caching (system prompt and user info)
+                static_content = self.system_prompt + self.user_info
+                
+                # Dynamic content starts with time information
+                dynamic_content = time_info
                 
                 # Add workflow guidance if a workflow is active
                 if self.workflow_manager and self.workflow_manager.get_active_workflow():
                     workflow_guidance = self.workflow_manager.get_system_prompt_extension()
-                    enhanced_system_prompt += workflow_guidance
+                    dynamic_content += workflow_guidance
                 
                 # Add guidance for tool selection if multiple tools are enabled
                 elif self.tool_repo and len(self.tool_repo.get_enabled_tools()) > 1:
@@ -348,7 +386,7 @@ class Conversation:
                     tool_list = ", ".join([t.replace("_tool", "") for t in enabled_tools])
                     tool_guidance = f"\nMultiple tools are currently available: {tool_list}. "
                     tool_guidance += "If the user's request is ambiguous about which tool to use, ask for clarification."
-                    enhanced_system_prompt += tool_guidance
+                    dynamic_content += tool_guidance
                 
                 # Add workflow detection guidance if we detected a potential workflow but none is active
                 detected_workflow_id = getattr(self, '_detected_workflow_id', None)
@@ -358,18 +396,23 @@ class Conversation:
                         workflow_hint = f"\n\nI've detected that the user might want help with: {workflow['name']}. "
                         workflow_hint += "If this seems correct, you can confirm and start this workflow process by including this exact text in your response: "
                         workflow_hint += f"<workflow_start:{detected_workflow_id} />"
-                        enhanced_system_prompt += workflow_hint
+                        dynamic_content += workflow_hint
+                
+                # Define cache control for prompt caching
+                cache_control = {"type": "ephemeral"}
                 
                 # Generate response (streaming or standard)
                 if stream:
                     response = self.llm_bridge.generate_response(
                         messages=messages,
-                        system_prompt=enhanced_system_prompt,
+                        system_prompt=static_content,
                         temperature=temperature,
                         max_tokens=max_tokens,
                         tools=selected_tools,
                         stream=True,
-                        callback=_handle_streaming_response
+                        callback=_handle_streaming_response,
+                        cache_control=cache_control,
+                        dynamic_content=dynamic_content
                     )
                     
                     # Update token counts if available in the response object
@@ -385,10 +428,12 @@ class Conversation:
                 else:
                     response = self.llm_bridge.generate_response(
                         messages=messages,
-                        system_prompt=enhanced_system_prompt,
+                        system_prompt=static_content,
                         temperature=temperature,
                         max_tokens=max_tokens,
-                        tools=selected_tools
+                        tools=selected_tools,
+                        cache_control=cache_control,
+                        dynamic_content=dynamic_content
                     )
                     
                     # Update token counts if available in the response object
@@ -401,6 +446,27 @@ class Conversation:
                 # Extract text content for final return value
                 assistant_response = self.llm_bridge.extract_text_content(response)
                 final_response = assistant_response
+                
+                # Check for need_tool tag
+                if tag_parser.has_need_tool(assistant_response):
+                    self.logger.info("Detected <need_tool /> marker in assistant response")
+                    
+                    if not getattr(self, '_tried_loading_all_tools', False):
+                        # Only try loading all tools once to prevent infinite loop
+                        self._tried_loading_all_tools = True
+                        
+                        # Load all available tools
+                        self._load_all_tools()
+                        
+                        # Don't add this message to the conversation
+                        # Instead, retry with all tools enabled
+                        continue
+                    else:
+                        # If we've already tried loading all tools, replace the <need_tool /> with a helpful message
+                        self.logger.warning("Still received <need_tool /> after loading all tools")
+                        modified_response = "I don't have the specific tool needed to handle this request. I can still try to help with the information and tools I do have available. Could you provide more details or ask your question in a different way?"
+                        assistant_response = modified_response
+                        final_response = modified_response
                 
                 # Check for workflow commands
                 if self.workflow_manager:
@@ -449,6 +515,11 @@ class Conversation:
                 
                 # If no tool calls, add the response to conversation and break the loop
                 if not tool_calls:
+                    # Extract topic change tag from the response and update tool relevance engine
+                    if self.tool_relevance_engine and not self.tool_relevance_engine.suspended:
+                        topic_changed = self.extract_topic_changed_tag(assistant_response)
+                        self.tool_relevance_engine.set_topic_changed(topic_changed)
+                    
                     self.add_message("assistant", assistant_response)
                     break
                 
@@ -600,6 +671,8 @@ class Conversation:
             "_detected_workflow_id": self._detected_workflow_id,
             "tokens_in": self.tokens_in,
             "tokens_out": self.tokens_out,
+            "_tried_loading_all_tools": getattr(self, '_tried_loading_all_tools', False),
+            "_previously_enabled_tools": list(getattr(self, '_previously_enabled_tools', set())),
         }
         
         # Add workflow state if we have a workflow manager
@@ -612,27 +685,35 @@ class Conversation:
     def from_dict(
         cls,
         data: Dict[str, Any],
-        llm_bridge: Optional[LLMBridge] = None,
-        tool_repo: Optional[ToolRepository] = None,
-        tool_relevance_engine: Optional['ToolRelevanceEngine'] = None,
-        workflow_manager: Optional['WorkflowManager'] = None
+        llm_bridge: LLMBridge,
+        tool_repo: ToolRepository,
+        tool_relevance_engine: 'ToolRelevanceEngine',
+        workflow_manager: 'WorkflowManager'
     ) -> 'Conversation':
         """
         Create a conversation from a dictionary representation.
         
         Args:
             data: Dictionary representation of the conversation
-            llm_bridge: Optional LLM bridge instance
-            tool_repo: Optional tool repository instance
-            tool_relevance_engine: Optional tool relevance engine instance
-            workflow_manager: Optional workflow manager instance
+            llm_bridge: LLM bridge instance
+            tool_repo: Tool repository instance
+            tool_relevance_engine: Tool relevance engine instance
+            workflow_manager: Workflow manager instance
             
         Returns:
             Conversation object
         """
+        # Ensure required fields are present
+        conversation_id = data["conversation_id"]
+        system_prompt = data.get("system_prompt")
+        
+        # If system_prompt is missing, use the default
+        if system_prompt is None:
+            system_prompt = config.get_system_prompt("main_system_prompt")
+            
         conversation = cls(
-            conversation_id=data["conversation_id"],
-            system_prompt=data.get("system_prompt"),
+            conversation_id=conversation_id,
+            system_prompt=system_prompt,
             llm_bridge=llm_bridge,
             tool_repo=tool_repo,
             tool_relevance_engine=tool_relevance_engine,
@@ -651,6 +732,10 @@ class Conversation:
         # Restore token counts
         conversation.tokens_in = data.get("tokens_in", 0)
         conversation.tokens_out = data.get("tokens_out", 0)
+        
+        # Restore tag handling state
+        conversation._tried_loading_all_tools = data.get("_tried_loading_all_tools", False)
+        conversation._previously_enabled_tools = set(data.get("_previously_enabled_tools", []))
         
         # Restore workflow state if we have a workflow manager and saved state
         if conversation.workflow_manager and "workflow_state" in data:
