@@ -2,10 +2,20 @@ import json
 import os
 from typing import Dict, List, Any, Optional
 
+from pydantic import BaseModel, Field
 from tools.repo import Tool
 from errors import ErrorCode, error_context, ToolError
-from config import config
 from api.llm_bridge import LLMBridge
+from config.registry import registry
+
+# Define configuration class for QuestionnaireTool
+class QuestionnaireToolConfig(BaseModel):
+    """Configuration for the questionnaire_tool."""
+    enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
+    # Add any other configuration fields specific to this tool
+    
+# Register with registry
+registry.register("questionnaire_tool", QuestionnaireToolConfig)
 
 
 class QuestionnaireTool(Tool):
@@ -98,6 +108,9 @@ Use this tool whenever you need to gather multiple pieces of structured informat
         """
         super().__init__()
         # Tool-specific state
+        # Import config when needed (avoids circular imports)
+        from config import config
+        
         self.data_dir = config.paths.data_dir
         self.questionnaire_dir = os.path.join(self.data_dir, "tools", "questionnaire_tool")
         self.llm_bridge = llm_bridge

@@ -14,10 +14,21 @@ from typing import Dict, Any, Optional
 from dateutil import parser as date_parser
 from sqlalchemy import Column, String, DateTime, Text, Boolean
 from dateutil.relativedelta import relativedelta
+from pydantic import BaseModel, Field
 
 from tools.repo import Tool
 from errors import ToolError, ErrorCode, error_context
 from db import Database, Base
+from config.registry import registry
+
+# Define configuration class for ReminderTool
+class ReminderToolConfig(BaseModel):
+    """Configuration for the reminder_tool."""
+    enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
+    # Add any other configuration fields specific to this tool
+
+# Register with registry
+registry.register("reminder_tool", ReminderToolConfig)
 
 
 class Reminder(Base):

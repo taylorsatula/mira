@@ -13,8 +13,21 @@ import logging
 import os
 from typing import Dict, List, Any, Optional, Union
 
+from pydantic import BaseModel, Field
 from tools.repo import Tool
 from errors import ToolError, ErrorCode, error_context
+from config.registry import registry
+
+# Define configuration class for KasaTool
+class KasaToolConfig(BaseModel):
+    """Configuration for the kasa_tool."""
+    enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
+    discovery_timeout: int = Field(default=5, description="Timeout in seconds for device discovery")
+    command_timeout: int = Field(default=10, description="Timeout in seconds for device commands")
+    config_dir: str = Field(default="data/tools/kasa_tool", description="Directory for Kasa device configurations")
+
+# Register with registry
+registry.register("kasa_tool", KasaToolConfig)
 
 try:
     from kasa import Discover, Device, Credentials
@@ -115,8 +128,6 @@ Use this tool whenever you need to control or check the status of Kasa smart hom
         self.username = username
         self.password = password
         self.logger = logging.getLogger(__name__)
-        self.device_mapping_path = "data/tools/kasa_tool/device_mapping.json"
-        self.latest_devices_path = "data/tools/kasa_tool/latest.json"
         
     def _load_device_mapping(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -128,20 +139,27 @@ Use this tool whenever you need to control or check the status of Kasa smart hom
         Raises:
             ToolError: If the mapping file doesn't exist or can't be loaded
         """
+        # Import config when needed (avoids circular imports)
+        from config import config
+        
+        # Get paths from config
+        config_dir = config.kasa_tool.config_dir
+        device_mapping_path = f"{config_dir}/device_mapping.json"
+        
         try:
-            if not os.path.exists(self.device_mapping_path):
+            if not os.path.exists(device_mapping_path):
                 raise ToolError(
-                    f"Device mapping file not found at {self.device_mapping_path}. "
+                    f"Device mapping file not found at {device_mapping_path}. "
                     "Please run kasa_device_discovery.py first.",
                     ErrorCode.TOOL_EXECUTION_ERROR
                 )
                 
-            with open(self.device_mapping_path, 'r') as f:
+            with open(device_mapping_path, 'r') as f:
                 return json.load(f)
                 
         except json.JSONDecodeError:
             raise ToolError(
-                f"Error parsing device mapping file at {self.device_mapping_path}",
+                f"Error parsing device mapping file at {device_mapping_path}",
                 ErrorCode.TOOL_EXECUTION_ERROR
             )
     
@@ -534,6 +552,8 @@ Use this tool whenever you need to control or check the status of Kasa smart hom
         Raises:
             ToolError: If operation fails
         """
+        # Import config when needed (avoids circular imports)
+        from config import config
         with error_context(
             component_name=self.name,
             operation=f"executing {operation}",

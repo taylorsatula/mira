@@ -5,9 +5,23 @@ import re
 from typing import Dict, List, Any, Optional
 import requests
 from urllib.parse import urlparse
+from pydantic import BaseModel, Field
 
 from tools.repo import Tool
 from errors import ErrorCode, error_context, ToolError
+from config.registry import registry
+
+# Define configuration class for HTTPTool
+class HttpToolConfig(BaseModel):
+    """Configuration for the http_tool."""
+    enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
+    timeout: int = Field(default=30, description="Timeout in seconds for HTTP requests")
+    max_timeout: int = Field(default=120, description="Maximum timeout allowed for HTTP requests in seconds")
+    max_retries: int = Field(default=3, description="Maximum number of retries for failed requests")
+    allowed_domains: List[str] = Field(default=[], description="List of allowed domains for requests (empty for all)")
+
+# Register with registry
+registry.register("http_tool", HttpToolConfig)
 
 
 class HTTPTool(Tool):
@@ -118,11 +132,7 @@ class HTTPTool(Tool):
             r'^https?://0\.0\.0\.0',
         ]
         
-        # Default timeout in seconds
-        self.default_timeout = 30
-        
-        # Maximum timeout allowed
-        self.max_timeout = 120
+        # Default timeout and max timeout will be loaded from config when needed
 
     def run(
         self,
@@ -166,6 +176,9 @@ class HTTPTool(Tool):
         Raises:
             ToolError: If inputs are invalid or if the request fails
         """
+        # Import config when needed (avoids circular imports)
+        from config import config
+        
         self.logger.info(f"Executing {method} request to {url}")
         
         # Use the main error context for the entire operation
@@ -181,7 +194,7 @@ class HTTPTool(Tool):
             
             # Set default timeout if not provided
             if timeout is None:
-                timeout = self.default_timeout
+                timeout = config.http_tool.timeout
                 
             # Prepare the request
             method = method.upper()
@@ -300,11 +313,20 @@ class HTTPTool(Tool):
                     {"provided_timeout": timeout}
                 )
                 
-            if timeout > self.max_timeout:
+            # Get max timeout from config
+            max_timeout = 120  # Default fallback
+            try:
+                from config import config
+                max_timeout = config.http_tool.max_timeout if hasattr(config.http_tool, 'max_timeout') else 120
+            except Exception:
+                # If config access fails, use default
+                pass
+                
+            if timeout > max_timeout:
                 raise ToolError(
-                    f"Timeout value exceeds maximum allowed ({self.max_timeout} seconds)",
+                    f"Timeout value exceeds maximum allowed ({max_timeout} seconds)",
                     ErrorCode.TOOL_INVALID_INPUT,
-                    {"provided_timeout": timeout, "max_timeout": self.max_timeout}
+                    {"provided_timeout": timeout, "max_timeout": max_timeout}
                 )
     
     def _format_response(self, response, response_format):

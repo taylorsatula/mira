@@ -16,11 +16,21 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Union, Set, Tuple
 
 from sqlalchemy import or_, and_, func, text
+from pydantic import BaseModel, Field
 
 from tools.repo import Tool
 from errors import ToolError, ErrorCode, error_context
-from config import config
+from config.registry import registry
 from db import Database, Customer, migrate_customers_from_json
+
+# Define configuration class for CustomerDatabaseTool
+class CustomerdatabaseToolConfig(BaseModel):
+    """Configuration for the customerdatabase_tool."""
+    enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
+    # Add any other configuration fields specific to this tool
+
+# Register with registry
+registry.register("customerdatabase_tool", CustomerdatabaseToolConfig)
 
 
 class CustomerDatabaseTool(Tool):
@@ -91,6 +101,9 @@ This tool maintains a SQLite database for customer data with support for importi
             
         if customer_count == 0:
             # Database is empty, check if JSON data exists
+            # Import config when needed (avoids circular imports)
+            from config import config
+            
             data_dir = pathlib.Path(config.paths.data_dir)
             cache_dir = data_dir / "tools" / "customer_tool"
             json_path = cache_dir / "customer_directory.json"

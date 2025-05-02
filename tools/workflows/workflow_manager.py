@@ -21,6 +21,8 @@ from sentence_transformers import SentenceTransformer
 from tools.repo import ToolRepository
 from errors import ErrorCode, error_context, ToolError
 from config import config
+from serialization import to_json, from_json
+from utils.tag_parser import parser as tag_parser
 
 
 class WorkflowManager:
@@ -35,8 +37,8 @@ class WorkflowManager:
     def __init__(
         self, 
         tool_repo: ToolRepository,
-        workflows_dir: Optional[str] = None,
-        model=None
+        model,
+        workflows_dir: Optional[str] = None
     ):
         """
         Initialize the workflow manager.
@@ -44,7 +46,7 @@ class WorkflowManager:
         Args:
             tool_repo: Repository of available tools
             workflows_dir: Directory containing workflow definition files
-            model: Optional pre-loaded SentenceTransformer model to use (for sharing) #ANNOTATION <-- "for sharing"? Sharing what?
+            model: Pre-loaded SentenceTransformer model to use for embedding computations
         """
         self.logger = logging.getLogger("workflow_manager")
         self.tool_repo = tool_repo
@@ -73,17 +75,9 @@ class WorkflowManager:
         # Cache for workflow example embeddings
         self.workflow_embeddings: Dict[str, Dict[str, Any]] = {}
         
-        # Use provided model or load a new one if not provided #ANNOTATION This is redundant. The SentenceTransformer is always available or else the whole application has critical game-breaking issues
+        # Use the provided model
         self.model = model
-        if self.model is None:
-            self.logger.info(f"Loading SentenceTransformer model: {self.embedding_model}")
-            try:
-                self.model = SentenceTransformer(self.embedding_model)
-                self.logger.info("SentenceTransformer model loaded successfully")
-            except Exception as e:
-                self.logger.error(f"Error loading SentenceTransformer model: {e}")
-        else:
-            self.logger.info("Using provided SentenceTransformer model")
+        self.logger.info("Using provided SentenceTransformer model")
         
         # Load workflow definitions
         self.load_workflows()
@@ -585,7 +579,7 @@ class WorkflowManager:
             "As you assist the user:",
             "1. Focus on completing the current step before moving to the next",
             "2. When you believe the current step is complete, explicitly mark it as complete by including this exact text in your response:",
-            "<workflow_step_complete />",
+            "<workflow_complete />",
             "3. If the user gets sidetracked, gently guide them back to the workflow when appropriate",
             "3b. To cancel the workflow at any time, include this exact text:",
             "<workflow_cancel />",
@@ -609,19 +603,20 @@ class WorkflowManager:
             command_type: "start", "complete", or "cancel" if a command was found, None otherwise
             command_params: Additional parameters for the command (e.g., workflow_id for "start"), None if not applicable
         """
-        # Check for workflow start command
-        start_match = re.search(r'<\s*workflow_start:(\w+)\s* />', message) #ANNOTATION this used to be called "<!--\s*START_WORKFLOW:(\w+)\s*-->" but I edited it manually and don't know where else in the codebase I need to edit
-        if start_match:
-            workflow_id = start_match.group(1)
-            return True, "start", workflow_id
+        # Use the centralized tag parser
+        workflow_action = tag_parser.get_workflow_action(message)
         
-        # Check for step completion command
-        if "<workflow_step_complete />" in message:
-            return True, "complete", None
-        
-        # Check for workflow cancellation command
-        if "<workflow_cancel />" in message:
-            return True, "cancel", None
+        if workflow_action and workflow_action["action"]:
+            action = workflow_action["action"]
+            
+            if action == "start":
+                workflow_id = workflow_action["id"]
+                if workflow_id:
+                    return True, "start", workflow_id
+            elif action == "complete":
+                return True, "complete", None
+            elif action == "cancel":
+                return True, "cancel", None
         
         return False, None, None
     
@@ -653,21 +648,21 @@ class WorkflowManager:
         if self.active_workflow_id:
             self._enable_tools_for_current_step()
     
-    def to_json(self) -> str: #ANNOTATION shouldn't to_json and from_json be created and used at a global level? I could be wrong though.
+    def to_json(self) -> str:
         """
         Convert workflow manager state to a JSON string.
         
         Returns:
             JSON string containing workflow manager state
         """
-        return json.dumps(self.to_dict(), indent=2)
+        return to_json(self.to_dict())
     
-    def from_json(self, json_str: str) -> None: #ANNOTATION same goes for this one
+    def from_json(self, json_str: str) -> None:
         """
         Load workflow manager state from a JSON string.
         
         Args:
             json_str: JSON string containing workflow manager state
         """
-        data = json.loads(json_str)
+        data = from_json(json_str)
         self.from_dict(data)
