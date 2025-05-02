@@ -74,6 +74,7 @@ def mock_conversation():
     
     conversation.messages = messages
     conversation.conversation_id = "test_conversation_123"
+    conversation.system_prompt = "Test system prompt"
     
     return conversation
 

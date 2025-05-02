@@ -87,11 +87,11 @@ def test_client_initialization():
     # Mock config.square_api_key property to return a string value
     with patch('tools.square_tool.config') as mock_config:
         # Set up the mock to return a string when square_api_key is accessed
-        mock_config.square_api_key = "test_api_key"
-        mock_config.square.environment = "sandbox"
-        mock_config.square.timeout = 60
-        mock_config.square.max_retries = 3
-        mock_config.square.backoff_factor = 2.0
+        mock_config.square_tool.api_key = "test_api_key"
+        mock_config.square_tool.environment = "sandbox"
+        mock_config.square_tool.timeout = 60
+        mock_config.square_tool.max_retries = 3
+        mock_config.square_tool.backoff_factor = 2.0
         
         with patch('square.client.Client') as mock_client:
             instance = mock_client.return_value
