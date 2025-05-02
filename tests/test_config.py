@@ -6,9 +6,11 @@ import os
 from pathlib import Path
 import tempfile
 import json
+from unittest import mock
 
+from pydantic import BaseModel, Field
 from config import config
-from config.config_manager import AppConfig
+from config.config_manager import AppConfig, get_tool_config_static
 from errors import ConfigError, ErrorCode
 
 
@@ -110,7 +112,7 @@ def test_custom_config_direct_creation():
     
     # Check that default values are used for unspecified fields
     assert custom_config.paths.data_dir == "data"
-    assert custom_config.conversation.max_history == 10
+    assert custom_config.conversation.max_history == 20
 
 
 def test_env_var_override():
@@ -136,3 +138,156 @@ def test_env_var_override():
         # Clean up environment
         del os.environ["AGENT_API__MODEL"]
         del os.environ["AGENT_SYSTEM__LOG_LEVEL"]
+
+
+# Tests for Dynamic Tool Configuration
+
+class MockToolConfig(BaseModel):
+    """Mock tool configuration for testing."""
+    timeout: int = Field(default=30, description="Tool operation timeout in seconds")
+    retry_count: int = Field(default=3, description="Number of retries for failed operations")
+    api_key: str = Field(default="", description="API key for the service")
+
+
+def test_tool_config_discovery():
+    """Test discovery of tool configurations."""
+    with mock.patch("importlib.import_module") as mock_import:
+        # Setup mock for tool discovery
+        mock_module = mock.MagicMock()
+        mock_module.__path__ = ["/mock/tools"]
+        mock_import.return_value = mock_module
+        
+        # Mock pkgutil.iter_modules to return a mock module info
+        mock_module_info = mock.MagicMock()
+        mock_module_info.name = "tools.mock_tool"
+        
+        with mock.patch("pkgutil.iter_modules", return_value=[mock_module_info]):
+            # Mock the module with a Tool class
+            mock_tool_module = mock.MagicMock()
+            mock_tool_class = mock.MagicMock()
+            mock_tool_class.name = "mock_tool"
+            mock_tool_class.__name__ = "MockTool"
+            mock_tool_class.__module__ = "tools.mock_tool"
+            
+            # Add the mock tool class to the mock module
+            mock_tool_module.__name__ = "tools.mock_tool"
+            type(mock_tool_module).MockTool = mock_tool_class
+            
+            # Mock the import of the tool module
+            with mock.patch.dict("sys.modules", {"tools.mock_tool": mock_tool_module}):
+                # Run the discovery method
+                config_classes = AppConfig.discover_tool_configs()
+                
+                # Check that the default config class was created for the mock tool
+                assert "mock_tool" in config_classes
+                assert issubclass(config_classes["mock_tool"], BaseModel)
+
+
+def test_tool_config_registration():
+    """Test registration of custom tool configurations."""
+    # Register a custom config class
+    AppConfig.register_config("custom_tool", MockToolConfig)
+    
+    # Mock the discovery to return our registered config
+    with mock.patch.object(AppConfig, "discover_tool_configs", return_value={"custom_tool": MockToolConfig}):
+        # Create a new config instance
+        app_config = AppConfig.load()
+        
+        # Check that our tool config was loaded
+        assert "custom_tool" in app_config.tool_configs
+        tool_config = app_config.tool_configs["custom_tool"]
+        assert isinstance(tool_config, MockToolConfig)
+        assert tool_config.timeout == 30
+        assert tool_config.retry_count == 3
+        assert tool_config.api_key == ""
+
+
+def test_tool_config_from_json():
+    """Test loading tool configurations from a JSON file."""
+    # Register a custom config class
+    AppConfig.register_config("custom_tool", MockToolConfig)
+    
+    # Create a temporary config file with tool config
+    with tempfile.NamedTemporaryFile(suffix='.json', mode='w', delete=False) as temp_file:
+        config_data = {
+            "tool_configs": {
+                "custom_tool": {
+                    "timeout": 60,
+                    "retry_count": 5,
+                    "api_key": "test_key"
+                }
+            }
+        }
+        json.dump(config_data, temp_file)
+        temp_file_path = temp_file.name
+    
+    try:
+        # Mock the discovery to return our registered config
+        with mock.patch.object(AppConfig, "discover_tool_configs", return_value={"custom_tool": MockToolConfig}):
+            # Load configuration from file
+            app_config = AppConfig.load(temp_file_path)
+            
+            # Check that our tool config was loaded with values from the file
+            assert "custom_tool" in app_config.tool_configs
+            tool_config = app_config.tool_configs["custom_tool"]
+            assert isinstance(tool_config, MockToolConfig)
+            assert tool_config.timeout == 60
+            assert tool_config.retry_count == 5
+            assert tool_config.api_key == "test_key"
+    
+    finally:
+        # Clean up
+        os.unlink(temp_file_path)
+
+
+def test_get_tool_config():
+    """Test getting tool configurations."""
+    # Register a custom config class
+    AppConfig.register_config("custom_tool", MockToolConfig)
+    
+    # Mock the discovery to return our registered config
+    with mock.patch.object(AppConfig, "discover_tool_configs", return_value={"custom_tool": MockToolConfig}):
+        # Create a new config instance
+        app_config = AppConfig.load()
+        
+        # Test get_tool_config method
+        tool_config = app_config.get_tool_config("custom_tool")
+        assert isinstance(tool_config, MockToolConfig)
+        assert tool_config.timeout == 30
+        
+        # Test get_tool_config with type casting
+        typed_config = app_config.get_tool_config("custom_tool", MockToolConfig)
+        assert isinstance(typed_config, MockToolConfig)
+        
+        # Test get_tool_config with non-existent tool
+        with pytest.raises(ConfigError):
+            app_config.get_tool_config("non_existent_tool")
+        
+        # Test the dot notation accessor
+        assert app_config.get("tool_configs.custom_tool") == tool_config
+        assert app_config.get("tool_configs.custom_tool.timeout") == 30
+        assert app_config.get("tool_configs.non_existent", "default") == "default"
+
+
+def test_get_tool_config_static():
+    """Test the static helper function for getting tool configurations."""
+    # Register a custom config class
+    AppConfig.register_config("custom_tool", MockToolConfig)
+    
+    # Mock the discovery to return our registered config
+    with mock.patch.object(AppConfig, "discover_tool_configs", return_value={"custom_tool": MockToolConfig}):
+        # Create a new config instance and set it as the global config
+        app_config = AppConfig.load()
+        with mock.patch("config.config_manager.config", app_config):
+            # Test the static helper function
+            tool_config = get_tool_config_static("custom_tool")
+            assert isinstance(tool_config, MockToolConfig)
+            assert tool_config.timeout == 30
+            
+            # Test with type casting
+            typed_config = get_tool_config_static("custom_tool", MockToolConfig)
+            assert isinstance(typed_config, MockToolConfig)
+            
+            # Test with non-existent tool
+            with pytest.raises(ConfigError):
+                get_tool_config_static("non_existent_tool")
