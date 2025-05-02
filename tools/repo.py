@@ -13,8 +13,17 @@ import pkgutil
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any, Set, Type, Callable, Union
 
+from pydantic import BaseModel, create_model
 from errors import ToolError, ErrorCode, error_context
-from config import config
+
+# Import the registry (which is initialized before any tools)
+from config.registry import registry
+
+# Deferred import for config
+def get_config():
+    """Get the config singleton, importing it only when needed."""
+    from config import config
+    return config
 
 
 class Tool(ABC):
@@ -34,9 +43,45 @@ class Tool(ABC):
     description = "Base class for all tools"
     usage_examples: List[Dict[str, Any]] = []
     
+    @classmethod
+    def register_config(cls, config_class: Type[BaseModel]) -> None:
+        """
+        Register a tool configuration class.
+        
+        This method should be called by tool implementations to register
+        their configuration class with the configuration registry. It can
+        be called in the class body for immediate registration.
+        
+        Args:
+            config_class: The Pydantic model class for this tool's configuration
+        """
+        registry.register(cls.name, config_class)
+    
     def __init__(self):
-        """Initialize a new tool instance."""
+        """Initialize a new tool instance with automatic config registration."""
         self.logger = logging.getLogger(f"tools.{self.name}")
+        
+        # Auto-register a default config if this tool doesn't have one
+        if self.name not in registry._registry:
+            self.logger.debug(f"Auto-registering default config for tool: {self.name}")
+            
+            # Generate appropriate class name
+            class_name = f"{self.name.capitalize()}Config"
+            if self.name.endswith('_tool'):
+                # Convert snake_case to CamelCase
+                parts = self.name.split('_')
+                class_name = ''.join(part.capitalize() for part in parts[:-1]) + 'ToolConfig'
+            
+            # Create the model
+            default_config = create_model(
+                class_name,
+                __base__=BaseModel,
+                enabled=(bool, True),
+                __doc__=f"Default configuration for {self.name}"
+            )
+            
+            # Register the config class
+            self.__class__.register_config(default_config)
     
     @abstractmethod
     def run(self, **params) -> Dict[str, Any]:
@@ -191,6 +236,7 @@ class ToolRepository:
         self.logger = logging.getLogger("tool_repository")
         self.tools: Dict[str, Tool] = {}
         self.enabled_tools: Set[str] = set()
+        config = get_config()
         self.tool_list_path: str = os.path.join(config.paths.data_dir, "tools", "tool_list.json")
     
     def register_tool(self, tool: Tool) -> None:
@@ -610,6 +656,7 @@ class ToolRepository:
         If auto_discovery is ON, enables all discovered tools.
         If auto_discovery is OFF, enables only the essential tools.
         """
+        config = get_config()
         auto_discovery = config.tools.auto_discovery
         
         if auto_discovery:
