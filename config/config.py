@@ -8,28 +8,6 @@ ensure type safety and validation of configuration values.
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 
-
-class GoogleMapsConfig(BaseModel):
-    """Google Maps API configuration settings."""
-    
-    api_key: Optional[str] = Field(
-        default=None,
-        description="Google Maps API key"
-    )
-    timeout: int = Field(
-        default=60,
-        description="Timeout in seconds for Google Maps API requests"
-    )
-    max_retries: int = Field(
-        default=3,
-        description="Maximum number of retries for failed Google Maps API requests"
-    )
-    backoff_factor: float = Field(
-        default=2.0,
-        description="Backoff factor for retries"
-    )
-
-
 class ApiConfig(BaseModel):
     """API configuration settings."""
     
@@ -105,69 +83,6 @@ class ConversationConfig(BaseModel):
         description="Maximum number of tool iterations for a single request"
     )
 
-
-class SquareConfig(BaseModel):
-    """Square API configuration settings."""
-    
-    api_key: Optional[str] = Field(
-        default=None,
-        description="Square API key"
-    )
-    environment: str = Field(
-        default="sandbox",
-        description="Square API environment (sandbox or production)"
-    )
-    timeout: int = Field(
-        default=60,
-        description="Timeout in seconds for Square API requests"
-    )
-    max_retries: int = Field(
-        default=3,
-        description="Maximum number of retries for failed Square API requests"
-    )
-    backoff_factor: float = Field(
-        default=2.0,
-        description="Backoff factor for retries"
-    )
-    default_team_member_id: str = Field(
-        default="TMjY-uYPS-Wb2hDU",
-        description="Default team member ID to use for bookings when not specified"
-    )
-    timezone: str = Field(
-        default="America/Chicago",
-        description="Default timezone for booking operations (Central Time)"
-    )
-
-
-class CalendarConfig(BaseModel):
-    """Calendar tool configuration settings."""
-    
-    default_url: str = Field(
-        default="https://caldav.example.com",
-        description="Default CalDAV server URL"
-    )
-    default_username: str = Field(
-        default="user@example.com",
-        description="Default CalDAV username"
-    )
-    default_calendar_id: str = Field(
-        default="personal",
-        description="Default calendar ID to use when not specified"
-    )
-    timeout: int = Field(
-        default=30,
-        description="Timeout in seconds for CalDAV requests"
-    )
-    max_events: int = Field(
-        default=100,
-        description="Maximum number of events to return in a single request"
-    )
-    default_event_duration: int = Field(
-        default=60,
-        description="Default event duration in minutes if not specified"
-    )
-
-
 class ToolConfig(BaseModel):
     """Tool-related configuration settings."""
     
@@ -222,50 +137,7 @@ class ToolConfig(BaseModel):
     )
 
 
-class EmailConfig(BaseModel):
-    """Email configuration settings."""
-    
-    imap_server: str = Field(
-        default="mi3-ts111.a2hosting.com",
-        description="IMAP server hostname"
-    )
-    imap_port: int = Field(
-        default=993,
-        description="IMAP server port (typically 993 for SSL/TLS)"
-    )
-    smtp_server: str = Field(
-        default="mi3-ts111.a2hosting.com",
-        description="SMTP server hostname (often same as IMAP server)"
-    )
-    smtp_port: int = Field(
-        default=465,
-        description="SMTP server port (typically 465 for SSL/TLS)"
-    )
-    email_address: str = Field(
-        default="llmtester@rocketcitywindowcleaning.com",
-        description="Email address to use for IMAP/SMTP connections"
-    )
-    use_ssl: bool = Field(
-        default=True,
-        description="Whether to use SSL/TLS for connections"
-    )
-    max_emails_to_fetch: int = Field(
-        default=50,
-        description="Maximum number of emails to fetch in a single request"
-    )
-    max_preview_length: int = Field(
-        default=10,
-        description="Maximum length of email body preview text"
-    )
-    default_folders: Dict[str, str] = Field(
-        default={
-            "inbox": "INBOX", 
-            "sent": "Sent", 
-            "drafts": "Drafts", 
-            "trash": "Trash"
-        },
-        description="Default folder names mapping"
-    )
+# Email configuration should be moved to tools/email_tool.py
 
 
 class DatabaseConfig(BaseModel):
@@ -334,6 +206,15 @@ class ToolRelevanceConfig(BaseModel):
     )
 
 
+class OnloadCheckerConfig(BaseModel):
+    """Configuration for the OnloadChecker."""
+    
+    reminder_lookahead_days: int = Field(
+        default=3,
+        description="Number of days to look ahead for upcoming reminders"
+    )
+
+
 class SystemConfig(BaseModel):
     """System-level configuration settings."""
     
@@ -348,4 +229,8 @@ class SystemConfig(BaseModel):
     json_indent: int = Field(
         default=2,
         description="Indentation level for JSON output"
+    )
+    tokenizers_parallelism: bool = Field(
+        default=False,
+        description="Whether to enable tokenizers parallelism for Hugging Face libraries"
     )

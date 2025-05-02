@@ -14,23 +14,24 @@ from typing import Any, Dict, Optional, Union, List
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
-from config.config import ( #ANNOTATION is there a reliable way to query what is in the config itself to dynamically load these? My thought is that after we realize our goal of having it so that you can drop a tool into tools/ and it works automagically next load adding and removing tools from this line will become a single manual step.
+from config.config import (
     ApiConfig,
     PathConfig,
     ConversationConfig,
     ToolConfig,
     SystemConfig,
-    SquareConfig,
-    GoogleMapsConfig,
-    EmailConfig,
-    CalendarConfig,
+    # Tool-specific configs are now defined in their respective tool files
     DatabaseConfig,
     ToolRelevanceConfig,
+    OnloadCheckerConfig,
 )
 from errors import ConfigError, ErrorCode
 
+# Import the registry (which was initialized in config/__init__.py)
+from config.registry import registry
 
-class AppConfig(BaseModel): #ANNOTATION Same goes for AppConfig. I'd like to be able to dynamically load the tools that exist in tools/ and unless specified in a manual field (within this file) all tools start with a predictable default_factory
+
+class AppConfig(BaseModel):
     """
     Central configuration manager for the application.
     
@@ -39,23 +40,26 @@ class AppConfig(BaseModel): #ANNOTATION Same goes for AppConfig. I'd like to be 
     2. Environment variables
     
     Provides validated access to all application settings.
+    Supports dynamic tool configuration through the configuration registry.
     """
     
+    # Core configurations defined explicitly
     api: ApiConfig = Field(default_factory=ApiConfig)
     paths: PathConfig = Field(default_factory=PathConfig)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     tools: ToolConfig = Field(default_factory=ToolConfig)
     system: SystemConfig = Field(default_factory=SystemConfig)
-    square: SquareConfig = Field(default_factory=SquareConfig)
-    google_maps: GoogleMapsConfig = Field(default_factory=GoogleMapsConfig)
-    email: EmailConfig = Field(default_factory=EmailConfig)
-    calendar: CalendarConfig = Field(default_factory=CalendarConfig)
+    # Tool-specific configs moved to their respective tool files
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     tool_relevance: ToolRelevanceConfig = Field(default_factory=ToolRelevanceConfig)
+    onload_checker: OnloadCheckerConfig = Field(default_factory=OnloadCheckerConfig)
     
     # Cache for system prompts (non-model field)
     prompt_cache: Dict[str, str] = Field(default_factory=dict, exclude=True)
     
+    # Cache for tool configs (non-model field, excluded from serialization)
+    tool_configs: Dict[str, BaseModel] = Field(default_factory=dict, exclude=True)
+
     @classmethod
     def load(cls, config_path: Optional[Union[str, Path]] = None) -> "AppConfig":
         """
@@ -390,20 +394,129 @@ class AppConfig(BaseModel): #ANNOTATION Same goes for AppConfig. I'd like to be 
         Reload all system prompts from disk, refreshing the cache.
         """
         self.prompt_cache.clear()
+        
+    def __getattr__(self, name: str) -> Any:
+        """
+        Dynamic attribute access for tool configurations.
+        
+        This method is called when an attribute is not found through normal
+        attribute access. It attempts to retrieve a tool configuration from
+        the registry if the attribute name matches a tool name.
+        
+        Args:
+            name: The attribute name to access
+            
+        Returns:
+            Tool configuration instance if it's a tool name, otherwise raises AttributeError
+            
+        Raises:
+            AttributeError: If the attribute is not a valid tool configuration
+        """
+        # Check if this might be a tool configuration
+        if name.endswith('_tool') or name in self.tool_configs:
+            # Get the tool configuration
+            return self.get_tool_config(name)
+            
+        # Not a tool config, raise normal attribute error
+        raise AttributeError(f"'AppConfig' object has no attribute '{name}'")
+    
+    def get_tool_config(self, tool_name: str) -> BaseModel:
+        """
+        Get a tool's configuration, creating it if needed.
+        
+        This method retrieves a tool configuration from the cache or creates
+        a new one using the registry.
+        
+        Args:
+            tool_name: The name of the tool
+            
+        Returns:
+            Configuration instance for the tool
+            
+        Raises:
+            ConfigError: If the tool configuration cannot be created
+        """
+        # Check if we already have this tool config cached
+        if tool_name not in self.tool_configs:
+            try:
+                # Get the config class for this tool (or create a default)
+                config_class = registry.get_or_create(tool_name)
+                
+                # Create an instance of the config class
+                config_instance = config_class()
+                
+                # Store in cache for future access
+                self.tool_configs[tool_name] = config_instance
+                
+                logging.debug(f"Created tool config for: {tool_name}")
+                
+            except Exception as e:
+                raise ConfigError(
+                    f"Error creating tool configuration for '{tool_name}': {e}",
+                    ErrorCode.INVALID_CONFIG
+                )
+                
+        # Return the cached config
+        return self.tool_configs[tool_name]
+    
+    # We don't need a discover_tools method anymore.
+    # Tools register themselves when they're imported naturally by the application.
+            
+    def list_available_tool_configs(self) -> List[str]:
+        """
+        List all available tool configurations.
+        
+        Returns:
+            List of tool configuration names
+        """
+        # Return configs we've already loaded
+        cached_configs = list(self.tool_configs.keys())
+        
+        # Add configs from registry
+        registry_configs = list(registry._registry.keys())
+        
+        # Combine both lists, eliminating duplicates
+        return list(set(cached_configs + registry_configs))
 
+
+# Initialize configuration
+def initialize_config() -> AppConfig:
+    """
+    Initialize the configuration.
+    
+    The registry is already initialized at this point (in config/__init__.py),
+    so we just need to load the core configuration.
+    
+    Returns:
+        Initialized AppConfig instance
+    """
+    try:
+        # Load core configuration
+        config_instance = AppConfig.load()
+        
+        # Set up logging
+        logging.basicConfig(
+            level=getattr(logging, config_instance.system.log_level),
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
+        
+        logging.info("Configuration loaded successfully")
+        logging.info(f"Registry initialized with: {list(registry._registry.keys())}")
+        
+        return config_instance
+        
+    except Exception as e:
+        error_msg = f"Error initializing configuration: {e}"
+        # Try to log the error, but we might not have logging configured yet
+        try:
+            logging.error(error_msg)
+        except:
+            pass
+        
+        raise ConfigError(
+            error_msg,
+            ErrorCode.INVALID_CONFIG
+        )
 
 # Create the global configuration instance
-try:
-    # Create a config instance with default values, overridden by environment variables #ANNOTATION does this leak environmental details? Can someone theoretically snatch the environmental variables from here or no?
-    config = AppConfig.load()
-    
-    # Set up logging
-    logging.basicConfig(
-        level=getattr(logging, config.system.log_level),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
-except Exception as e:
-    raise ConfigError(
-        f"Error initializing configuration: {e}",
-        ErrorCode.INVALID_CONFIG
-    )
+config = initialize_config()

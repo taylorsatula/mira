@@ -16,8 +16,16 @@ Usage:
     
     # For required values (raises exception if missing)
     api_key = config.require("api.key")
+    
+    # For tool configurations
+    timeout = config.sample_tool.timeout
 """
 
+# First, initialize the registry (which has no dependencies)
+from config.registry import registry
+
+# Then, import the configuration system
 from config.config_manager import AppConfig, config
 
-__all__ = ["config", "AppConfig"]
+# Export the public interface
+__all__ = ["config", "AppConfig", "registry"]
