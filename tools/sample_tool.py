@@ -1,8 +1,35 @@
+"""
+Sample weather tool implementation for demonstration purposes.
+
+This module contains a complete implementation of a weather tool,
+which serves as a reference for creating new tools. It demonstrates:
+1. Proper tool structure
+2. Configuration class definition and registration
+3. Error handling and parameter validation
+4. Comprehensive documentation
+"""
+
 import random
 from typing import List, Dict, Any
 
+from pydantic import BaseModel, Field
 from tools.repo import Tool
 from errors import ErrorCode, error_context, ToolError
+
+# Import the registry
+from config.registry import registry
+
+
+# Define configuration class for WeatherTool
+class WeatherToolConfig(BaseModel):
+    """Configuration for the weather tool."""
+    enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
+    default_units: str = Field(default="celsius", description="Default temperature units (celsius/fahrenheit)")
+    api_key: str = Field(default="", description="API key for external weather service (not used in demo)")
+    cache_timeout: int = Field(default=30, description="Weather data cache timeout in minutes")
+
+# Register the configuration with the registry
+registry.register("weather_tool", WeatherToolConfig)
 
 
 class WeatherTool(Tool):
@@ -21,7 +48,10 @@ class WeatherTool(Tool):
     4. Comprehensive documentation with detailed docstrings
     5. Logging of operations for debugging and auditing
     """
-
+    
+    # Configuration is registered directly with the registry
+    
+    # Class attributes
     name = "weather_tool"
     description = """
     Retrieves detailed weather information for any specified location. This tool provides current 
@@ -72,7 +102,7 @@ class WeatherTool(Tool):
     def run(
         self,
         location: str,
-        units: str = "celsius",
+        units: str = None,
         include_forecast: bool = False
     ) -> Dict[str, Any]:
         """
@@ -85,7 +115,7 @@ class WeatherTool(Tool):
 
         Args:
             location: The city or location to get weather for (required)
-            units: Temperature units ('celsius' or 'fahrenheit', defaults to 'celsius')
+            units: Temperature units ('celsius' or 'fahrenheit', defaults to configured default)
             include_forecast: Whether to include a 5-day forecast (defaults to False)
 
         Returns:
@@ -103,7 +133,14 @@ class WeatherTool(Tool):
         Raises:
             ToolError: If units are invalid or other errors occur during execution
         """
-        self.logger.info(f"Fetching weather for {location} in {units}")
+        # Access the tool's configuration via the config system
+        from config import config
+        
+        # Use the configured default units if none provided
+        if units is None:
+            units = config.weather_tool.default_units
+            
+        self.logger.info(f"Fetching weather for {location} in {units} (config: {config.weather_tool.model_dump()})")
 
         # Use the centralized error context for weather data generation
         with error_context(
@@ -233,5 +270,3 @@ class WeatherTool(Tool):
         today = datetime.datetime.now()
         future_date = today + datetime.timedelta(days=day_offset)
         return future_date.strftime("%A")
-
-
