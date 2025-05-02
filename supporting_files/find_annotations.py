@@ -7,11 +7,17 @@ from pathlib import Path
 
 
 def find_annotations(root_dir, output_file):
-    """Find all #ANNOTATION or # ANNOTATION comments in code files.
+    """Find all #ANNOTATION or # ANNOTATION comments in code files and save to JSON.
+    
+    Searches through all supported code files (Python, JavaScript, etc.) for annotation
+    comments and creates a JSON file with their locations and content.
     
     Args:
         root_dir: Root directory to start search from
         output_file: Path to output JSON file
+    
+    Returns:
+        List of dictionaries containing annotation information
     """
     annotations = []
     pattern = re.compile(r'#\s*ANNOTATION')

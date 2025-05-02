@@ -52,7 +52,7 @@
       {
         "filename": "find_annotations.py",
         "annotation": "\"\"\"Find all #ANNOTATION or # ANNOTATION comments in code files.",
-        "isfixed": false,
+        "isfixed": true,
         "context": "This is the docstring of a script that searches for annotation comments throughout the codebase."
       }
     ]
@@ -68,31 +68,31 @@
       {
         "filename": "tools/workflows/workflow_manager.py",
         "annotation": "model: Optional pre-loaded SentenceTransformer model to use (for sharing) #ANNOTATION <-- \"for sharing\"? Sharing what?",
-        "isfixed": false,
+        "isfixed": true,
         "context": "In the WorkflowManager constructor, developer is questioning the comment about 'sharing' the SentenceTransformer model."
       },
       {
         "filename": "config/config_manager.py",
         "annotation": "@property #ANNOTATION why do all of these need to be redundantly specified? Is there a good reason? Can't we just look for things that should have had an environmental variable and crash out if none is specified or a non-empty-string default is not given? Like,, if we don't have an Anthropic key we aren't getting off the ground but if we don't have a Square key that tool just won't work. This would also reduce our dependance on having to update a bunch of code sections when adding new tools or w/e.",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer is questioning the need for individual environment variable property accessors in config_manager.py and suggesting a more dynamic approach."
       },
       {
         "filename": "config/config_manager.py",
         "annotation": "# Create a config instance with default values, overridden by environment variables #ANNOTATION does this leak environmental details? Can someone theoretically snatch the environmental variables from here or no?",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer is concerned about potential security issues with config initialization exposing environment variables."
       },
       {
         "filename": "main.py",
         "annotation": "os.environ[\"TOKENIZERS_PARALLELISM\"] = \"false\" #ANNOTATION Is this the most appropriate place for this declaration?",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer is questioning if setting TOKENIZERS_PARALLELISM environment variable at the beginning of main.py is the right location."
       },
       {
         "filename": "config/config_manager.py",
         "annotation": "# Try to parse value as JSON for complex types #ANNOTATION are there complex types? What is the usecase for this?",
-        "isfixed": false,
+        "isfixed": true,
         "context": "In config_manager.py, developer is questioning what complex types would be parsed from JSON in environment variables."
       },
       {
@@ -106,19 +106,19 @@
       {
         "filename": "tool_relevance_engine.py",
         "annotation": "model: Optional pre-loaded SentenceTransformer model to use (for sharing) #ANNOTATION - The SentenceTransformer should not be optional. ToolRelevanceEngine doesn't work without it.",
-        "isfixed": false,
+        "isfixed": true,
         "context": "In the ToolRelevanceEngine constructor, developer is pointing out that the model parameter should be required, not optional."
       },
       {
         "filename": "tools/workflows/workflow_manager.py",
         "annotation": "# Use provided model or load a new one if not provided #ANNOTATION This is redundant. The SentenceTransformer is always available or else the whole application has critical game-breaking issues",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer is suggesting that the fallback model loading is redundant since the application would fail earlier without it."
       },
       {
         "filename": "tool_relevance_engine.py",
         "annotation": "# Use the shared embedding model if available #ANNOTATION Operate under the assumption that the embedding model is always available.",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Similar concern about unnecessary conditional checks for the embedding model which should always be available."
       },
       {
@@ -168,7 +168,7 @@
       {
         "filename": "tool_relevance_engine.py",
         "annotation": "# Don't disable any tools with the empty list - use explicitly defined empty list [] #ANNOTATION what does this mean?",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer is confused about a comment regarding empty lists for disabling tools in the manage_tool_relevance method."
       },
       {
@@ -192,7 +192,7 @@
       {
         "filename": "tools/tool_feedback.py",
         "annotation": "def get_feedback_summary() -> Dict[str, Any]: #ANNOTATION <- Question: Where is this used outside this file?",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer is asking if the get_feedback_summary function is actually used anywhere in the codebase."
       },
       {
@@ -216,7 +216,7 @@
       {
         "filename": "main.py",
         "annotation": "original_generate_response = llm_bridge.generate_response #ANNOTATION what is 'original_generate_response? Is this a backwards compatibility thing?'",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer is asking about the purpose of storing the original method reference before applying a decorator for token tracking."
       }
     ],
@@ -224,19 +224,19 @@
       {
         "filename": "tool_relevance_engine.py",
         "annotation": "def _enable_tools(self, tools_to_enable: List[str]) -> List[str]: #ANNOTATION this appears to be a private method for enabling tools. Why not use a globally available enable/disable functionality?",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer is questioning why there's a private method for enabling tools in ToolRelevanceEngine rather than a globally available function."
       },
       {
         "filename": "tool_relevance_engine.py",
         "annotation": "def _disable_irrelevant_tools(self, current_relevant_tools: List[str]) -> None: #ANNOTATION same goes for this private method. Why not have them globally available? Is there something special that these ones need to be private?",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Similar question about the private method for disabling tools in ToolRelevanceEngine."
       },
       {
         "filename": "tool_relevance_engine.py",
         "annotation": "def enable_relevant_tools(self, message: str) -> List[str]: #ANNOTATION as the comment below says this appears to be left behind for backwards compatibility. Do we need it anymore? Is there a better unified solution we can use?",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer is questioning if a method marked for backward compatibility is still needed or can be removed."
       }
     ],
@@ -260,13 +260,13 @@
       {
         "filename": "conversation.py",
         "annotation": "self.logger.warning(f\"Skipping message with invalid role: {message.role}\") #ANNOTATION Directly above it says it converts all messages into user or assistant, no?",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer is noting a contradiction - earlier code converts invalid roles to 'user', but this code skips messages with invalid roles."
       },
       {
         "filename": "conversation.py",
         "annotation": "stream: Whether to stream the response (default: False) #ANNOTATION I thought that stream /was/ enabled by default. Am I wrong?",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer is questioning whether streaming responses is enabled by default or not."
       },
       {
@@ -286,7 +286,7 @@
       {
         "filename": "conversation.py",
         "annotation": "role = \"user\"  # For backwards compatibility, convert invalid roles to 'user' #ANNOTATION Throw a warning",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer suggests adding a warning when converting invalid roles to 'user' for clarity."
       }
     ],
@@ -330,7 +330,7 @@
       {
         "filename": "tool_relevance_engine.py",
         "annotation": "examples_per_temp=20,  # Initial value, will be adjusted based on complexity #ANNOTATION so why is this a value if its just going to change midstream?",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer is questioning why examples_per_temp is hardcoded if it's going to be adjusted dynamically."
       }
     ],
@@ -338,7 +338,7 @@
       {
         "filename": "tool_relevance_engine.py",
         "annotation": "skip_llm_review=False,  # Keep LLM review for quality control #ANNOTATION The llm review should not be an optional step",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer suggests making LLM review a required step rather than configurable."
       }
     ],
@@ -364,19 +364,19 @@
       {
         "filename": "onload_checker.py",
         "annotation": "three_days_later = today + timedelta(days=3) #ANNOTATION Lookahead X days should be able to be specified in the config",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer suggests making the reminder lookup window configurable rather than hardcoded to 3 days."
       },
       {
         "filename": "onload_checker.py",
         "annotation": "end_date=three_days_later.strftime(\"%Y-%m-%d\") #ANNOTATION If we're updating it to not be a fixed amount of future days we should update this name",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer suggests renaming the variable if the fixed 3-day window becomes configurable."
       },
       {
         "filename": "conversation.py",
         "annotation": "Args: #ANNOTATION Every one of these should be required and fail loudly if it doesn't have one.",
-        "isfixed": false,
+        "isfixed": true,
         "context": "Developer suggests making constructor parameters required rather than optional with defaults."
       }
     ],
