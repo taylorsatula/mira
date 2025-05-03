@@ -222,6 +222,10 @@ class SystemConfig(BaseModel):
         default="INFO",
         description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
     )
+    timezone: str = Field(
+        default="UTC",
+        description="Default timezone for date/time operations (e.g., 'America/New_York', 'Europe/London')"
+    )
     streaming: bool = Field(
         default=True,
         description="Whether to stream responses from the API"
