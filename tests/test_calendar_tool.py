@@ -1,8 +1,12 @@
 import unittest
-from unittest.mock import patch, MagicMock
+import os
+import json
+import tempfile
+from unittest.mock import patch, MagicMock, mock_open
 from datetime import datetime, timedelta
 import uuid
 import caldav
+import requests
 
 from tools.calendar_tool import CalendarTool
 from errors import ToolError, ErrorCode
@@ -567,6 +571,283 @@ class TestCalendarTool(unittest.TestCase):
         
         self.assertEqual(context.exception.code, ErrorCode.TOOL_INVALID_INPUT)
         self.assertIn(f"Invalid action: {invalid_action}", str(context.exception))
+
+
+    @patch('time.time')
+    @patch('os.path.exists')
+    @patch('os.path.getmtime')
+    @patch('config.config.calendar_tool.cache_duration', new=3600)
+    def test_is_cache_valid(self, mock_getmtime, mock_exists, mock_time):
+        """Test validation of cache file."""
+        # Setup
+        cache_path = "/tmp/cache/12345.json"
+        
+        # Test 1: Cache file doesn't exist
+        mock_exists.return_value = False
+        self.assertFalse(self.tool._is_cache_valid(cache_path))
+        
+        # Test 2: Cache file exists but is expired
+        mock_exists.return_value = True
+        mock_time.return_value = 10000
+        mock_getmtime.return_value = 6000  # 4000 seconds old (> 3600s cache duration)
+        self.assertFalse(self.tool._is_cache_valid(cache_path))
+        
+        # Test 3: Cache file exists and is valid
+        mock_exists.return_value = True
+        mock_time.return_value = 10000
+        mock_getmtime.return_value = 9000  # 1000 seconds old (< 3600s cache duration)
+        self.assertTrue(self.tool._is_cache_valid(cache_path))
+    
+    @patch('requests.get')
+    @patch.object(CalendarTool, '_is_cache_valid')
+    @patch.object(CalendarTool, '_get_cache_path')
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('caldav.lib.error.vcal.VCalendar')
+    def test_fetch_ical_url_fresh(self, mock_vcalendar_class, mock_file, mock_get_cache_path, 
+                                 mock_is_cache_valid, mock_requests_get):
+        """Test fetching fresh iCalendar data from URL."""
+        # Setup mocks
+        mock_get_cache_path.return_value = "/tmp/cache/12345.json"
+        mock_is_cache_valid.return_value = False  # Force fresh fetch
+        
+        mock_response = MagicMock()
+        mock_response.text = "BEGIN:VCALENDAR\nEND:VCALENDAR"
+        mock_requests_get.return_value = mock_response
+        
+        # Mock VCalendar
+        mock_vcalendar = MagicMock()
+        mock_vcalendar_class.return_value = mock_vcalendar
+        
+        # Create mock event
+        mock_event = MagicMock()
+        mock_event.name = 'VEVENT'
+        mock_event.get.side_effect = lambda key, default=None: {
+            'uid': 'event-1',
+            'summary': 'Test Event',
+            'dtstart': MagicMock(value=datetime.fromisoformat("2025-05-15T10:00:00")),
+            'dtend': MagicMock(value=datetime.fromisoformat("2025-05-15T11:00:00")),
+            'description': 'Test Description',
+            'location': 'Test Location'
+        }.get(key, default)
+        
+        # Configure VCalendar to return our mock event
+        mock_vcalendar.components.return_value = [mock_event]
+        
+        # Call the method
+        url = "https://example.com/calendar.ics"
+        start_date = "2025-05-15"
+        end_date = "2025-05-16"
+        result = self.tool._fetch_ical_url(url, start_date, end_date)
+        
+        # Verify requests.get was called
+        mock_requests_get.assert_called_once_with(url, timeout=30)
+        
+        # Verify VCalendar was created with the response text
+        mock_vcalendar_class.assert_called_once_with(mock_response.text)
+        
+        # Verify components were requested from VCalendar
+        mock_vcalendar.components.assert_called_once()
+        
+        # Verify event properties were accessed
+        mock_event.get.assert_any_call('uid', str(uuid.uuid4()))
+        mock_event.get.assert_any_call('summary', 'No Title')
+        mock_event.get.assert_any_call('dtstart')
+        mock_event.get.assert_any_call('dtend')
+        
+        # Verify the result structure
+        self.assertTrue(result["success"])
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["calendar_id"], "external")
+        self.assertEqual(result["url"], url)
+        self.assertEqual(result["start_date"], start_date)
+        self.assertEqual(result["end_date"], end_date)
+        
+        # Verify event details
+        event = result["events"][0]
+        self.assertEqual(event["event_id"], "event-1")
+        self.assertEqual(event["summary"], "Test Event")
+        self.assertEqual(event["start"], "2025-05-15T10:00:00")
+        self.assertEqual(event["end"], "2025-05-15T11:00:00")
+        self.assertEqual(event["description"], "Test Description")
+        self.assertEqual(event["location"], "Test Location")
+        
+        # Verify cache was written
+        mock_file().write.assert_called_once()
+    
+    @patch.object(CalendarTool, '_is_cache_valid')
+    @patch.object(CalendarTool, '_get_cache_path')
+    @patch('builtins.open', new_callable=mock_open)
+    def test_fetch_ical_url_cached(self, mock_file, mock_get_cache_path, mock_is_cache_valid):
+        """Test fetching cached iCalendar data."""
+        # Setup mocks
+        mock_get_cache_path.return_value = "/tmp/cache/12345.json"
+        mock_is_cache_valid.return_value = True  # Use cache
+        
+        # Create mock cached data
+        cached_data = {
+            "success": True,
+            "events": [
+                {
+                    "event_id": "event-1",
+                    "summary": "Cached Event",
+                    "start": "2025-05-15T10:00:00",
+                    "end": "2025-05-15T11:00:00",
+                    "description": "Cached Description",
+                    "location": "Cached Location"
+                }
+            ],
+            "count": 1,
+            "calendar_id": "external",
+            "url": "https://example.com/calendar.ics",
+            "start_date": "2025-05-15",
+            "end_date": "2025-05-16"
+        }
+        
+        # Mock file read to return cached data
+        mock_file.return_value.__enter__.return_value.read.return_value = json.dumps(cached_data)
+        
+        # Call the method
+        url = "https://example.com/calendar.ics"
+        start_date = "2025-05-15"
+        end_date = "2025-05-16"
+        result = self.tool._fetch_ical_url(url, start_date, end_date)
+        
+        # Verify cache was checked and path was generated
+        mock_get_cache_path.assert_called_once()
+        mock_is_cache_valid.assert_called_once_with("/tmp/cache/12345.json")
+        
+        # Verify file was opened for reading
+        mock_file.assert_called_once_with('/tmp/cache/12345.json', 'r')
+        
+        # Verify the result structure matches cached data
+        self.assertEqual(result, cached_data)
+    
+    @patch.object(CalendarTool, '_fetch_ical_url')
+    def test_run_read_ical_url(self, mock_fetch_ical_url):
+        """Test run method with read_ical_url action."""
+        # Configure mock
+        expected_result = {"success": True, "events": []}
+        mock_fetch_ical_url.return_value = expected_result
+        
+        # Call method
+        url = "https://example.com/calendar.ics"
+        start_date = "2025-05-15"
+        end_date = "2025-05-16"
+        
+        result = self.tool.run(
+            action="read_ical_url",
+            ical_url=url,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        # Verify method was called with correct parameters
+        mock_fetch_ical_url.assert_called_once_with(url, start_date, end_date)
+        
+        # Verify result
+        self.assertEqual(result, expected_result)
+    
+    def test_run_read_ical_url_missing_url(self):
+        """Test run method with read_ical_url action but missing URL."""        
+        # Call method and verify error
+        with self.assertRaises(ToolError) as context:
+            self.tool.run(action="read_ical_url")
+        
+        self.assertEqual(context.exception.code, ErrorCode.TOOL_INVALID_INPUT)
+        self.assertIn("iCalendar URL must be a non-empty string", str(context.exception))
+        
+    @patch.object(CalendarTool, '_fetch_all_calendars')
+    def test_run_list_all_events(self, mock_fetch_all_calendars):
+        """Test run method with list_all_events action."""
+        # Configure mock
+        expected_result = {
+            "success": True,
+            "calendars": [
+                {
+                    "name": "Work Calendar",
+                    "events": [{"summary": "Meeting"}],
+                    "count": 1
+                }
+            ],
+            "total_events": 1
+        }
+        mock_fetch_all_calendars.return_value = expected_result
+        
+        # Call method
+        calendar_name = "Work Calendar"
+        start_date = "2025-05-01"
+        end_date = "2025-05-07"
+        
+        result = self.tool.run(
+            action="list_all_events",
+            calendar_name=calendar_name,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        # Verify method was called with correct parameters
+        mock_fetch_all_calendars.assert_called_once_with(calendar_name, start_date, end_date)
+        
+        # Verify result
+        self.assertEqual(result, expected_result)
+        
+    @patch('config.config.calendar_tool.calendars', new={
+        'work': MagicMock(name='Work Calendar', url='https://work.example.com', type='ical'),
+        'personal': MagicMock(name='Personal Calendar', url='https://personal.example.com', type='ical')
+    })
+    @patch.object(CalendarTool, '_fetch_ical_url')
+    def test_fetch_all_calendars(self, mock_fetch_ical_url):
+        """Test fetching events from all configured calendars."""
+        # Configure mock
+        mock_fetch_ical_url.return_value = {
+            "success": True,
+            "events": [{"summary": "Meeting"}],
+            "count": 1
+        }
+        
+        # Call method
+        result = self.tool._fetch_all_calendars(
+            start_date="2025-05-01",
+            end_date="2025-05-07"
+        )
+        
+        # Verify method was called twice (once for each calendar)
+        self.assertEqual(mock_fetch_ical_url.call_count, 2)
+        
+        # Verify result structure
+        self.assertTrue(result["success"])
+        self.assertEqual(len(result["calendars"]), 2)
+        self.assertEqual(result["total_events"], 2)
+        
+    @patch('config.config.calendar_tool.calendars', new={
+        'work': MagicMock(name='Work Calendar', url='https://work.example.com', type='ical'),
+        'personal': MagicMock(name='Personal Calendar', url='https://personal.example.com', type='ical')
+    })
+    @patch.object(CalendarTool, '_fetch_ical_url')
+    def test_fetch_all_calendars_with_name(self, mock_fetch_ical_url):
+        """Test fetching events from a specific calendar by name."""
+        # Configure mock
+        mock_fetch_ical_url.return_value = {
+            "success": True,
+            "events": [{"summary": "Meeting"}],
+            "count": 1
+        }
+        
+        # Call method
+        result = self.tool._fetch_all_calendars(
+            calendar_name="Work Calendar",
+            start_date="2025-05-01",
+            end_date="2025-05-07"
+        )
+        
+        # Verify method was called once (for the specified calendar)
+        mock_fetch_ical_url.assert_called_once()
+        
+        # Verify result structure
+        self.assertTrue(result["success"])
+        self.assertEqual(len(result["calendars"]), 1)
+        self.assertEqual(result["total_events"], 1)
+        self.assertEqual(result["calendars"][0]["name"], "Work Calendar")
 
 
 if __name__ == '__main__':
