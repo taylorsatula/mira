@@ -3,6 +3,12 @@ Conversation management for the AI agent system.
 
 This module handles conversation turns, context tracking,
 tool result integration, and conversation history management.
+
+Datetime handling follows the UTC-everywhere approach:
+- All datetimes are stored in UTC internally
+- Timezone-aware datetime objects are used consistently
+- Conversion to local time happens only when displaying to users
+- The utility functions from utils.timezone_utils are used consistently
 """
 import json
 import logging
@@ -17,6 +23,12 @@ if TYPE_CHECKING:
     from tool_relevance_engine import ToolRelevanceEngine
     from tools.workflows.workflow_manager import WorkflowManager
 from zoneinfo import ZoneInfo
+
+# Import timezone utilities for UTC-everywhere approach
+from utils.timezone_utils import (
+    utc_now, ensure_utc, convert_from_utc, format_datetime,
+    parse_utc_time_string, get_default_timezone
+)
 
 from errors import ConversationError, ErrorCode, error_context
 from config import config
@@ -34,13 +46,13 @@ class Message:
         role: The role of the message sender (must be 'user' or 'assistant')
         content: The content of the message (string or list of content blocks)
         id: Unique identifier for the message
-        created_at: Timestamp when the message was created
+        created_at: UTC datetime when the message was created
         metadata: Additional metadata for the message
     """
     role: str
     content: Union[str, List[Dict[str, Any]]]
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    created_at: float = field(default_factory=time.time)
+    created_at: datetime.datetime = field(default_factory=utc_now)
     metadata: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -59,11 +71,16 @@ class Message:
             # Handle list of complex objects
             content = [str(item) if not isinstance(item, (str, int, float, bool, dict, list, type(None))) else item for item in content]
         
+        # Format created_at as ISO string if it's a datetime, or pass through if it's still a float
+        created_at_formatted = self.created_at
+        if isinstance(self.created_at, datetime.datetime):
+            created_at_formatted = self.created_at.isoformat()
+        
         return {
             "role": self.role,
             "content": content,
             "id": self.id,
-            "created_at": self.created_at,
+            "created_at": created_at_formatted,
             "metadata": self.metadata
         }
     
@@ -78,11 +95,18 @@ class Message:
         Returns:
             Message object
         """
+        # Default to current UTC time if created_at is missing
+        if "created_at" not in data:
+            created_at = utc_now()
+        else:
+            # Parse ISO string into datetime - use timezone_utils for consistent handling
+            created_at = parse_utc_time_string(data["created_at"])
+            
         return cls(
             role=data["role"],
             content=data["content"],
             id=data.get("id", str(uuid.uuid4())),
-            created_at=data.get("created_at", time.time()),
+            created_at=created_at,
             metadata=data.get("metadata", {})
         )
 
@@ -364,10 +388,12 @@ class Conversation:
                 else:
                     selected_tools = None
                 
-                # Get current time information 
-                central_tz = ZoneInfo("America/Chicago")
-                now = datetime.datetime.now(central_tz)
-                time_info = f"Current datetime: {now.strftime('%Y-%m-%d %I:%M:%S %p')} Central Time (America/Chicago)\n\n"
+                # Get current time information - use our utility for consistent UTC handling
+                now_utc = utc_now()
+                # Convert to user's configured timezone for display
+                user_tz = get_default_timezone()
+                now_local = convert_from_utc(now_utc, user_tz)
+                time_info = f"Current datetime: {format_datetime(now_local, 'date_time', include_timezone=True)} (UTC: {format_datetime(now_utc, 'date_time')})\n\n"
                 
                 # Static content for caching (system prompt and user info)
                 static_content = self.system_prompt + self.user_info
@@ -418,8 +444,13 @@ class Conversation:
                     # Update token counts if available in the response object
                     if hasattr(response, 'usage'):
                         usage = response.usage
-                        self.tokens_in += getattr(usage, 'input_tokens', 0)
-                        self.tokens_out += getattr(usage, 'output_tokens', 0)
+                        input_tokens = getattr(usage, 'input_tokens', 0)
+                        output_tokens = getattr(usage, 'output_tokens', 0)
+                        self.tokens_in += input_tokens
+                        self.tokens_out += output_tokens
+
+                        # Log token usage with timestamp for tracking
+                        self.logger.info(f"Token usage at {format_datetime(utc_now(), 'iso')}: input={input_tokens}, output={output_tokens}")
                     
                     # For stream responses, get the final message
                     if hasattr(response, 'get_final_message'):
@@ -439,8 +470,13 @@ class Conversation:
                     # Update token counts if available in the response object
                     if hasattr(response, 'usage'):
                         usage = response.usage
-                        self.tokens_in += getattr(usage, 'input_tokens', 0)
-                        self.tokens_out += getattr(usage, 'output_tokens', 0)
+                        input_tokens = getattr(usage, 'input_tokens', 0)
+                        output_tokens = getattr(usage, 'output_tokens', 0)
+                        self.tokens_in += input_tokens
+                        self.tokens_out += output_tokens
+
+                        # Log token usage with timestamp for tracking
+                        self.logger.info(f"Token usage at {format_datetime(utc_now(), 'iso')}: input={input_tokens}, output={output_tokens}")
                 
                 
                 # Extract text content for final return value
@@ -706,8 +742,8 @@ class Conversation:
             "conversation_id": self.conversation_id,
             "system_prompt": self.system_prompt,
             "messages": [message.to_dict() for message in self.messages],
-            "created_at": self.messages[0].created_at if self.messages else time.time(),
-            "updated_at": self.messages[-1].created_at if self.messages else time.time(),
+            "created_at": self.messages[0].created_at if self.messages else utc_now(),
+            "updated_at": self.messages[-1].created_at if self.messages else utc_now(),
             "_detected_workflow_id": self._detected_workflow_id,
             "tokens_in": self.tokens_in,
             "tokens_out": self.tokens_out,

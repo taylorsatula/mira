@@ -348,10 +348,13 @@ def save_conversation(conversation: Conversation) -> None:
         # Define the file path for the conversation
         file_path = conversation_dir / f"conversation_{conversation.conversation_id}.json"
         
-        # Write the conversation data to the file
+        # Write the conversation data to the file using serialization module
         try:
+            from serialization import to_json
             with open(file_path, 'w') as f:
-                json.dump(conversation_data, f, indent=config.system.json_indent)
+                # Use the custom to_json function that handles datetime objects
+                json_data = to_json(conversation_data, indent=config.system.json_indent)
+                f.write(json_data)
             logging.info(f"Saved conversation: {conversation.conversation_id}")
         except Exception as e:
             raise FileOperationError(
