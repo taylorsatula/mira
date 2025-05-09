@@ -4,6 +4,12 @@ Weather tool for retrieving forecast data and calculating heat stress indices.
 This tool provides weather forecast information from OpenMeteo API and calculates
 Wet Bulb Globe Temperature (WBGT) for heat stress assessment, which is particularly
 useful for field technicians working in hot conditions.
+
+Datetime handling follows the UTC-everywhere approach:
+- All datetimes are stored in UTC internally
+- Timezone-aware datetime objects are used consistently
+- Conversion to local time happens only when displaying to users
+- The utility functions from utils.timezone_utils are used consistently
 """
 
 # Standard library imports
@@ -18,6 +24,9 @@ from datetime import datetime, timedelta
 # Third-party imports
 import requests
 from pydantic import BaseModel, Field
+
+# Import timezone utilities for UTC-everywhere approach
+from utils.timezone_utils import utc_now, ensure_utc, convert_from_utc, format_datetime, parse_utc_time_string
 
 # Local imports
 from tools.repo import Tool
@@ -136,7 +145,9 @@ class WeatherCache:
             return False
             
         # Check if cache is expired based on file modification time
-        cache_age = time.time() - os.path.getmtime(cache_path)
+        # Use utc_now timestamp for consistent timezone handling
+        cache_mtime = os.path.getmtime(cache_path)
+        cache_age = utc_now().timestamp() - cache_mtime
         return cache_age < self.cache_duration
     
     def get(self, key: str) -> Optional[Dict[str, Any]]:
@@ -266,12 +277,15 @@ class ValidationUtils:
             )
             
         try:
-            # Parse date in ISO format
-            date_obj = datetime.fromisoformat(date_str)
+            # Parse date in ISO format using our timezone utilities
+            date_obj = parse_utc_time_string(date_str)
+
+            # Ensure we're working with UTC time for consistency
+            now_utc = utc_now()
             
             # Ensure date is not too far in the future
             max_days = 16  # OpenMeteo typically supports up to 16 days
-            if date_obj.date() > datetime.now().date() + timedelta(days=max_days):
+            if date_obj.date() > now_utc.date() + timedelta(days=max_days):
                 raise ToolError(
                     f"Date cannot be more than {max_days} days in the future",
                     ErrorCode.TOOL_INVALID_INPUT,
@@ -732,21 +746,50 @@ class WeatherTool(Tool):
         # Get weather data
         weather_data = self._get_weather_data(latitude, longitude, forecast_type, date, parameters)
         
+        # Get the API timezone from the response
+        api_timezone = weather_data.get("timezone", "UTC")
+        
+        # Process forecast data to ensure all timestamps are properly handled
+        forecast_data = weather_data.get(forecast_type, {})
+        
+        # Process timestamps in time data if they exist in the response
+        if "time" in forecast_data:
+            times = forecast_data["time"]
+            processed_times = []
+            
+            for time_str in times:
+                # Parse the time string into a UTC datetime (API returns timezone-specific times)
+                try:
+                    # If the time string has no timezone info, attach the API timezone
+                    if 'T' in time_str and not ('+' in time_str or 'Z' in time_str):
+                        time_str = f"{time_str}+00:00"  # Assume UTC if no timezone
+                    
+                    # Use our timezone_utils consistently for parsing
+                    dt = parse_utc_time_string(time_str)
+                    processed_times.append(dt.isoformat())
+                except ValueError:
+                    # If parsing fails, use the original string
+                    processed_times.append(time_str)
+            
+            # Replace the original times with processed ones if successful
+            if processed_times:
+                forecast_data["time"] = processed_times
+        
         # Return formatted response
         return {
             "location": {
                 "latitude": weather_data.get("latitude", latitude),
                 "longitude": weather_data.get("longitude", longitude),
                 "elevation": weather_data.get("elevation"),
-                "timezone": weather_data.get("timezone")
+                "timezone": api_timezone
             },
             "forecast_type": forecast_type,
             "forecast": {
                 # Include units if available
                 f"{forecast_type}_units": weather_data.get(f"{forecast_type}_units", {}),
                 
-                # Include forecast data
-                forecast_type: weather_data.get(forecast_type, {})
+                # Include processed forecast data
+                forecast_type: forecast_data
             }
         }
     
@@ -796,8 +839,32 @@ class WeatherTool(Tool):
                 {"missing_params": missing_params}
             )
         
-        # Calculate WBGT and heat stress risk
+        # Get the API timezone from the response
+        api_timezone = weather_data.get("timezone", "UTC")
+        
+        # Process timestamps in time data - ensure they're properly formatted
         times = hourly_data.get("time", [])
+        processed_times = []
+        
+        for time_str in times:
+            # Parse the time string into a UTC datetime (API returns timezone-specific times)
+            try:
+                # If the time string has no timezone info, attach the API timezone
+                if 'T' in time_str and not ('+' in time_str or 'Z' in time_str):
+                    time_str = f"{time_str}+00:00"  # Assume UTC if no timezone
+                
+                # Use our timezone_utils consistently for parsing
+                dt = parse_utc_time_string(time_str)
+                processed_times.append(dt.isoformat())
+            except ValueError:
+                # If parsing fails, use the original string
+                processed_times.append(time_str)
+        
+        # Replace the original times with processed ones if successful
+        if processed_times:
+            hourly_data["time"] = processed_times
+        
+        # Continue with WBGT calculation
         temp_2m = hourly_data.get("temperature_2m", [])
         wet_bulb_temp = hourly_data.get("wet_bulb_temperature_2m", [])
         radiation = hourly_data.get("shortwave_radiation", [])
@@ -834,7 +901,7 @@ class WeatherTool(Tool):
                 "latitude": weather_data.get("latitude", latitude),
                 "longitude": weather_data.get("longitude", longitude),
                 "elevation": weather_data.get("elevation"),
-                "timezone": weather_data.get("timezone")
+                "timezone": api_timezone
             },
             "forecast_type": forecast_type,
             "forecast": {

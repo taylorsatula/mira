@@ -5,6 +5,12 @@ This tool provides a unified interface for creating and managing both simple
 recurring tasks and multi-step sequences with a common scheduling system.
 It replaces the separate scheduler_tool and chain_tool with a single,
 more intuitive interface.
+
+Datetime handling follows the UTC-everywhere approach:
+- All datetimes are stored in UTC internally
+- Conversion to local time happens only when displaying to users
+- All datetime objects are timezone-aware 
+- We use the utilities from utils.timezone_utils for consistent handling
 """
 
 import json
@@ -13,6 +19,8 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 from pydantic import BaseModel, Field
+
+from utils.timezone_utils import utc_now, ensure_utc, convert_from_utc, format_datetime
 
 from tools.repo import Tool
 from errors import ToolError, ErrorCode, error_context
@@ -447,18 +455,16 @@ class AutomationTool(Tool):
         try:
             automation = self.engine.create_automation(kwargs)
 
-            # Import timezone utilities
-            from utils.timezone_utils import convert_to_timezone, format_datetime
-
             # Generate a human-readable message with proper timezone
             frequency = automation.frequency.value
             
-            # Convert time to user's timezone for display
+            # Ensure the scheduled_time is UTC and then convert to user's timezone for display
             user_tz = automation.timezone
-            time_display = format_datetime(automation.scheduled_time, 'short', user_tz)
+            scheduled_time_utc = ensure_utc(automation.scheduled_time)
+            time_display = format_datetime(scheduled_time_utc, 'short', user_tz)
 
             if frequency == "once":
-                date_display = format_datetime(automation.scheduled_time, 'date', user_tz)
+                date_display = format_datetime(scheduled_time_utc, 'date', user_tz)
                 message = f"Automation '{automation.name}' scheduled to run once on {date_display} at {time_display}"
             elif frequency == "daily":
                 message = f"Automation '{automation.name}' scheduled to run daily at {time_display}"
@@ -479,7 +485,8 @@ class AutomationTool(Tool):
                 )
                 message = f"Automation '{automation.name}' scheduled to run weekly on {day_name} at {time_display}"
             elif frequency == "monthly":
-                day = automation.day_of_month or automation.scheduled_time.day
+                # Use day_of_month if specified, otherwise use the day from the UTC time
+                day = automation.day_of_month or scheduled_time_utc.day
                 message = f"Automation '{automation.name}' scheduled to run monthly on day {day} at {time_display}"
             else:
                 message = f"Automation '{automation.name}' scheduled with {frequency} frequency at {time_display}"

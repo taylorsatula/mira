@@ -4,6 +4,12 @@ Reminder tool for managing scheduled reminders.
 This tool allows users to create reminders with specific dates, details,
 and contact information. It stores reminders in a SQLite database and provides
 functions to add, retrieve, and manage reminders.
+
+Datetime handling follows the UTC-everywhere approach:
+- All datetimes are stored in UTC internally
+- Timezone-aware datetime objects are used consistently
+- Conversion to local time happens only when displaying to users
+- The utility functions from utils.timezone_utils are used consistently
 """
 
 import logging
@@ -22,7 +28,7 @@ from db import Database, Base
 from config.registry import registry
 from utils.timezone_utils import (
     validate_timezone, get_default_timezone, convert_to_timezone,
-    format_datetime, parse_time_string
+    format_datetime, parse_time_string, utc_now, ensure_utc
 )
 
 # Define configuration class for ReminderTool
@@ -53,7 +59,7 @@ class Reminder(Base):
     
     # Scheduling information
     reminder_date = Column(DateTime, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now())
+    created_at = Column(DateTime, default=lambda: utc_now())
     completed = Column(Boolean, default=False)
     completed_at = Column(DateTime)
     
@@ -346,8 +352,8 @@ class ReminderTool(Tool):
             id=reminder_id,
             title=title,
             description=description,
-            reminder_date=reminder_date,
-            created_at=datetime.now(),
+            reminder_date=ensure_utc(reminder_date),  # Ensure it's UTC-aware
+            created_at=utc_now(),  # Use UTC-aware time
             completed=False,
             contact_name=contact_name,
             contact_email=contact_email,
@@ -428,10 +434,9 @@ class ReminderTool(Tool):
                 ErrorCode.TOOL_INVALID_INPUT
             )
             
-        # Process date types - use timezone-aware datetime objects
-        tz_name = get_default_timezone()
-        today_naive = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        today = convert_to_timezone(today_naive, tz_name)
+        # Use UTC for all internal datetime operations
+        today = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
+        # No timezone conversion needed here - we'll work in UTC and only convert at display time
         
         with self.db.get_session() as session:
             query = session.query(Reminder)
@@ -487,7 +492,8 @@ class ReminderTool(Tool):
                         Reminder.reminder_date < next_date
                     )
                     # Format the date in user timezone
-                    date_str = format_datetime(parsed_date, "date", tz_name)
+                    user_tz = get_default_timezone()
+                    date_str = format_datetime(parsed_date, "date", user_tz)
                     date_description = f"on {date_str}"
                 except Exception as e:
                     raise ToolError(
@@ -512,8 +518,9 @@ class ReminderTool(Tool):
                         Reminder.reminder_date < parsed_end
                     )
                     # Format the dates in user timezone
-                    start_str = format_datetime(parsed_start, "date", tz_name)
-                    end_str = format_datetime(parsed_end - timedelta(days=1), "date", tz_name)
+                    user_tz = get_default_timezone()
+                    start_str = format_datetime(parsed_start, "date", user_tz)
+                    end_str = format_datetime(parsed_end - timedelta(days=1), "date", user_tz)
                     date_description = f"from {start_str} to {end_str}"
                 except Exception as e:
                     raise ToolError(
@@ -560,7 +567,7 @@ class ReminderTool(Tool):
             
         # Update reminder
         reminder.completed = True
-        reminder.completed_at = datetime.now()
+        reminder.completed_at = utc_now()  # Use UTC-aware time
         
         # Save changes
         try:
@@ -748,19 +755,19 @@ class ReminderTool(Tool):
         Raises:
             ValueError: If date parsing fails
         """
-        # Get reference date at noon in user timezone
-        tz_name = get_default_timezone()
-        today = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
-        today_tz = convert_to_timezone(today, tz_name)
+        # Use UTC for internal operations and only convert to user timezone when displaying
+        today_utc = utc_now().replace(hour=12, minute=0, second=0, microsecond=0)
+        # Store the user's timezone for later display
+        user_tz = get_default_timezone()
         
         # Handle some common natural language cases
         date_str = date_str.lower().strip()
         
         if date_str == "today":
-            return today_tz
+            return today_utc
             
         if date_str == "tomorrow":
-            return today_tz + timedelta(days=1)
+            return today_utc + timedelta(days=1)
             
         if date_str.startswith("in "):
             # Handle "in X days/weeks/months/years" format
@@ -771,20 +778,22 @@ class ReminderTool(Tool):
                     unit = parts[2].lower()
                     
                     if unit.startswith("day"):
-                        return today_tz + timedelta(days=amount)
+                        return today_utc + timedelta(days=amount)
                     elif unit.startswith("week"):
-                        return today_tz + timedelta(weeks=amount)
+                        return today_utc + timedelta(weeks=amount)
                     elif unit.startswith("month"):
-                        return today_tz + relativedelta(months=amount)
+                        return today_utc + relativedelta(months=amount)
                     elif unit.startswith("year"):
-                        return today_tz + relativedelta(years=amount)
+                        return today_utc + relativedelta(years=amount)
                 except ValueError:
                     pass  # Fall back to our parse_time_string utility
         
         # Use our timezone-aware parsing utility
         try:
-            # This handles ISO format and other time string formats with timezone awareness
-            return parse_time_string(date_str, tz_name, today_tz)
+            # Parse using the user's timezone, but then ensure it's converted to UTC for storage
+            parsed_dt = parse_time_string(date_str, user_tz, today_utc)
+            # Ensure the result is in UTC
+            return ensure_utc(parsed_dt)
         except Exception as e:
             raise ValueError(f"Could not parse date: {date_str}. Error: {str(e)}")
 
