@@ -111,3 +111,27 @@ Based on the in-depth analysis in your report, please proceed to implement the s
 
 
 ###################
+
+
+
+
+
+  Current System:
+  [Files] -> AppConfig -> Conversation
+                        ↗              ↘
+       ToolRepository ↗                 → System Prompt
+                                       ↗
+           WorkflowManager -----------↗
+
+  Proposed System:
+                        → WorkingMemory ←
+                      ↗       |         ↖
+  AppConfig ---------↗        |          ↖
+                              ↓           ToolRepository
+                        Conversation      ↗
+                              ↑         ↗
+                              ↑       ↗
+                        WorkflowManager
+
+
+
