@@ -22,7 +22,7 @@ from tools.repo import ToolRepository
 from tools.tool_feedback import save_tool_feedback
 from conversation import Conversation
 from onload_checker import OnLoadChecker, add_stimuli_to_conversation
-from utils import task_automation_controller
+from utils import automation_controller
 
 
 def parse_arguments():
@@ -188,9 +188,9 @@ def initialize_system(args) -> Dict[str, Any]:
         tool_relevance_engine = ToolRelevanceEngine(tool_repo, shared_model)
         logger.info("Initialized ToolRelevanceEngine for dynamic tool management")
         
-        # Initialize the WorkflowManager with shared model
-        workflow_manager = WorkflowManager(tool_repo, model=shared_model)
-        logger.info("Initialized WorkflowManager for predefined workflows")
+        # Initialize the WorkflowManager with shared model and LLM bridge for dynamic tool selection
+        workflow_manager = WorkflowManager(tool_repo, model=shared_model, llm_bridge=llm_bridge)
+        logger.info("Initialized WorkflowManager with LLM bridge for dynamic tool selection")
         
         # Initialize or load conversation
         if args.conversation:
@@ -270,14 +270,18 @@ def initialize_system(args) -> Dict[str, Any]:
             logger.info(f"Found {len(onload_stimuli)} notification(s) from on-load checks")
             add_stimuli_to_conversation(onload_stimuli, conversation)
         
-        # Initialize and start the scheduler and chain systems
-        system_components = task_automation_controller.initialize_systems(
+        # Initialize and start the automation systems
+        automation_components = automation_controller.initialize_systems(
             tool_repo=tool_repo, 
             llm_bridge=llm_bridge
         )
-        task_automation_controller.start_systems()
+        automation_controller.start_systems()
+        
+        # Get the automation engine from components
+        automation_engine = automation_components.get('scheduler')
         
         logger.info(f"System initialized with conversation ID: {conversation.conversation_id}")
+        logger.info("Automation systems initialized and started")
         
         # Now that we have a conversation, add token tracking to the LLM bridge
         def token_tracking_decorator(func: Callable) -> Callable:
@@ -318,9 +322,7 @@ def initialize_system(args) -> Dict[str, Any]:
             'tool_relevance_engine': tool_relevance_engine,
             'workflow_manager': workflow_manager,
             'onload_checker': onload_checker,
-            'scheduler': system_components.get('scheduler'),
-            'notification_manager': system_components.get('notification_manager'),
-            'chain_executor': system_components.get('chain_executor')
+            'automation_engine': automation_engine
         }
 
 
@@ -384,24 +386,8 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
         if message.role == "assistant" and message.metadata.get("is_notification"):
             print(f"\nAssistant: {message.content}")
     
-    # Check for task and chain notifications
-    notification_manager = task_automation_controller.get_notification_manager()
-    if notification_manager:
-        pending_notifications = task_automation_controller.check_pending_notifications(
-            conversation_id=conversation.conversation_id,
-            limit=3
-        )
-        
-        # Display pending notifications
-        for notification in pending_notifications:
-            if "chain" in notification.title.lower():
-                print(f"\nTask Chain: {notification.title}")
-            else:
-                print(f"\nScheduled Task: {notification.title}")
-            print(f"{notification.content}")
-            
-            # Mark as displayed
-            notification_manager.mark_notification_displayed(notification.id)
+    # In the new unified automation system, notifications are handled differently
+    # This section will be enhanced in future updates as needed
 
     def print_token(token: str):
         """Print token by token for streaming effect."""
@@ -526,7 +512,7 @@ def main():
             interactive_mode(system, stream_mode=stream_mode)
     finally:
         # Stop all automation systems
-        task_automation_controller.stop_systems()
+        automation_controller.stop_systems()
         
         # Final cleanup
         logging.info("Session ended")

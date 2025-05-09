@@ -1,17 +1,18 @@
 """
-Task manager package for scheduling and chaining automated tasks.
+Task manager package for scheduling and executing automated tasks and sequences.
 
-This package provides a system for scheduling tasks, executing chains of tasks,
-and managing notifications related to automated task execution.
+This package provides a unified system for managing automated tasks, including
+both simple recurring tasks and multi-step sequences, with a common scheduling system.
 """
 
-# Make task scheduler components available at package level
-from task_manager.task_scheduler import TaskScheduler, TaskFrequency, TaskStatus
-from task_manager.scheduled_task import ScheduledTask, ExecutionMode
-from task_manager.task_notification import TaskNotification, NotificationManager
-
-# Make chain components available at package level
-from task_manager.task_chain import TaskChain, ChainStep, ChainStatus, ErrorPolicy
-from task_manager.chain_execution import ChainExecution, StepExecution
-from task_manager.chain_executor import ChainExecutor
-from task_manager.chain_template import TemplateEngine
+# Make automation system components available at package level
+from task_manager.automation import (
+    Automation, AutomationType, AutomationStatus, 
+    ExecutionMode, TaskFrequency, AutomationStep, 
+    AutomationExecution, StepExecution, ErrorPolicy,
+    ConditionType, TriggerType, ExecutionStatus
+)
+from task_manager.automation_engine import (
+    get_automation_engine, initialize_automation_engine, 
+    AutomationEngine, TemplateEngine
+)
