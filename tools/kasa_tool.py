@@ -48,7 +48,9 @@ class KasaTool(Tool):
     """
     
     name = "kasa_tool"
-    description = """Controls TP-Link Kasa smart home devices on the local network with comprehensive management capabilities.
+    simple_description = """Controls TP-Link Kasa smart home devices on the local network with comprehensive management capabilities."""
+    
+    implementation_details = """
 
 This tool enables complete control of Kasa smart devices including:
 
@@ -72,6 +74,8 @@ This tool enables complete control of Kasa smart devices including:
    - For supported devices, provides power consumption and additional metrics
 
 Use this tool whenever you need to control or check the status of Kasa smart home devices on the local network."""
+
+    description = simple_description + implementation_details
     usage_examples = [
         # {
         #     "input": {

@@ -265,6 +265,15 @@ class ToolRepository:
             self.tools[tool.name] = tool
             self.logger.info(f"Registered tool: {tool.name}")
             
+            # Create the tool's data directory in data/tools/{tool_name}/
+            config = get_config()
+            tool_data_dir = os.path.join(config.paths.data_dir, "tools", tool.name)
+            try:
+                os.makedirs(tool_data_dir, exist_ok=True)
+                self.logger.debug(f"Created or verified tool data directory: {tool_data_dir}")
+            except Exception as e:
+                self.logger.warning(f"Failed to create tool data directory for {tool.name}: {e}")
+            
             # Update tool list file
             self._update_tool_list_file()
     

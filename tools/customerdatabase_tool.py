@@ -50,8 +50,9 @@ class CustomerDatabaseTool(Tool):
     """
 
     name = "customerdatabase_tool"
-    description = """Manages a comprehensive customer directory using database storage with robust search and location-based capabilities. This tool allows you to retrieve details about existing customers. DO NOT use this tool if you believe you need to create a new customer or edit an existing customer's details.. If you need to create a new customer/edit details use square_tool instead.
+    simple_description = """Manages a comprehensive customer directory using database storage with robust search and location-based capabilities. This tool allows you to retrieve details about existing customers. DO NOT use this tool if you believe you need to create a new customer or edit an existing customer's details.. If you need to create a new customer/edit details use square_tool instead."""
     
+    implementation_details = """
 This tool maintains a SQLite database for customer data with support for importing from external systems (currently Square). It provides efficient searching and retrieving of customer data through multiple operations:
 
 1. search_customers: Find customers by various identifiers including name, email, phone number, or address. 
@@ -73,6 +74,8 @@ This tool maintains a SQLite database for customer data with support for importi
 4. rebuild_directory: Refresh the customer database from external systems.
    - Optional 'source' parameter (currently only supports 'square')
    - Returns status information about the rebuild operation"""
+
+    description = simple_description + implementation_details
 
     def __init__(self):
         """Initialize the Customer tool."""

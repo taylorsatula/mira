@@ -34,8 +34,9 @@ class QuestionnaireTool(Tool):
     """
 
     name = "questionnaire_tool"
-    description = """Manages interactive multi-question surveys to collect structured information from users without sending intermediate responses to the Anthropic API. You can use this tool to collect information if you are confident that clarification cannot reasonably be collected in a single message. This tool also has access to predefined questionnaires for collecting customer details (customer_questionnaire.json) and a recipe generator (recipe_questionnaire.json)
+    simple_description = """Manages interactive multi-question surveys to collect structured information from users without sending intermediate responses to the Anthropic API. You can use this tool to collect information if you are confident that clarification cannot reasonably be collected in a single message. This tool also has access to predefined questionnaires for collecting customer details (customer_questionnaire.json) and a recipe generator (recipe_questionnaire.json)"""
 
+    implementation_details = """
 This tool enables conducting comprehensive questionnaires with various customization options:
 
 1. Running Questionnaires:
@@ -58,6 +59,7 @@ This tool enables conducting comprehensive questionnaires with various customiza
    - IMPORTANT: When presenting results, show only the raw data without interpretive commentary
 
 Use this tool whenever you need to gather multiple pieces of structured information from the user in a single interaction session."""
+    description = simple_description + implementation_details
     usage_examples = [
 #         {
 #             "input": {"questionnaire_id": "recipe"},

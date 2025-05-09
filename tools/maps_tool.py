@@ -19,7 +19,7 @@ from tools.repo import Tool
 from errors import ToolError, ErrorCode, error_context
 from config.registry import registry
 
-# Define configuration class for MapsTool
+# Define configuration class for  MapsTool
 class MapsToolConfig(BaseModel):
     """Configuration for the maps_tool."""
     enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
@@ -53,36 +53,41 @@ class MapsTool(Tool):
     """
 
     name = "maps_tool"
-    description = """Provides comprehensive location intelligence and geographical services through Maps API integration. Use this tool when the user needs details of a place, geocoding, or relative information compared to another place.
+    simple_description = """Provides comprehensive location intelligence and geographical services through Maps API integration. Use this tool when the user needs details of a place, geocoding, or relative information compared to another place."""
+    
+    implementation_details = """
 
-This tool enables interaction with mapping services for various location-based operations including:
+   This tool enables interaction with mapping services for various location-based operations including:
+   
+   1. geocode: Convert natural language locations to precise coordinates.
+      - Requires 'query' parameter with address, landmark, or place name
+      - Returns formatted address, geographic coordinates, and place information
+   
+   2. reverse_geocode: Convert coordinates to address information.
+      - Requires 'lat' and 'lng' parameters as decimal degrees
+      - Returns detailed address components for the specified location
+   
+   3. place_details: Retrieve comprehensive information about specific places.
+      - Requires 'place_id' parameter (unique place identifier)
+      - Returns name, address, phone number, website, opening hours, and other details
+   
+   4. places_nearby: Discover places around a specific location.
+      - Requires 'lat' and 'lng' parameters for center point
+      - Optional parameters: 'radius' (default 1000m), 'type' (e.g., restaurant), 'keyword', 'open_now'
+      - Returns matching places sorted by proximity with ratings and details
+   
+   5. find_place: Locate specific places by name or description.
+      - Requires 'query' parameter with place name
+      - Returns precise match results with location data
+   
+   6. calculate_distance: Determine distance between two geographic points.
+      - Requires 'lat1', 'lng1', 'lat2', 'lng2' parameters
+      - Returns distance in meters, kilometers, and miles
+   
+   Use this tool for any task requiring location resolution, place discovery, geocoding, or geographic calculations."""
+   
+    description = simple_description + implementation_details
 
-1. geocode: Convert natural language locations to precise coordinates.
-   - Requires 'query' parameter with address, landmark, or place name
-   - Returns formatted address, geographic coordinates, and place information
-
-2. reverse_geocode: Convert coordinates to address information.
-   - Requires 'lat' and 'lng' parameters as decimal degrees
-   - Returns detailed address components for the specified location
-
-3. place_details: Retrieve comprehensive information about specific places.
-   - Requires 'place_id' parameter (unique place identifier)
-   - Returns name, address, phone number, website, opening hours, and other details
-
-4. places_nearby: Discover places around a specific location.
-   - Requires 'lat' and 'lng' parameters for center point
-   - Optional parameters: 'radius' (default 1000m), 'type' (e.g., restaurant), 'keyword', 'open_now'
-   - Returns matching places sorted by proximity with ratings and details
-
-5. find_place: Locate specific places by name or description.
-   - Requires 'query' parameter with place name
-   - Returns precise match results with location data
-
-6. calculate_distance: Determine distance between two geographic points.
-   - Requires 'lat1', 'lng1', 'lat2', 'lng2' parameters
-   - Returns distance in meters, kilometers, and miles
-
-Use this tool for any task requiring location resolution, place discovery, geocoding, or geographic calculations."""
     usage_examples = [
         # # Example 1: Geocode an address
         # {

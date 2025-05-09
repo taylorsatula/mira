@@ -34,9 +34,12 @@ class HTTPTool(Tool):
     """
     
     name = "http_tool"
-    description = """
+    simple_description = """
     Makes HTTP requests to external APIs and web services. This tool lets you directly interact with 
     web APIs and services by sending HTTP requests with various methods, parameters, and headers. Use this tool when you need to contact a remote server that is not handled by another tool AND you know the correct API format for the service. If you are unsure of the format but confident that you need this tool please ask the user for the proper format and then try again.
+    """
+    
+    implementation_details = """
     
     OPERATIONS:
     - GET: Retrieve data from a specified URL
@@ -95,6 +98,8 @@ class HTTPTool(Tool):
     - Cookie persistence is not maintained between requests
     - Binary responses are not supported (images, files, etc.)
     """
+    
+    description = simple_description + implementation_details
     
     usage_examples = [
         {

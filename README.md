@@ -76,7 +76,8 @@ Once running, you can use these commands:
 
 - **Persistent Conversations**: Save and resume conversations with unique IDs
 - **Streaming Responses**: See AI responses as they are generated 
-- **The Ability to Fashion Its Own Tools**: This one is the kicker. The Reminders tool was created for $0.98 in API tokens and a one line prompt describing what I wanted out of the tool. No code edits, no training data, no creating directories or configs,,. just speak a tool into existance (you should review the code eventually tho lol). It returned a well-formed SQLite integrated tool with Read/Write/Update/Delete/Manage. Proper documentation and all. 
+- **The Ability to Fashion Its Own Tools**: This one is the kicker. The Reminders tool was created for $0.98 in API tokens and a one line prompt describing what I wanted out of the tool. No code edits, no training data, no creating directories or configs,,. just speak a tool into existance (you should review the code eventually tho lol). It returned a well-formed SQLite integrated tool with Read/Write/Update/Delete/Manage. Proper documentation and all.
+- **Flexible Workflow System**: Create multi-step workflows with branching, conditional logic, and dynamic progression. The system can extract data from initial prompts, skip completed steps, and adapt based on gathered information.
 - **Tool Feedback Collection**: Capture user feedback about tool activations with AI-powered analysis to improve classification accuracy. The system analyzes feedback, examines related training examples, and provides technical insights for improving tool selection.
 - **Configurable System**: Configure via environment variables, files, or command line
 
@@ -127,6 +128,7 @@ Mira follows a modular architecture:
 - **LLM Bridge**: Provides a unified interface to the Anthropic API
 - **Tool Repository**: Manages discovery and execution of specialized tools
 - **ToolRelevanceEngine**: Manages (add/remove) the tools in the context window autonomously
+- **WorkflowManager**: Coordinates multi-step processes with prerequisite-based progression, contextual tool activation, and adaptive execution
 - **Tool Feedback System**: Captures and stores user feedback about tool activations with contextual information
 - **Configuration System**: Centralizes configuration from multiple sources
   - **Dynamic Tool Configuration**: Automatically discovers and configures tools

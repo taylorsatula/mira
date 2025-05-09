@@ -53,6 +53,7 @@ class ErrorCode(Enum):
     TOOL_NOT_ENABLED = 408
     TOOL_INVALID_PARAMETERS = 409
     TOOL_CIRCULAR_DEPENDENCY = 410
+    TOOL_UNAVAILABLE = 411
 
     # Conversation errors (5xx)
     CONVERSATION_NOT_FOUND = 501

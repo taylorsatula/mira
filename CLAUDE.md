@@ -54,7 +54,7 @@
 - **Reference Implementation**: Use `tools/sample_tool.py` as a blueprint when creating new tools. It demonstrates the proper structure, error handling, testing approach, and documentation style.
 - **Data Management**: Store persistent tool data in `data/tools/{tool_name}/` directory to maintain consistency with project structure.
 - **Error Handling**: Always use the `error_context` manager from `errors.py` and raise the appropriate `ToolError` with a specific `ErrorCode` to ensure consistent error reporting across tools.
-- **Tool Documentation**: Write detailed tool descriptions (see `supporting_files/TOOL_DEF_BESTPRACTICE.md`) that clearly explain what the tool does, when it should be used, all parameters, and any limitations.
+- **Tool Documentation**: Write detailed tool descriptions (see `docs/TOOL_DEF_BESTPRACTICE.md`) that clearly explain what the tool does, when it should be used, all parameters, and any limitations.
 - **Comprehensive Testing**: For new tools, create corresponding test files in `tests/` that verify both success paths and error conditions, following patterns in existing test files.
 
 ## Continuous Improvement

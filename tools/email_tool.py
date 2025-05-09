@@ -88,10 +88,11 @@ class EmailTool(Tool):
     """
     
     name = "email_tool"
-    description = """
+    simple_description = """
     Email management tool that provides access to email accounts via IMAP/SMTP protocols. 
     Use this tool to read, search, send, and manage emails.
-    
+    """
+    implementation_details = """
     OPERATIONS:
     - get_emails: Retrieve emails from specified folder with options for filtering and content loading
       Parameters:
@@ -179,6 +180,8 @@ class EmailTool(Tool):
     - For handling multiple emails efficiently, process them by category
     - Mark emails for later reply to keep track of emails the user wants to address during the conversation
     """
+    
+    description = simple_description + implementation_details
     
     def __init__(self):
         """Initialize the email tool with configuration."""

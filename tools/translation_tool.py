@@ -32,10 +32,12 @@ class TranslationTool(Tool):
     """
     
     name = "translation_tool"
-    description = """
+    simple_description = """
     Translates communicative intent into different languages in a natural, culturally 
     appropriate way, considering provided context. Use this tool when users want to know 
-    how to express something in another language with proper cultural and situational awareness.
+    how to express something in another language with proper cultural and situational awareness."""
+    
+    implementation_details = """
     
     This tool does not perform word-for-word translation, but rather understands what 
     the user wants to communicate and produces natural phrasing that a native speaker 
@@ -57,6 +59,8 @@ class TranslationTool(Tool):
     
     The tool uses Claude 3.7 Sonnet specifically for optimal translation quality.
     """
+    
+    description = simple_description + implementation_details
     
     usage_examples = [
         {

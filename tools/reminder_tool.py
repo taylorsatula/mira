@@ -20,6 +20,10 @@ from tools.repo import Tool
 from errors import ToolError, ErrorCode, error_context
 from db import Database, Base
 from config.registry import registry
+from utils.timezone_utils import (
+    validate_timezone, get_default_timezone, convert_to_timezone,
+    format_datetime, parse_time_string
+)
 
 # Define configuration class for ReminderTool
 class ReminderToolConfig(BaseModel):
@@ -67,21 +71,33 @@ class Reminder(Base):
         Convert the model to a dictionary.
         
         Returns:
-            Dict representation of the reminder
+            Dict representation of the reminder with timestamps in user timezone
         """
+        # Get user's timezone
+        user_tz = get_default_timezone()
+        
+        # Function to format datetime with proper timezone
+        def format_dt(dt: Optional[datetime]) -> Optional[str]:
+            if not dt:
+                return None
+            # Convert to user timezone before serializing
+            dt_aware = convert_to_timezone(dt, user_tz)
+            return dt_aware.isoformat()
+        
         return {
             "id": self.id,
             "title": self.title,
             "description": self.description,
-            "reminder_date": self.reminder_date.isoformat() if self.reminder_date else None,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "reminder_date": format_dt(self.reminder_date),
+            "created_at": format_dt(self.created_at),
             "completed": self.completed,
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "completed_at": format_dt(self.completed_at),
             "contact_name": self.contact_name,
             "contact_email": self.contact_email,
             "contact_phone": self.contact_phone,
             "customer_id": self.customer_id,
-            "additional_notes": self.additional_notes
+            "additional_notes": self.additional_notes,
+            "timezone": user_tz  # Include timezone information
         }
 
 
@@ -95,9 +111,11 @@ class ReminderTool(Tool):
     """
 
     name = "reminder_tool"
-    description = """
+    simple_description = """
     Manages scheduled reminders with contact information integration. Use this tool when the user
-    wants to create, view, or manage reminders about tasks, follow-ups, or appointments.
+    wants to create, view, or manage reminders about tasks, follow-ups, or appointments."""
+    
+    implementation_details = """
     
     IMPORTANT: This tool requires parameters to be passed as a JSON string in the "kwargs" field.
     The tool supports these operations:
@@ -131,6 +149,8 @@ class ReminderTool(Tool):
     fetching complete contact information for known customers. When creating reminders with a name
     that doesn't match an existing customer, the tool will prompt for additional contact details.
     """
+    
+    description = simple_description + implementation_details
     
     usage_examples = [
         {
@@ -408,8 +428,10 @@ class ReminderTool(Tool):
                 ErrorCode.TOOL_INVALID_INPUT
             )
             
-        # Process date types
-        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        # Process date types - use timezone-aware datetime objects
+        tz_name = get_default_timezone()
+        today_naive = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today = convert_to_timezone(today_naive, tz_name)
         
         with self.db.get_session() as session:
             query = session.query(Reminder)
@@ -457,13 +479,16 @@ class ReminderTool(Tool):
                     )
                 
                 try:
+                    # Use our timezone-aware date parser
                     parsed_date = self._parse_date(specific_date)
                     next_date = parsed_date + timedelta(days=1)
                     query = query.filter(
                         Reminder.reminder_date >= parsed_date,
                         Reminder.reminder_date < next_date
                     )
-                    date_description = f"on {parsed_date.strftime('%Y-%m-%d')}"
+                    # Format the date in user timezone
+                    date_str = format_datetime(parsed_date, "date", tz_name)
+                    date_description = f"on {date_str}"
                 except Exception as e:
                     raise ToolError(
                         f"Failed to parse specific_date '{specific_date}': {str(e)}",
@@ -478,6 +503,7 @@ class ReminderTool(Tool):
                     )
                 
                 try:
+                    # Use our timezone-aware date parser for both dates
                     parsed_start = self._parse_date(start_date)
                     # Include end date fully
                     parsed_end = self._parse_date(end_date) + timedelta(days=1)
@@ -485,10 +511,10 @@ class ReminderTool(Tool):
                         Reminder.reminder_date >= parsed_start,
                         Reminder.reminder_date < parsed_end
                     )
-                    date_description = (
-                        f"from {parsed_start.strftime('%Y-%m-%d')} "
-                        f"to {parsed_end.strftime('%Y-%m-%d')}"
-                    )
+                    # Format the dates in user timezone
+                    start_str = format_datetime(parsed_start, "date", tz_name)
+                    end_str = format_datetime(parsed_end - timedelta(days=1), "date", tz_name)
+                    date_description = f"from {start_str} to {end_str}"
                 except Exception as e:
                     raise ToolError(
                         f"Failed to parse date range: {str(e)}",
@@ -717,21 +743,24 @@ class ReminderTool(Tool):
                 "2025-05-01", etc.)
             
         Returns:
-            datetime object representing the parsed date
+            timezone-aware datetime object representing the parsed date
             
         Raises:
             ValueError: If date parsing fails
         """
+        # Get reference date at noon in user timezone
+        tz_name = get_default_timezone()
         today = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        today_tz = convert_to_timezone(today, tz_name)
         
         # Handle some common natural language cases
         date_str = date_str.lower().strip()
         
         if date_str == "today":
-            return today
+            return today_tz
             
         if date_str == "tomorrow":
-            return today + timedelta(days=1)
+            return today_tz + timedelta(days=1)
             
         if date_str.startswith("in "):
             # Handle "in X days/weeks/months/years" format
@@ -742,19 +771,20 @@ class ReminderTool(Tool):
                     unit = parts[2].lower()
                     
                     if unit.startswith("day"):
-                        return today + timedelta(days=amount)
+                        return today_tz + timedelta(days=amount)
                     elif unit.startswith("week"):
-                        return today + timedelta(weeks=amount)
+                        return today_tz + timedelta(weeks=amount)
                     elif unit.startswith("month"):
-                        return today + relativedelta(months=amount)
+                        return today_tz + relativedelta(months=amount)
                     elif unit.startswith("year"):
-                        return today + relativedelta(years=amount)
+                        return today_tz + relativedelta(years=amount)
                 except ValueError:
-                    pass  # Fall back to dateutil parser
+                    pass  # Fall back to our parse_time_string utility
         
-        # Use dateutil for more complex cases
+        # Use our timezone-aware parsing utility
         try:
-            return date_parser.parse(date_str, fuzzy=True)
+            # This handles ISO format and other time string formats with timezone awareness
+            return parse_time_string(date_str, tz_name, today_tz)
         except Exception as e:
             raise ValueError(f"Could not parse date: {date_str}. Error: {str(e)}")
 

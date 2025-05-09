@@ -12,3 +12,102 @@
 
 
 
+
+
+
+
+
+##########
+USE THIS ONE FIRST:
+###################
+
+
+Thank you for conceptualizing what the square_tool may look like. I'm particularly interested in implementing this using a Domain-Specific Abstraction approach. Please ultrathink about the BEST way to implement this tool using domain-specific wrappers rather than direct SDK calls.
+
+In your ultrathink process, please:
+
+1. Explore how to create intuitive domain-specific methods (like create_appointment() instead of directly using bookings.create()) that:
+   - Abstract away the complexity of parameter structures and "body" wrappers
+   - Provide intuitive interfaces for developers
+   - Handle error cases appropriately
+   - Maintain consistency with other tools in our codebase
+
+2. For this abstraction layer, ultrathink to evaluate:
+   - How to structure these wrapper methods
+   - What naming conventions would be most intuitive
+   - How to document these abstractions clearly
+   - How to handle SDK versioning under the hood
+
+3. When designing these abstractions, ultrathink critically about:
+   - Making common use cases simple while still allowing for edge cases
+   - Balancing flexibility with consistency
+   - Ensuring proper validation before API calls
+   - Maintaining testability of the abstraction layer
+
+4. Ultrathink iteratively until you have a robust abstraction design that:
+   - Shields developers from SDK complexity
+   - Provides domain-appropriate method names and parameters
+   - Handles the underlying SDK calls correctly
+   - Maintains forward compatibility where possible
+
+5. Return a detailed report on your findings, including:
+   - Your recommended abstraction approach with examples
+   - Key interface methods to implement
+   - Implementation steps in logical sequence
+   - How this approach upholds the core tenets in CLAUDE.md
+
+Take as much time as you need for this ultrathink process. Focus on creating a clean, intuitive domain abstraction layer that makes working with the {{tool}} straightforward for developers.
+
+###############
+After reading the thinking block and picking the approach that sounds best
+Go into Claude Desktop and paste this prompt ^^^ and describe what you want to change. It'll create a revised direction that you can Esc Esc and replace the first prompt. It'll re-ultrathink except in this case it'll only focus on the best approach (like a zero-shot with a 2nd try lol)
+###############
+	V2
+###############
+Thank you for conceptualizing what the square_tool may look like. I'm particularly interested in implementing this using a Domain-Specific Abstraction 
+  approach. Please ultrathink about the BEST way to implement this tool using domain-specific wrappers rather than direct SDK calls.
+
+  In your thinking process, please:
+
+  1. Explore how to create intuitive domain-specific methods (like create_appointment() instead of directly using bookings.create()) that:
+     - Abstract away the complexity of parameter structures and "body" wrappers
+     - Provide intuitive interfaces for developers
+     - Handle error cases appropriately
+     - Maintain consistency with other tools in our codebase
+
+  2. For this abstraction layer, ultrathink to evaluate:
+     - How to structure these wrapper methods
+     - What naming conventions would be most intuitive
+     - How to document these abstractions clearly
+     - How to handle SDK versioning under the hood
+
+  3. When designing these abstractions, ultrathink critically about:
+     - Making common use cases simple while still allowing for edge cases
+     - Balancing flexibility with consistency
+     - Ensuring proper validation before API calls
+     - Maintaining testability of the abstraction layer
+
+  4. Ultrathink iteratively until you have a robust abstraction design that:
+     - Shields developers from SDK complexity
+     - Provides domain-appropriate method names and parameters
+     - Handles the underlying SDK calls correctly
+     - Maintains forward compatibility where possible
+
+  5. Return a detailed report on your ultrathink findings, including:
+     - Your recommended abstraction approach with examples
+     - Key interface methods to implement
+     - Implementation steps in logical sequence
+     - How this approach upholds the core tenets in CLAUDE.md
+
+  Take as much time as you need for this ultrathink process. A well-thought-out plan will save significant time during implementation and maintenance.
+
+
+
+#################
+
+
+Based on the in-depth analysis in your report, please proceed to implement the square_tool following your recommended approach, ensuring each step aligns with the principles and considerations you've outlined while maintaining full compatibility with the existing codebase structure.
+
+
+
+###################
