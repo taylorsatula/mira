@@ -29,7 +29,11 @@ class TagParser:
         Supported tags:
         - <topic_changed=true/> or <topic_changed=false/>
         - <need_tool />
-        - <workflow_start:workflow_id />
+        - <workflow_start:workflow_id /> (legacy format)
+        - <workflow_start id="workflow_id" /> (new format)
+        - <workflow_complete_step id="step_id" /> (with optional data attributes)
+        - <workflow_skip_step id="step_id" />
+        - <workflow_revisit_step id="step_id" />
         - <workflow_complete />
         - <workflow_cancel />
         
@@ -42,8 +46,9 @@ class TagParser:
                 "topic_changed": True/False,
                 "need_tool": True/False,
                 "workflow": {
-                    "action": "start"/"complete"/"cancel",
-                    "id": "workflow_id" (only for "start" action)
+                    "action": "start"/"complete_step"/"skip_step"/"revisit_step"/"complete"/"cancel",
+                    "id": "workflow_id" or "step_id" (depending on action),
+                    "data": {key-value pairs for data attributes} (only for complete_step)
                 }
             }
         """
@@ -53,7 +58,8 @@ class TagParser:
             "need_tool": False,
             "workflow": {
                 "action": None,
-                "id": None
+                "id": None,
+                "data": {}
             }
         }
         
@@ -70,13 +76,54 @@ class TagParser:
             result["need_tool"] = True
             self.logger.info("Found need_tool tag")
         
-        # Check for workflow tags
+        # Check for workflow tags - first for older format
         workflow_start_match = re.search(r'<workflow_start:([a-zA-Z0-9_-]+)\s*/?>', text)
         if workflow_start_match:
             result["workflow"]["action"] = "start"
             result["workflow"]["id"] = workflow_start_match.group(1)
+            self.logger.info(f"Found workflow_start tag (legacy format): {result['workflow']['id']}")
+        
+        # New format for workflow_start with attributes
+        workflow_start_attr_match = re.search(r'<workflow_start\s+id="([^"]+)"\s*/?>', text)
+        if workflow_start_attr_match and not workflow_start_match:  # Only match if legacy format not found
+            result["workflow"]["action"] = "start"
+            result["workflow"]["id"] = workflow_start_attr_match.group(1)
             self.logger.info(f"Found workflow_start tag: {result['workflow']['id']}")
         
+        # Check for workflow step navigation tags
+        workflow_complete_step_match = re.search(r'<workflow_complete_step\s+id="([^"]+)"([^>]*)/?>', text)
+        if workflow_complete_step_match:
+            result["workflow"]["action"] = "complete_step"
+            result["workflow"]["id"] = workflow_complete_step_match.group(1)
+            
+            # Parse data attributes if any
+            attributes_str = workflow_complete_step_match.group(2).strip()
+            if attributes_str:
+                # Extract all key-value pairs
+                attr_matches = re.finditer(r'(\w+)="([^"]*)"', attributes_str)
+                for attr_match in attr_matches:
+                    key = attr_match.group(1)
+                    if key != "id":  # Skip the id attribute as we already captured it
+                        value = attr_match.group(2)
+                        result["workflow"]["data"][key] = value
+            
+            self.logger.info(f"Found workflow_complete_step tag: {result['workflow']['id']}")
+            if result["workflow"]["data"]:
+                self.logger.info(f"With data: {result['workflow']['data']}")
+        
+        workflow_skip_step_match = re.search(r'<workflow_skip_step\s+id="([^"]+)"\s*/?>', text)
+        if workflow_skip_step_match:
+            result["workflow"]["action"] = "skip_step"
+            result["workflow"]["id"] = workflow_skip_step_match.group(1)
+            self.logger.info(f"Found workflow_skip_step tag: {result['workflow']['id']}")
+        
+        workflow_revisit_step_match = re.search(r'<workflow_revisit_step\s+id="([^"]+)"\s*/?>', text)
+        if workflow_revisit_step_match:
+            result["workflow"]["action"] = "revisit_step"
+            result["workflow"]["id"] = workflow_revisit_step_match.group(1)
+            self.logger.info(f"Found workflow_revisit_step tag: {result['workflow']['id']}")
+        
+        # Check for workflow completion/cancellation tags
         workflow_complete_match = re.search(r'<workflow_complete\s*/?>', text, re.IGNORECASE)
         if workflow_complete_match:
             result["workflow"]["action"] = "complete"
@@ -127,7 +174,7 @@ class TagParser:
             text: The text to check for workflow tags
             
         Returns:
-            Dictionary with action and id keys if a workflow tag is found,
+            Dictionary with action, id, and data keys if a workflow tag is found,
             None otherwise
         """
         tags = self.parse_tags(text)

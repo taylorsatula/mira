@@ -1,9 +1,9 @@
 """
-Workflow manager for handling multi-step workflows.
+Workflow manager for handling flexible, data-driven workflows.
 
 This module provides a workflow management system that can detect when user
-input matches a workflow, track progress through workflow steps, and integrate
-with the conversation system.
+input matches a workflow, track progress through workflow steps in a non-linear fashion,
+and integrate with the conversation system.
 """
 
 import datetime
@@ -27,10 +27,10 @@ from utils.tag_parser import parser as tag_parser
 
 class WorkflowManager:
     """
-    Manages detection and execution of predefined workflows.
+    Manages detection and execution of flexible, data-driven workflows.
     
     This class handles loading workflow definitions, detecting when user input
-    matches a workflow, tracking progress through workflow steps, and integrating
+    matches a workflow, tracking state through workflow steps, and integrating
     with the conversation system via the system prompt.
     """
     
@@ -38,15 +38,16 @@ class WorkflowManager:
         self, 
         tool_repo: ToolRepository,
         model,
-        workflows_dir: Optional[str] = None
+        workflows_dir: Optional[str] = None,
+        llm_bridge = None
     ):
         """
         Initialize the workflow manager.
         
         Args:
             tool_repo: Repository of available tools
-            workflows_dir: Directory containing workflow definition files
             model: Pre-loaded SentenceTransformer model to use for embedding computations
+            workflows_dir: Directory containing workflow definition files
         """
         self.logger = logging.getLogger("workflow_manager")
         self.tool_repo = tool_repo
@@ -66,11 +67,15 @@ class WorkflowManager:
         
         # Get configuration values
         self.embedding_model = config.tool_relevance.embedding_model
-        self.match_threshold = 0.65  # Default, can be overridden from config #ANNOTATION <- This should be a config only value
+        self.match_threshold = 0.65  # Default, can be overridden from config
         
         # State for the current workflow (if any)
         self.active_workflow_id: Optional[str] = None
-        self.active_step_index: int = 0
+        
+        # New state tracking for flexible workflows
+        self.completed_steps: Set[str] = set()
+        self.available_steps: Set[str] = set()
+        self.workflow_data: Dict[str, Any] = {}
         
         # Cache for workflow example embeddings
         self.workflow_embeddings: Dict[str, Dict[str, Any]] = {}
@@ -78,6 +83,9 @@ class WorkflowManager:
         # Use the provided model
         self.model = model
         self.logger.info("Using provided SentenceTransformer model")
+        
+        # Store LLM bridge for dynamic operations
+        self.llm_bridge = llm_bridge
         
         # Load workflow definitions
         self.load_workflows()
@@ -91,7 +99,7 @@ class WorkflowManager:
         
         This method discovers and loads all workflow definition files in the
         workflows directory, checking file hashes to avoid unnecessarily
-        reloading unchanged files. 
+        reloading unchanged files.
         """
         self.logger.info(f"Loading workflows from {self.workflows_dir}")
         
@@ -141,7 +149,7 @@ class WorkflowManager:
         
         self.logger.info(f"Loaded {len(self.workflows)} workflows")
     
-    def _calculate_file_hash(self, file_path: str) -> str: #ANNOTATION We should create one global file hash checker function and use it throughout the codebase instead of each python file handling its own hashing function.
+    def _calculate_file_hash(self, file_path: str) -> str:
         """
         Calculate a hash of the file contents.
         
@@ -161,7 +169,7 @@ class WorkflowManager:
     
     def _validate_workflow(self, workflow: Dict[str, Any]) -> bool:
         """
-        Validate a workflow definition.
+        Validate a workflow definition according to the new schema.
         
         Args:
             workflow: Workflow definition to validate
@@ -170,15 +178,15 @@ class WorkflowManager:
             True if the workflow is valid, False otherwise
         """
         # Check required fields
-        required_fields = ["id", "name", "description", "trigger_examples", "steps"]
+        required_fields = ["id", "name", "description", "trigger_examples", "steps", "completion_requirements"]
         for field in required_fields:
             if field not in workflow:
                 self.logger.error(f"Workflow missing required field: {field}")
                 return False
         
-        # Check that steps is a non-empty list
-        if not isinstance(workflow["steps"], list) or not workflow["steps"]:
-            self.logger.error("Workflow steps must be a non-empty list")
+        # Check that steps is a dictionary
+        if not isinstance(workflow["steps"], dict) or not workflow["steps"]:
+            self.logger.error("Workflow steps must be a non-empty dictionary")
             return False
         
         # Check that trigger_examples is a non-empty list
@@ -186,20 +194,41 @@ class WorkflowManager:
             self.logger.error("Workflow trigger_examples must be a non-empty list")
             return False
         
+        # Check completion requirements
+        completion_requirements = workflow.get("completion_requirements", {})
+        if not isinstance(completion_requirements, dict):
+            self.logger.error("Workflow completion_requirements must be a dictionary")
+            return False
+        
+        # Check that at least one of required_steps or required_data is present
+        if "required_steps" not in completion_requirements and "required_data" not in completion_requirements:
+            self.logger.error("Workflow completion_requirements must include required_steps or required_data")
+            return False
+        
         # Check that each step has required fields
-        for i, step in enumerate(workflow["steps"]):
+        for step_id, step in workflow["steps"].items():
             if not isinstance(step, dict):
-                self.logger.error(f"Step {i} is not a dictionary")
+                self.logger.error(f"Step {step_id} is not a dictionary")
                 return False
             
-            for field in ["id", "description", "tools", "guidance"]:
+            for field in ["id", "description", "tools", "guidance", "prerequisites"]:
                 if field not in step:
-                    self.logger.error(f"Step {i} missing required field: {field}")
+                    self.logger.error(f"Step {step_id} missing required field: {field}")
                     return False
             
             # Check that tools is a list
             if not isinstance(step["tools"], list):
-                self.logger.error(f"Step {i} tools must be a list")
+                self.logger.error(f"Step {step_id} tools must be a list")
+                return False
+            
+            # Check that prerequisites is a list
+            if not isinstance(step["prerequisites"], list):
+                self.logger.error(f"Step {step_id} prerequisites must be a list")
+                return False
+            
+            # Check optional flag is boolean if present
+            if "optional" in step and not isinstance(step["optional"], bool):
+                self.logger.error(f"Step {step_id} optional flag must be a boolean")
                 return False
         
         return True
@@ -270,7 +299,7 @@ class WorkflowManager:
                 
                 # Calculate similarity scores
                 # Ensure embeddings are normalized for proper cosine similarity
-                message_norm = np.linalg.norm(message_embedding) #ANNOTATION explain this normalizing process to me and tell me why it is necessary.
+                message_norm = np.linalg.norm(message_embedding)
                 if message_norm > 0:
                     message_embedding_norm = message_embedding / message_norm
                 else:
@@ -305,12 +334,14 @@ class WorkflowManager:
                 self.logger.debug(f"No workflow detected (best confidence: {best_match_score:.4f})")
                 return None, 0.0
     
-    def start_workflow(self, workflow_id: str) -> Dict[str, Any]: #ANNOTATION Recently I have experienced an issue where MIRA (incorrectly) guesses on what the name of the workflow. We should either improve the prompt that gives direction on how to pick a workflow ID ~or~ build in a programmatic matcher. I think option 1 would be better.
+    def start_workflow(self, workflow_id: str, triggering_message: str = None, llm_bridge = None) -> Dict[str, Any]:
         """
         Start a workflow.
         
         Args:
             workflow_id: ID of the workflow to start
+            triggering_message: Optional message that triggered the workflow, used for initial data extraction
+            llm_bridge: Optional LLMBridge instance for extracting data from the triggering message
             
         Returns:
             Dictionary containing workflow information
@@ -334,10 +365,62 @@ class WorkflowManager:
         
         # Activate the workflow
         self.active_workflow_id = workflow_id
-        self.active_step_index = 0
         
-        # Enable the tools for the first step
-        self._enable_tools_for_current_step()
+        # Initialize workflow state
+        self.completed_steps = set()
+        self.workflow_data = {}
+        
+        # Attempt to extract initial data from the triggering message if provided
+        if triggering_message and llm_bridge:
+            extracted_data = self._extract_initial_data(workflow_id, triggering_message, llm_bridge)
+            if extracted_data:
+                self.workflow_data.update(extracted_data)
+                self.logger.info(f"Extracted initial data from triggering message: {extracted_data}")
+        
+        # Determine which steps are available at the start
+        self.available_steps = set()
+        
+        # Check if the workflow has explicitly defined entry points
+        entry_points = []
+        if "entry_points" in workflow and workflow["entry_points"]:
+            entry_points = [
+                step_id for step_id in workflow["entry_points"] 
+                if step_id in workflow["steps"]
+            ]
+        else:
+            # Fall back to finding steps with no prerequisites
+            entry_points = [
+                step_id for step_id, step in workflow["steps"].items() 
+                if not step["prerequisites"]
+            ]
+        
+        # Process entry points - auto-complete steps if we already have their data
+        for step_id in entry_points:
+            step = workflow["steps"].get(step_id)
+            if not step:
+                continue
+                
+            # Check if this entry point step provides data that we already have
+            if "provides_data" in step and step["provides_data"]:
+                # If we have all the data this step would provide, mark it completed
+                if all(field in self.workflow_data for field in step["provides_data"]):
+                    self.completed_steps.add(step_id)
+                    self.logger.info(f"Auto-completed step {step_id} based on extracted data")
+                else:
+                    # Otherwise make it available
+                    self._check_and_add_available_step(step_id)
+            else:
+                # No data requirements, just make it available
+                self._check_and_add_available_step(step_id)
+                
+        # After handling entry points, calculate all available steps
+        # This finds steps that become available due to auto-completed entry points
+        for step_id in workflow["steps"]:
+            if step_id not in self.completed_steps and step_id not in self.available_steps:
+                self._check_and_add_available_step(step_id)
+        
+        # Enable tools for all available steps
+        self._update_tool_access()
         
         self.logger.info(f"Started workflow: {workflow_id}")
         
@@ -345,44 +428,355 @@ class WorkflowManager:
             "workflow_id": workflow_id,
             "name": workflow["name"],
             "description": workflow["description"],
-            "active_step": workflow["steps"][self.active_step_index],
+            "available_steps": list(self.available_steps),
+            "completed_steps": list(self.completed_steps),
+            "workflow_data": self.workflow_data
         }
-    
-    def advance_workflow(self) -> Dict[str, Any]:
-        """
-        Advance the workflow to the next step.
         
-        Returns:
-            Dictionary containing workflow information
+    def _extract_initial_data(self, workflow_id: str, message: str, llm_bridge) -> Dict[str, Any]:
+        """
+        Extract initial data for a workflow from a triggering message using the LLM.
+        
+        Uses the workflow's data schema to guide extraction.
+        
+        Args:
+            workflow_id: ID of the workflow
+            message: The message to extract data from
+            llm_bridge: LLMBridge instance for LLM access
             
-        Raises:
-            ValueError: If no workflow is active
+        Returns:
+            Dictionary of extracted data that matches the workflow's data schema
+        """
+        workflow = self.workflows.get(workflow_id)
+        if not workflow or not message or not llm_bridge:
+            return {}
+            
+        # Get the data schema for this workflow
+        data_schema = workflow.get("data_schema", {})
+        if not data_schema:
+            return {}
+            
+        try:
+            # Create a system prompt for the LLM to extract structured data
+            system_prompt = f"""
+            You are a data extraction assistant that extracts structured information from natural language requests.
+            
+            For the workflow: "{workflow['name']}" ({workflow['description']}), extract any relevant data from the user's message.
+            
+            Only extract data that is explicitly mentioned or can be clearly inferred. DO NOT make up or assume information not in the message.
+            
+            The data schema for this workflow contains these possible fields:
+            """
+            
+            # Add information about each potential field
+            for field_name, field_info in data_schema.items():
+                field_type = field_info.get("type", "string")
+                field_description = field_info.get("description", "")
+                system_prompt += f"\n- {field_name} ({field_type}): {field_description}"
+            
+            # Add instructions for the output format
+            system_prompt += """
+            
+            IMPORTANT OUTPUT FORMATTING INSTRUCTIONS:
+            1. Return a JSON object with field names as keys and extracted values as values
+            2. ONLY include fields that are explicitly mentioned or clearly implied in the message
+            3. DO NOT include fields where no information is provided
+            4. DO NOT add explanations, comments, or markdown formatting
+            5. Return ONLY valid, parseable JSON
+            """
+            
+            # Create the LLM query
+            user_message = f"Extract data from this message: {message}"
+            
+            # Use a small, non-streaming model for this query
+            response = llm_bridge.generate_response(
+                messages=[{"role": "user", "content": user_message}],
+                system_prompt=system_prompt,
+                temperature=0.0,  # Use zero temperature for deterministic extraction
+                stream=False
+            )
+            
+            # Extract the text content from the response
+            response_text = llm_bridge.extract_text_content(response)
+            
+            # Parse the JSON response
+            import json
+            
+            # Clean up common formatting issues
+            # Remove possible markdown code blocks
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0].strip()
+                
+            # Try to parse the JSON
+            try:
+                extracted_data = json.loads(response_text)
+                
+                # Validate the extracted data against the schema
+                validated_data = {}
+                for field, value in extracted_data.items():
+                    if field in data_schema:
+                        # Basic type validation
+                        field_type = data_schema[field]["type"]
+                        
+                        # Add the field if it passes basic type validation
+                        if (field_type == "string" and isinstance(value, str)) or \
+                           (field_type == "number" and isinstance(value, (int, float))) or \
+                           (field_type == "integer" and isinstance(value, int)) or \
+                           (field_type == "boolean" and isinstance(value, bool)) or \
+                           (field_type == "array" and isinstance(value, list)) or \
+                           (field_type == "object" and isinstance(value, dict)):
+                            validated_data[field] = value
+                        else:
+                            self.logger.warning(f"Field {field} has incorrect type: expected {field_type}")
+                
+                return validated_data
+                
+            except json.JSONDecodeError as e:
+                self.logger.error(f"Failed to parse JSON from LLM response: {e}")
+                self.logger.debug(f"Response text: {response_text}")
+                return {}
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting initial data: {e}")
+            return {}
+    
+    def _check_and_add_available_step(self, step_id: str) -> None:
+        """
+        Check if a step should be available and add it to available_steps if so.
+        
+        Args:
+            step_id: ID of the step to check
         """
         if not self.active_workflow_id:
-            raise ValueError("No active workflow! How the h e c k did we get here?")
+            return
+        
+        workflow = self.workflows[self.active_workflow_id]
+        step = workflow["steps"].get(step_id)
+        
+        if not step:
+            return
+        
+        # Skip if already completed or already available
+        if step_id in self.completed_steps or step_id in self.available_steps:
+            return
+        
+        # Check prerequisites
+        for prereq in step["prerequisites"]:
+            if prereq not in self.completed_steps:
+                return  # Prerequisite not met
+        
+        # Check condition if present
+        if "condition" in step:
+            # Simple condition evaluation
+            condition = step["condition"]
+            if condition.startswith("!workflow_data."):
+                # Check if data field doesn't exist or is falsy
+                data_field = condition.split(".", 1)[1]
+                if data_field in self.workflow_data and self.workflow_data[data_field]:
+                    return  # Condition not met
+            elif condition.startswith("workflow_data."):
+                # Check if data field exists and is truthy
+                data_field = condition.split(".", 1)[1]
+                if data_field not in self.workflow_data or not self.workflow_data[data_field]:
+                    return  # Condition not met
+        
+        # Check if we have required data
+        if "requires_data" in step:
+            for data_field in step["requires_data"]:
+                if data_field not in self.workflow_data:
+                    return  # Required data not available
+        
+        # All checks passed, add to available steps
+        self.available_steps.add(step_id)
+    
+    def complete_step(self, step_id: str, data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Complete a workflow step and update workflow state.
+        
+        Args:
+            step_id: ID of the step to complete
+            data: Data collected during this step
+            
+        Returns:
+            Dictionary containing updated workflow information
+            
+        Raises:
+            ValueError: If the step doesn't exist or isn't available
+        """
+        if not self.active_workflow_id:
+            raise ValueError("No active workflow")
         
         workflow = self.workflows[self.active_workflow_id]
         
-        # Advance to the next step
-        self.active_step_index += 1
+        if step_id not in workflow["steps"]:
+            raise ValueError(f"Step '{step_id}' doesn't exist in workflow '{self.active_workflow_id}'")
         
-        # Check if this was the last step
-        if self.active_step_index >= len(workflow["steps"]):
-            # Workflow is complete
-            result = self.complete_workflow()
-            return result
+        if step_id not in self.available_steps:
+            raise ValueError(f"Step '{step_id}' is not currently available")
         
-        # Enable the tools for the next step
-        self._enable_tools_for_current_step()
+        # Mark step as completed
+        self.completed_steps.add(step_id)
+        self.available_steps.remove(step_id)
         
-        self.logger.info(f"Advanced workflow {self.active_workflow_id} to step {self.active_step_index}")
+        # Update workflow data
+        if data:
+            self.workflow_data.update(data)
+        
+        # If the step provides data, record that
+        step = workflow["steps"][step_id]
+        if "provides_data" in step and not data:
+            self.logger.warning(f"Step {step_id} is marked as providing data but no data was provided")
+        
+        # Recalculate available steps
+        for potential_step_id in workflow["steps"]:
+            self._check_and_add_available_step(potential_step_id)
+        
+        # Update tool access
+        self._update_tool_access()
+        
+        self.logger.info(f"Completed workflow step: {step_id}")
+        
+        # Check if the workflow is now complete
+        is_complete = self._check_workflow_completion()
+        
+        if is_complete:
+            return self.complete_workflow()
         
         return {
             "workflow_id": self.active_workflow_id,
             "name": workflow["name"],
             "description": workflow["description"],
-            "active_step": workflow["steps"][self.active_step_index],
+            "available_steps": list(self.available_steps),
+            "completed_steps": list(self.completed_steps),
+            "workflow_data": self.workflow_data
         }
+    
+    def skip_step(self, step_id: str) -> Dict[str, Any]:
+        """
+        Skip an optional workflow step.
+        
+        Args:
+            step_id: ID of the step to skip
+            
+        Returns:
+            Dictionary containing updated workflow information
+            
+        Raises:
+            ValueError: If the step doesn't exist, isn't available, or isn't optional
+        """
+        if not self.active_workflow_id:
+            raise ValueError("No active workflow")
+        
+        workflow = self.workflows[self.active_workflow_id]
+        
+        if step_id not in workflow["steps"]:
+            raise ValueError(f"Step '{step_id}' doesn't exist in workflow '{self.active_workflow_id}'")
+        
+        if step_id not in self.available_steps:
+            raise ValueError(f"Step '{step_id}' is not currently available")
+        
+        step = workflow["steps"][step_id]
+        if not step.get("optional", False):
+            raise ValueError(f"Step '{step_id}' is not optional and cannot be skipped")
+        
+        # Mark step as completed without updating data
+        self.completed_steps.add(step_id)
+        self.available_steps.remove(step_id)
+        
+        # Recalculate available steps
+        for potential_step_id in workflow["steps"]:
+            self._check_and_add_available_step(potential_step_id)
+        
+        # Update tool access
+        self._update_tool_access()
+        
+        self.logger.info(f"Skipped workflow step: {step_id}")
+        
+        # Check if the workflow is now complete
+        is_complete = self._check_workflow_completion()
+        
+        if is_complete:
+            return self.complete_workflow()
+        
+        return {
+            "workflow_id": self.active_workflow_id,
+            "name": workflow["name"],
+            "description": workflow["description"],
+            "available_steps": list(self.available_steps),
+            "completed_steps": list(self.completed_steps),
+            "workflow_data": self.workflow_data
+        }
+    
+    def revisit_step(self, step_id: str) -> Dict[str, Any]:
+        """
+        Revisit a previously completed step.
+        
+        Args:
+            step_id: ID of the step to revisit
+            
+        Returns:
+            Dictionary containing updated workflow information
+            
+        Raises:
+            ValueError: If the step doesn't exist or wasn't previously completed
+        """
+        if not self.active_workflow_id:
+            raise ValueError("No active workflow")
+        
+        workflow = self.workflows[self.active_workflow_id]
+        
+        if step_id not in workflow["steps"]:
+            raise ValueError(f"Step '{step_id}' doesn't exist in workflow '{self.active_workflow_id}'")
+        
+        if step_id not in self.completed_steps:
+            raise ValueError(f"Step '{step_id}' was not previously completed")
+        
+        # Move step from completed to available
+        self.completed_steps.remove(step_id)
+        self.available_steps.add(step_id)
+        
+        # Update tool access
+        self._update_tool_access()
+        
+        self.logger.info(f"Revisiting workflow step: {step_id}")
+        
+        return {
+            "workflow_id": self.active_workflow_id,
+            "name": workflow["name"],
+            "description": workflow["description"],
+            "available_steps": list(self.available_steps),
+            "completed_steps": list(self.completed_steps),
+            "workflow_data": self.workflow_data
+        }
+    
+    def _check_workflow_completion(self) -> bool:
+        """
+        Check if the current workflow is complete based on completion requirements.
+        
+        Returns:
+            True if the workflow is complete, False otherwise
+        """
+        if not self.active_workflow_id:
+            return False
+        
+        workflow = self.workflows[self.active_workflow_id]
+        completion_requirements = workflow.get("completion_requirements", {})
+        
+        # Check required steps
+        required_steps = completion_requirements.get("required_steps", [])
+        for step_id in required_steps:
+            if step_id not in self.completed_steps:
+                return False
+        
+        # Check required data
+        required_data = completion_requirements.get("required_data", [])
+        for data_field in required_data:
+            if data_field not in self.workflow_data:
+                return False
+        
+        return True
     
     def complete_workflow(self) -> Dict[str, Any]:
         """
@@ -404,10 +798,12 @@ class WorkflowManager:
             "workflow_id": self.active_workflow_id,
             "name": workflow["name"],
             "description": workflow["description"],
-            "status": "completed"
+            "status": "completed",
+            "completed_steps": list(self.completed_steps),
+            "workflow_data": self.workflow_data
         }
         
-        # Disable all workflow tools before clearing workflow state #ANNOTATION 
+        # Disable all workflow tools before clearing workflow state
         currently_enabled_tools = self.tool_repo.get_enabled_tools()
         for tool_name in currently_enabled_tools:
             try:
@@ -418,7 +814,9 @@ class WorkflowManager:
         
         # Clear the active workflow
         self.active_workflow_id = None
-        self.active_step_index = 0
+        self.completed_steps = set()
+        self.available_steps = set()
+        self.workflow_data = {}
         
         self.logger.info(f"Completed workflow: {completed_workflow['workflow_id']}")
         
@@ -444,10 +842,12 @@ class WorkflowManager:
             "workflow_id": self.active_workflow_id,
             "name": workflow["name"],
             "description": workflow["description"],
-            "status": "cancelled"
+            "status": "cancelled",
+            "completed_steps": list(self.completed_steps),
+            "workflow_data": self.workflow_data
         }
         
-        # Disable all workflow tools before clearing workflow state #ANNOTATION I worry that this could cause the next message after a canceled workflow to have access to no tools. Please investigate if the workflow tool wipe happens BEFORE or AFTER the message analysis that enables tools in normal conversation.
+        # Disable all workflow tools before clearing workflow state
         currently_enabled_tools = self.tool_repo.get_enabled_tools()
         for tool_name in currently_enabled_tools:
             try:
@@ -458,7 +858,9 @@ class WorkflowManager:
         
         # Clear the active workflow
         self.active_workflow_id = None
-        self.active_step_index = 0
+        self.completed_steps = set()
+        self.available_steps = set()
+        self.workflow_data = {}
         
         self.logger.info(f"Cancelled workflow: {cancelled_workflow['workflow_id']}")
         
@@ -480,50 +882,73 @@ class WorkflowManager:
             "workflow_id": self.active_workflow_id,
             "name": workflow["name"],
             "description": workflow["description"],
-            "active_step_index": self.active_step_index,
-            "active_step": workflow["steps"][self.active_step_index],
+            "available_steps": list(self.available_steps),
+            "completed_steps": list(self.completed_steps),
+            "workflow_data": self.workflow_data,
             "total_steps": len(workflow["steps"])
         }
     
-    def _enable_tools_for_current_step(self) -> None:
+    def _update_tool_access(self) -> None:
         """
-        Enable the tools required for the current workflow step and disable tools
-        that are not needed for this step.
+        Update tool access based on the current workflow state.
+        Enable tools for all available steps and disable tools that aren't needed.
         """
         if not self.active_workflow_id:
             return
         
         workflow = self.workflows[self.active_workflow_id]
         
-        # Check if the step index is valid
-        if self.active_step_index >= len(workflow["steps"]):
-            self.logger.error(f"Invalid step index: {self.active_step_index}")
-            return
-        
-        # Get the current step
-        step = workflow["steps"][self.active_step_index]
-        
-        # Get the tools for this step
-        tools_for_current_step = step.get("tools", [])
+        # Get all tools needed for current available steps
+        needed_tools = set()
+        for step_id in self.available_steps:
+            step = workflow["steps"].get(step_id)
+            if step:
+                # Process tools for this step
+                if "tools" in step and step["tools"]:
+                    # First add all explicitly defined tools (except the special marker)
+                    for tool_name in step.get("tools", []):
+                        # Skip the special marker and empty tool names
+                        if tool_name and tool_name != "specialcase__decideviallm":
+                            needed_tools.add(tool_name)
+                    
+                    # Check for special case of dynamic tool selection
+                    if "specialcase__decideviallm" in step["tools"]:
+                        # Get tools via LLM reasoning if LLM bridge is available
+                        if self.llm_bridge:
+                            self.logger.info(f"Determining required tools dynamically for step {step_id}")
+                            dynamic_tools = self.determine_required_tools(self.active_workflow_id, step_id)
+                            if dynamic_tools:
+                                for tool_name in dynamic_tools:
+                                    if tool_name:  # Skip empty tool names
+                                        needed_tools.add(tool_name)
+                                self.logger.info(f"Dynamically enabled tools: {dynamic_tools}")
+                else:
+                    # No tools defined for this step
+                    pass
         
         # Get list of currently enabled tools
         currently_enabled_tools = self.tool_repo.get_enabled_tools()
         
-        # First, disable tools that are not needed for this step
+        # First, disable tools that are not needed
         for tool_name in currently_enabled_tools:
-            if tool_name not in tools_for_current_step:
+            if tool_name not in needed_tools:
                 try:
                     self.tool_repo.disable_tool(tool_name)
-                    self.logger.info(f"Disabled tool not needed for current workflow step: {tool_name}")
+                    self.logger.info(f"Disabled tool not needed for current workflow state: {tool_name}")
                 except Exception as e:
                     self.logger.error(f"Error disabling tool {tool_name}: {e}")
         
-        # Then, enable each tool needed for this step #ANNOTATION does this attempt to reload tools that are already in tools_for_current_step?
-        for tool_name in tools_for_current_step:
+        # Then, enable each needed tool
+        for tool_name in needed_tools:
+            # Skip empty tool names
+            if not tool_name:
+                self.logger.info("Skipping empty tool name in workflow step")
+                continue
+                
             try:
                 if not self.tool_repo.is_tool_enabled(tool_name):
                     self.tool_repo.enable_tool(tool_name)
-                    self.logger.info(f"Enabled tool for workflow step: {tool_name}")
+                    self.logger.info(f"Enabled tool for workflow state: {tool_name}")
             except Exception as e:
                 self.logger.error(f"Error enabling tool {tool_name}: {e}")
     
@@ -533,7 +958,7 @@ class WorkflowManager:
         
         This method generates text to be appended to the system prompt that
         informs the LLM about the active workflow and provides guidance for
-        the current step, including a visual checklist.
+        the available steps, including a visual progress tracking.
         
         Returns:
             Text to append to the system prompt, or empty string if no workflow is active
@@ -543,29 +968,84 @@ class WorkflowManager:
         
         workflow = self.workflows[self.active_workflow_id]
         
-        # Check if the step index is valid
-        if self.active_step_index >= len(workflow["steps"]):
-            return ""
+        # Format available steps with their guidance and input requirements
+        available_step_info = []
+        for step_id in sorted(self.available_steps):
+            step = workflow["steps"].get(step_id)
+            if step:
+                # Mark optional steps
+                optional_text = " (Optional)" if step.get("optional", False) else ""
+                
+                # Add step ID explicitly to help Mira reference it correctly
+                step_header = f"### {step['description']}{optional_text} (ID: {step_id})"
+                
+                # Add guidance
+                guidance_text = step['guidance']
+                
+                # Add input requirements section if inputs are defined
+                input_reqs = []
+                if "inputs" in step and step["inputs"]:
+                    input_reqs.append("\n#### Required inputs for this step:")
+                    for input_item in step["inputs"]:
+                        req_marker = "(Required)" if input_item.get("required", False) else "(Optional)"
+                        input_desc = input_item.get("description", input_item["name"])
+                        
+                        # Add format guidance if available
+                        format_info = ""
+                        if input_item.get("type") == "select" and "options" in input_item:
+                            options = input_item["options"]
+                            if isinstance(options[0], dict):
+                                option_values = ", ".join([f"{o.get('label', o['value'])}" for o in options])
+                            else:
+                                option_values = ", ".join([str(o) for o in options])
+                            format_info = f" - Options: {option_values}"
+                        elif input_item.get("example"):
+                            format_info = f" - Example: {input_item['example']}"
+                        
+                        input_reqs.append(f"- **{input_item['name']}** {req_marker}: {input_desc}{format_info}")
+                
+                full_guidance = f"{step_header}\n{guidance_text}{''.join(input_reqs)}"
+                available_step_info.append(full_guidance)
         
-        # Get the current step
-        current_step = workflow["steps"][self.active_step_index]
+        available_steps_text = "\n\n".join(available_step_info) if available_step_info else "No steps currently available."
         
-        # Format the checklist
+        # Format the checklist of all steps
         checklist_items = []
-        for i, step in enumerate(workflow["steps"]):
-            if i < self.active_step_index:
+        for step_id, step in workflow["steps"].items():
+            if step_id in self.completed_steps:
                 # Completed step
                 status_marker = "[✅]"
-            elif i == self.active_step_index:
-                # Current step
+            elif step_id in self.available_steps:
+                # Available step
                 status_marker = "[🔄]"
             else:
                 # Future step
                 status_marker = "[ ]"
             
-            checklist_items.append(f"{status_marker} {step['description']}")
+            # Mark optional steps
+            optional_text = " (Optional)" if step.get("optional", False) else ""
+            # Include the step ID explicitly in the checklist
+            checklist_items.append(f"{status_marker} {step['description']}{optional_text} `(ID: {step_id})`")
         
         checklist_text = "\n".join(checklist_items)
+        
+        # Format collected data
+        collected_data_items = []
+        for field, value in self.workflow_data.items():
+            # Format the value for display
+            if isinstance(value, (dict, list)):
+                display_value = json.dumps(value, indent=2)
+            else:
+                display_value = str(value)
+            
+            # Get field description if available
+            field_description = ""
+            if "data_schema" in workflow and field in workflow["data_schema"]:
+                field_description = f" - {workflow['data_schema'][field].get('description', '')}"
+            
+            collected_data_items.append(f"**{field}**{field_description}: {display_value}")
+        
+        collected_data_text = "\n".join(collected_data_items) if collected_data_items else "No data collected yet."
         
         # Build the prompt
         prompt = [
@@ -573,24 +1053,47 @@ class WorkflowManager:
             f"You are currently helping the user with: **{workflow['name']}**",
             f"Description: {workflow['description']}",
             "",
-            f"## Current Step: {current_step['description']}",
-            f"Guidance: {current_step['guidance']}",
+            # Remove Current Progress section as it's redundant with the checklist
+            # and can be misleading for branching workflows
+            "",
+
+            "## Available Steps",
+            available_steps_text,
+            "",
+            "## Workflow Checklist",
+            checklist_text,
+            "",
+            "## Collected Information",
+            collected_data_text,
+            "",
+            "## Navigation Commands",
+            "You can navigate the workflow using these commands:",
+            "- <workflow_complete_step id=\"step_id\" /> - Mark a step as complete (replace step_id with the actual ID shown in parentheses)",
+            "- <workflow_skip_step id=\"step_id\" /> - Skip an optional step (replace step_id with the actual ID shown in parentheses)",
+            "- <workflow_revisit_step id=\"step_id\" /> - Go back to a previously completed step (replace step_id with the actual ID shown in parentheses)",
+            "- <workflow_complete /> - Complete the entire workflow",
+            "- <workflow_cancel /> - Cancel the workflow",
+            "",
+            "## IMPORTANT: Using Step IDs Correctly",
+            "- When using workflow commands, you MUST use the exact step ID as shown in parentheses (e.g., step1, step2, etc.)",
+            "- DO NOT create your own step IDs or use descriptions as IDs",
+            "- Example: To complete the 'Select frequency' step with ID step2, use: <workflow_complete_step id=\"step2\" />",
+            "- Only mark a step as complete when you have collected ALL required inputs for that step",
+            "- For steps with conditional paths, ensure you collect appropriate information before proceeding",
+            "- After completing a step, available steps will automatically update based on the workflow structure",
+            "- Complete the task in step-by-step order; do not skip ahead or try to complete multiple steps at once",
             "",
             "As you assist the user:",
-            "1. Focus on completing the current step before moving to the next",
-            "2. When you believe the current step is complete, explicitly mark it as complete by including this exact text in your response:",
-            "<workflow_complete />",
-            "3. If the user gets sidetracked, gently guide them back to the workflow when appropriate",
-            "3b. To cancel the workflow at any time, include this exact text:",
-            "<workflow_cancel />",
-            "",
-            "## Workflow Checklist:",
-            checklist_text
+            "1. Focus on collecting ALL the required inputs for the CURRENT step before completing it",
+            "2. Reference exact step IDs when using workflow commands",
+            "3. Validate user inputs against requirements (format, options) before completing steps",
+            "4. Move through the workflow sequentially, completing each step fully",
+            "5. Review collected information regularly to ensure accuracy"
         ]
         
         return "\n".join(prompt)
     
-    def check_for_workflow_commands(self, message: str) -> Tuple[bool, Optional[str], Optional[str]]:
+    def check_for_workflow_commands(self, message: str) -> Tuple[bool, Optional[str], Optional[str], Optional[Dict[str, Any]]]:
         """
         Check an assistant message for workflow commands.
         
@@ -598,10 +1101,11 @@ class WorkflowManager:
             message: Assistant message to check
             
         Returns:
-            Tuple of (command_found, command_type, command_params)
+            Tuple of (command_found, command_type, command_params, command_data)
             command_found: True if a command was found, False otherwise
-            command_type: "start", "complete", or "cancel" if a command was found, None otherwise
-            command_params: Additional parameters for the command (e.g., workflow_id for "start"), None if not applicable
+            command_type: "start", "complete_step", "skip_step", "revisit_step", "complete", or "cancel"
+            command_params: Additional parameters for the command (e.g., step_id)
+            command_data: Additional data provided with the command
         """
         # Use the centralized tag parser
         workflow_action = tag_parser.get_workflow_action(message)
@@ -612,13 +1116,26 @@ class WorkflowManager:
             if action == "start":
                 workflow_id = workflow_action["id"]
                 if workflow_id:
-                    return True, "start", workflow_id
+                    return True, "start", workflow_id, None
+            elif action == "complete_step":
+                step_id = workflow_action.get("id")
+                data = workflow_action.get("data", {})
+                if step_id:
+                    return True, "complete_step", step_id, data
+            elif action == "skip_step":
+                step_id = workflow_action.get("id")
+                if step_id:
+                    return True, "skip_step", step_id, None
+            elif action == "revisit_step":
+                step_id = workflow_action.get("id")
+                if step_id:
+                    return True, "revisit_step", step_id, None
             elif action == "complete":
-                return True, "complete", None
+                return True, "complete", None, None
             elif action == "cancel":
-                return True, "cancel", None
+                return True, "cancel", None, None
         
-        return False, None, None
+        return False, None, None, None
     
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -629,7 +1146,9 @@ class WorkflowManager:
         """
         return {
             "active_workflow_id": self.active_workflow_id,
-            "active_step_index": self.active_step_index
+            "completed_steps": list(self.completed_steps),
+            "available_steps": list(self.available_steps),
+            "workflow_data": self.workflow_data
         }
     
     def from_dict(self, data: Dict[str, Any]) -> None:
@@ -640,13 +1159,15 @@ class WorkflowManager:
             data: Dictionary containing workflow manager state
         """
         self.active_workflow_id = data.get("active_workflow_id")
-        self.active_step_index = data.get("active_step_index", 0)
+        self.completed_steps = set(data.get("completed_steps", []))
+        self.available_steps = set(data.get("available_steps", []))
+        self.workflow_data = data.get("workflow_data", {})
         
         self.logger.info(f"Loaded workflow manager state: active workflow: {self.active_workflow_id}")
         
-        # If there's an active workflow, enable the tools for the current step
+        # If there's an active workflow, update tool access
         if self.active_workflow_id:
-            self._enable_tools_for_current_step()
+            self._update_tool_access()
     
     def to_json(self) -> str:
         """
@@ -666,3 +1187,112 @@ class WorkflowManager:
         """
         data = from_json(json_str)
         self.from_dict(data)
+        
+    def determine_required_tools(self, workflow_id: str, step_id: str) -> List[str]:
+        """
+        Determine required tools for a workflow step using LLM reasoning.
+        
+        This function:
+        1. Collects workflow data and task requirements
+        2. Gathers tool descriptions from the tool repository
+        3. Uses LLM to determine which tools are needed
+        4. Returns a list of tool names to enable
+        
+        Args:
+            workflow_id: ID of the current workflow
+            step_id: ID of the step being processed
+            
+        Returns:
+            List of tool names that should be enabled
+        """
+        workflow = self.workflows.get(workflow_id)
+        if not workflow:
+            self.logger.error(f"Cannot determine tools: workflow {workflow_id} not found")
+            return []
+            
+        # Get current workflow data and step
+        step = workflow["steps"].get(step_id)
+        task_data = self.workflow_data.copy()
+        
+        # Get tool descriptions from repository
+        tool_descriptions = {}
+        for tool_name in self.tool_repo.get_all_tools():
+            tool = self.tool_repo.get_tool(tool_name)
+            if hasattr(tool, "simple_description"):
+                tool_descriptions[tool_name] = tool.simple_description
+            elif hasattr(tool, "description"):
+                tool_descriptions[tool_name] = tool.description
+            else:
+                tool_descriptions[tool_name] = f"Tool: {tool_name}"
+        
+        # Create prompt for the LLM
+        system_prompt = """
+        You are a tool selection assistant. Based on the automation task description and requirements,
+        determine which tools are necessary for this automation. Only select tools that are directly
+        relevant to the described task.
+        
+        Return your answer as a JSON array of tool names, without explanation or additional text.
+        Example: ["email_tool", "calendar_tool"]
+        """
+        
+        # Prepare the user message with task details and available tools
+        user_message = f"""
+        TASK DESCRIPTION:
+        {task_data.get('task_name', 'No task name provided')}
+        {task_data.get('task_description', 'No description provided')}
+        
+        EXECUTION MODE: {task_data.get('execution_mode', 'Not specified')}
+        FREQUENCY: {task_data.get('frequency', 'Not specified')}
+        
+        AVAILABLE TOOLS:
+        """
+        
+        # Add available tools with descriptions
+        for tool_name, description in tool_descriptions.items():
+            user_message += f"- {tool_name}: {description}\n"
+        
+        user_message += "\nBased on this information, which tools will be necessary for this automation task? Return only the list of tool names."
+        
+        try:
+            # Get LLM response
+            response = self.llm_bridge.generate_response(
+                messages=[{"role": "user", "content": user_message}],
+                system_prompt=system_prompt,
+                temperature=0.0,  # Use zero temperature for deterministic selection
+                stream=False
+            )
+            
+            # Extract and parse tool list
+            response_text = self.llm_bridge.extract_text_content(response)
+            
+            # Handle various response formats
+            try:
+                import json
+                import re
+                
+                # Clean up response to extract just the JSON array
+                json_match = re.search(r'\[.*\]', response_text, re.DOTALL)
+                if json_match:
+                    clean_json = json_match.group(0)
+                    tool_list = json.loads(clean_json)
+                    
+                    # Validate that tools exist
+                    valid_tools = [t for t in tool_list if t in tool_descriptions]
+                    
+                    self.logger.info(f"LLM determined required tools: {valid_tools}")
+                    return valid_tools
+                else:
+                    # Fallback: parse comma-separated list if JSON parsing fails
+                    tool_list = [t.strip() for t in response_text.replace('[', '').replace(']', '').split(',')]
+                    valid_tools = [t.strip('"\'') for t in tool_list if t.strip('"\'') in tool_descriptions]
+                    
+                    self.logger.info(f"LLM determined required tools (fallback parsing): {valid_tools}")
+                    return valid_tools
+                    
+            except Exception as e:
+                self.logger.error(f"Error parsing tool list: {e}")
+                return ["automation_tool"]  # Default fallback
+                
+        except Exception as e:
+            self.logger.error(f"Error determining required tools via LLM: {e}")
+            return ["automation_tool"]  # Default fallback

@@ -395,7 +395,7 @@ class Conversation:
                     if workflow:
                         workflow_hint = f"\n\nI've detected that the user might want help with: {workflow['name']}. "
                         workflow_hint += "If this seems correct, you can confirm and start this workflow process by including this exact text in your response: "
-                        workflow_hint += f"<workflow_start:{detected_workflow_id} />"
+                        workflow_hint += f"<workflow_start id=\"{detected_workflow_id}\" />"
                         dynamic_content += workflow_hint
                 
                 # Define cache control for prompt caching
@@ -470,14 +470,27 @@ class Conversation:
                 
                 # Check for workflow commands
                 if self.workflow_manager:
-                    # Check for workflow commands (start, complete, cancel)
-                    command_found, command_type, command_params = self.workflow_manager.check_for_workflow_commands(assistant_response)
+                    # Check for workflow commands using the new format supporting more actions
+                    command_found, command_type, command_params, command_data = self.workflow_manager.check_for_workflow_commands(assistant_response)
                     
                     if command_found:
                         if command_type == "start" and not self.workflow_manager.get_active_workflow():
                             workflow_id = command_params
                             try:
-                                self.workflow_manager.start_workflow(workflow_id)
+                                # Get the message that triggered the workflow to extract initial data
+                                # We retrieve the most recent user message
+                                triggering_message = None
+                                for msg in reversed(self.messages):
+                                    if msg.role == "user" and isinstance(msg.content, str):
+                                        triggering_message = msg.content
+                                        break
+                                
+                                # Start the workflow with potential data extraction from triggering message
+                                self.workflow_manager.start_workflow(
+                                    workflow_id,
+                                    triggering_message=triggering_message, 
+                                    llm_bridge=self.llm_bridge
+                                )
                                 self.logger.info(f"Started workflow: {workflow_id}")
                                 # Suspend tool relevance engine
                                 if self.tool_relevance_engine:
@@ -485,12 +498,39 @@ class Conversation:
                             except Exception as e:
                                 self.logger.error(f"Error starting workflow {workflow_id}: {e}")
                         
+                        elif command_type == "complete_step" and self.workflow_manager.get_active_workflow():
+                            step_id = command_params
+                            try:
+                                self.workflow_manager.complete_step(step_id, command_data)
+                                self.logger.info(f"Completed workflow step: {step_id}")
+                            except Exception as e:
+                                self.logger.error(f"Error completing workflow step {step_id}: {e}")
+                        
+                        elif command_type == "skip_step" and self.workflow_manager.get_active_workflow():
+                            step_id = command_params
+                            try:
+                                self.workflow_manager.skip_step(step_id)
+                                self.logger.info(f"Skipped workflow step: {step_id}")
+                            except Exception as e:
+                                self.logger.error(f"Error skipping workflow step {step_id}: {e}")
+                        
+                        elif command_type == "revisit_step" and self.workflow_manager.get_active_workflow():
+                            step_id = command_params
+                            try:
+                                self.workflow_manager.revisit_step(step_id)
+                                self.logger.info(f"Revisiting workflow step: {step_id}")
+                            except Exception as e:
+                                self.logger.error(f"Error revisiting workflow step {step_id}: {e}")
+                        
                         elif command_type == "complete" and self.workflow_manager.get_active_workflow():
                             try:
-                                self.workflow_manager.advance_workflow()
-                                self.logger.info("Advanced workflow to next step")
+                                self.workflow_manager.complete_workflow()
+                                self.logger.info("Completed workflow")
+                                # Resume tool relevance engine
+                                if self.tool_relevance_engine:
+                                    self.tool_relevance_engine.resume()
                             except Exception as e:
-                                self.logger.error(f"Error advancing workflow: {e}")
+                                self.logger.error(f"Error completing workflow: {e}")
                         
                         elif command_type == "cancel" and self.workflow_manager.get_active_workflow():
                             try:
