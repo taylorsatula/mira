@@ -223,8 +223,8 @@ class SystemConfig(BaseModel):
         description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
     )
     timezone: str = Field(
-        default="UTC",
-        description="Default timezone for date/time operations (e.g., 'America/New_York', 'Europe/London')"
+        default="America/Chicago",
+        description="Default timezone for date/time operations (must be a valid IANA timezone name like 'America/New_York', 'Europe/London')"
     )
     streaming: bool = Field(
         default=True,
