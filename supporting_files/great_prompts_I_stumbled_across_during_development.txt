@@ -7,7 +7,7 @@
  - Yes it does. I want you to ultrathink about the plan of action and what order you'd implement the functionality in. Provide a detailed report to me.
   ^ Incredibly detailed and it implements them in the correct order which is crucial when LLMs are predicting the next token. They must have the supporting code ready when they make a function
 
-- Thank you for conceptualizing what the updated tool_finder may look like. Now I want you to Ultrathink about the BEST way to implement this tool edit before proceeding. Once you have a mental model you want to work with step back and look at it with a critical eye. If it stands up that is great BUT if it does not you should ultrathink again and again until you have a plan that can stand up to criticism. This may include looking back and making changes to the steps you'd already worked on. Take as much time as you need and don't forget to reference the core tenants in CLAUDE.md. Return a report on your findings. 
+- Thank you for conceptualizing what the updated architecture may look like. Now I want you to Ultrathink about the BEST way to implement this architecture edit before proceeding. Once you have a mental model you want to work with step back and look at it with a critical eye. If it stands up that is great BUT if it does not you should ultrathink again and again until you have a plan that can stand up to criticism. This may include looking back and making changes to the steps you'd already worked on. Take as much time as you need and don't forget to reference the core tenants in CLAUDE.md. Return a report on your findings. 
 
 
 

@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import pkgutil
+import threading
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any, Set, Type, Callable, Union
 
@@ -18,6 +19,9 @@ from errors import ToolError, ErrorCode, error_context
 
 # Import the registry (which is initialized before any tools)
 from config.registry import registry
+
+# Lock for thread safety
+_repo_lock = threading.Lock()
 
 # Deferred import for config
 def get_config():
@@ -222,20 +226,28 @@ class Tool(ABC):
 class ToolRepository:
     """
     Repository for managing and accessing tools.
-    
+
     This class is responsible for registering, discovering, and resolving
     dependencies between tools.
-    
+
     Attributes:
         tools (Dict[str, Tool]): Dictionary mapping tool names to tool instances.
         enabled_tools (Set[str]): Set of names of currently enabled tools.
+        working_memory (Optional[WorkingMemory]): WorkingMemory instance for managing tool info in system prompts.
     """
-    
-    def __init__(self):
-        """Initialize a new tool repository."""
+
+    def __init__(self, working_memory=None):
+        """
+        Initialize a new tool repository.
+
+        Args:
+            working_memory: Optional WorkingMemory instance for managing tool info in system prompts.
+        """
         self.logger = logging.getLogger("tool_repository")
         self.tools: Dict[str, Tool] = {}
         self.enabled_tools: Set[str] = set()
+        self.working_memory = working_memory
+        self._tool_guidance_id = None
         config = get_config()
         self.tool_list_path: str = os.path.join(config.paths.data_dir, "tools", "tool_list.json")
     
@@ -276,6 +288,9 @@ class ToolRepository:
             
             # Update tool list file
             self._update_tool_list_file()
+
+            # Update tool guidance in working memory
+            self._update_tool_guidance()
     
     def enable_tool(self, name: str) -> None:
         """
@@ -309,6 +324,9 @@ class ToolRepository:
             # Now enable this tool
             self.enabled_tools.add(name)
             self.logger.info(f"Enabled tool: {name}")
+
+            # Update tool guidance in working memory
+            self._update_tool_guidance()
     
     def disable_tool(self, name: str) -> None:
         """
@@ -336,6 +354,9 @@ class ToolRepository:
             if name in self.enabled_tools:
                 self.enabled_tools.remove(name)
                 self.logger.info(f"Disabled tool: {name}")
+
+                # Update tool guidance in working memory
+                self._update_tool_guidance()
             else:
                 self.logger.debug(f"Tool '{name}' was already disabled")
     
@@ -616,10 +637,11 @@ class ToolRepository:
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
                 
-                if (inspect.isclass(attr) and 
-                    issubclass(attr, Tool) and 
+                if (inspect.isclass(attr) and
+                    issubclass(attr, Tool) and
                     attr is not Tool and
-                    attr.__module__ == module.__name__):
+                    attr.__module__ == module.__name__ and
+                    not getattr(attr, '_is_abstract_base_class', False)):
                     
                     self.logger.debug(f"Found Tool subclass: {attr_name}")
                     
@@ -699,6 +721,52 @@ class ToolRepository:
             except ToolError as e:
                 self.logger.error(f"Error enabling tool {name}: {e}")
     
+    def update_working_memory(self) -> None:
+        """
+        Update tool-related content in working memory.
+
+        This method is called by the working memory system to refresh tool-related
+        content. It delegates to _update_tool_guidance for implementation.
+        """
+        self._update_tool_guidance()
+
+    def _update_tool_guidance(self) -> None:
+        """
+        Update tool guidance in working memory based on enabled tools.
+
+        This method is called automatically when tools are enabled or disabled.
+        It updates the tool guidance content in working memory.
+        """
+        # If working_memory is not available, skip
+        if not self.working_memory:
+            return
+
+        # Remove existing tool guidance if present
+        if self._tool_guidance_id:
+            self.working_memory.remove(self._tool_guidance_id)
+            self._tool_guidance_id = None
+
+        # Get enabled tools
+        enabled_tools = self.get_enabled_tools()
+
+        # If fewer than 2 tools are enabled, no guidance needed
+        if len(enabled_tools) <= 1:
+            return
+
+        # Create tool guidance text
+        tool_list = ", ".join([t.replace("_tool", "") for t in enabled_tools])
+        tool_guidance = f"# Available Tools\n"
+        tool_guidance += f"Multiple tools are currently available: {tool_list}.\n"
+        tool_guidance += "If the user's request is ambiguous about which tool to use, ask for clarification."
+
+        # Add to working memory
+        self._tool_guidance_id = self.working_memory.add(
+            content=tool_guidance,
+            category="tool_guidance"
+        )
+
+        self.logger.debug(f"Updated tool guidance for {len(enabled_tools)} tools in working memory")
+
     def _update_tool_list_file(self) -> None:
         """
         Update the tool list file with current registered tools.

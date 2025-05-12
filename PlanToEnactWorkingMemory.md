@@ -1,8 +1,8 @@
-# Working Memory Implementation Plan
+# Working Memory Implementation Plan - Updated
 
 ## Overview
 
-This document outlines the strategy for implementing a centralized `WorkingMemory` system to manage dynamic content in system prompts. Currently, dynamic information is added to system prompts through various standalone mechanisms without a unified approach. The new design will standardize this process, improving maintainability and extensibility.
+This document outlines the strategy for implementing a centralized `WorkingMemory` system to manage dynamic content in system prompts. Currently, dynamic information is added to system prompts through various standalone mechanisms without a unified approach. The new design standardizes this process, improving maintainability and extensibility.
 
 ## Current Architecture
 
@@ -19,375 +19,166 @@ This leads to several problems:
 3. No standardized interface for managing dynamic content
 4. Difficult to track what is in the system prompt at any given time
 
-## Proposed Architecture
+## New Architecture: WorkingMemory
 
-The new architecture introduces a centralized `WorkingMemory` class that will:
+The new architecture introduces a centralized `WorkingMemory` class with "trinkets" - utility classes that manage specific types of memory content. This design:
 
-1. Provide a standard interface for adding/removing content
-2. Categorize content for better organization
-3. Allow components to manage their own prompt content
-4. Centralize the assembly of dynamic system prompt content
+1. Provides a standard interface for adding/removing content
+2. Categorizes content for better organization
+3. Allows components to manage their own prompt content
+4. Centralizes the assembly of dynamic system prompt content
 
 ```
-                      → WorkingMemory ←
-                    ↗       |         ↖  
-AppConfig ---------↗        |          ↖
-                            ↓           ToolRepository
-                      Conversation      ↗
-                            ↑         ↗
-                            ↑       ↗
-                      WorkflowManager
+                  → WorkingMemory ←
+                ↗       |         ↖  
+MemoryTrinkets-↗        |          ↖-ToolGuidance
+                        ↓ 
+                  Conversation      
 ```
 
-## Implementation Phases
+## Implemented Components
 
-### Phase 1: Core Implementation
+### WorkingMemory Class
 
-1. Create `working_memory.py` with the `WorkingMemory` class
-   - Implement core add/remove/get methods
-   - Add category-based organization
-   - Implement basic content formatting
+The `WorkingMemory` class serves as the central store for dynamic prompt content. It provides methods to:
 
-2. Modify `main.py` to initialize `WorkingMemory` and pass it to components
-   - Update dependency injection
-   - Ensure proper initialization order
+- Add content with a specific category
+- Remove content by ID or category
+- Retrieve formatted content for system prompts
+- Query content by category
 
-### Phase 2: Component Integration
+### Memory Trinkets
 
-1. Update `config_manager.py` to use `WorkingMemory` for user information
-   - Add loading method that uses `WorkingMemory.add()`
-   - Track memory item ID for updates
-   - Update user information reload mechanism
+We've implemented several "trinkets" to manage specific types of content:
 
-2. Modify `ToolRepository` to manage tool guidance via `WorkingMemory`
-   - Add update method
-   - Track memory item ID
-   - Call update when tool availability changes
+1. **TimeManager**
+   - Updates current date and time information 
+   - Formats in both local and UTC time
 
-3. Refactor `WorkflowManager` to use `WorkingMemory` for workflow state
-   - Refactor `get_system_prompt_extension` into an update method
-   - Track memory item ID
-   - Call update when workflow state changes
+2. **UserInfoManager**
+   - Loads user information from files
+   - Provides reload functionality
 
-4. Create a `TimeManager` class to handle date and time information
-   - Implement update method
-   - Register with `WorkingMemory`
+3. **WorkflowHintManager**
+   - Manages workflow detection hints
+   - Updates active workflow guidance
 
-### Phase 3: Conversation Integration
+4. **ToolGuidanceManager**
+   - Provides guidance when multiple tools are enabled
+   - Shows available tools to the assistant
 
-1. Update `conversation.py` to use `WorkingMemory` for system prompt generation
-   - Replace manual concatenation with `WorkingMemory.get_prompt_content()`
-   - Ensure proper component updates before response generation
+5. **SystemStatusManager**
+   - Tracks system status information
+   - Manages notification messages
 
-### Phase 4: Testing and Validation
+## Integration Points
 
-1. Create unit tests for `WorkingMemory` class
-2. Update component tests to verify integration
-3. Add end-to-end tests to verify system prompt generation
-4. Create specific tests for edge cases and potential race conditions
+### Main.py
 
-## Migration Guide for Components
-
-### For Tool Developers
+The `main.py` file initializes the WorkingMemory and trinkets, then passes them to the Conversation:
 
 ```python
-# Before
-def get_tool_guidance(self):
-    return "Tool guidance content"
-
-# After
-def __init__(self, working_memory, ...):
-    self.working_memory = working_memory
-    self._memory_id = None
-
-def update_tool_guidance(self):
-    if self._memory_id:
-        self.working_memory.remove(self._memory_id)
-    
-    guidance = "Tool guidance content"
-    self._memory_id = self.working_memory.add(
-        content=guidance,
-        category="tool_guidance"
-    )
-```
-
-### For Workflow Developers
-
-```python
-# Before
-def get_system_prompt_extension(self):
-    return "Workflow guidance content"
-
-# After
-def update_workflow_guidance(self):
-    if self._workflow_memory_id:
-        self.working_memory.remove(self._workflow_memory_id)
-    
-    guidance = "Workflow guidance content"
-    self._workflow_memory_id = self.working_memory.add(
-        content=guidance, 
-        category="workflow"
-    )
-```
-
-## Implementation Details
-
-### `WorkingMemory` Class
-
-```python
-from typing import Dict, Any, Optional, List
-import uuid
-import logging
-
-logger = logging.getLogger(__name__)
-
-class WorkingMemory:
-    """Centralized manager for dynamic system prompt content."""
-    
-    def __init__(self):
-        # Main storage for memory items
-        self._memory_items: Dict[str, Dict[str, Any]] = {}
-        
-    def add(self, content: str, category: str) -> str:
-        """
-        Add content to working memory.
-        
-        Args:
-            content: The content to add
-            category: Category for organization
-            
-        Returns:
-            item_id: Unique ID for the added item
-            
-        Raises:
-            ValueError: If content or category is empty
-        """
-        if not content or not category:
-            logger.error("Attempted to add empty content or category")
-            raise ValueError("Content and category cannot be empty")
-            
-        item_id = str(uuid.uuid4())
-        self._memory_items[item_id] = {
-            "content": content,
-            "category": category,
-            "metadata": {}  # Reserved for future use
-        }
-        logger.debug(f"Added item {item_id} to working memory (category: {category})")
-        return item_id
-    
-    def remove(self, item_id: str) -> bool:
-        """
-        Remove content by ID.
-        
-        Args:
-            item_id: The ID of item to remove
-            
-        Returns:
-            bool: True if item was removed, False if not found
-        """
-        if item_id in self._memory_items:
-            category = self._memory_items[item_id]["category"]
-            del self._memory_items[item_id]
-            logger.debug(f"Removed item {item_id} from working memory (category: {category})")
-            return True
-        
-        logger.warning(f"Attempted to remove non-existent item: {item_id}")
-        return False
-    
-    def remove_by_category(self, category: str) -> int:
-        """
-        Remove all items of a specific category.
-        
-        Args:
-            category: Category to remove
-            
-        Returns:
-            int: Number of items removed
-        """
-        ids = [id for id, item in self._memory_items.items() 
-               if item["category"] == category]
-        
-        for id in ids:
-            del self._memory_items[id]
-            
-        if ids:
-            logger.debug(f"Removed {len(ids)} items with category '{category}'")
-        return len(ids)
-    
-    def get_prompt_content(self) -> str:
-        """
-        Generate formatted content for the system prompt.
-        
-        Returns:
-            str: Concatenated content items
-        """
-        if not self._memory_items:
-            logger.warning("Getting prompt content from empty working memory")
-            return ""
-            
-        content = "\n\n".join(item["content"] for item in self._memory_items.values())
-        logger.debug(f"Generated prompt content with {len(self._memory_items)} items")
-        return content
-    
-    def get_items_by_category(self, category: str) -> List[Dict[str, Any]]:
-        """
-        Get all items of a specific category.
-        
-        Args:
-            category: Category to retrieve
-            
-        Returns:
-            List of memory items with specified category
-        """
-        return [item.copy() for item_id, item in self._memory_items.items() 
-                if item["category"] == category]
-```
-
-### Component Integration Examples
-
-#### Time Manager
-
-```python
-class TimeManager:
-    def __init__(self, working_memory):
-        self.working_memory = working_memory
-        self._datetime_id = None
-        
-    def update_datetime_info(self):
-        """Updates current date and time in working memory"""
-        if self._datetime_id:
-            self.working_memory.remove(self._datetime_id)
-            
-        current_time = datetime.now()
-        formatted_time = current_time.strftime("%A, %B %d, %Y at %I:%M:%S %p")
-        timezone_name = current_time.astimezone().tzname()
-        
-        datetime_info = f"# Current Date and Time\n"
-        datetime_info += f"The current date and time is {formatted_time} {timezone_name}."
-        
-        self._datetime_id = self.working_memory.add(
-            content=datetime_info,
-            category="datetime"
-        )
-```
-
-#### AppConfig Update
-
-```python
-def load_user_information(self):
-    """Loads and stores user information in working memory"""
-    user_info_path = os.path.join(self.prompts_dir, "user_information.txt")
-    
-    try:
-        with open(user_info_path, "r") as f:
-            user_info = f.read().strip()
-            
-        if self._user_info_id:
-            self.working_memory.remove(self._user_info_id)
-            
-        self._user_info_id = self.working_memory.add(
-            content=user_info,
-            category="user_information"
-        )
-    except FileNotFoundError:
-        logger.warning(f"User information file not found: {user_info_path}")
-```
-
-#### Main.py Integration Example
-
-```python
-# In main.py
-
 # Create working memory instance
 working_memory = WorkingMemory()
 
-# Initialize components with working memory
-config_manager = AppConfig(working_memory=working_memory)
-time_manager = TimeManager(working_memory=working_memory)
-tool_repository = ToolRepository(working_memory=working_memory)
-workflow_manager = WorkflowManager(working_memory=working_memory)
+# Initialize trinkets
+time_manager = TimeManager(working_memory)
+user_info_manager = UserInfoManager(working_memory, config)
+workflow_hint_manager = WorkflowHintManager(working_memory, workflow_manager)
+tool_guidance_manager = ToolGuidanceManager(working_memory, tool_repo)
 
 # Initialize conversation with working memory
 conversation = Conversation(
-    config_manager=config_manager,
-    tool_repository=tool_repository,
+    conversation_id=conversation_id,
+    system_prompt=system_prompt,
+    llm_bridge=llm_bridge,
+    tool_repo=tool_repo,
+    tool_relevance_engine=tool_relevance_engine,
     workflow_manager=workflow_manager,
-    time_manager=time_manager,
     working_memory=working_memory
 )
-
-# Load initial content
-config_manager.load_user_information()
-tool_repository.update_tool_guidance()
-time_manager.update_datetime_info()
 ```
 
-## Testing Strategy
+### Updating Memory Content
 
-1. **Unit Tests**:
-   - Test `WorkingMemory` add/remove operations
-   - Verify content formatting
-   - Test category-based removal
-
-Example unit test:
+Before generating each response, main.py updates the dynamic content:
 
 ```python
-def test_working_memory_basic_operations():
-    # Initialize working memory
-    memory = WorkingMemory()
-    
-    # Test adding content
-    item_id = memory.add("Test content", "test_category")
-    assert item_id is not None
-    
-    # Test retrieving content
-    content = memory.get_prompt_content()
-    assert "Test content" in content
-    
-    # Test removing by ID
-    result = memory.remove(item_id)
-    assert result is True
-    assert memory.get_prompt_content() == ""
-    
-    # Test removing non-existent item
-    result = memory.remove("non_existent_id")
-    assert result is False
-    
-    # Test removing by category
-    id1 = memory.add("Content 1", "category_a")
-    id2 = memory.add("Content 2", "category_a")
-    id3 = memory.add("Content 3", "category_b")
-    
-    assert len(memory._memory_items) == 3
-    
-    removed = memory.remove_by_category("category_a")
-    assert removed == 2
-    assert len(memory._memory_items) == 1
-    assert "Content 3" in memory.get_prompt_content()
+# Update dynamic information in working memory before each response
+system['time_manager'].update_datetime_info()
+system['workflow_hint_manager'].update_workflow_guidance()
+system['tool_guidance_manager'].update_tool_guidance()
 ```
 
-2. **Integration Tests**:
-   - Verify components correctly update their content
-   - Test interactions between different content types
-   - Ensure consistent formatting
+### Conversation Integration
 
-3. **System Tests**:
-   - Validate complete system prompt generation
-   - Test performance with many memory items
+The Conversation class now uses WorkingMemory to get dynamic content:
 
-## Potential Challenges and Mitigations
+```python
+# Get dynamic content from working memory
+dynamic_content = self.working_memory.get_prompt_content()
+```
 
-1. **Challenge**: Circular dependencies between components
-   - **Mitigation**: Use dependency injection and the registry pattern
+## Testing
 
-2. **Challenge**: Thread safety if used in concurrent contexts
-   - **Mitigation**: Consider adding synchronization or making operations atomic
+We've created comprehensive tests for all components:
 
-3. **Challenge**: Memory leaks from unremoved items
-   - **Mitigation**: Implement cleanup methods and ensure proper removal
+1. **WorkingMemory Tests**
+   - Basic add/remove operations
+   - Content formatting
+   - Category-based operations
+
+2. **Trinket Tests**
+   - TimeManager
+   - UserInfoManager
+   - WorkflowHintManager
+   - ToolGuidanceManager
+   - SystemStatusManager
+
+## Benefits of the New Architecture
+
+The WorkingMemory architecture offers several benefits:
+
+1. **Separation of Concerns**:
+   - Each component manages its own content
+   - Conversation only needs to get content from WorkingMemory
+
+2. **Centralized Management**:
+   - All dynamic content flows through one system
+   - Clear view of what's in the system prompt
+
+3. **Extensibility**:
+   - New content types can be added via new trinkets
+   - Existing components don't need to change
+
+4. **Maintainability**:
+   - Simpler code in Conversation class
+   - Better organization of related functionality
+
+5. **Testing**:
+   - Each component can be tested in isolation
+   - Easier to mock dependencies
+
+## Next Steps
+
+1. **Full Integration with Workflows**:
+   - Update WorkflowManager to use WorkingMemory directly
+   - Remove the workflow-specific integration in Conversation
+
+2. **Refine Tool Guidance**:
+   - Enhance tool guidance with more specific help
+   - Add examples of tool usage
+
+3. **Performance Optimization**:
+   - Monitor memory usage and performance
+   - Consider caching strategies for large content items
+
+4. **Documentation Updates**:
+   - Add developer guidelines for using WorkingMemory
+   - Document the trinket pattern for future extensions
 
 ## Conclusion
 
-The `WorkingMemory` system represents a significant architectural improvement that will standardize how dynamic content is managed in system prompts. By providing a centralized interface and clear responsibilities, this change will improve maintainability, extensibility, and code organization.
+The WorkingMemory system represents a significant architectural improvement that standardizes how dynamic content is managed in system prompts. By providing a centralized interface and clear responsibilities, this change improves maintainability, extensibility, and code organization.
 
-This plan outlines a structured approach to implementing the change with full integration across all components that manage system prompt content.
+The implementation follows a clean design pattern that separates concerns and makes the system more modular. The use of "trinkets" provides a flexible way to extend the system with new content types without affecting existing components.
