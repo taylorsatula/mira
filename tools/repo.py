@@ -492,59 +492,103 @@ class ToolRepository:
     def get_all_tool_definitions(self) -> List[Dict[str, Any]]:
         """
         Get definitions for all enabled tools.
-        
+
         Returns:
-            A list of tool definition dictionaries suitable for Anthropic's Claude API.
+            A list of tool definition dictionaries based on the configured provider:
+            - For 'anthropic': Includes simple_description and anthropic tool format
+            - For 'ollama': Includes simple_description and openai_schema
+
+        Raises:
+            ToolError: If the provider is not 'anthropic' or 'ollama'
         """
+        # Import config when needed (avoids circular imports)
+        config = get_config()
+        provider = getattr(config.api, "provider", "").lower()
+
+        if provider not in ["anthropic", "ollama"]:
+            raise ToolError(
+                f"Unsupported API provider: {provider}. Must be 'anthropic' or 'ollama'",
+                ErrorCode.TOOL_EXECUTION_ERROR
+            )
+
         definitions = []
-        
+
         for name in self.enabled_tools:
             tool = self.tools[name]
             metadata = tool.get_metadata()
-            
-            # Format metadata into Anthropic's tool definition format
-            definition = {
-                "name": metadata["name"],
-                "description": metadata["description"],
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "required": metadata["required_parameters"]
+
+            if provider == "anthropic":
+                # Format for Anthropic
+                # Start with the base tool description
+                tool_description = metadata["description"]
+
+                # Add simple_description to the description if available
+                if hasattr(tool, 'simple_description'):
+                    tool_description = f"{tool.simple_description}\n\n{tool_description}"
+
+                # Add anthropic_details to the description if available
+                if hasattr(tool, 'anthropic_details'):
+                    tool_description = f"{tool_description}\n\n{tool.anthropic_details}"
+
+                definition = {
+                    "name": metadata["name"],
+                    "description": tool_description,
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": metadata["required_parameters"]
+                    }
                 }
-            }
-            
-            # Add properties
-            for param_name, param_info in metadata["parameters"].items():
-                param_type = param_info.get("type", "string")
-                
-                # Map Python types to JSON Schema types
-                if param_type in ("int", "float", "complex", "number"):
-                    json_type = "number"
-                elif param_type in ("bool", "boolean"):
-                    json_type = "boolean"
-                elif param_type in ("dict", "Dict", "dictionary", "object"):
-                    json_type = "object"
-                elif param_type in ("list", "List", "array"):
-                    json_type = "array"
-                else:
-                    json_type = "string"
-                
-                # Create property definition
-                prop_def = {
-                    "type": json_type,
-                    "description": param_info.get("description", f"Parameter: {param_name}")
+
+            elif provider == "ollama":
+                # Format for Ollama
+                definition = {
+                    "name": metadata["name"],
+                    "description": metadata["description"]
                 }
-                
-                # Include any additional schema properties if available
-                for schema_key, schema_value in param_info.items():
-                    if schema_key not in ["type", "description"]:
-                        prop_def[schema_key] = schema_value
-                
-                # Add to input_schema properties
-                definition["input_schema"]["properties"][param_name] = prop_def
-            
+
+                # Include simple_description if available
+                if hasattr(tool, 'simple_description'):
+                    definition["simple_description"] = tool.simple_description
+
+                # Include openai_schema if available
+                if hasattr(tool, 'openai_schema'):
+                    definition["openai_schema"] = tool.openai_schema
+
+            # Only need to add properties for Anthropic format
+            if provider == "anthropic":
+                # Add properties
+                for param_name, param_info in metadata["parameters"].items():
+                    param_type = param_info.get("type", "string")
+
+                    # Map Python types to JSON Schema types
+                    if param_type in ("int", "float", "complex", "number"):
+                        json_type = "number"
+                    elif param_type in ("bool", "boolean"):
+                        json_type = "boolean"
+                    elif param_type in ("dict", "Dict", "dictionary", "object"):
+                        json_type = "object"
+                    elif param_type in ("list", "List", "array"):
+                        json_type = "array"
+                    else:
+                        json_type = "string"
+
+                    # Create property definition
+                    prop_def = {
+                        "type": json_type,
+                        "description": param_info.get("description", f"Parameter: {param_name}")
+                    }
+
+                    # Include any additional schema properties if available
+                    for schema_key, schema_value in param_info.items():
+                        if schema_key not in ["type", "description"]:
+                            prop_def[schema_key] = schema_value
+
+                    # Add to input_schema properties
+                    definition["input_schema"]["properties"][param_name] = prop_def
+
             definitions.append(definition)
-        
+
         return definitions
     
     def resolve_dependencies(self, tool_name: str) -> List[str]:

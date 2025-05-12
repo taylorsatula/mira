@@ -52,10 +52,10 @@ class OllamaBridge:
     ) -> Union[Dict[str, Any], Any]:
         """
         Generate a response using Ollama.
-        
+
         This method follows the same interface as LLMBridge.generate_response
         for compatibility with the existing application architecture.
-        
+
         Args:
             messages: List of message dictionaries with 'role' and 'content'
             system_prompt: Optional system prompt for the conversation
@@ -66,10 +66,10 @@ class OllamaBridge:
             callback: Optional callback function for processing streamed chunks
             cache_control: Optional cache control parameters (ignored)
             dynamic_content: Optional dynamic content to append to system prompt
-            
+
         Returns:
             Response object with compatible interface to Anthropic API
-            
+
         Raises:
             APIError: If the API request fails
         """
@@ -80,12 +80,25 @@ class OllamaBridge:
             error_code=ErrorCode.API_RESPONSE_ERROR,
             logger=self.logger
         ):
+            # Extract simple descriptions from tools
+            tool_descriptions = self._extract_simple_descriptions(tools) if tools else None
+
+            # Add tool descriptions to dynamic content if they exist
+            if tool_descriptions:
+                tool_prompt = "# Available Tools\n" + tool_descriptions + "\n\n"
+                tool_prompt += "IMPORTANT: When the user's request involves tasks like checking email, sending messages, or other actions these tools can help with, you MUST use these tools by calling the appropriate function. Do not pretend to perform actions - use the tools.\n\n"
+
+                if dynamic_content:
+                    dynamic_content = tool_prompt + dynamic_content
+                else:
+                    dynamic_content = tool_prompt
+
             # Format messages for OpenAI format
             formatted_messages = self._format_messages(messages, system_prompt, dynamic_content)
-            
+
             # Extract OpenAI schemas from tools
             openai_tools = self._extract_openai_schemas(tools) if tools else None
-            
+
             # Build request body
             request_body = {
                 "model": self.model,
@@ -215,29 +228,74 @@ class OllamaBridge:
     def _extract_openai_schemas(self, tools):
         """
         Extract OpenAI schemas from tools.
-        
+
         Only includes tools that explicitly have an openai_schema defined.
-        
+
         Args:
             tools: List of tool definitions
-            
+
         Returns:
             List of OpenAI-compatible tool definitions or None if no compatible tools
         """
         openai_tools = []
         skipped_tools = []
-        
+
         for tool in tools:
             # Check if the tool has an openai_schema defined
             if "openai_schema" in tool:
                 openai_tools.append(tool["openai_schema"])
             else:
                 skipped_tools.append(tool.get("name", "unnamed"))
-        
+
         if skipped_tools:
             self.logger.info(f"Skipped {len(skipped_tools)} tools without OpenAI schema: {', '.join(skipped_tools)}")
-            
+
         return openai_tools if openai_tools else None
+
+    def _extract_simple_descriptions(self, tools):
+        """
+        Extract simple descriptions from tools for the system prompt.
+
+        Args:
+            tools: List of tool definitions
+
+        Returns:
+            String with tool names and simple descriptions, or None if no tools have simple descriptions
+        """
+        if not tools:
+            return None
+
+        descriptions = []
+        examples = []
+
+        for tool in tools:
+            name = tool.get("name", "")
+            simple_description = tool.get("simple_description", "")
+
+            if name and simple_description:
+                descriptions.append(f"- {name}: {simple_description}")
+
+                # Add usage example for email_tool specifically
+                if name == "email_tool":
+                    examples.append(f"""
+Example: When user asks "Check my email", you should call the {name} function:
+```
+{{
+  "name": "{name}",
+  "arguments": {{
+    "operation": "get_emails",
+    "folder": "INBOX",
+    "max_emails": 10
+  }}
+}}
+```
+                    """)
+
+        result = "\n".join(descriptions)
+        if examples:
+            result += "\n\n## Function Calling Examples\n" + "\n".join(examples)
+
+        return result if descriptions else None
     
     def _create_response_object(self, ollama_response):
         """

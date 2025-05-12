@@ -13,7 +13,7 @@ class ApiConfig(BaseModel):
 
     # Provider configuration
     provider: str = Field(
-        default="ollama",
+        default="anthropic",
         description="LLM provider to use ('anthropic' or 'ollama')"
     )
 
@@ -30,7 +30,7 @@ class ApiConfig(BaseModel):
         description="URL for the Ollama API server when provider is 'ollama'"
     )
     ollama_model: str = Field(
-        default="qwen3:1.7b",
+        default="qwen3:4b",
         description="Ollama model name to use when provider is 'ollama'"
     )
 

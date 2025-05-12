@@ -182,7 +182,82 @@ class EmailTool(Tool):
     """
     
     description = simple_description + implementation_details
-    
+
+    openai_schema = {
+        "type": "function",
+        "function": {
+            "name": "email_tool",
+            "description": "Email management tool that provides access to email accounts via IMAP/SMTP protocols. Use this tool to read, search, send, and manage emails.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["get_emails", "get_email_content", "mark_as_read", "mark_as_unread", "delete_email", "move_email", "send_email", "reply_to_email", "create_draft", "search_emails", "list_folders", "mark_for_later_reply", "get_emails_for_later_reply"],
+                        "description": "The email operation to perform"
+                    },
+                    "folder": {
+                        "type": "string",
+                        "description": "Email folder to access (default: INBOX)"
+                    },
+                    "email_id": {
+                        "type": "string",
+                        "description": "UUID of a specific email for operations that work on a single email"
+                    },
+                    "unread_only": {
+                        "type": "boolean",
+                        "description": "Whether to only return unread emails (default: false)"
+                    },
+                    "load_content": {
+                        "type": "boolean",
+                        "description": "Whether to load full email content (default: true)"
+                    },
+                    "sender": {
+                        "type": "string",
+                        "description": "Sender email address or name to search for"
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "Subject text to search for"
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "description": "Start date for range search (DD-Mon-YYYY format)"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "End date for range search (DD-Mon-YYYY format)"
+                    },
+                    "max_emails": {
+                        "type": "integer",
+                        "description": "Maximum number of emails to return (default: 20)"
+                    },
+                    "to": {
+                        "type": "string",
+                        "description": "Recipient email address(es) for sending emails"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Email body content for sending or replying to emails"
+                    },
+                    "cc": {
+                        "type": "string",
+                        "description": "CC recipient(s) for sending emails"
+                    },
+                    "bcc": {
+                        "type": "string",
+                        "description": "BCC recipient(s) for sending emails"
+                    },
+                    "destination_folder": {
+                        "type": "string",
+                        "description": "Destination folder for move_email operation"
+                    }
+                },
+                "required": ["operation"]
+            }
+        }
+    }
+
     def __init__(self):
         """Initialize the email tool with configuration."""
         super().__init__()
