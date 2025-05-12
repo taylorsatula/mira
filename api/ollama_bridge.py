@@ -242,28 +242,28 @@ class OllamaBridge:
     def _create_response_object(self, ollama_response):
         """
         Create a response object compatible with Anthropic API.
-        
+
         Args:
             ollama_response: Raw response from Ollama
-            
+
         Returns:
             Response object with Anthropic-compatible interface
         """
-        
+
         # Create response object with compatible interface
         class AnthropicResponse:
             def __init__(self, content, tool_calls=None):
                 self.content = content
                 self.tool_calls = tool_calls
-                
+
                 # Add usage info (estimates)
                 class Usage:
                     def __init__(self):
                         self.input_tokens = ollama_response.get("usage", {}).get("prompt_tokens", 0)
                         self.output_tokens = ollama_response.get("usage", {}).get("completion_tokens", 0)
-                        
+
                 self.usage = Usage()
-        
+
         # Extract content from Ollama response
         content = []
         
@@ -274,6 +274,16 @@ class OllamaBridge:
         elif "choices" in ollama_response and len(ollama_response["choices"]) > 0:
             response_message = ollama_response["choices"][0].get("message", {})
             response_text = response_message.get("content", "")
+        # Handle final streaming response which might be formatted differently
+        elif isinstance(ollama_response, dict) and "done" in ollama_response and ollama_response.get("done") is True:
+            # This handles the final message in a streaming response
+            if "message" in ollama_response and "content" in ollama_response["message"]:
+                response_text = ollama_response["message"]["content"]
+                response_message = ollama_response["message"]
+            else:
+                self.logger.warning(f"Final streaming message missing content: {ollama_response}")
+                response_message = {}
+                response_text = ""
         else:
             self.logger.warning(f"Unexpected Ollama response format: {ollama_response}")
             response_message = {}

@@ -436,7 +436,7 @@ class RequestQueue:
                     
                     # Parse JSON chunk
                     chunk = json.loads(data)
-                    
+
                     # Extract the content delta
                     delta = ""
                     if 'choices' in chunk and len(chunk['choices']) > 0:
@@ -445,11 +445,19 @@ class RequestQueue:
                             delta = choice['delta']['content']
                         elif 'text' in choice:
                             delta = choice['text']
-                    
+                    # Handle Ollama-specific response format
+                    elif 'message' in chunk and 'content' in chunk['message']:
+                        delta = chunk['message']['content']
+
+                    # Don't include internal <think> tags from Ollama
+                    if delta == "<think>" or delta == "</think>":
+                        delta = ""
+
+
                     # Append to final response
                     if delta:
                         final_response['choices'][0]['message']['content'] += delta
-                        
+
                         # Call the callback with the delta
                         callback(delta)
                     
