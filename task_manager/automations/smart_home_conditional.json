@@ -1,0 +1,116 @@
+{
+  "id": "smart-home-conditional",
+  "name": "Smart Home Temperature Control",
+  "description": "Adjusts smart home temperature based on weather conditions and time of day",
+  "type": "sequence",
+  "frequency": "daily",
+  "scheduled_time": "06:00:00",
+  "timezone": "America/Chicago",
+  "status": "active",
+  "error_policy": "continue",
+  "timeout": 1800,
+  "max_executions": null,
+  "user_id": "system",
+  
+  "steps": [
+    {
+      "id": "check-weather",
+      "name": "Check Weather Forecast",
+      "position": 1,
+      "description": "Get today's weather forecast",
+      "execution_mode": "direct",
+      "tool_name": "weather_tool",
+      "operation": "get_forecast",
+      "parameters": {
+        "location": "Chicago, IL",
+        "days": 1,
+        "details": true
+      },
+      "output_key": "weather_data",
+      "condition_type": "always",
+      "max_retries": 3,
+      "retry_delay": 60
+    },
+    {
+      "id": "set-temperature-hot",
+      "name": "Set Temperature for Hot Day",
+      "position": 2,
+      "description": "Set thermostat to cooler temperature for hot days",
+      "execution_mode": "direct",
+      "tool_name": "kasa_tool",
+      "operation": "set_thermostat",
+      "parameters": {
+        "device_name": "Living Room Thermostat",
+        "temperature": 72,
+        "mode": "cool"
+      },
+      "output_key": "thermostat_hot_result",
+      "condition_type": "if_data",
+      "condition_data_key": "weather_data.result.max_temp",
+      "condition_operator": "gt",
+      "condition_value": 85,
+      "max_retries": 2,
+      "retry_delay": 30
+    },
+    {
+      "id": "set-temperature-cold",
+      "name": "Set Temperature for Cold Day",
+      "position": 3,
+      "description": "Set thermostat to warmer temperature for cold days",
+      "execution_mode": "direct",
+      "tool_name": "kasa_tool",
+      "operation": "set_thermostat",
+      "parameters": {
+        "device_name": "Living Room Thermostat",
+        "temperature": 68,
+        "mode": "heat"
+      },
+      "output_key": "thermostat_cold_result",
+      "condition_type": "if_data",
+      "condition_data_key": "weather_data.result.min_temp",
+      "condition_operator": "lt",
+      "condition_value": 50,
+      "max_retries": 2,
+      "retry_delay": 30
+    },
+    {
+      "id": "set-temperature-normal",
+      "name": "Set Normal Temperature",
+      "position": 4,
+      "description": "Set thermostat to normal temperature for mild days",
+      "execution_mode": "direct",
+      "tool_name": "kasa_tool",
+      "operation": "set_thermostat",
+      "parameters": {
+        "device_name": "Living Room Thermostat",
+        "temperature": 70,
+        "mode": "auto"
+      },
+      "output_key": "thermostat_normal_result",
+      "condition_type": "if_no_data",
+      "condition_data_key": "thermostat_hot_result",
+      "condition_operator": "exists",
+      "on_failure_step_id": "send-error-notification",
+      "max_retries": 2,
+      "retry_delay": 30
+    },
+    {
+      "id": "send-error-notification",
+      "name": "Send Error Notification",
+      "position": 5,
+      "description": "Send notification if there was an error",
+      "execution_mode": "direct",
+      "tool_name": "email_tool",
+      "operation": "send_email",
+      "parameters": {
+        "to": "homeowner@example.com",
+        "subject": "Smart Home Automation Error",
+        "body": "There was an error with your smart home temperature control automation."
+      },
+      "output_key": "notification_result",
+      "condition_type": "if_failure",
+      "max_retries": 1,
+      "retry_delay": 60
+    }
+  ]
+}

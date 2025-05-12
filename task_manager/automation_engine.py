@@ -11,11 +11,13 @@ import logging
 import threading
 import time
 import uuid
+import asyncio
 from datetime import datetime, timezone, timedelta, UTC
 from typing import Dict, Any, Optional, List, Set, Union, cast
 
 import pytz
 from dateutil.relativedelta import relativedelta
+from utils.async_utils import get_or_create_event_loop, close_event_loop
 
 from db import Database
 from errors import ToolError, ErrorCode, error_context
@@ -30,7 +32,7 @@ from api.llm_bridge import LLMBridge
 from config import config
 from utils.timezone_utils import (
     utc_now, ensure_utc, convert_to_timezone, convert_from_utc,
-    parse_time_string, validate_timezone
+    convert_to_utc, parse_time_string, validate_timezone
 )
 
 # Configure logger
@@ -233,37 +235,39 @@ class AutomationEngine:
     """
     
     def __init__(
-        self, 
+        self,
         tool_repo: Optional[ToolRepository] = None,
         llm_bridge: Optional[LLMBridge] = None
     ):
         """
         Initialize the automation engine.
-        
+
         Args:
             tool_repo: Repository of available tools
             llm_bridge: LLM bridge for orchestrated steps
         """
         self.db = Database()
+        # Store the provided tool_repo - important to use the same one as the main application
         self.tool_repo = tool_repo or ToolRepository()
         self.llm_bridge = llm_bridge or LLMBridge()
         self.template_engine = TemplateEngine()
-        
+
         # Keep track of which automations are currently being executed
         self.active_automations = {}  # automation_id -> execution_id
         self.automation_lock = threading.Lock()
-        
+
         # Flag to indicate if the scheduler is running
         self.scheduler_running = False
-        
+
         # Thread for the scheduler
         self.scheduler_thread = None
-        
+
         # Configuration
         self.check_interval = config.get("automation", {}).get("check_interval", 30)
         self.max_concurrent_automations = config.get("automation", {}).get("max_concurrent_automations", 5)
-        
-        logger.info("Automation engine initialized")
+
+        logger.info("Automation engine initialized with tool repository: %s",
+                   "shared instance" if tool_repo else "new instance")
     
     def start_scheduler(self) -> None:
         """
@@ -366,27 +370,40 @@ class AutomationEngine:
     def _execute_automation_safely(self, automation_id: str) -> None:
         """
         Execute an automation safely in a separate thread.
-        
+
         Args:
             automation_id: ID of the automation to execute
         """
         try:
+            # Initialize the event loop for this thread
+            get_or_create_event_loop()
+            logger.debug(f"Initialized event loop for automation {automation_id}")
+
             # Check if automation is already running
             if automation_id in self.active_automations:
                 logger.warning(f"Automation {automation_id} is already running, skipping")
                 return
-            
+
             # Get the automation with full details
             automation = self.db.get(Automation, automation_id)
             if not automation:
                 logger.error(f"Automation {automation_id} not found")
                 return
-            
+
             # Execute the automation
             self.execute_automation(automation, TriggerType.SCHEDULED)
-            
+
         except Exception as e:
             logger.error(f"Error executing automation {automation_id}: {e}", exc_info=True)
+
+        finally:
+            # Clean up the event loop resources
+            try:
+                self._cleanup_tools(automation_id)
+                close_event_loop()
+                logger.debug(f"Cleaned up event loop for automation {automation_id}")
+            except Exception as e:
+                logger.error(f"Error cleaning up resources for automation {automation_id}: {e}", exc_info=True)
     
     def execute_automation(self, automation: Automation, trigger_type: TriggerType) -> None:
         """
@@ -438,7 +455,11 @@ class AutomationEngine:
             # Mark execution as completed
             execution.status = ExecutionStatus.COMPLETED
             execution.completed_at = utc_now()
-            execution.runtime_seconds = (execution.completed_at - execution.started_at).total_seconds()
+
+            # Ensure both timestamps are timezone-aware before calculation
+            started_at = ensure_utc(execution.started_at)
+            completed_at = ensure_utc(execution.completed_at)
+            execution.runtime_seconds = (completed_at - started_at).total_seconds()
             self.db.update(execution)
             
             logger.info(f"Automation {automation.id} executed successfully")
@@ -451,14 +472,11 @@ class AutomationEngine:
             # Update execution with error
             execution.status = ExecutionStatus.FAILED
             execution.completed_at = utc_now()
-            
-            # Ensure both datetimes have timezone info before calculating runtime
-            if execution.started_at and execution.started_at.tzinfo is None:
-                started_at = ensure_utc(execution.started_at)
-            else:
-                started_at = execution.started_at
-                
-            execution.runtime_seconds = (execution.completed_at - started_at).total_seconds()
+
+            # Ensure both timestamps are timezone-aware before calculation
+            started_at = ensure_utc(execution.started_at)
+            completed_at = ensure_utc(execution.completed_at)
+            execution.runtime_seconds = (completed_at - started_at).total_seconds()
             execution.error = error_message
             self.db.update(execution)
             
@@ -732,6 +750,7 @@ class AutomationEngine:
         if not should_execute:
             step_execution.status = StepExecutionStatus.SKIPPED
             step_execution.completed_at = utc_now()
+            # For skipped steps, just set runtime to 0 directly
             step_execution.runtime_seconds = 0
             self.db.update(step_execution)
             
@@ -756,7 +775,10 @@ class AutomationEngine:
             step_execution.status = StepExecutionStatus.FAILED
             step_execution.error = f"Parameter resolution error: {str(e)}"
             step_execution.completed_at = utc_now()
-            step_execution.runtime_seconds = (step_execution.completed_at - step_execution.started_at).total_seconds()
+            # Ensure both timestamps are timezone-aware before calculation
+            started_at = ensure_utc(step_execution.started_at)
+            completed_at = ensure_utc(step_execution.completed_at)
+            step_execution.runtime_seconds = (completed_at - started_at).total_seconds()
             self.db.update(step_execution)
             
             raise ToolError(
@@ -805,7 +827,10 @@ class AutomationEngine:
                     step_execution.status = StepExecutionStatus.COMPLETED
                     step_execution.result = result
                     step_execution.completed_at = utc_now()
-                    step_execution.runtime_seconds = (step_execution.completed_at - step_execution.started_at).total_seconds()
+                    # Ensure both timestamps are timezone-aware before calculation
+                    started_at = ensure_utc(step_execution.started_at)
+                    completed_at = ensure_utc(step_execution.completed_at)
+                    step_execution.runtime_seconds = (completed_at - started_at).total_seconds()
                     
                     # Update execution context
                     if step.output_key:
@@ -847,7 +872,10 @@ class AutomationEngine:
                         step_execution.status = StepExecutionStatus.FAILED
                         step_execution.error = str(e)
                         step_execution.completed_at = utc_now()
-                        step_execution.runtime_seconds = (step_execution.completed_at - step_execution.started_at).total_seconds()
+                        # Ensure both timestamps are timezone-aware before calculation
+                        started_at = ensure_utc(step_execution.started_at)
+                        completed_at = ensure_utc(step_execution.completed_at)
+                        step_execution.runtime_seconds = (completed_at - started_at).total_seconds()
                         session.commit()
                 
                 # Propagate the error
@@ -859,28 +887,38 @@ class AutomationEngine:
     def _execute_direct_task(self, automation: Automation) -> Dict[str, Any]:
         """
         Execute a direct task.
-        
+
         Args:
             automation: The automation to execute
-            
+
         Returns:
             Result of the task execution
-            
+
         Raises:
             ToolError: If the task execution fails
         """
         # Get the tool
-        tool = self.tool_repo.get_tool(automation.tool_name)
-        if not tool:
+        try:
+            # First ensure the tool is enabled
+            if not self.tool_repo.is_tool_enabled(automation.tool_name):
+                self.tool_repo.enable_tool(automation.tool_name)
+
+            tool = self.tool_repo.get_tool(automation.tool_name)
+            if not tool:
+                raise ToolError(
+                    f"Tool '{automation.tool_name}' not found or not enabled",
+                    ErrorCode.TOOL_NOT_FOUND
+                )
+        except Exception as e:
             raise ToolError(
-                f"Tool '{automation.tool_name}' not found or not enabled",
+                f"Error getting tool '{automation.tool_name}': {str(e)}",
                 ErrorCode.TOOL_NOT_FOUND
             )
-        
+
         # Execute the tool with the specified operation and parameters
         logger.debug(f"Executing tool {automation.tool_name}.{automation.operation} with parameters: {automation.parameters}")
         result = tool.run(automation.operation, **automation.parameters)
-        
+
         return result
     
     def _execute_orchestrated_task(self, automation: Automation) -> Dict[str, Any]:
@@ -1058,28 +1096,47 @@ class AutomationEngine:
         return result
     
     def _determine_next_step(
-        self, 
-        step: AutomationStep, 
-        result: Dict[str, Any], 
+        self,
+        step: AutomationStep,
+        result: Dict[str, Any],
         context: Dict[str, Any]
     ) -> Optional[str]:
         """
         Determine the next step based on step logic and results.
-        
+
         Args:
             step: The current step
             result: Result of the step execution
             context: The execution context
-            
+
         Returns:
             ID of the next step or None for linear progression
         """
         # Check for explicit next step overrides first
         if step.on_success_step_id:
             return step.on_success_step_id
-        
+
         # If no explicit next step is defined, return None for linear progression
         return None
+
+    def _cleanup_tools(self, automation_id: str) -> None:
+        """
+        Clean up resources for all tools used in this automation.
+
+        Args:
+            automation_id: ID of the automation
+        """
+        try:
+            for tool_name in self.tool_repo.get_enabled_tools():
+                tool = self.tool_repo.get_tool(tool_name)
+                if hasattr(tool, 'cleanup') and callable(tool.cleanup):
+                    try:
+                        tool.cleanup()
+                        logger.debug(f"Cleaned up tool {tool_name} for automation {automation_id}")
+                    except Exception as e:
+                        logger.warning(f"Error cleaning up tool {tool_name}: {e}")
+        except Exception as e:
+            logger.warning(f"Error during tool cleanup for automation {automation_id}: {e}")
     
     def _calculate_next_run_time(self, automation: Automation) -> Optional[datetime]:
         """
@@ -1582,7 +1639,7 @@ class AutomationEngine:
             # Save to database
             self.db.add(execution)
             
-            # Launch execution in a separate thread
+            # Launch execution in a separate thread with event loop handling
             threading.Thread(
                 target=self._execute_automation_safely,
                 args=(automation.id,),
@@ -1793,13 +1850,28 @@ def get_automation_engine() -> AutomationEngine:
     return _automation_engine
 
 
-def initialize_automation_engine() -> AutomationEngine:
+def initialize_automation_engine(
+    tool_repo: Optional[ToolRepository] = None,
+    llm_bridge: Optional[LLMBridge] = None
+) -> AutomationEngine:
     """
     Initialize the automation engine and start the scheduler.
-    
+
+    Args:
+        tool_repo: The tool repository to use (should be shared with main app)
+        llm_bridge: The LLM bridge to use
+
     Returns:
         The initialized automation engine
     """
-    engine = get_automation_engine()
-    engine.start_scheduler()
-    return engine
+    global _automation_engine
+
+    with _engine_lock:
+        # Create the engine with the shared tool repository
+        _automation_engine = AutomationEngine(
+            tool_repo=tool_repo,
+            llm_bridge=llm_bridge
+        )
+
+    _automation_engine.start_scheduler()
+    return _automation_engine

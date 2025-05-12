@@ -126,11 +126,12 @@ class Conversation:
         llm_bridge: LLMBridge,
         tool_repo: ToolRepository,
         tool_relevance_engine: 'ToolRelevanceEngine',
-        workflow_manager: 'WorkflowManager'
+        workflow_manager: 'WorkflowManager',
+        working_memory: 'WorkingMemory'
     ):
         """
         Initialize a new conversation.
-        
+
         Args:
             conversation_id: Unique identifier for the conversation
             system_prompt: System prompt for the conversation
@@ -138,6 +139,7 @@ class Conversation:
             tool_repo: Tool repository instance
             tool_relevance_engine: Tool relevance engine instance
             workflow_manager: Workflow manager instance
+            working_memory: Working memory instance for dynamic prompt content
         """
         # Set up logging
         self.logger = logging.getLogger("conversation")
@@ -157,6 +159,7 @@ class Conversation:
         self.tool_repo = tool_repo
         self.tool_relevance_engine = tool_relevance_engine
         self.workflow_manager = workflow_manager
+        self.working_memory = working_memory
         
         # Set up conversation config
         self.max_history = config.conversation.max_history
@@ -164,15 +167,6 @@ class Conversation:
         
         # Store system prompt as a property (not as a message)
         self.system_prompt = system_prompt
-        
-        # Load user information once and store in memory
-        try:
-            self.user_info = config.get_system_prompt("user_information")
-            self.user_info = f"USER INFORMATION:\n{self.user_info}\n\n"
-            self.logger.info("Successfully loaded user information")
-        except Exception as e:
-            self.logger.warning(f"Failed to load user information: {e}")
-            self.user_info = ""
             
         # Initialize error tracking
         self.last_error = None
@@ -338,8 +332,10 @@ class Conversation:
             workflow_id, confidence = self.workflow_manager.detect_workflow(user_input)
             if workflow_id:
                 self.logger.info(f"Detected potential workflow: {workflow_id} (confidence: {confidence:.2f})")
-                # Store the detected workflow ID for the system prompt
+                # Store the detected workflow ID
                 self._detected_workflow_id = workflow_id
+                # Update the workflow hint in working memory
+                self.workflow_manager.update_workflow_hint(workflow_id)
                 # We'll continue with normal processing and let the LLM handle confirmation
         
         # If workflow is active, suspend tool relevance engine and enable workflow tools
@@ -388,41 +384,17 @@ class Conversation:
                 else:
                     selected_tools = None
                 
-                # Get current time information - use our utility for consistent UTC handling
-                now_utc = utc_now()
-                # Convert to user's configured timezone for display
-                user_tz = get_default_timezone()
-                now_local = convert_from_utc(now_utc, user_tz)
-                time_info = f"Current datetime: {format_datetime(now_local, 'date_time', include_timezone=True)} (UTC: {format_datetime(now_utc, 'date_time')})\n\n"
+                # Static content for caching (just the system prompt now)
+                static_content = self.system_prompt
+
+                # Get dynamic content from working memory
+                dynamic_content = self.working_memory.get_prompt_content()
                 
-                # Static content for caching (system prompt and user info)
-                static_content = self.system_prompt + self.user_info
+                # Working memory already contains all dynamic content
                 
-                # Dynamic content starts with time information
-                dynamic_content = time_info
+                # Working memory contains all dynamic guidance
                 
-                # Add workflow guidance if a workflow is active
-                if self.workflow_manager and self.workflow_manager.get_active_workflow():
-                    workflow_guidance = self.workflow_manager.get_system_prompt_extension()
-                    dynamic_content += workflow_guidance
-                
-                # Add guidance for tool selection if multiple tools are enabled
-                elif self.tool_repo and len(self.tool_repo.get_enabled_tools()) > 1:
-                    enabled_tools = self.tool_repo.get_enabled_tools()
-                    tool_list = ", ".join([t.replace("_tool", "") for t in enabled_tools])
-                    tool_guidance = f"\nMultiple tools are currently available: {tool_list}. "
-                    tool_guidance += "If the user's request is ambiguous about which tool to use, ask for clarification."
-                    dynamic_content += tool_guidance
-                
-                # Add workflow detection guidance if we detected a potential workflow but none is active
-                detected_workflow_id = getattr(self, '_detected_workflow_id', None)
-                if self.workflow_manager and not self.workflow_manager.get_active_workflow() and detected_workflow_id:
-                    workflow = self.workflow_manager.workflows.get(detected_workflow_id)
-                    if workflow:
-                        workflow_hint = f"\n\nI've detected that the user might want help with: {workflow['name']}. "
-                        workflow_hint += "If this seems correct, you can confirm and start this workflow process by including this exact text in your response: "
-                        workflow_hint += f"<workflow_start id=\"{detected_workflow_id}\" />"
-                        dynamic_content += workflow_hint
+                # Working memory contains all dynamic content including workflow hints
                 
                 # Define cache control for prompt caching
                 cache_control = {"type": "ephemeral"}
@@ -715,21 +687,6 @@ class Conversation:
         self.messages = []
         self.logger.debug(f"Cleared conversation history for {self.conversation_id}")
         
-    def reload_user_information(self) -> None:
-        """
-        Reload user information from file.
-        
-        Call this method when the user information file has been updated
-        and you want to refresh the cached information without restarting
-        the application.
-        """
-        try:
-            self.user_info = config.get_system_prompt("user_information", reload=True)
-            self.user_info = f"USER INFORMATION:\n{self.user_info}\n\n"
-            self.logger.info("Successfully reloaded user information")
-        except Exception as e:
-            self.logger.warning(f"Failed to reload user information: {e}")
-            # Keep existing user_info if refresh fails
     
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -764,18 +721,20 @@ class Conversation:
         llm_bridge: LLMBridge,
         tool_repo: ToolRepository,
         tool_relevance_engine: 'ToolRelevanceEngine',
-        workflow_manager: 'WorkflowManager'
+        workflow_manager: 'WorkflowManager',
+        working_memory: 'WorkingMemory'
     ) -> 'Conversation':
         """
         Create a conversation from a dictionary representation.
-        
+
         Args:
             data: Dictionary representation of the conversation
             llm_bridge: LLM bridge instance
             tool_repo: Tool repository instance
             tool_relevance_engine: Tool relevance engine instance
             workflow_manager: Workflow manager instance
-            
+            working_memory: Working memory instance for dynamic prompt content
+
         Returns:
             Conversation object
         """
@@ -793,7 +752,8 @@ class Conversation:
             llm_bridge=llm_bridge,
             tool_repo=tool_repo,
             tool_relevance_engine=tool_relevance_engine,
-            workflow_manager=workflow_manager
+            workflow_manager=workflow_manager,
+            working_memory=working_memory
         )
         
         # Load messages

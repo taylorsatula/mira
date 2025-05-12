@@ -4,10 +4,14 @@ Main entry point for the AI agent system.
 This module handles central control flow, system initialization,
 and provides a clean, readable entry point with minimal complexity.
 """
+# Set environment variable before importing any libraries that might use tokenizers
+# This prevents deadlocks when the process is forked
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import argparse
 import json
 import logging
-import os
 import sys
 import uuid
 import functools
@@ -23,6 +27,7 @@ from tools.tool_feedback import save_tool_feedback
 from conversation import Conversation
 from onload_checker import OnLoadChecker, add_stimuli_to_conversation
 from utils import automation_controller
+from working_memory import WorkingMemory, TimeManager, SystemStatusManager, UserInfoManager, ReminderManager
 
 
 def parse_arguments():
@@ -188,10 +193,42 @@ def initialize_system(args) -> Dict[str, Any]:
         tool_relevance_engine = ToolRelevanceEngine(tool_repo, shared_model)
         logger.info("Initialized ToolRelevanceEngine for dynamic tool management")
         
-        # Initialize the WorkflowManager with shared model and LLM bridge for dynamic tool selection
-        workflow_manager = WorkflowManager(tool_repo, model=shared_model, llm_bridge=llm_bridge)
-        logger.info("Initialized WorkflowManager with LLM bridge for dynamic tool selection")
-        
+        # Initialize working memory system first
+        working_memory = WorkingMemory()
+        logger.info("Initialized WorkingMemory for centralized system prompt content")
+
+        # Initialize the WorkflowManager with shared model, LLM bridge, and working memory
+        workflow_manager = WorkflowManager(
+            tool_repo,
+            model=shared_model,
+            llm_bridge=llm_bridge,
+            working_memory=working_memory
+        )
+        logger.info("Initialized WorkflowManager with working memory integration")
+
+        # Initialize TimeManager to handle datetime information (standalone trinket)
+        time_manager = TimeManager(working_memory)
+        logger.info("Initialized TimeManager for datetime information")
+
+        # Initialize UserInfoManager to handle user information (standalone trinket)
+        user_info_manager = UserInfoManager(working_memory, config)
+        logger.info("Initialized UserInfoManager for user information")
+
+        # Initialize SystemStatusManager to handle system status (standalone trinket)
+        system_status_manager = SystemStatusManager(working_memory)
+        logger.info("Initialized SystemStatusManager for system status")
+
+        # Initialize ReminderManager to handle reminders in system prompt (standalone trinket)
+        reminder_manager = ReminderManager(working_memory)
+        logger.info("Initialized ReminderManager for reminder information")
+
+        # Register managers with working memory
+        working_memory.register_manager(workflow_manager)
+        logger.info("Registered WorkflowManager with working memory")
+
+        working_memory.register_manager(tool_repo)
+        logger.info("Registered ToolRepository with working memory")
+
         # Initialize or load conversation
         if args.conversation:
             # Use error context specifically for loading the conversation
@@ -231,7 +268,8 @@ def initialize_system(args) -> Dict[str, Any]:
                         llm_bridge=llm_bridge,
                         tool_repo=tool_repo,
                         tool_relevance_engine=tool_relevance_engine,
-                        workflow_manager=workflow_manager
+                        workflow_manager=workflow_manager,
+                        working_memory=working_memory
                     )
                     logger.info(f"Loaded conversation: {conversation.conversation_id}")
                 except Exception as e:
@@ -244,7 +282,8 @@ def initialize_system(args) -> Dict[str, Any]:
                         llm_bridge=llm_bridge,
                         tool_repo=tool_repo,
                         tool_relevance_engine=tool_relevance_engine,
-                        workflow_manager=workflow_manager
+                        workflow_manager=workflow_manager,
+                        working_memory=working_memory
                     )
         else:
             # Generate a unique conversation ID and get default system prompt
@@ -256,7 +295,8 @@ def initialize_system(args) -> Dict[str, Any]:
                 llm_bridge=llm_bridge,
                 tool_repo=tool_repo,
                 tool_relevance_engine=tool_relevance_engine,
-                workflow_manager=workflow_manager
+                workflow_manager=workflow_manager,
+                working_memory=working_memory
             )
             
 
@@ -322,7 +362,12 @@ def initialize_system(args) -> Dict[str, Any]:
             'tool_relevance_engine': tool_relevance_engine,
             'workflow_manager': workflow_manager,
             'onload_checker': onload_checker,
-            'automation_engine': automation_engine
+            'automation_engine': automation_engine,
+            'working_memory': working_memory,
+            'time_manager': time_manager,
+            'user_info_manager': user_info_manager,
+            'system_status_manager': system_status_manager,
+            'reminder_manager': reminder_manager
         }
 
 
@@ -419,7 +464,7 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
                 continue
                 
             elif user_input.lower() == '/reload_user':
-                conversation.reload_user_information()
+                system['user_info_manager'].load_user_information()
                 print("User information reloaded.")
                 continue
                 
@@ -456,6 +501,13 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
 
             # Generate response
             print("\nAssistant: ", end="", flush=True)
+
+            # Update dynamic information in working memory before each response
+            system['time_manager'].update_datetime_info()
+            system['reminder_manager'].update_reminder_info()
+
+            # Update all registered managers (workflow_manager and tool_repo)
+            system['working_memory'].update_all_managers()
 
             # Use error context for response generation
             with error_context(

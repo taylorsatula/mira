@@ -89,6 +89,8 @@ class AutomationTool(Tool):
        - For simple_task: execution_mode, tool_name/operation OR task_description
        - For sequence: steps (list of step definitions)
        - Optional: scheduled_time, day_of_week, day_of_month, timezone, etc.
+       
+       When creating automations, tools MUST stage the automation for future execution without performing immediate actions. Direct tool invocations during automation creation are prohibited and should be replaced by scheduling mechanisms.
     
     2. get_automations: List automations filtered by criteria
        - Optional filters: type, status, frequency, limit, offset
@@ -102,6 +104,7 @@ class AutomationTool(Tool):
     
     5. delete_automation: Remove an automation
        - Required: automation_id
+       Explicit confirmation is required to delete an automation. DO NOT automatically set the value to true. Ask the user if they really want to delete the automation before setting true. AFTER the user confirms that they want to delete the automation set 'confirm=true' to proceed.
     
     6. execute_now: Run an automation immediately
        - Required: automation_id

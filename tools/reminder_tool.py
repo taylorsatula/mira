@@ -427,7 +427,7 @@ class ReminderTool(Tool):
         self.logger.info(f"Getting reminders with date_type: {date_type}")
         
         # Validate date_type
-        valid_date_types = ["today", "tomorrow", "upcoming", "past", "all", "date", "range"]
+        valid_date_types = ["today", "tomorrow", "upcoming", "past", "all", "date", "range", "overdue"]
         if date_type not in valid_date_types:
             raise ToolError(
                 f"Invalid date_type: {date_type}. Must be one of {valid_date_types}",
@@ -466,12 +466,20 @@ class ReminderTool(Tool):
                 )
                 date_description = "upcoming"
                 
+            elif date_type == "overdue":
+                # Overdue reminders: past due date and not completed
+                query = query.filter(
+                    Reminder.reminder_date < today,
+                    Reminder.completed.is_(False)
+                )
+                date_description = "overdue"
+
             elif date_type == "past":
                 query = query.filter(
                     Reminder.reminder_date < today
                 )
                 date_description = "past"
-                
+
             elif date_type == "all":
                 # No filter needed
                 date_description = "all"

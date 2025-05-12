@@ -35,22 +35,44 @@ class WorkflowManager:
     """
     
     def __init__(
-        self, 
+        self,
         tool_repo: ToolRepository,
         model,
         workflows_dir: Optional[str] = None,
-        llm_bridge = None
+        llm_bridge = None,
+        working_memory = None
     ):
         """
         Initialize the workflow manager.
-        
+
         Args:
             tool_repo: Repository of available tools
             model: Pre-loaded SentenceTransformer model to use for embedding computations
             workflows_dir: Directory containing workflow definition files
+            llm_bridge: LLM bridge instance for dynamic operations
+            working_memory: Working memory instance for storing workflow content
         """
         self.logger = logging.getLogger("workflow_manager")
         self.tool_repo = tool_repo
+
+        # Store working memory reference
+        self.working_memory = working_memory
+
+        # Track detected but not yet active workflow ID
+        self._detected_workflow_id = None
+
+        # Track workflow hint ID for memory management
+        self._workflow_hint_id = None
+
+        # Content cache to avoid unnecessary updates to working memory
+        self._content_cache = {
+            "current_workflow": None,
+            "header": None,
+            "steps": {},  # step_id -> content
+            "data": {},    # field_name -> content
+            "checklist": None,
+            "navigation": None
+        }
         
         # Set workflows directory
         self.workflows_dir = workflows_dir
@@ -265,19 +287,67 @@ class WorkflowManager:
         
         self.logger.info(f"Computed embeddings for {len(self.workflow_embeddings)} workflows")
     
+    def update_workflow_hint(self, detected_workflow_id: Optional[str] = None) -> None:
+        """
+        Update the workflow hint in working memory.
+
+        This method adds a hint to the working memory when a workflow is detected
+        but not yet activated, to guide the assistant to start the workflow.
+
+        Args:
+            detected_workflow_id: ID of the detected workflow, or None if no workflow is detected
+        """
+        # Store the detected workflow ID for future reference
+        if detected_workflow_id:
+            self._detected_workflow_id = detected_workflow_id
+        else:
+            detected_workflow_id = self._detected_workflow_id
+
+        # Remove existing workflow hint if present
+        if self._workflow_hint_id and self.working_memory:
+            self.working_memory.remove(self._workflow_hint_id)
+            self._workflow_hint_id = None
+
+        # If no workflow is detected or the working memory is not provided, return
+        if not detected_workflow_id or not self.working_memory:
+            return
+
+        # If a workflow is already active, don't add a hint
+        if self.get_active_workflow():
+            return
+
+        # Get the workflow information
+        workflow = self.workflows.get(detected_workflow_id)
+        if not workflow:
+            return
+
+        # Create the workflow hint
+        workflow_hint = f"# Detected Workflow\n"
+        workflow_hint += f"I've detected that the user might want help with: {workflow['name']}.\n"
+        workflow_hint += "If this seems correct, you can confirm and start this workflow process by including this exact text in your response:\n"
+        workflow_hint += f"<workflow_start id=\"{detected_workflow_id}\" />"
+
+        # Add to working memory
+        self._workflow_hint_id = self.working_memory.add(
+            content=workflow_hint,
+            category="workflow_hint"
+        )
+
+        self.logger.debug(f"Added workflow hint for '{workflow['name']}' to working memory (item ID: {self._workflow_hint_id})")
+
     def detect_workflow(self, message: str) -> Tuple[Optional[str], float]:
         """
         Detect if a message matches a workflow.
-        
+
         Args:
             message: User message to analyze
-            
+
         Returns:
             Tuple of (workflow_id, confidence) if a match is found, (None, 0.0) otherwise
         """
         if not self.model or not self.workflows or not self.workflow_embeddings:
             return None, 0.0
-        
+
         with error_context(
             component_name="WorkflowManager",
             operation="detecting workflow",
@@ -334,26 +404,310 @@ class WorkflowManager:
                 self.logger.debug(f"No workflow detected (best confidence: {best_match_score:.4f})")
                 return None, 0.0
     
+    def update_working_memory(self) -> None:
+        """
+        Update workflow content in working memory.
+
+        This is the main method called by WorkingMemory to refresh workflow content.
+        It updates both active workflow content and workflow hints for detection.
+        """
+        # Update hints for detected workflows if no active workflow
+        if not self.get_active_workflow() and hasattr(self, '_detected_workflow_id') and getattr(self, '_detected_workflow_id', None):
+            self.update_workflow_hint(self._detected_workflow_id)
+
+        # Update content for active workflow
+        self._update_workflow_content()
+
+    def _update_workflow_content(self) -> None:
+        """
+        Update workflow content in working memory.
+
+        Uses the category system built into WorkingMemory to efficiently
+        manage workflow content, only updating content that has changed.
+        """
+        if not self.working_memory or not self.active_workflow_id:
+            return
+
+        workflow = self.workflows[self.active_workflow_id]
+
+        # If we've switched workflows, clear previous workflow content
+        if self._content_cache["current_workflow"] != self.active_workflow_id:
+            self._clear_workflow_content()
+            self._content_cache["current_workflow"] = self.active_workflow_id
+
+        # Update workflow header (workflow name and description)
+        header_content = self._generate_header_content(workflow)
+        if header_content != self._content_cache["header"]:
+            # Remove existing header content if any
+            self.working_memory.remove_by_category("workflow_header")
+
+            # Add new header content
+            self.working_memory.add(
+                content=header_content,
+                category="workflow_header"
+            )
+
+            # Update cache
+            self._content_cache["header"] = header_content
+            self.logger.debug("Updated workflow header in working memory")
+
+        # Update available steps
+        current_step_ids = set(self.available_steps)
+        cached_step_ids = set(self._content_cache["steps"].keys())
+
+        # Handle steps that are no longer available
+        steps_to_remove = cached_step_ids - current_step_ids
+        for step_id in steps_to_remove:
+            # Remove from working memory by category
+            self.working_memory.remove_by_category(f"workflow_step_{step_id}")
+
+            # Remove from cache
+            del self._content_cache["steps"][step_id]
+            self.logger.debug(f"Removed step {step_id} from working memory")
+
+        # Add or update available steps
+        for step_id in current_step_ids:
+            step = workflow["steps"].get(step_id)
+            if not step:
+                continue
+
+            step_content = self._generate_step_content(step_id, step)
+
+            # Only update if content has changed
+            if step_content != self._content_cache["steps"].get(step_id):
+                # Remove existing step content if any
+                self.working_memory.remove_by_category(f"workflow_step_{step_id}")
+
+                # Add new step content
+                self.working_memory.add(
+                    content=step_content,
+                    category=f"workflow_step_{step_id}"
+                )
+
+                # Update cache
+                self._content_cache["steps"][step_id] = step_content
+                self.logger.debug(f"Updated step {step_id} in working memory")
+
+        # Update workflow data
+        current_data_fields = set(self.workflow_data.keys())
+        cached_data_fields = set(self._content_cache["data"].keys())
+
+        # Handle data fields no longer present
+        fields_to_remove = cached_data_fields - current_data_fields
+        for field in fields_to_remove:
+            # Remove from working memory
+            self.working_memory.remove_by_category(f"workflow_data_{field}")
+
+            # Remove from cache
+            del self._content_cache["data"][field]
+            self.logger.debug(f"Removed data field {field} from working memory")
+
+        # Add or update data fields
+        for field, value in self.workflow_data.items():
+            data_content = self._generate_data_field_content(field, value, workflow)
+
+            # Only update if content has changed
+            if data_content != self._content_cache["data"].get(field):
+                # Remove existing data content if any
+                self.working_memory.remove_by_category(f"workflow_data_{field}")
+
+                # Add new data content
+                self.working_memory.add(
+                    content=data_content,
+                    category=f"workflow_data_{field}"
+                )
+
+                # Update cache
+                self._content_cache["data"][field] = data_content
+                self.logger.debug(f"Updated data field {field} in working memory")
+
+        # Update checklist
+        checklist_content = self._generate_checklist_content(workflow)
+        if checklist_content != self._content_cache["checklist"]:
+            # Remove existing checklist content if any
+            self.working_memory.remove_by_category("workflow_checklist")
+
+            # Add new checklist content
+            self.working_memory.add(
+                content=checklist_content,
+                category="workflow_checklist"
+            )
+
+            # Update cache
+            self._content_cache["checklist"] = checklist_content
+            self.logger.debug("Updated workflow checklist in working memory")
+
+        # Update navigation
+        navigation_content = self._generate_navigation_content()
+        if navigation_content != self._content_cache["navigation"]:
+            # Remove existing navigation content if any
+            self.working_memory.remove_by_category("workflow_navigation")
+
+            # Add new navigation content
+            self.working_memory.add(
+                content=navigation_content,
+                category="workflow_navigation"
+            )
+
+            # Update cache
+            self._content_cache["navigation"] = navigation_content
+            self.logger.debug("Updated workflow navigation in working memory")
+
+        self.logger.info(f"Updated workflow content in working memory for workflow: {self.active_workflow_id}")
+
+    def _clear_workflow_content(self) -> None:
+        """
+        Clear all workflow content from working memory.
+
+        Uses category-based removal for efficient cleanup.
+        """
+        if not self.working_memory:
+            return
+
+        # Remove workflow header
+        self.working_memory.remove_by_category("workflow_header")
+
+        # Remove workflow steps - need to handle each step individually
+        for step_id in list(self._content_cache["steps"].keys()):
+            self.working_memory.remove_by_category(f"workflow_step_{step_id}")
+
+        # Remove workflow data fields - need to handle each field individually
+        for field in list(self._content_cache["data"].keys()):
+            self.working_memory.remove_by_category(f"workflow_data_{field}")
+
+        # Remove workflow checklist
+        self.working_memory.remove_by_category("workflow_checklist")
+
+        # Remove workflow navigation
+        self.working_memory.remove_by_category("workflow_navigation")
+
+        # Reset content cache
+        self._content_cache = {
+            "current_workflow": None,
+            "header": None,
+            "steps": {},
+            "data": {},
+            "checklist": None,
+            "navigation": None
+        }
+
+        self.logger.debug("Cleared all workflow content from working memory")
+
+    def _generate_header_content(self, workflow: Dict[str, Any]) -> str:
+        """Generate the workflow header content."""
+        content = "\n\n# ACTIVE WORKFLOW GUIDANCE\n"
+        content += f"You are currently helping the user with: **{workflow['name']}**\n"
+        content += f"Description: {workflow['description']}\n"
+        return content
+
+    def _generate_step_content(self, step_id: str, step: Dict[str, Any]) -> str:
+        """Generate content for a workflow step."""
+        # Mark optional steps
+        optional_text = " (Optional)" if step.get("optional", False) else ""
+
+        # Build step content
+        content = f"\n## Available Step: {step['description']}{optional_text} (ID: {step_id})\n"
+        content += f"{step['guidance']}\n"
+
+        # Add input requirements if defined
+        if "inputs" in step and step["inputs"]:
+            content += "\n### Required inputs for this step:\n"
+            for input_item in step["inputs"]:
+                req_marker = "(Required)" if input_item.get("required", False) else "(Optional)"
+                input_desc = input_item.get("description", input_item["name"])
+
+                # Add format guidance if available
+                format_info = ""
+                if input_item.get("type") == "select" and "options" in input_item:
+                    options = input_item["options"]
+                    if isinstance(options[0], dict):
+                        option_values = ", ".join([f"{o.get('label', o['value'])}" for o in options])
+                    else:
+                        option_values = ", ".join([str(o) for o in options])
+                    format_info = f" - Options: {option_values}"
+                elif input_item.get("example"):
+                    format_info = f" - Example: {input_item['example']}"
+
+                content += f"- **{input_item['name']}** {req_marker}: {input_desc}{format_info}\n"
+
+        return content
+
+    def _generate_data_field_content(self, field: str, value: Any, workflow: Dict[str, Any]) -> str:
+        """Generate content for a workflow data field."""
+        # Format the value for display
+        if isinstance(value, (dict, list)):
+            import json
+            display_value = json.dumps(value, indent=2)
+        else:
+            display_value = str(value)
+
+        # Get field description if available
+        field_description = ""
+        if "data_schema" in workflow and field in workflow["data_schema"]:
+            field_description = f" - {workflow['data_schema'][field].get('description', '')}"
+
+        # Create data item content
+        return f"\n## Data: {field}{field_description}\n{display_value}"
+
+    def _generate_checklist_content(self, workflow: Dict[str, Any]) -> str:
+        """Generate the workflow checklist content."""
+        content = "\n## Workflow Checklist\n"
+
+        # Add each step with status indicator
+        for step_id, step in sorted(workflow["steps"].items()):
+            if step_id in self.completed_steps:
+                status_marker = "[✅]"
+            elif step_id in self.available_steps:
+                status_marker = "[🔄]"
+            else:
+                status_marker = "[ ]"
+
+            # Mark optional steps
+            optional_text = " (Optional)" if step.get("optional", False) else ""
+
+            # Include the step ID explicitly in the checklist
+            content += f"{status_marker} {step['description']}{optional_text} `(ID: {step_id})`\n"
+
+        return content
+
+    def _generate_navigation_content(self) -> str:
+        """Generate the workflow navigation guidance content."""
+        return """
+## Navigation Commands
+You can navigate the workflow using these commands:
+- <workflow_complete_step id="step_id" /> - Mark a step as complete (replace step_id with the actual ID)
+- <workflow_skip_step id="step_id" /> - Skip an optional step (replace step_id with the actual ID)
+- <workflow_revisit_step id="step_id" /> - Go back to a previously completed step (replace step_id with the actual ID)
+- <workflow_complete /> - Complete the entire workflow
+- <workflow_cancel /> - Cancel the workflow
+
+## IMPORTANT: Using Step IDs Correctly
+- When using workflow commands, you MUST use the exact step ID as shown in parentheses
+- Only mark a step as complete when you have collected ALL required inputs for that step
+- After completing a step, available steps will automatically update based on the workflow structure
+- Complete each step fully before moving to the next step
+"""
+
     def start_workflow(self, workflow_id: str, triggering_message: str = None, llm_bridge = None) -> Dict[str, Any]:
         """
         Start a workflow.
-        
+
         Args:
             workflow_id: ID of the workflow to start
             triggering_message: Optional message that triggered the workflow, used for initial data extraction
             llm_bridge: Optional LLMBridge instance for extracting data from the triggering message
-            
+
         Returns:
             Dictionary containing workflow information
-            
+
         Raises:
             ValueError: If the workflow doesn't exist
         """
         if workflow_id not in self.workflows:
             raise ValueError(f"Workflow with ID '{workflow_id}' doesn't exist")
-        
+
         workflow = self.workflows[workflow_id]
-        
+
         # Disable all currently enabled tools to start fresh
         currently_enabled_tools = self.tool_repo.get_enabled_tools()
         for tool_name in currently_enabled_tools:
@@ -362,44 +716,44 @@ class WorkflowManager:
                 self.logger.info(f"Disabled previously enabled tool: {tool_name}")
             except Exception as e:
                 self.logger.error(f"Error disabling tool {tool_name}: {e}")
-        
+
         # Activate the workflow
         self.active_workflow_id = workflow_id
-        
+
         # Initialize workflow state
         self.completed_steps = set()
         self.workflow_data = {}
-        
+
         # Attempt to extract initial data from the triggering message if provided
         if triggering_message and llm_bridge:
             extracted_data = self._extract_initial_data(workflow_id, triggering_message, llm_bridge)
             if extracted_data:
                 self.workflow_data.update(extracted_data)
                 self.logger.info(f"Extracted initial data from triggering message: {extracted_data}")
-        
+
         # Determine which steps are available at the start
         self.available_steps = set()
-        
+
         # Check if the workflow has explicitly defined entry points
         entry_points = []
         if "entry_points" in workflow and workflow["entry_points"]:
             entry_points = [
-                step_id for step_id in workflow["entry_points"] 
+                step_id for step_id in workflow["entry_points"]
                 if step_id in workflow["steps"]
             ]
         else:
             # Fall back to finding steps with no prerequisites
             entry_points = [
-                step_id for step_id, step in workflow["steps"].items() 
+                step_id for step_id, step in workflow["steps"].items()
                 if not step["prerequisites"]
             ]
-        
+
         # Process entry points - auto-complete steps if we already have their data
         for step_id in entry_points:
             step = workflow["steps"].get(step_id)
             if not step:
                 continue
-                
+
             # Check if this entry point step provides data that we already have
             if "provides_data" in step and step["provides_data"]:
                 # If we have all the data this step would provide, mark it completed
@@ -412,18 +766,22 @@ class WorkflowManager:
             else:
                 # No data requirements, just make it available
                 self._check_and_add_available_step(step_id)
-                
+
         # After handling entry points, calculate all available steps
         # This finds steps that become available due to auto-completed entry points
         for step_id in workflow["steps"]:
             if step_id not in self.completed_steps and step_id not in self.available_steps:
                 self._check_and_add_available_step(step_id)
-        
+
         # Enable tools for all available steps
         self._update_tool_access()
-        
+
+        # Update working memory with workflow content
+        if self.working_memory:
+            self._update_workflow_content()
+
         self.logger.info(f"Started workflow: {workflow_id}")
-        
+
         return {
             "workflow_id": workflow_id,
             "name": workflow["name"],
@@ -594,56 +952,60 @@ class WorkflowManager:
     def complete_step(self, step_id: str, data: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Complete a workflow step and update workflow state.
-        
+
         Args:
             step_id: ID of the step to complete
             data: Data collected during this step
-            
+
         Returns:
             Dictionary containing updated workflow information
-            
+
         Raises:
             ValueError: If the step doesn't exist or isn't available
         """
         if not self.active_workflow_id:
             raise ValueError("No active workflow")
-        
+
         workflow = self.workflows[self.active_workflow_id]
-        
+
         if step_id not in workflow["steps"]:
             raise ValueError(f"Step '{step_id}' doesn't exist in workflow '{self.active_workflow_id}'")
-        
+
         if step_id not in self.available_steps:
             raise ValueError(f"Step '{step_id}' is not currently available")
-        
+
         # Mark step as completed
         self.completed_steps.add(step_id)
         self.available_steps.remove(step_id)
-        
+
         # Update workflow data
         if data:
             self.workflow_data.update(data)
-        
+
         # If the step provides data, record that
         step = workflow["steps"][step_id]
         if "provides_data" in step and not data:
             self.logger.warning(f"Step {step_id} is marked as providing data but no data was provided")
-        
+
         # Recalculate available steps
         for potential_step_id in workflow["steps"]:
             self._check_and_add_available_step(potential_step_id)
-        
+
         # Update tool access
         self._update_tool_access()
-        
+
+        # Update working memory
+        if self.working_memory:
+            self._update_workflow_content()
+
         self.logger.info(f"Completed workflow step: {step_id}")
-        
+
         # Check if the workflow is now complete
         is_complete = self._check_workflow_completion()
-        
+
         if is_complete:
             return self.complete_workflow()
-        
+
         return {
             "workflow_id": self.active_workflow_id,
             "name": workflow["name"],
@@ -656,50 +1018,54 @@ class WorkflowManager:
     def skip_step(self, step_id: str) -> Dict[str, Any]:
         """
         Skip an optional workflow step.
-        
+
         Args:
             step_id: ID of the step to skip
-            
+
         Returns:
             Dictionary containing updated workflow information
-            
+
         Raises:
             ValueError: If the step doesn't exist, isn't available, or isn't optional
         """
         if not self.active_workflow_id:
             raise ValueError("No active workflow")
-        
+
         workflow = self.workflows[self.active_workflow_id]
-        
+
         if step_id not in workflow["steps"]:
             raise ValueError(f"Step '{step_id}' doesn't exist in workflow '{self.active_workflow_id}'")
-        
+
         if step_id not in self.available_steps:
             raise ValueError(f"Step '{step_id}' is not currently available")
-        
+
         step = workflow["steps"][step_id]
         if not step.get("optional", False):
             raise ValueError(f"Step '{step_id}' is not optional and cannot be skipped")
-        
+
         # Mark step as completed without updating data
         self.completed_steps.add(step_id)
         self.available_steps.remove(step_id)
-        
+
         # Recalculate available steps
         for potential_step_id in workflow["steps"]:
             self._check_and_add_available_step(potential_step_id)
-        
+
         # Update tool access
         self._update_tool_access()
-        
+
+        # Update working memory
+        if self.working_memory:
+            self._update_workflow_content()
+
         self.logger.info(f"Skipped workflow step: {step_id}")
-        
+
         # Check if the workflow is now complete
         is_complete = self._check_workflow_completion()
-        
+
         if is_complete:
             return self.complete_workflow()
-        
+
         return {
             "workflow_id": self.active_workflow_id,
             "name": workflow["name"],
@@ -712,36 +1078,40 @@ class WorkflowManager:
     def revisit_step(self, step_id: str) -> Dict[str, Any]:
         """
         Revisit a previously completed step.
-        
+
         Args:
             step_id: ID of the step to revisit
-            
+
         Returns:
             Dictionary containing updated workflow information
-            
+
         Raises:
             ValueError: If the step doesn't exist or wasn't previously completed
         """
         if not self.active_workflow_id:
             raise ValueError("No active workflow")
-        
+
         workflow = self.workflows[self.active_workflow_id]
-        
+
         if step_id not in workflow["steps"]:
             raise ValueError(f"Step '{step_id}' doesn't exist in workflow '{self.active_workflow_id}'")
-        
+
         if step_id not in self.completed_steps:
             raise ValueError(f"Step '{step_id}' was not previously completed")
-        
+
         # Move step from completed to available
         self.completed_steps.remove(step_id)
         self.available_steps.add(step_id)
-        
+
         # Update tool access
         self._update_tool_access()
-        
+
+        # Update working memory
+        if self.working_memory:
+            self._update_workflow_content()
+
         self.logger.info(f"Revisiting workflow step: {step_id}")
-        
+
         return {
             "workflow_id": self.active_workflow_id,
             "name": workflow["name"],
@@ -781,18 +1151,18 @@ class WorkflowManager:
     def complete_workflow(self) -> Dict[str, Any]:
         """
         Complete the active workflow.
-        
+
         Returns:
             Dictionary containing workflow information
-            
+
         Raises:
             ValueError: If no workflow is active
         """
         if not self.active_workflow_id:
             raise ValueError("No active workflow")
-        
+
         workflow = self.workflows[self.active_workflow_id]
-        
+
         # Store the completed workflow info before clearing active state
         completed_workflow = {
             "workflow_id": self.active_workflow_id,
@@ -802,7 +1172,7 @@ class WorkflowManager:
             "completed_steps": list(self.completed_steps),
             "workflow_data": self.workflow_data
         }
-        
+
         # Disable all workflow tools before clearing workflow state
         currently_enabled_tools = self.tool_repo.get_enabled_tools()
         for tool_name in currently_enabled_tools:
@@ -811,32 +1181,36 @@ class WorkflowManager:
                 self.logger.info(f"Disabled workflow tool on completion: {tool_name}")
             except Exception as e:
                 self.logger.error(f"Error disabling tool {tool_name}: {e}")
-        
+
+        # Clear workflow content from working memory
+        if self.working_memory:
+            self._clear_workflow_content()
+
         # Clear the active workflow
         self.active_workflow_id = None
         self.completed_steps = set()
         self.available_steps = set()
         self.workflow_data = {}
-        
+
         self.logger.info(f"Completed workflow: {completed_workflow['workflow_id']}")
-        
+
         return completed_workflow
-    
+
     def cancel_workflow(self) -> Dict[str, Any]:
         """
         Cancel the active workflow.
-        
+
         Returns:
             Dictionary containing workflow information
-            
+
         Raises:
             ValueError: If no workflow is active
         """
         if not self.active_workflow_id:
             raise ValueError("No active workflow")
-        
+
         workflow = self.workflows[self.active_workflow_id]
-        
+
         # Store the cancelled workflow info before clearing active state
         cancelled_workflow = {
             "workflow_id": self.active_workflow_id,
@@ -846,7 +1220,7 @@ class WorkflowManager:
             "completed_steps": list(self.completed_steps),
             "workflow_data": self.workflow_data
         }
-        
+
         # Disable all workflow tools before clearing workflow state
         currently_enabled_tools = self.tool_repo.get_enabled_tools()
         for tool_name in currently_enabled_tools:
@@ -855,15 +1229,19 @@ class WorkflowManager:
                 self.logger.info(f"Disabled workflow tool on cancellation: {tool_name}")
             except Exception as e:
                 self.logger.error(f"Error disabling tool {tool_name}: {e}")
-        
+
+        # Clear workflow content from working memory
+        if self.working_memory:
+            self._clear_workflow_content()
+
         # Clear the active workflow
         self.active_workflow_id = None
         self.completed_steps = set()
         self.available_steps = set()
         self.workflow_data = {}
-        
+
         self.logger.info(f"Cancelled workflow: {cancelled_workflow['workflow_id']}")
-        
+
         return cancelled_workflow
     
     def get_active_workflow(self) -> Optional[Dict[str, Any]]:

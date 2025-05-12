@@ -53,9 +53,12 @@ def initialize_systems(
     # Initialize the database
     _db = Database()
     
-    # Initialize the automation engine
-    engine = initialize_automation_engine()
-    
+    # Initialize the automation engine with the shared tool repository
+    engine = initialize_automation_engine(
+        tool_repo=tool_repo,
+        llm_bridge=llm_bridge
+    )
+
     # Set flag
     _is_initialized = True
     

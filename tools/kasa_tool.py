@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 from utils.timezone_utils import utc_now, ensure_utc
 
 # Local imports
-from tools.repo import Tool
+from utils.asyncio_tool_base import AsyncioToolBase
 from errors import ErrorCode, error_context, ToolError
 from config.registry import registry
 
@@ -213,15 +213,16 @@ class DeviceCache:
 
 # -------------------- MAIN TOOL CLASS --------------------
 
-class KasaTool(Tool):
+class KasaTool(AsyncioToolBase):
     """
     Tool for controlling TP-Link Kasa smart home devices.
-    
+
     This tool provides functionality to discover and control Kasa smart home devices
     on your local network including plugs, switches, bulbs, light strips, and multi-outlet
     power strips.
     """
-    
+
+
     name = "kasa_tool"
     
     description = """
@@ -375,11 +376,18 @@ class KasaTool(Tool):
             config.kasa_tool.cache_duration
         )
 
-        # In-memory device storage
-        self._device_instances = {}
-
         # Load device mapping if available
         self._device_mapping = self._load_device_mapping()
+
+    @property
+    def _device_instances(self):
+        """
+        Get thread-local device instances.
+
+        Returns:
+            Dictionary of device instances for the current thread
+        """
+        return self.get_thread_data('device_instances', {})
     
     def run(self, operation: str, **kwargs) -> Dict[str, Any]:
         """
@@ -415,25 +423,25 @@ class KasaTool(Tool):
             
             # Route to the appropriate operation
             if operation == "discover_devices":
-                return asyncio.run(self._discover_devices(**kwargs))
+                return self.run_async(self._discover_devices(**kwargs))
             elif operation == "get_device_info":
-                return asyncio.run(self._get_device_info(**kwargs))
+                return self.run_async(self._get_device_info(**kwargs))
             elif operation == "power_control":
-                return asyncio.run(self._power_control(**kwargs))
+                return self.run_async(self._power_control(**kwargs))
             elif operation == "set_brightness":
-                return asyncio.run(self._set_brightness(**kwargs))
+                return self.run_async(self._set_brightness(**kwargs))
             elif operation == "set_color":
-                return asyncio.run(self._set_color(**kwargs))
+                return self.run_async(self._set_color(**kwargs))
             elif operation == "set_color_temp":
-                return asyncio.run(self._set_color_temp(**kwargs))
+                return self.run_async(self._set_color_temp(**kwargs))
             elif operation == "get_energy_usage":
-                return asyncio.run(self._get_energy_usage(**kwargs))
+                return self.run_async(self._get_energy_usage(**kwargs))
             elif operation == "set_device_alias":
-                return asyncio.run(self._set_device_alias(**kwargs))
+                return self.run_async(self._set_device_alias(**kwargs))
             elif operation == "get_child_devices":
-                return asyncio.run(self._get_child_devices(**kwargs))
+                return self.run_async(self._get_child_devices(**kwargs))
             elif operation == "control_child_device":
-                return asyncio.run(self._control_child_device(**kwargs))
+                return self.run_async(self._control_child_device(**kwargs))
             else:
                 raise ToolError(
                     f"Unknown operation: {operation}. Valid operations are: "
@@ -1289,10 +1297,13 @@ class KasaTool(Tool):
                 )
 
                 if device:
-                    self._device_instances[device_id] = device
-                    self._device_instances[device.host] = device
+                    # Store in thread-local storage
+                    device_instances = self.get_thread_data('device_instances', {})
+                    device_instances[device_id] = device
+                    device_instances[device.host] = device
                     if device.alias:
-                        self._device_instances[device.alias] = device
+                        device_instances[device.alias] = device
+                    self.set_thread_data('device_instances', device_instances)
                     return device
             except Exception as e:
                 self.logger.warning(f"Error connecting directly to {device_id}: {e}")
@@ -1382,6 +1393,33 @@ class KasaTool(Tool):
             f"Device '{device_id}' not found in cache or network. Make sure it is connected to your network or try discover_devices operation first.",
             ErrorCode.TOOL_NOT_FOUND
         )
+
+    def cleanup(self) -> None:
+        """
+        Clean up resources used by this tool.
+
+        This method is called by the automation engine when an automation completes.
+        It ensures that all device connections are properly closed.
+        """
+        # Get the thread-local device instances
+        device_instances = self.get_thread_data('device_instances', {})
+
+        # Clean up each device
+        for device_id, device in list(device_instances.items()):
+            try:
+                # Only attempt to close once per physical device (by host)
+                if hasattr(device, 'host') and device.host == device_id:
+                    self.logger.debug(f"Cleaning up kasa device: {device_id}")
+                    # Note: python-kasa doesn't have an explicit close method,
+                    # but we should clear our references to these objects
+            except Exception as e:
+                self.logger.warning(f"Error cleaning up device {device_id}: {e}")
+
+        # Clear the device instances for this thread
+        self.set_thread_data('device_instances', {})
+
+        # Call parent cleanup to handle common cleanup tasks
+        super().cleanup()
     
     def _serialize_device_summary(self, device: Any) -> Dict[str, Any]:
         """
@@ -1539,10 +1577,12 @@ class KasaTool(Tool):
             if device.alias:
                 self.cache.set(device.alias, device_data)
                 
-            # Store in memory cache
-            self._device_instances[device.host] = device
+            # Store in thread-local memory cache
+            device_instances = self.get_thread_data('device_instances', {})
+            device_instances[device.host] = device
             if device.alias:
-                self._device_instances[device.alias] = device
+                device_instances[device.alias] = device
+            self.set_thread_data('device_instances', device_instances)
                 
         except Exception as e:
             self.logger.warning(f"Error caching device {device.host}: {e}")
