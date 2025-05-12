@@ -10,12 +10,31 @@ from pydantic import BaseModel, Field
 
 class ApiConfig(BaseModel):
     """API configuration settings."""
-    
+
+    # Provider configuration
+    provider: str = Field(
+        default="ollama",
+        description="LLM provider to use ('anthropic' or 'ollama')"
+    )
+
+    # Anthropic model settings
     model: str = Field(
         default="claude-3-5-haiku-20241022", # Haiku is much faster and still skilled for common tasks
 #       default="claude-3-7-sonnet-20250219",
-        description="LLM model to use for API requests"
+        description="Anthropic model to use for API requests when provider is 'anthropic'"
     )
+
+    # Ollama model settings
+    ollama_url: str = Field(
+        default="http://localhost:11434",
+        description="URL for the Ollama API server when provider is 'ollama'"
+    )
+    ollama_model: str = Field(
+        default="qwen3:1.7b",
+        description="Ollama model name to use when provider is 'ollama'"
+    )
+
+    # Common settings for both providers
     max_tokens: int = Field(
         default=1000,
         description="Maximum number of tokens to generate in responses"

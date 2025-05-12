@@ -39,8 +39,8 @@ class HTTPTool(Tool):
     web APIs and services by sending HTTP requests with various methods, parameters, and headers. Use this tool when you need to contact a remote server that is not handled by another tool AND you know the correct API format for the service. If you are unsure of the format but confident that you need this tool please ask the user for the proper format and then try again.
     """
     
-    implementation_details = """
-    
+    anthropic_details = """
+
     OPERATIONS:
     - GET: Retrieve data from a specified URL
       Parameters:
@@ -49,7 +49,7 @@ class HTTPTool(Tool):
         headers (optional): HTTP headers as a dictionary
         timeout (optional, default=30): Request timeout in seconds
         response_format (optional, default="json"): Format to return the response in ("json", "text", or "full")
-    
+
     - POST: Send data to a specified URL
       Parameters:
         url (required): The URL to send the request to
@@ -59,7 +59,7 @@ class HTTPTool(Tool):
         headers (optional): HTTP headers as a dictionary
         timeout (optional, default=30): Request timeout in seconds
         response_format (optional, default="json"): Format to return the response in ("json", "text", or "full")
-    
+
     - PUT: Update data at a specified URL
       Parameters:
         url (required): The URL to send the request to
@@ -69,7 +69,7 @@ class HTTPTool(Tool):
         headers (optional): HTTP headers as a dictionary
         timeout (optional, default=30): Request timeout in seconds
         response_format (optional, default="json"): Format to return the response in ("json", "text", or "full")
-    
+
     - DELETE: Delete data at a specified URL
       Parameters:
         url (required): The URL to send the request to
@@ -77,12 +77,12 @@ class HTTPTool(Tool):
         headers (optional): HTTP headers as a dictionary
         timeout (optional, default=30): Request timeout in seconds
         response_format (optional, default="json"): Format to return the response in ("json", "text", or "full")
-    
+
     RESPONSE FORMAT OPTIONS:
     - "json": Automatically parse and return the JSON response (default)
     - "text": Return the raw text response
     - "full": Return a comprehensive response object with status, headers, and body
-    
+
     USAGE NOTES:
     - Always validate the URL before sending sensitive information
     - Use appropriate headers for authentication (e.g., Authorization header)
@@ -90,7 +90,7 @@ class HTTPTool(Tool):
     - For POST/PUT requests, use either data (for form data) or json (for JSON data)
     - The response_format parameter controls how the response is returned
     - Check the status_code in the response to verify success (200-299 is success)
-    
+
     LIMITATIONS:
     - Cannot make requests to internal network addresses (security restriction)
     - File uploads are not supported in the current version
@@ -98,8 +98,54 @@ class HTTPTool(Tool):
     - Cookie persistence is not maintained between requests
     - Binary responses are not supported (images, files, etc.)
     """
-    
-    description = simple_description + implementation_details
+
+    openai_schema = {
+        "type": "function",
+        "function": {
+            "name": "http_tool",
+            "description": "Makes HTTP requests to external APIs and web services. Use when you need to directly interact with web APIs and services.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "enum": ["GET", "POST", "PUT", "DELETE"],
+                        "description": "HTTP method to use for the request"
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "The URL to send the request to"
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "Query parameters as key-value pairs"
+                    },
+                    "headers": {
+                        "type": "object",
+                        "description": "HTTP headers as key-value pairs"
+                    },
+                    "data": {
+                        "type": ["object", "string"],
+                        "description": "Form data to send (as a string or object)"
+                    },
+                    "json": {
+                        "type": "object",
+                        "description": "JSON data to send in the request body"
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "description": "Request timeout in seconds (default: 30)"
+                    },
+                    "response_format": {
+                        "type": "string",
+                        "enum": ["json", "text", "full"],
+                        "description": "Format to return the response in"
+                    }
+                },
+                "required": ["method", "url"]
+            }
+        }
+    }
     
     usage_examples = [
         {
@@ -139,24 +185,14 @@ class HTTPTool(Tool):
         
         # Default timeout and max timeout will be loaded from config when needed
 
-    def run(
-        self,
-        method: str,
-        url: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-        data: Optional[Any] = None,
-        json: Optional[Dict[str, Any]] = None,
-        timeout: Optional[int] = None,
-        response_format: str = "json"
-    ) -> Dict[str, Any]:
+    def run(self, **params) -> Dict[str, Any]:
         """
         Execute an HTTP request with the specified parameters.
-        
+
         This is the main entry point for the HTTP tool. It validates the inputs,
         prepares and sends the HTTP request, and formats the response according
         to the specified format.
-        
+
         Args:
             method: HTTP method (GET, POST, PUT, DELETE)
             url: The URL to send the request to
@@ -166,7 +202,7 @@ class HTTPTool(Tool):
             json: Optional JSON data to send (for POST/PUT)
             timeout: Optional request timeout in seconds (default: 30)
             response_format: Format to return the response in (json, text, full)
-            
+
         Returns:
             Dictionary containing the response with the following structure:
             {
@@ -177,15 +213,33 @@ class HTTPTool(Tool):
                 "url": str,  # The final URL (may differ from request URL due to redirects)
                 "error": str  # Only included if an error occurred
             }
-            
+
         Raises:
             ToolError: If inputs are invalid or if the request fails
         """
+        # Extract expected parameters
+        method = params.get("method")
+        url = params.get("url")
+        request_params = params.get("params")
+        headers = params.get("headers")
+        data = params.get("data")
+        json_data = params.get("json")
+        timeout = params.get("timeout")
+        response_format = params.get("response_format", "json")
+
+        # Validate required parameters
+        if not method or not url:
+            raise ToolError(
+                "Required parameters 'method' and 'url' must be provided",
+                ErrorCode.TOOL_INVALID_INPUT,
+                {"provided_params": list(params.keys())}
+            )
+
         # Import config when needed (avoids circular imports)
         from config import config
         
         self.logger.info(f"Executing {method} request to {url}")
-        
+
         # Use the main error context for the entire operation
         with error_context(
             component_name=self.name,
@@ -196,25 +250,25 @@ class HTTPTool(Tool):
         ):
             # Input validation
             self._validate_inputs(method, url, response_format, timeout)
-            
+
             # Set default timeout if not provided
             if timeout is None:
                 timeout = config.http_tool.timeout
-                
+
             # Prepare the request
-            method = method.upper()
+            method = str(method).upper()
             headers = headers or {}
-            params = params or {}
+            request_params = request_params or {}
             
             # Attempt to execute the request
             try:
                 response = requests.request(
-                    method=method,
-                    url=url,
-                    params=params,
+                    method=str(method).upper(),
+                    url=str(url),
+                    params=request_params,
                     headers=headers,
                     data=data,
-                    json=json,
+                    json=json_data,
                     timeout=timeout,
                     allow_redirects=True
                 )

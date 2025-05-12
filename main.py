@@ -167,8 +167,30 @@ def initialize_system(args) -> Dict[str, Any]:
         data_dir = Path(config.paths.data_dir)
         os.makedirs(data_dir, exist_ok=True)
 
-        # Initialize LLM bridge with token tracking
-        llm_bridge = LLMBridge()
+        # Initialize LLM bridge based on configured provider
+        provider = getattr(config.api, "provider", "anthropic").lower()
+
+        if provider == "ollama":
+            # Import and initialize Ollama bridge
+            try:
+                from api.ollama_bridge import OllamaBridge
+                ollama_url = getattr(config.api, "ollama_url", "http://localhost:11434")
+                ollama_model = getattr(config.api, "ollama_model", "qwen")
+
+                llm_bridge = OllamaBridge(
+                    base_url=ollama_url,
+                    model=ollama_model
+                )
+                logger.info(f"Initialized Ollama bridge with model {ollama_model}")
+            except ImportError as e:
+                logger.error(f"Failed to initialize Ollama bridge: {e}. Falling back to Anthropic API.")
+                from api.llm_bridge import LLMBridge
+                llm_bridge = LLMBridge()
+        else:
+            # Default to Anthropic
+            from api.llm_bridge import LLMBridge
+            llm_bridge = LLMBridge()
+            logger.info(f"Initialized Anthropic bridge with model {getattr(config.api, 'model', 'default')}")
 
         # Initialize tool repository
         tool_repo = ToolRepository()
