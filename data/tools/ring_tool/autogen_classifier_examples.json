@@ -1,0 +1,166 @@
+[
+  {
+    "tool_name": "ring_tool",
+    "query": "What Ring locations do I have set up in my account?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I want to see all the properties and addresses connected to my Ring system"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Can you show me the different locations I've registered with my Ring security account?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I'm trying to check which places I have Ring devices installed at right now"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "What devices are set up at my home location right now?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Can you show me all the Ring security equipment installed at 123 Oak Street?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I want to see a full inventory of my Ring cameras and sensors for the main house"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Pull up the complete list of security devices connected to my home system"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Can you tell me the current status and battery level of my front door camera?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I want to check the details of the camera installed at my home office location"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "What's the current connectivity and power status for the security device in my living room?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Pull up the full specifications and current state of my outdoor Ring camera near the garage"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "What's the current status of my home security system right now?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Can you tell me if my alarm is set to home or away mode for the main house?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I want to check the alarm state before I head out - is it armed?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I'm leaving for work - can you make sure the security system is fully armed?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "We're home now, switch the alarm to home mode for the main house location"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I just got back and want to turn off the security system. Can you disarm everything?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Can you show me all the security cameras at my home location?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I want to set my home alarm system to away mode while I'm traveling"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I need to check the status of my doorbell camera at my main residence"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Can you help me arm my home security system before I leave for vacation?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Can you show me all the properties I have set up in my Ring system?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I want to see which locations are currently in my Ring account"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "What Ring locations do I have linked to my security system right now?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Please help me review the different addresses connected to my Ring security setup"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "What devices are connected to my home security system right now?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Can you show me everything installed in my home security setup? Need a full inventory of my devices."
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Give me a complete list of all security equipment for my property at 123 Main Street"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Can you pull up the details for my front door camera at the main house?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I want to check the current status and specifications of my downstairs Ring camera - what information can you show me?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Show me everything you know about the device installed near the garage entrance. What are its current settings and capabilities?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I'm trying to troubleshoot my outdoor security camera. Can you retrieve its complete device information and technical specs?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I want to check the alarm state before I head out - what mode is it in?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I'm leaving for vacation and want to make sure my home security system is fully activated"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Can you set my alarm to home mode since I'm staying in for the evening?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I just got home and want to turn off the security system - disarm everything at my main house location"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I'm leaving for vacation and want to make sure my home security system is set to away mode"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "What's the current status of my alarm system at the main house?"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "I need to check which devices are connected at my property on Oak Street"
+  },
+  {
+    "tool_name": "ring_tool",
+    "query": "Can you help me arm my security system for the night and give me details about my front door camera?"
+  }
+]

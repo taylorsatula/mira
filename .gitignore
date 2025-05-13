@@ -33,8 +33,6 @@ env/
 .DS_Store
 
 # Project specific
-data/*
-!data/.gitkeep
 .env
 
 # Persistent and generated data

@@ -1,0 +1,8 @@
+{
+  "host": "192.168.4.50",
+  "alias": "Air Purifier",
+  "model": "EP10",
+  "mac": "B0:A7:B9:FA:38:C2",
+  "device_type": "DeviceType.Plug",
+  "last_updated": "2025-05-11T20:48:21.259282+00:00"
+}

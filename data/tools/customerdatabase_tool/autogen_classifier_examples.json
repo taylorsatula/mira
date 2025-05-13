@@ -1,0 +1,134 @@
+[
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I need to find all customers with the last name Rodriguez"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Can you help me locate customers in the Chicago area who have an email address?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Search for anyone named Sarah in our customer database"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I'm looking for customer contact information for people with phone numbers in the 415 area code"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I need to find the nearest customers to our new store location at 37.7749\u00b0 N, 122.4194\u00b0 W"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Can you show me which of our customers are within 5 kilometers of this conference venue?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Help me identify the closest clients to our sales team's current location at latitude 40.7128 and longitude -74.0060, excluding our existing contact"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "What customers are geographically closest to these coordinates? I want to prioritize local outreach for our marketing campaign"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I need to refresh our customer list from Square - can you sync the latest data?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Our customer directory seems out of date. Can we pull in the most recent customer information from our Square account?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Update the customer database with the current Square records, please."
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I want to make sure we have the most up-to-date customer information from our Square integration. Can you reload everything?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I need to pull up John Smith's customer record"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Can you find the details for customer ID 5742?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Looking for information on a specific customer - how do I retrieve their full profile?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Show me the complete information for the customer with ID number 3291"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Can you help me find all customers located within 10 kilometers of our San Francisco office?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Pull up the full details for customer ID 54321"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I want to refresh our customer directory from our Square account"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find the three nearest customers to the coordinates 37.7749\u00b0 N, 122.4194\u00b0 W"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Search for anyone with 'marketing' in their contact details"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find customers whose phone numbers start with area code 415"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Can you help me identify which of our customers are closest to the conference venue? We want to invite the nearest local clients. Coordinates are 40.7128\u00b0 N, 74.0060\u00b0 W"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Show me the 5 closest customers to this job site location, but don't include our existing contact from XYZ Corp. The site is at latitude 33.4484\u00b0 N, longitude 112.0740\u00b0 W"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "We're planning a regional sales event and want to reach out to customers within 10 kilometers of our downtown office. Can you pull the list of nearby contacts? Location is 41.8781\u00b0 N, 87.6298\u00b0 W"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Our customer database seems out of date. Can we pull the latest data from our Square account?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Reset the customer directory with the most current information from our Square integration"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I want to completely update our customer records and make sure we have the newest data from our sales platform"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Can you pull up the details for customer 5742?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I need to see the full profile of the customer with ID 3209"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Looking for information on a specific client - their ID is 1156"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Retrieve the complete record for the customer whose identifier is 9023"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Pull up the contact details for customer ID 12345"
+  }
+]

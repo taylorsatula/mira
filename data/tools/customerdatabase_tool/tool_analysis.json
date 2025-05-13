@@ -1,0 +1,86 @@
+"description": "A tool for managing a customer directory with database support, providing capabilities for loading, saving, searching, and location-based customer finding using a SQLite database for persistent storage.",
+  "operations": [
+    {
+      "name": "search_customers",
+      "description": "Searches for customers in the database based on a query string, with automatic rebuilding of the directory if needed.",
+      "required_parameters": [
+        {
+          "name": "query",
+          "type": "string",
+          "description": "The search term to find matching customers"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "category",
+          "type": "string",
+          "description": "The search category to specify which fields to search (name, given_name, family_name, email, phone, address, any)",
+          "default": "any"
+        }
+      ]
+    },
+    {
+      "name": "find_closest_customers",
+      "description": "Finds customers closest to a specific geographical location based on coordinates, sorted by proximity.",
+      "required_parameters": [
+        {
+          "name": "lat",
+          "type": "float",
+          "description": "Latitude in decimal degrees"
+        },
+        {
+          "name": "lng",
+          "type": "float",
+          "description": "Longitude in decimal degrees"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "limit",
+          "type": "integer",
+          "description": "Maximum number of customers to return",
+          "default": 1
+        },
+        {
+          "name": "max_distance",
+          "type": "float",
+          "description": "Maximum distance in meters to search for customers",
+          "default": null
+        },
+        {
+          "name": "exclude_customer_id",
+          "type": "string",
+          "description": "Customer ID to exclude from results",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "rebuild_directory",
+      "description": "Rebuilds the customer directory from an external source, currently supporting only Square as a source.",
+      "required_parameters": [],
+      "optional_parameters": [
+        {
+          "name": "source",
+          "type": "string",
+          "description": "Source system to rebuild the directory from",
+          "default": "square"
+        }
+      ]
+    },
+    {
+      "name": "get_customer",
+      "description": "Retrieves a specific customer record by ID from the database.",
+      "required_parameters": [
+        {
+          "name": "customer_id",
+          "type": "string",
+          "description": "The ID of the customer to retrieve"
+        }
+      ],
+      "optional_parameters": []
+    }
+  ],
+  "complexity_category": "standard",
+  "recommended_examples": 45
+}

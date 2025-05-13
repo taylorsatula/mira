@@ -1,0 +1,385 @@
+[
+  {
+    "dependencies": [],
+    "description": "\n    Creates and manages automated tasks and sequences that run at scheduled times without user intervention.\n    Use this tool when the user wants to automate tasks, create workflows, or set up recurring activities.\n    \n    \n    This tool supports two types of automations:\n    \n    1. Simple Tasks: Execute a single operation at scheduled times\n       - Direct execution: Run a specific tool operation with predetermined parameters\n       - Orchestrated execution: Use Claude to interpret a task description and determine which tools to use\n       \n    2. Sequences: Execute a series of connected steps with data passing between them\n       - Each step can execute either directly or through Claude\n       - Support for conditional execution, error handling, and alternative paths\n       - Parameters can reference results from previous steps using template syntax\n    \n    The tool supports these operations:\n    \n    1. create_automation: Create a new task or sequence\n       - Required fields: name, type (simple_task or sequence), frequency\n       - For simple_task: execution_mode, tool_name/operation OR task_description\n       - For sequence: steps (list of step definitions)\n       - Optional: scheduled_time, day_of_week, day_of_month, timezone, etc.\n       \n       When creating automations, tools MUST stage the automation for future execution without performing immediate actions. Direct tool invocations during automation creation are prohibited and should be replaced by scheduling mechanisms.\n    \n    2. get_automations: List automations filtered by criteria\n       - Optional filters: type, status, frequency, limit, offset\n    \n    3. get_automation: Get detailed information about a specific automation\n       - Required: automation_id\n    \n    4. update_automation: Modify an existing automation\n       - Required: automation_id\n       - Optional: Any fields to update\n    \n    5. delete_automation: Remove an automation\n       - Required: automation_id\n       Explicit confirmation is required to delete an automation. DO NOT automatically set the value to true. Ask the user if they really want to delete the automation before setting true. AFTER the user confirms that they want to delete the automation set 'confirm=true' to proceed.\n    \n    6. execute_now: Run an automation immediately\n       - Required: automation_id\n       - Optional: initial_context (for sequences)\n    \n    7. pause_automation: Temporarily pause scheduled execution\n       - Required: automation_id\n    \n    8. resume_automation: Resume a paused automation\n       - Required: automation_id\n    \n    9. get_executions: View execution history for an automation\n       - Required: automation_id\n       - Optional: limit, offset\n    \n    10. get_execution_details: Get detailed information about a specific execution\n        - Required: execution_id\n    \n    This tool requires parameters to be passed as a JSON string in the \"kwargs\" field when using the direct APIs.\n    When interacting through Claude, you can use natural language to describe the automation you want to create.\n    \n    Examples:\n    - \"Create a daily reminder to check inventory at 9am\"\n    - \"Set up a weekly chain that generates a sales report and emails it to the team every Monday\"\n    - \"Make a sequence that processes customer data and sends personalized messages\"\n    ",
+    "name": "automation_tool",
+    "parameters": {
+      "kwargs": {
+        "description": "Parameter: kwargs",
+        "type": "any"
+      },
+      "operation": {
+        "description": "The operation to perform **kwargs: Operation-specific parameters",
+        "type": "str"
+      }
+    },
+    "required_parameters": [
+      "operation",
+      "kwargs"
+    ]
+  },
+  {
+    "dependencies": [],
+    "description": "\n    Manages calendar events for viewing appointments and scheduling. Use this tool when the user needs to check their calendar, \n    see upcoming events, or manage their personal appointments.\n    OPERATIONS:\n    - list_all_events: Lists events from all configured calendars within a date range\n      Parameters:\n        calendar_name (optional): Name of a specific calendar to query (if not provided, shows events from all configured calendars)\n        start_date (optional, default=today): Start date in ISO format (YYYY-MM-DD)\n        end_date (optional, default=7 days from start): End date in ISO format (YYYY-MM-DD)\n    \n    - list_calendars: Lists available calendars on the server\n      Parameters:\n        url (optional): The calendar server URL\n        username (optional): Username for authentication\n        password (optional): Password for authentication\n    \n    - list_events: Lists events from a specific calendar within a date range\n      Parameters:\n        url (optional): The calendar server URL\n        username (optional): Username for authentication\n        password (optional): Password for authentication\n        calendar_id (required): The calendar ID to query\n        start_date (optional, default=today): Start date in ISO format (YYYY-MM-DD)\n        end_date (optional, default=7 days from start): End date in ISO format (YYYY-MM-DD)\n    \n    - create_event: Creates a new calendar event\n      Parameters:\n        url (optional): The calendar server URL\n        username (optional): Username for authentication\n        password (optional): Password for authentication\n        calendar_id (required): The calendar ID to add the event to\n        summary (required): Event title/summary\n        start_time (required): Start time in ISO format (YYYY-MM-DDTHH:MM:SS)\n        end_time (required): End time in ISO format (YYYY-MM-DDTHH:MM:SS)\n        description (optional): Event description\n        location (optional): Event location\n    \n    - delete_event: Deletes a calendar event\n      Parameters:\n        url (optional): The calendar server URL\n        username (optional): Username for authentication\n        password (optional): Password for authentication\n        calendar_id (required): The calendar ID containing the event\n        event_id (required): The unique ID of the event to delete\n        \n    - read_ical_url: Reads events from a calendar URL\n      Parameters:\n        ical_url (optional): URL to the calendar file\n        start_date (optional, default=today): Start date in ISO format (YYYY-MM-DD)\n        end_date (optional, default=7 days from start): End date in ISO format (YYYY-MM-DD)\n    \n    RESPONSE FORMAT:\n    - All operations return a dictionary with success status and relevant data\n    - Events include summary, start/end times, and optional location and description\n    - Errors include detailed information about what went wrong\n    \n    USAGE NOTES:\n    - Calendars can be configured in the tool settings with user-friendly names\n    - Use list_all_events to see events from all configured calendars at once\n    - For viewing a specific calendar by name, use the calendar_name parameter\n    - Date ranges for listing events should be reasonable (e.g., 1-30 days)\n    - All date and time parameters must be in ISO format\n    - Calendar data is cached for improved performance\n    \n    LIMITATIONS:\n    - Some calendars may be read-only depending on their configuration\n    - Does not support recurring event creation (only displays them)\n    - Limited to basic event properties (no attachments, attendees, or notifications)\n    ",
+    "name": "calendar_tool",
+    "parameters": {
+      "action": {
+        "description": "The operation to perform (list_all_events, list_calendars, list_events, create_event, delete_event, read_ical_url)",
+        "type": "str"
+      },
+      "calendar_id": {
+        "description": "Calendar ID for CalDAV operations",
+        "type": "typing.Optional[str]"
+      },
+      "calendar_name": {
+        "description": "Name of a specific calendar for list_all_events",
+        "type": "typing.Optional[str]"
+      },
+      "description": {
+        "description": "Event description for create_event",
+        "type": "typing.Optional[str]"
+      },
+      "end_date": {
+        "description": "End date for listing events (YYYY-MM-DD)",
+        "type": "typing.Optional[str]"
+      },
+      "end_time": {
+        "description": "Event end time for create_event (YYYY-MM-DDTHH:MM:SS)",
+        "type": "typing.Optional[str]"
+      },
+      "event_id": {
+        "description": "Event ID for delete_event",
+        "type": "typing.Optional[str]"
+      },
+      "ical_url": {
+        "description": "URL to an iCalendar (.ics) file for read_ical_url",
+        "type": "typing.Optional[str]"
+      },
+      "location": {
+        "description": "Event location for create_event",
+        "type": "typing.Optional[str]"
+      },
+      "password": {
+        "description": "Password for CalDAV authentication",
+        "type": "typing.Optional[str]"
+      },
+      "start_date": {
+        "description": "Start date for listing events (YYYY-MM-DD)",
+        "type": "typing.Optional[str]"
+      },
+      "start_time": {
+        "description": "Event start time for create_event (YYYY-MM-DDTHH:MM:SS)",
+        "type": "typing.Optional[str]"
+      },
+      "summary": {
+        "description": "Event title/summary for create_event",
+        "type": "typing.Optional[str]"
+      },
+      "url": {
+        "description": "CalDAV server URL for direct operations",
+        "type": "typing.Optional[str]"
+      },
+      "username": {
+        "description": "Username for CalDAV authentication",
+        "type": "typing.Optional[str]"
+      }
+    },
+    "required_parameters": [
+      "action"
+    ]
+  },
+  {
+    "dependencies": [],
+    "description": "Manages a comprehensive customer directory using database storage with robust search and location-based capabilities. This tool allows you to retrieve details about existing customers. DO NOT use this tool if you believe you need to create a new customer or edit an existing customer's details.. If you need to create a new customer/edit details use square_tool instead.\nThis tool maintains a SQLite database for customer data with support for importing from external systems (currently Square). It provides efficient searching and retrieving of customer data through multiple operations:\n\n1. search_customers: Find customers by various identifiers including name, email, phone number, or address. \n   - Requires 'query' parameter with your search term\n   - Optional 'category' parameter to specify search type: 'name', 'given_name', 'family_name', 'email', 'phone', 'address', or 'any' (default)\n   - Returns matching customer records with contact details\n\n2. find_closest_customers: Locate nearby customers using geographical coordinates.\n   - Requires 'lat' and 'lng' parameters (latitude/longitude)\n   - Optional 'limit' parameter to specify maximum number of results (default: 1)\n   - Optional 'max_distance' parameter to set maximum distance in meters\n   - Optional 'exclude_customer_id' to omit a specific customer\n   - Returns customers sorted by proximity with distance information\n\n3. get_customer: Retrieve a specific customer record by ID.\n   - Requires 'customer_id' parameter\n   - Returns complete customer information\n\n4. rebuild_directory: Refresh the customer database from external systems.\n   - Optional 'source' parameter (currently only supports 'square')\n   - Returns status information about the rebuild operation",
+    "name": "customerdatabase_tool",
+    "parameters": {
+      "kwargs": {
+        "description": "Parameter: kwargs",
+        "type": "any"
+      },
+      "operation": {
+        "description": "Operation to perform (see below for valid operations) **kwargs: Parameters for the specific operation",
+        "type": "str"
+      }
+    },
+    "required_parameters": [
+      "operation",
+      "kwargs"
+    ]
+  },
+  {
+    "dependencies": [],
+    "description": "\n    Email management tool that provides access to email accounts via IMAP/SMTP protocols. \n    Use this tool to read, search, send, and manage emails.\n    \n    OPERATIONS:\n    - get_emails: Retrieve emails from specified folder with options for filtering and content loading\n      Parameters:\n        folder (optional, default=\"INBOX\"): Email folder to access\n        unread_only (optional, default=False): Set to True to only return unread emails\n        load_content (optional, default=True): Set to True to load full email content\n        sender (optional): Filter by sender email or name\n        max_emails (optional, default=20): Maximum number of emails to return\n    \n    - get_email_content: Get full content of a specific email\n      Parameters:\n        email_id (required): UUID of the email to retrieve\n        folder (optional, default=\"INBOX\"): Email folder containing the email\n    \n    - mark_as_read: Mark an email as read\n      Parameters:\n        email_id (required): UUID of the email to mark\n        folder (optional, default=\"INBOX\"): Email folder containing the email\n    \n    - mark_as_unread: Mark an email as unread\n      Parameters:\n        email_id (required): UUID of the email to mark\n        folder (optional, default=\"INBOX\"): Email folder containing the email\n    \n    - delete_email: Delete an email\n      Parameters:\n        email_id (required): UUID of the email to delete\n        folder (optional, default=\"INBOX\"): Email folder containing the email\n    \n    - move_email: Move an email to another folder\n      Parameters:\n        email_id (required): UUID of the email to move\n        destination_folder (required): Folder to move the email to\n        folder (optional, default=\"INBOX\"): Source folder containing the email\n    \n    - send_email: Send a new email\n      Parameters:\n        to (required): Recipient email address(es)\n        subject (required): Email subject\n        body (required): Email body content\n        cc (optional): CC recipient(s)\n        bcc (optional): BCC recipient(s)\n    \n    - reply_to_email: Reply to an existing email\n      Parameters:\n        email_id (required): UUID of the email to reply to\n        body (required): Reply content\n        folder (optional, default=\"INBOX\"): Email folder containing the email\n        cc (optional): CC recipient(s)\n        bcc (optional): BCC recipient(s)\n        \n    - create_draft: Create a draft email without sending\n      Parameters:\n        to (required): Recipient email address(es)\n        subject (required): Email subject\n        body (required): Email body content\n        cc (optional): CC recipient(s)\n        bcc (optional): BCC recipient(s)\n    \n    - search_emails: Search emails with various criteria\n      Parameters:\n        folder (optional, default=\"INBOX\"): Email folder to search in\n        sender (optional): Sender email or name to search for\n        subject (optional): Subject text to search for\n        start_date (optional): Start date for range search (DD-Mon-YYYY format)\n        end_date (optional): End date for range search (DD-Mon-YYYY format)\n        unread_only (optional, default=False): Set to True to only return unread emails\n        load_content (optional, default=True): Set to True to load full email content\n        max_emails (optional, default=20): Maximum number of emails to return\n        \n    - list_folders: List available email folders\n      Parameters: None\n      \n    - mark_for_later_reply: Mark an email to be replied to later in the conversation\n      Parameters:\n        email_id (required): UUID of the email to mark\n        \n    - get_emails_for_later_reply: Get list of emails marked for later reply\n      Parameters: None\n    \n    USAGE NOTES:\n    - Emails are loaded with full content by default to enable intelligent categorization\n    - The LLM should categorize emails into groups like: from humans, priority, notifications, newsletters\n    - Use the email_id to reference specific emails throughout the conversation\n    - For handling multiple emails efficiently, process them by category\n    - Mark emails for later reply to keep track of emails the user wants to address during the conversation\n    ",
+    "name": "email_tool",
+    "parameters": {
+      "bcc": {
+        "description": "BCC recipients for sending emails",
+        "type": "typing.Optional[str]"
+      },
+      "body": {
+        "description": "Body text for sending emails",
+        "type": "typing.Optional[str]"
+      },
+      "cc": {
+        "description": "CC recipients for sending emails",
+        "type": "typing.Optional[str]"
+      },
+      "destination_folder": {
+        "description": "Destination folder for move_email",
+        "type": "typing.Optional[str]"
+      },
+      "email_id": {
+        "description": "UUID of a specific email",
+        "type": "typing.Optional[str]"
+      },
+      "end_date": {
+        "description": "End date for range search (DD-Mon-YYYY format)",
+        "type": "typing.Optional[str]"
+      },
+      "folder": {
+        "description": "Email folder to access (default: \"INBOX\")",
+        "type": "str"
+      },
+      "load_content": {
+        "description": "Whether to load full email content",
+        "type": "bool"
+      },
+      "max_emails": {
+        "description": "Maximum number of emails to return",
+        "type": "typing.Optional[int]"
+      },
+      "operation": {
+        "description": "The operation to perform (get_emails, get_email_content, etc.)",
+        "type": "str"
+      },
+      "sender": {
+        "description": "Sender email address or name to search for",
+        "type": "typing.Optional[str]"
+      },
+      "start_date": {
+        "description": "Start date for range search (DD-Mon-YYYY format)",
+        "type": "typing.Optional[str]"
+      },
+      "subject": {
+        "description": "Subject text to search for",
+        "type": "typing.Optional[str]"
+      },
+      "to": {
+        "description": "Recipient for sending emails",
+        "type": "typing.Optional[str]"
+      },
+      "unread_only": {
+        "description": "Whether to only return unread emails",
+        "type": "bool"
+      }
+    },
+    "required_parameters": [
+      "operation"
+    ]
+  },
+  {
+    "dependencies": [],
+    "description": "Base class for all tools",
+    "name": "http_tool",
+    "parameters": {
+      "params": {
+        "description": "Optional query parameters as a dictionary",
+        "type": "any"
+      }
+    },
+    "required_parameters": [
+      "params"
+    ]
+  },
+  {
+    "dependencies": [],
+    "description": "\n    Controls TP-Link Kasa smart home devices on your local network. Use this tool to discover\n    and manage Kasa devices like smart plugs, light bulbs, switches, and light strips.\n    \n    OPERATIONS:\n    - discover_devices: Find all Kasa devices on your local network\n      Parameters:\n        target (optional): The network address to target for discovery (default: 255.255.255.255)\n        timeout (optional): Timeout in seconds for discovery (default: 5)\n        username (optional): Username for devices requiring authentication\n        password (optional): Password for devices requiring authentication\n        \n    - get_device_info: Get detailed information about a specific device\n      Parameters:\n        device_id (required): The device identifier (IP address, hostname, or alias)\n        \n    - power_control: Turn a device on or off\n      Parameters:\n        device_id (required): The device identifier\n        state (required): The desired state (\"on\" or \"off\")\n        \n    - set_brightness: Set the brightness of a light bulb or light strip\n      Parameters:\n        device_id (required): The device identifier\n        brightness (required): Brightness level (0-100)\n        \n    - set_color: Set the color of a light bulb or light strip\n      Parameters:\n        device_id (required): The device identifier\n        hue (required): Hue value (0-360)\n        saturation (required): Saturation value (0-100)\n        value (optional): Brightness value (0-100)\n        \n    - set_color_temp: Set the color temperature of a light bulb\n      Parameters:\n        device_id (required): The device identifier\n        temperature (required): Color temperature in Kelvin\n        \n    - get_energy_usage: Get energy usage data for supported devices\n      Parameters:\n        device_id (required): The device identifier\n        period (optional): Period to retrieve (\"realtime\", \"today\", \"month\")\n        \n    - set_device_alias: Set a new name for the device\n      Parameters:\n        device_id (required): The device identifier\n        alias (required): New name for the device\n        \n    - get_child_devices: Get information about child devices for power strips\n      Parameters:\n        device_id (required): The device identifier of the parent device\n        \n    - control_child_device: Control a specific outlet on a power strip\n      Parameters:\n        device_id (required): The device identifier of the parent device\n        child_id (required): The ID or index of the child device\n        state (required): The desired state (\"on\" or \"off\")\n    \n    RESPONSE FORMAT:\n    - All operations return a success flag and operation-specific data\n    \n    LIMITATIONS:\n    - Only works with devices on the same local network\n    - Some operations may require device-specific parameters\n    - Some devices may require authentication\n    ",
+    "name": "kasa_tool",
+    "parameters": {
+      "kwargs": {
+        "description": "Parameter: kwargs",
+        "type": "any"
+      },
+      "operation": {
+        "description": "The operation to perform **kwargs: Operation-specific parameters",
+        "type": "str"
+      }
+    },
+    "required_parameters": [
+      "operation",
+      "kwargs"
+    ]
+  },
+  {
+    "dependencies": [],
+    "description": "Provides comprehensive location intelligence and geographical services through Maps API integration. Use this tool when the user needs details of a place, geocoding, or relative information compared to another place.\n\n   This tool enables interaction with mapping services for various location-based operations including:\n   \n   1. geocode: Convert natural language locations to precise coordinates.\n      - Requires 'query' parameter with address, landmark, or place name\n      - Returns formatted address, geographic coordinates, and place information\n   \n   2. reverse_geocode: Convert coordinates to address information.\n      - Requires 'lat' and 'lng' parameters as decimal degrees\n      - Returns detailed address components for the specified location\n   \n   3. place_details: Retrieve comprehensive information about specific places.\n      - Requires 'place_id' parameter (unique place identifier)\n      - Returns name, address, phone number, website, opening hours, and other details\n   \n   4. places_nearby: Discover places around a specific location.\n      - Requires 'lat' and 'lng' parameters for center point\n      - Optional parameters: 'radius' (default 1000m), 'type' (e.g., restaurant), 'keyword', 'open_now'\n      - Returns matching places sorted by proximity with ratings and details\n   \n   5. find_place: Locate specific places by name or description.\n      - Requires 'query' parameter with place name\n      - Returns precise match results with location data\n   \n   6. calculate_distance: Determine distance between two geographic points.\n      - Requires 'lat1', 'lng1', 'lat2', 'lng2' parameters\n      - Returns distance in meters, kilometers, and miles\n   \n   Use this tool for any task requiring location resolution, place discovery, geocoding, or geographic calculations.",
+    "name": "maps_tool",
+    "parameters": {
+      "fields": {
+        "description": "Specific fields to request from the API (for find_place)",
+        "type": "typing.Optional[typing.List[str]]"
+      },
+      "keyword": {
+        "description": "Search keywords",
+        "type": "typing.Optional[str]"
+      },
+      "language": {
+        "description": "Language for results",
+        "type": "typing.Optional[str]"
+      },
+      "lat": {
+        "description": "Latitude for operations requiring coordinates",
+        "type": "typing.Optional[float]"
+      },
+      "lat1": {
+        "description": "First latitude for distance calculations",
+        "type": "typing.Optional[float]"
+      },
+      "lat2": {
+        "description": "Second latitude for distance calculations",
+        "type": "typing.Optional[float]"
+      },
+      "lng": {
+        "description": "Longitude for operations requiring coordinates",
+        "type": "typing.Optional[float]"
+      },
+      "lng1": {
+        "description": "First longitude for distance calculations",
+        "type": "typing.Optional[float]"
+      },
+      "lng2": {
+        "description": "Second longitude for distance calculations",
+        "type": "typing.Optional[float]"
+      },
+      "open_now": {
+        "description": "Filter results to those open at request time",
+        "type": "typing.Optional[bool]"
+      },
+      "operation": {
+        "description": "Operation to perform (see below for valid operations)",
+        "type": "str"
+      },
+      "place_id": {
+        "description": "Google Places ID for place details",
+        "type": "typing.Optional[str]"
+      },
+      "query": {
+        "description": "Search query for geocoding or places text search",
+        "type": "typing.Optional[str]"
+      },
+      "radius": {
+        "description": "Search radius in meters for nearby places",
+        "type": "typing.Optional[int]"
+      },
+      "type": {
+        "description": "Type of place (e.g., restaurant, cafe)",
+        "type": "typing.Optional[str]"
+      }
+    },
+    "required_parameters": [
+      "operation"
+    ]
+  },
+  {
+    "dependencies": [],
+    "description": "Manages interactive multi-question surveys to collect structured information from users without sending intermediate responses to the Anthropic API. You can use this tool to collect information if you are confident that clarification cannot reasonably be collected in a single message. This tool also has access to predefined questionnaires for collecting customer details (customer_questionnaire.json) and a recipe generator (recipe_questionnaire.json)\nThis tool enables conducting comprehensive questionnaires with various customization options:\n\n1. Running Questionnaires:\n   - Use predefined questionnaires via 'questionnaire_id' parameter\n   - Create ad-hoc questionnaires with 'questions' parameter (simple string list)\n   - Design custom structured questionnaires with 'custom_questions' parameter\n   - Example: questionnaire_id=\"recipe\" or questions=[\"What's your name?\", \"Where do you live?\"]\n\n2. Question Types and Features:\n   - Simple text questions for free-form responses\n   - Multiple-choice questions with predefined options\n   - Dynamic question generation based on previous answers\n   - Preference key mapping for organizing responses with meaningful labels\n   - Automatic filtering of already-answered questions\n   \n3. Response Handling:\n   - Collects all responses locally without sending to LLM until complete\n   - Returns structured data with question/answer pairs\n   - Maps responses to semantic keys for easier preference management\n   - IMPORTANT: When presenting results, show only the raw data without interpretive commentary\n\nUse this tool whenever you need to gather multiple pieces of structured information from the user in a single interaction session.",
+    "name": "questionnaire_tool",
+    "parameters": {
+      "context_data": {
+        "description": "Optional contextual data to use for dynamic question generation and to filter out already answered questions",
+        "type": "typing.Optional[typing.Dict[str, typing.Any]]"
+      },
+      "custom_questions": {
+        "description": "Optional list of custom structured question objects Each object should contain at least 'id' and 'text' keys",
+        "type": "typing.Optional[typing.List[typing.Dict[str, typing.Any]]]"
+      },
+      "questionnaire_id": {
+        "description": "ID of the questionnaire to use (e.g., \"recipe\") or a name/description for a questionnaire created from simple questions",
+        "type": "str"
+      },
+      "questions": {
+        "description": "Optional list of question strings or a JSON string representing a list of strings for on-the-fly questionnaire creation.",
+        "type": "typing.Optional[typing.List[str]]"
+      }
+    },
+    "required_parameters": [
+      "questionnaire_id"
+    ]
+  },
+  {
+    "dependencies": [],
+    "description": "\n    Manages scheduled reminders with contact information integration. Use this tool when the user\n    wants to create, view, or manage reminders about tasks, follow-ups, or appointments.\n    \n    IMPORTANT: This tool requires parameters to be passed as a JSON string in the \"kwargs\" field.\n    The tool supports these operations:\n    \n    1. add_reminder: Create a new reminder with a date, description, and optional contact info.\n       - Required: title (brief description), date (when to be reminded)\n       - Optional: description (details), contact_name, contact_email, contact_phone\n       - If a contact name is provided, attempts to find matching customer information\n       - Returns the created reminder with a unique identifier\n    \n    2. get_reminders: Retrieve reminders for a specific date range.\n       - Required: date_type (\"today\", \"tomorrow\", \"upcoming\", \"past\", \"all\", \"date\" or \"range\")\n       - If date_type is \"date\", requires specific_date parameter\n       - If date_type is \"range\", requires start_date and end_date parameters\n       - Returns list of reminders matching the criteria\n    \n    3. mark_completed: Mark a reminder as completed.\n       - Required: reminder_id (the ID of the reminder to mark as completed)\n       - Returns the updated reminder\n       \n    4. update_reminder: Update an existing reminder's details.\n       - Required: reminder_id (the ID of the reminder to update)\n       - Optional: Any fields to update (title, description, date, contact information)\n       - Returns the updated reminder\n       \n    5. delete_reminder: Remove a reminder.\n       - Required: reminder_id (the ID of the reminder to delete)\n       - Returns confirmation of deletion\n       \n    This tool automatically integrates with the customer database when contact names are provided,\n    fetching complete contact information for known customers. When creating reminders with a name\n    that doesn't match an existing customer, the tool will prompt for additional contact details.\n    ",
+    "name": "reminder_tool",
+    "parameters": {
+      "kwargs": {
+        "description": "Parameter: kwargs",
+        "type": "any"
+      },
+      "operation": {
+        "description": "Operation to perform (see below for valid operations) **kwargs: Parameters for the specific operation",
+        "type": "str"
+      }
+    },
+    "required_parameters": [
+      "operation",
+      "kwargs"
+    ]
+  },
+  {
+    "dependencies": [],
+    "description": "\n    Retrieves detailed weather information for any specified location. This tool provides current \n    weather data including temperature, conditions, humidity, and wind speed. Use this tool whenever \n    the user asks about weather conditions for a specific location or needs weather-related information \n    for planning purposes.\n    \n    The 'location' parameter accepts any city or region name and is required. The 'units' parameter \n    controls temperature format and defaults to celsius but can be set to fahrenheit. The optional \n    'include_forecast' parameter, when set to true, will return a 5-day weather forecast in addition \n    to current conditions.\n    \n    Note that this tool generates fictional weather data and should not be used for actual weather \n    planning or emergency situations. Response times are typically under 1 second. The tool does not \n    provide historical weather data or severe weather warnings.\n    ",
+    "name": "weather_tool",
+    "parameters": {
+      "include_forecast": {
+        "description": "Whether to include a 5-day forecast (defaults to False)",
+        "type": "bool"
+      },
+      "location": {
+        "description": "The city or location to get weather for (required)",
+        "type": "str"
+      },
+      "units": {
+        "description": "Temperature units ('celsius' or 'fahrenheit', defaults to configured default)",
+        "type": "str"
+      }
+    },
+    "required_parameters": [
+      "location"
+    ]
+  },
+  {
+    "dependencies": [],
+    "description": "\n    Translates communicative intent into different languages in a natural, culturally \n    appropriate way, considering provided context. Use this tool when users want to know \n    how to express something in another language with proper cultural and situational awareness.\n    \n    This tool does not perform word-for-word translation, but rather understands what \n    the user wants to communicate and produces natural phrasing that a native speaker \n    would use in the specific context. It adjusts for different formality levels, \n    social situations, and can provide pronunciation guides or cultural usage notes.\n    \n    Parameters:\n    - intent: The core message to translate (what you want to say/ask)\n    - target_language: The language to translate the intent into\n    - context: Additional background information that affects how the intent should be expressed\n    - formality_level: Level of formality (casual, neutral, formal, honorific) - defaults to neutral\n    - include_pronunciation: Whether to include a pronunciation guide - defaults to false\n    - include_cultural_notes: Whether to include cultural usage notes - defaults to false\n    \n    This tool is particularly useful for:\n    1. Preparing to communicate in foreign countries with proper social awareness\n    2. Learning culturally appropriate expressions for specific situations\n    3. Generating natural-sounding phrases beyond what simple translation tools provide\n    \n    The tool uses Claude 3.7 Sonnet specifically for optimal translation quality.\n    ",
+    "name": "translation_tool",
+    "parameters": {
+      "context": {
+        "description": "Additional background information that affects how the intent should be expressed",
+        "type": "typing.Optional[str]"
+      },
+      "formality_level": {
+        "description": "Level of formality (casual, neutral, formal, honorific)",
+        "type": "str"
+      },
+      "include_cultural_notes": {
+        "description": "Whether to include cultural usage notes",
+        "type": "bool"
+      },
+      "include_pronunciation": {
+        "description": "Whether to include a pronunciation guide",
+        "type": "bool"
+      },
+      "intent": {
+        "description": "The core message to translate (what you want to say/ask)",
+        "type": "str"
+      },
+      "target_language": {
+        "description": "The language to translate into",
+        "type": "str"
+      }
+    },
+    "required_parameters": [
+      "intent",
+      "target_language"
+    ]
+  }
+]

@@ -1,0 +1,181 @@
+{
+  "tool_name": "http_tool",
+  "tool_code": "import os\nimport json\nimport logging\nimport re\nfrom typing import Dict, List, Any, Optional\nimport requests\nfrom urllib.parse import urlparse\nfrom pydantic import BaseModel, Field\n\nfrom tools.repo import Tool\nfrom errors import ErrorCode, error_context, ToolError\nfrom config.registry import registry\n\n# Define configuration class for HTTPTool\nclass HttpToolConfig(BaseModel):\n    \"\"\"Configuration for the http_tool.\"\"\"\n    enabled: bool = Field(default=True, description=\"Whether this tool is enabled by default\")\n    timeout: int = Field(default=30, description=\"Timeout in seconds for HTTP requests\")\n    max_timeout: int = Field(default=120, description=\"Maximum timeout allowed for HTTP requests in seconds\")\n    max_retries: int = Field(default=3, description=\"Maximum number of retries for failed requests\")\n    allowed_domains: List[str] = Field(default=[], description=\"List of allowed domains for requests (empty for all)\")\n\n# Register with registry\nregistry.register(\"http_tool\", HttpToolConfig)\n\n\nclass HTTPTool(Tool):\n    \"\"\"\n    HTTP request tool for making API calls and web requests.\n    \n    This tool allows for performing HTTP requests to external services and APIs.\n    It supports the standard HTTP methods (GET, POST, PUT, DELETE) and provides\n    flexible control over request parameters, headers, and response formatting.\n    \"\"\"\n    \n    name = \"http_tool\"\n    description = \"\"\"\n    Makes HTTP requests to external APIs and web services. This tool lets you directly interact with \n    web APIs and services by sending HTTP requests with various methods, parameters, and headers. Use this tool when you need to contact a remote server that is not handled by another tool AND you know the correct API format for the service. If you are unsure of the format but confident that you need this tool please ask the user for the proper format and then try again.\n    \n    OPERATIONS:\n    - GET: Retrieve data from a specified URL\n      Parameters:\n        url (required): The URL to send the request to\n        params (optional): Query parameters as a dictionary\n        headers (optional): HTTP headers as a dictionary\n        timeout (optional, default=30): Request timeout in seconds\n        response_format (optional, default=\"json\"): Format to return the response in (\"json\", \"text\", or \"full\")\n    \n    - POST: Send data to a specified URL\n      Parameters:\n        url (required): The URL to send the request to\n        data (optional): Form data to send (as a string or dictionary)\n        json (optional): JSON data to send (as a dictionary)\n        params (optional): Query parameters as a dictionary\n        headers (optional): HTTP headers as a dictionary\n        timeout (optional, default=30): Request timeout in seconds\n        response_format (optional, default=\"json\"): Format to return the response in (\"json\", \"text\", or \"full\")\n    \n    - PUT: Update data at a specified URL\n      Parameters:\n        url (required): The URL to send the request to\n        data (optional): Form data to send (as a string or dictionary)\n        json (optional): JSON data to send (as a dictionary)\n        params (optional): Query parameters as a dictionary\n        headers (optional): HTTP headers as a dictionary\n        timeout (optional, default=30): Request timeout in seconds\n        response_format (optional, default=\"json\"): Format to return the response in (\"json\", \"text\", or \"full\")\n    \n    - DELETE: Delete data at a specified URL\n      Parameters:\n        url (required): The URL to send the request to\n        params (optional): Query parameters as a dictionary\n        headers (optional): HTTP headers as a dictionary\n        timeout (optional, default=30): Request timeout in seconds\n        response_format (optional, default=\"json\"): Format to return the response in (\"json\", \"text\", or \"full\")\n    \n    RESPONSE FORMAT OPTIONS:\n    - \"json\": Automatically parse and return the JSON response (default)\n    - \"text\": Return the raw text response\n    - \"full\": Return a comprehensive response object with status, headers, and body\n    \n    USAGE NOTES:\n    - Always validate the URL before sending sensitive information\n    - Use appropriate headers for authentication (e.g., Authorization header)\n    - For GET requests, use params to send query parameters\n    - For POST/PUT requests, use either data (for form data) or json (for JSON data)\n    - The response_format parameter controls how the response is returned\n    - Check the status_code in the response to verify success (200-299 is success)\n    \n    LIMITATIONS:\n    - Cannot make requests to internal network addresses (security restriction)\n    - File uploads are not supported in the current version\n    - Redirects are followed by default (up to 5)\n    - Cookie persistence is not maintained between requests\n    - Binary responses are not supported (images, files, etc.)\n    \"\"\"\n    \n    usage_examples = [\n        {\n            \"input\": {\"method\": \"GET\", \"url\": \"https://api.example.com/data\", \"params\": {\"key\": \"value\"}},\n            \"output\": {\n                \"status_code\": 200,\n                \"success\": True,\n                \"data\": {\"example\": \"response\"}\n            }\n        },\n        {\n            \"input\": {\"method\": \"POST\", \"url\": \"https://api.example.com/create\", \"json\": {\"name\": \"Test\"}, \"headers\": {\"Authorization\": \"Bearer token\"}},\n            \"output\": {\n                \"status_code\": 201,\n                \"success\": True,\n                \"data\": {\"id\": 123, \"created\": True}\n            }\n        }\n    ]\n\n    def __init__(self):\n        \"\"\"\n        Initialize the HTTP tool with configuration and setup.\n        \"\"\"\n        super().__init__()\n        self.logger.info(\"HTTPTool initialized\")\n        \n        # List of blocked URL patterns for security\n        self._blocked_url_patterns = [\n            r'^https?://localhost',\n            r'^https?://127\\.',\n            r'^https?://10\\.',\n            r'^https?://172\\.(1[6-9]|2[0-9]|3[0-1])\\.',\n            r'^https?://192\\.168\\.',\n            r'^https?://0\\.0\\.0\\.0',\n        ]\n        \n        # Default timeout and max timeout will be loaded from config when needed\n\n    def run(\n        self,\n        method: str,\n        url: str,\n        params: Optional[Dict[str, Any]] = None,\n        headers: Optional[Dict[str, Any]] = None,\n        data: Optional[Any] = None,\n        json: Optional[Dict[str, Any]] = None,\n        timeout: Optional[int] = None,\n        response_format: str = \"json\"\n    ) -> Dict[str, Any]:\n        \"\"\"\n        Execute an HTTP request with the specified parameters.\n        \n        This is the main entry point for the HTTP tool. It validates the inputs,\n        prepares and sends the HTTP request, and formats the response according\n        to the specified format.\n        \n        Args:\n            method: HTTP method (GET, POST, PUT, DELETE)\n            url: The URL to send the request to\n            params: Optional query parameters as a dictionary\n            headers: Optional HTTP headers as a dictionary\n            data: Optional data to send (for POST/PUT)\n            json: Optional JSON data to send (for POST/PUT)\n            timeout: Optional request timeout in seconds (default: 30)\n            response_format: Format to return the response in (json, text, full)\n            \n        Returns:\n            Dictionary containing the response with the following structure:\n            {\n                \"success\": bool,\n                \"status_code\": int,\n                \"data\": Any,  # Parsed JSON, text, or full response object\n                \"headers\": Dict[str, str],  # Only included if response_format=\"full\"\n                \"url\": str,  # The final URL (may differ from request URL due to redirects)\n                \"error\": str  # Only included if an error occurred\n            }\n            \n        Raises:\n            ToolError: If inputs are invalid or if the request fails\n        \"\"\"\n        # Import config when needed (avoids circular imports)\n        from config import config\n        \n        self.logger.info(f\"Executing {method} request to {url}\")\n        \n        # Use the main error context for the entire operation\n        with error_context(\n            component_name=self.name,\n            operation=f\"executing {method} request\",\n            error_class=ToolError,\n            error_code=ErrorCode.TOOL_EXECUTION_ERROR,\n            logger=self.logger\n        ):\n            # Input validation\n            self._validate_inputs(method, url, response_format, timeout)\n            \n            # Set default timeout if not provided\n            if timeout is None:\n                timeout = config.http_tool.timeout\n                \n            # Prepare the request\n            method = method.upper()\n            headers = headers or {}\n            params = params or {}\n            \n            # Attempt to execute the request\n            try:\n                response = requests.request(\n                    method=method,\n                    url=url,\n                    params=params,\n                    headers=headers,\n                    data=data,\n                    json=json,\n                    timeout=timeout,\n                    allow_redirects=True\n                )\n                \n                # Log response info\n                self.logger.debug(f\"Response received: Status {response.status_code}\")\n                \n                # Format and return the response\n                return self._format_response(response, response_format)\n                \n            except requests.exceptions.Timeout:\n                self.logger.error(f\"Request to {url} timed out after {timeout} seconds\")\n                raise ToolError(\n                    f\"Request timed out after {timeout} seconds\",\n                    ErrorCode.API_TIMEOUT_ERROR,\n                    {\"url\": url, \"method\": method, \"timeout\": timeout}\n                )\n                \n            except requests.exceptions.ConnectionError as e:\n                self.logger.error(f\"Connection error for {url}: {str(e)}\")\n                raise ToolError(\n                    f\"Connection error: {str(e)}\",\n                    ErrorCode.API_CONNECTION_ERROR,\n                    {\"url\": url, \"method\": method, \"error\": str(e)}\n                )\n                \n            except requests.exceptions.RequestException as e:\n                self.logger.error(f\"Request error for {url}: {str(e)}\")\n                raise ToolError(\n                    f\"Request error: {str(e)}\",\n                    ErrorCode.API_RESPONSE_ERROR,\n                    {\"url\": url, \"method\": method, \"error\": str(e)}\n                )\n    \n    def _validate_inputs(self, method, url, response_format, timeout):\n        \"\"\"\n        Validate input parameters before executing the request.\n        \n        Performs comprehensive validation of all input parameters to ensure\n        they are valid and safe for execution.\n        \n        Args:\n            method: HTTP method string\n            url: URL string\n            response_format: Response format string\n            timeout: Timeout value in seconds\n            \n        Raises:\n            ToolError: If any inputs are invalid\n        \"\"\"\n        # Validate HTTP method\n        valid_methods = [\"GET\", \"POST\", \"PUT\", \"DELETE\"]\n        if not method or method.upper() not in valid_methods:\n            raise ToolError(\n                f\"Invalid HTTP method: {method}. Must be one of: {', '.join(valid_methods)}\",\n                ErrorCode.TOOL_INVALID_INPUT,\n                {\"provided_method\": method, \"valid_methods\": valid_methods}\n            )\n        \n        # Validate URL format\n        if not url or not isinstance(url, str):\n            raise ToolError(\n                \"URL must be a non-empty string\",\n                ErrorCode.TOOL_INVALID_INPUT,\n                {\"provided_url\": str(url)}\n            )\n            \n        # Check URL scheme\n        parsed_url = urlparse(url)\n        if not parsed_url.scheme or parsed_url.scheme not in [\"http\", \"https\"]:\n            raise ToolError(\n                f\"Invalid URL scheme: {parsed_url.scheme}. Must be http or https\",\n                ErrorCode.TOOL_INVALID_INPUT,\n                {\"url\": url, \"scheme\": parsed_url.scheme}\n            )\n            \n        # Security check - validate against blocked URL patterns\n        for pattern in self._blocked_url_patterns:\n            if re.match(pattern, url, re.IGNORECASE):\n                raise ToolError(\n                    \"URL is restricted for security reasons (internal/private network)\",\n                    ErrorCode.TOOL_INVALID_INPUT,\n                    {\"url\": url}\n                )\n                \n        # Validate response format\n        valid_formats = [\"json\", \"text\", \"full\"]\n        if response_format not in valid_formats:\n            raise ToolError(\n                f\"Invalid response format: {response_format}. Must be one of: {', '.join(valid_formats)}\",\n                ErrorCode.TOOL_INVALID_INPUT,\n                {\"provided_format\": response_format, \"valid_formats\": valid_formats}\n            )\n            \n        # Validate timeout\n        if timeout is not None:\n            if not isinstance(timeout, (int, float)) or timeout <= 0:\n                raise ToolError(\n                    \"Timeout must be a positive number\",\n                    ErrorCode.TOOL_INVALID_INPUT,\n                    {\"provided_timeout\": timeout}\n                )\n                \n            # Get max timeout from config\n            max_timeout = 120  # Default fallback\n            try:\n                from config import config\n                max_timeout = config.http_tool.max_timeout if hasattr(config.http_tool, 'max_timeout') else 120\n            except Exception:\n                # If config access fails, use default\n                pass\n                \n            if timeout > max_timeout:\n                raise ToolError(\n                    f\"Timeout value exceeds maximum allowed ({max_timeout} seconds)\",\n                    ErrorCode.TOOL_INVALID_INPUT,\n                    {\"provided_timeout\": timeout, \"max_timeout\": max_timeout}\n                )\n    \n    def _format_response(self, response, response_format):\n        \"\"\"\n        Format the HTTP response according to the specified format.\n        \n        Args:\n            response: The requests.Response object\n            response_format: The format to return (\"json\", \"text\", or \"full\")\n            \n        Returns:\n            Formatted response dictionary\n        \"\"\"\n        result = {\n            \"success\": 200 <= response.status_code < 300,\n            \"status_code\": response.status_code,\n            \"url\": response.url\n        }\n        \n        # Format based on specified format\n        if response_format == \"json\":\n            try:\n                # Try to parse as JSON\n                result[\"data\"] = response.json()\n            except ValueError:\n                # If parsing fails, include text and a warning\n                result[\"data\"] = response.text\n                result[\"warning\"] = \"Response could not be parsed as JSON\"\n                \n        elif response_format == \"text\":\n            result[\"data\"] = response.text\n            \n        elif response_format == \"full\":\n            result[\"data\"] = response.text\n            result[\"headers\"] = dict(response.headers)\n            \n            # Try to include JSON if response is JSON\n            try:\n                result[\"json\"] = response.json()\n            except ValueError:\n                # Not JSON, so we don't include it\n                pass\n        \n        return result",
+  "description": "A tool for making HTTP requests to external APIs and web services, supporting standard HTTP methods (GET, POST, PUT, DELETE) with flexible control over request parameters, headers, and response formatting.",
+  "operations": [
+    {
+      "name": "GET",
+      "description": "Retrieves data from a specified URL by sending an HTTP GET request.",
+      "required_parameters": [
+        {
+          "name": "url",
+          "type": "string",
+          "description": "The URL to send the request to"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "params",
+          "type": "dictionary",
+          "description": "Query parameters to include in the URL",
+          "default": "None"
+        },
+        {
+          "name": "headers",
+          "type": "dictionary",
+          "description": "HTTP headers to include in the request",
+          "default": "None"
+        },
+        {
+          "name": "timeout",
+          "type": "integer",
+          "description": "Request timeout in seconds",
+          "default": 30
+        },
+        {
+          "name": "response_format",
+          "type": "string",
+          "description": "Format to return the response in (json, text, or full)",
+          "default": "json"
+        }
+      ]
+    },
+    {
+      "name": "POST",
+      "description": "Sends data to a specified URL by making an HTTP POST request.",
+      "required_parameters": [
+        {
+          "name": "url",
+          "type": "string",
+          "description": "The URL to send the request to"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "data",
+          "type": "string or dictionary",
+          "description": "Form data to send in the request body",
+          "default": "None"
+        },
+        {
+          "name": "json",
+          "type": "dictionary",
+          "description": "JSON data to send in the request body",
+          "default": "None"
+        },
+        {
+          "name": "params",
+          "type": "dictionary",
+          "description": "Query parameters to include in the URL",
+          "default": "None"
+        },
+        {
+          "name": "headers",
+          "type": "dictionary",
+          "description": "HTTP headers to include in the request",
+          "default": "None"
+        },
+        {
+          "name": "timeout",
+          "type": "integer",
+          "description": "Request timeout in seconds",
+          "default": 30
+        },
+        {
+          "name": "response_format",
+          "type": "string",
+          "description": "Format to return the response in (json, text, or full)",
+          "default": "json"
+        }
+      ]
+    },
+    {
+      "name": "PUT",
+      "description": "Updates data at a specified URL by making an HTTP PUT request.",
+      "required_parameters": [
+        {
+          "name": "url",
+          "type": "string",
+          "description": "The URL to send the request to"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "data",
+          "type": "string or dictionary",
+          "description": "Form data to send in the request body",
+          "default": "None"
+        },
+        {
+          "name": "json",
+          "type": "dictionary",
+          "description": "JSON data to send in the request body",
+          "default": "None"
+        },
+        {
+          "name": "params",
+          "type": "dictionary",
+          "description": "Query parameters to include in the URL",
+          "default": "None"
+        },
+        {
+          "name": "headers",
+          "type": "dictionary",
+          "description": "HTTP headers to include in the request",
+          "default": "None"
+        },
+        {
+          "name": "timeout",
+          "type": "integer",
+          "description": "Request timeout in seconds",
+          "default": 30
+        },
+        {
+          "name": "response_format",
+          "type": "string",
+          "description": "Format to return the response in (json, text, or full)",
+          "default": "json"
+        }
+      ]
+    },
+    {
+      "name": "DELETE",
+      "description": "Deletes data at a specified URL by making an HTTP DELETE request.",
+      "required_parameters": [
+        {
+          "name": "url",
+          "type": "string",
+          "description": "The URL to send the request to"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "params",
+          "type": "dictionary",
+          "description": "Query parameters to include in the URL",
+          "default": "None"
+        },
+        {
+          "name": "headers",
+          "type": "dictionary",
+          "description": "HTTP headers to include in the request",
+          "default": "None"
+        },
+        {
+          "name": "timeout",
+          "type": "integer",
+          "description": "Request timeout in seconds",
+          "default": 30
+        },
+        {
+          "name": "response_format",
+          "type": "string",
+          "description": "Format to return the response in (json, text, or full)",
+          "default": "json"
+        }
+      ]
+    }
+  ],
+  "complexity_category": "standard",
+  "recommended_examples": 45
+}

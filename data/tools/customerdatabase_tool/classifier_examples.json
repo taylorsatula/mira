@@ -1,0 +1,402 @@
+[
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Which customers live in Toney, AL?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Look up 5551238372 and tell me the name of the customer"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Which customer lives at 123 Main Street?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Please look up the email address for Diane Weber."
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Please look up Diane Weber's email address"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I need you to look up Diane's phone number."
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Which customers have a reference id of allCleanTeam."
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Query all customers named Mike"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find the customer who lives closest to the hospital."
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Show me the 5 closest customers to this job site location, but don't include our existing contact from XYZ Corp."
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I'm looking for customer contact information for people with phone numbers in the 415 area code"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I need to find all customers with the last name Rodriguez"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "What is the name of the customer I just drove by? My current coodinates are 41.02992, -20.28920"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Search for customers near the naval station. I'm looking for the one with a Gmail email address and a last name that starts with the letter B"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Pull up the contact details for customer Mikey Day"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I just walked past an existing customers house and I don't know what their email address is. Will you please retrieve it and report back to me."
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "idk whos phone number is 2091397281. i need you to reference the database and return their name to me"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "There is a customer who lives up on Monte Sano in a blue house on a street named Candy and I want to get their reference ID"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I want to look up every person from my database within 3 miles of 29.2928, -29.6987"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Who is our customer with the last name Johnson?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find everyone in our database named Sarah"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Do we have a customer named Robert Garcia?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Search for people with the last name starting with 'Mc'"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Are there any Smiths in our customer database?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find that lady whose name was something like Christina or Christine"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Can you look up if we have anyone named Wong in our system?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Tell me if there's a James Wilson in our database"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Search for all the Johnsons in Huntsville"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "What's Mark Thompson's phone number?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I need Patricia Lee's email address"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Give me the contact info for Samuel Green"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "What address do we have on file for Jennifer Williams?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Can you tell me how to reach David Martinez?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "What's the phone number for that tech company on Oak Street?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Need the email for the Wilsons on Maple Avenue"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "What's the best way to contact Alex from last week's service call?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Show me all the contact methods we have for Barbara Collins"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Who does this number belong to: 555-867-5309?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Got a missed call from 2055551234, who is it?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Look up customer with phone number (307) 555-9876"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Someone just called from 555-123-4567 - check who that is"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Match phone number 8005551212 to customer name"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I got a text from 5551234567 - which customer is this?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Tell me which customer has the number that ends in 3456"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find customer with mobile number 555-888-1234"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Is 256-555-7890 in our database? Who does it belong to?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Which customer lives at 42 Sunset Boulevard?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find all customers on Pine Street"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Do we have any customers in the Highland Park neighborhood?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Look up who lives at 789 Oakwood Drive"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Search for customers in the 35801 zip code"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Are there any customers in that new subdivision off Highway 72?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find all clients in Madison County"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Who's that customer in the blue house on Cedar Lane?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Show me everyone in our database who lives in apartment buildings"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find the customer with email address johndoe@example.com"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Who has the email that starts with 'service' at company.com?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Look up all customers with Yahoo email addresses"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Do we have anyone in our system with a .edu email?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find that customer who emailed us from a business account yesterday"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Search for clients with Outlook or Hotmail emails"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Who owns the email address that ends with @smithfamily.net?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Check if we have anyone with an AOL email still in our database"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find the customer who contacted us from mrsmith1975@gmail.com"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Who are the 3 closest customers to my current location?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find all customers within 5 miles of downtown"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I'm at the mall - show me the nearest customers from here"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Who's the closest client to the airport?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Show me customers near coordinates 34.7304, -86.5861"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I'm heading to Bridge Street - are there any customers nearby I could visit?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find the 10 nearest customers to the city center"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Who lives closest to our new office location at 123 Commerce St?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Show me all customers in a 2-mile radius from where I am now"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find all customers named Smith who live in the downtown area"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Who are our customers with Gmail addresses in the Hampton Cove neighborhood?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "I need contact info for all Johnsons who live within 10 miles of the mall"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Look for any customers with 256 area code phones who live on Lake streets"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find businesspeople with non-company email addresses in our database"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Are there any customers with the last name Chen who live near Research Park?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Show me customers whose phone numbers start with 205 and live in Mountain Brook"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Search for people with hotmail emails who live on streets with 'wood' in the name"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find that older couple with a Hispanic last name who live near the university"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Who's that lady we did work for on Green Mountain?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Remember that guy with the classic cars? What's his contact info?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Can you find the customer we helped last week who had that big corner lot?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Look up that doctor who lives in the Five Points district"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "What was the name of that nice couple on Valley View Drive?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find that person who always pays in cash - I think they live near the lake"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Who's our customer with the red brick house on that street with all the oak trees?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "What's the contact info for that company we work with that has 'tech' in their name?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Can you look up that family with the twins who live in south Huntsville?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find customer with reference ID HC-2045"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Look up the customer whose ID is JONES-001"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Who's associated with reference number SJC-5589?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Search for customer with account number 10458"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find the people linked to project code HSVL-2023-45"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Which customer has the loyalty number gold-555?"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Look up who's assigned to contract number SVC-2023-0872"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Find the customer with confirmation number TX-45721"
+  },
+  {
+    "tool_name": "customerdatabase_tool",
+    "query": "Who's the contact person for invoice #INV-20230728-001?"
+  }
+]

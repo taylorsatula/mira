@@ -1,0 +1,114 @@
+[
+  {
+    "tool_name": "maps_tool",
+    "query": "What are the coordinates for the Empire State Building?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you give me the precise location of 1600 Pennsylvania Avenue NW, Washington, DC?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "What's the address for these GPS coordinates: 40.7128\u00b0 N, 74.0060\u00b0 W?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you tell me the full street location for the point at latitude 37.7749 and longitude -122.4194?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you pull up all the details for this restaurant with the Google ID ChIJN1t_tDeuEmsRUsoyG83frY4?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I want to know more information about this specific location - here's the place identifier: g0987654321"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "What restaurants are near 40.7128\u00b0 N, 74.0060\u00b0 W?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Find coffee shops within 500 meters of my current location that are open right now"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Find coffee shops near downtown San Francisco"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I need restaurants within 5 miles of 37.7749\u00b0 N, 122.4194\u00b0 W"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Where is the Eiffel Tower located?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you help me find the exact address of the Sydney Opera House?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "How far is it from San Francisco to Los Angeles?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "What's the distance between my current location at 37.7749\u00b0 N, 122.4194\u00b0 W and my destination at 34.0522\u00b0 N, 118.2437\u00b0 W?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Find me coffee shops within 2 kilometers of my current location at 40.7128, -74.0060"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you tell me the full address for the Statue of Liberty?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I want to search for highly rated Italian restaurants near downtown Chicago"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I need the precise latitude and longitude for 1600 Pennsylvania Avenue in Washington DC"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you pull up all the details for the Eiffel Tower? I want to know everything about this landmark."
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I'm planning a trip and need the full information for the Museum of Modern Art in New York - address, contact info, everything."
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "What restaurants are near the space needle in Seattle?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Find coffee shops within 500 meters of 47.6062\u00b0 N, 122.3321\u00b0 W that are open right now"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I'm looking for a good Italian restaurant within 5 miles of 37.7749\u00b0 N, 122.4194\u00b0 W"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "What's the exact location of the Guggenheim Museum in New York?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you tell me the miles between these coordinates: 37.7749\u00b0 N, 122.4194\u00b0 W and 34.0522\u00b0 N, 118.2437\u00b0 W?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "What are some good coffee shops near the Empire State Building?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I need the full address and contact details for the Smithsonian Museum"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Convert 40.7128\u00b0 N, 74.0060\u00b0 W into a readable street address"
+  }
+]

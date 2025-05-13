@@ -1,0 +1,186 @@
+[
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you help me find all the smart home devices on my network right now?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I want to scan my local network and see what Kasa devices are connected. Can you list them out for me?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "What are the current settings for my kitchen smart plug?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you show me the details of the living room light strip, including its current status and configuration?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you turn off the kitchen smart plug?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I want to switch on the living room lamp remotely"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you make the living room light a bit dimmer? Set it to around 40%."
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I want the kitchen light to be brighter - turn it up to 75 brightness."
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you change the living room light strip to a deep purple color?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Set my kitchen smart bulb to a soft orange hue at about 70% brightness"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you make the living room lights warmer? They feel too blue right now."
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I want the kitchen lights to look more like soft white light - around 3000K would be perfect."
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "How much electricity is my kitchen smart plug using right now?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you show me today's power consumption for the living room outlet?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can I rename my kitchen smart plug to 'Refrigerator Outlet'?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I want to change the name of my living room lamp from 'Lamp' to 'Main Room Light' so it's clearer"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "What devices are plugged into my multi-outlet power strip?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you show me the list of outlets on my TP-Link power strip and their current status?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you turn off the second outlet on my kitchen power strip?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I want to switch the third socket of my multi-outlet Kasa device to on"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you help me turn off all my smart plugs remotely?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I want to check how much energy my living room lights are using right now"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Is there a way to find all the smart home devices connected to my network?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I'd like to change the color of my bedroom light strip to a warm orange and dim it to 40%"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "How can I rename my smart outlets so I know which one controls the coffee maker?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you help me find all the smart home devices connected to my local network right now?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I just set up some new Kasa devices and want to scan my home network to see what's available. What devices are online?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you tell me the details of my living room smart plug?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "What are the current specifications for the kitchen light strip I just installed?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Switch on the living room lamp right now"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you make the living room light a bit dimmer? It's too bright right now."
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I want the kitchen light at 40% brightness for a softer evening ambiance."
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I want the kitchen smart bulb to be a bright teal - can you adjust its color to something vibrant?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Change the kitchen light to a softer, more yellowish white around 3000K."
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "How much electricity did my kitchen smart plug use today?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you tell me the current power consumption for the living room outlet?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I want to rename my kitchen smart plug to 'Counter Outlet' so I can identify it more easily"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you help me change the name of my living room light strip from the default to something more descriptive like 'TV Backlight'"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "What devices are plugged into my power strip right now?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you show me the list of outlets on my multi-outlet Kasa device and their current status?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I want to switch the third socket of my home office power strip to on"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I want to turn off all my smart home devices in the living room"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Can you help me find out how much electricity my smart plug is using right now?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Change the color of my bedroom light strip to a warm orange and dim it to 40% brightness"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "I just bought some new smart home devices. How can I see what's connected to my network?"
+  },
+  {
+    "tool_name": "kasa_tool",
+    "query": "Set the living room bulb to a cool white light around 6500K for better reading conditions"
+  }
+]

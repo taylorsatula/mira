@@ -1,0 +1,334 @@
+"description": "A tool for accessing and managing email accounts via IMAP/SMTP protocols, allowing users to read, search, send, and manage emails with intelligent categorization capabilities.",
+  "operations": [
+    {
+      "name": "get_emails",
+      "description": "Retrieves emails from a specified folder with options for filtering and content loading.",
+      "required_parameters": [],
+      "optional_parameters": [
+        {
+          "name": "folder",
+          "type": "string",
+          "description": "Email folder to access",
+          "default": "INBOX"
+        },
+        {
+          "name": "unread_only",
+          "type": "boolean",
+          "description": "Only return unread emails",
+          "default": false
+        },
+        {
+          "name": "load_content",
+          "type": "boolean",
+          "description": "Load full email content",
+          "default": true
+        },
+        {
+          "name": "sender",
+          "type": "string",
+          "description": "Filter by sender email or name",
+          "default": null
+        },
+        {
+          "name": "max_emails",
+          "type": "integer",
+          "description": "Maximum number of emails to return",
+          "default": 20
+        }
+      ]
+    },
+    {
+      "name": "get_email_content",
+      "description": "Retrieves the full content of a specific email by its ID.",
+      "required_parameters": [
+        {
+          "name": "email_id",
+          "type": "string",
+          "description": "UUID of the email to retrieve"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "folder",
+          "type": "string",
+          "description": "Email folder containing the email",
+          "default": "INBOX"
+        }
+      ]
+    },
+    {
+      "name": "mark_as_read",
+      "description": "Marks a specific email as read.",
+      "required_parameters": [
+        {
+          "name": "email_id",
+          "type": "string",
+          "description": "UUID of the email to mark"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "folder",
+          "type": "string",
+          "description": "Email folder containing the email",
+          "default": "INBOX"
+        }
+      ]
+    },
+    {
+      "name": "mark_as_unread",
+      "description": "Marks a specific email as unread.",
+      "required_parameters": [
+        {
+          "name": "email_id",
+          "type": "string",
+          "description": "UUID of the email to mark"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "folder",
+          "type": "string",
+          "description": "Email folder containing the email",
+          "default": "INBOX"
+        }
+      ]
+    },
+    {
+      "name": "delete_email",
+      "description": "Deletes a specific email.",
+      "required_parameters": [
+        {
+          "name": "email_id",
+          "type": "string",
+          "description": "UUID of the email to delete"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "folder",
+          "type": "string",
+          "description": "Email folder containing the email",
+          "default": "INBOX"
+        }
+      ]
+    },
+    {
+      "name": "move_email",
+      "description": "Moves an email from one folder to another.",
+      "required_parameters": [
+        {
+          "name": "email_id",
+          "type": "string",
+          "description": "UUID of the email to move"
+        },
+        {
+          "name": "destination_folder",
+          "type": "string",
+          "description": "Folder to move the email to"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "folder",
+          "type": "string",
+          "description": "Source folder containing the email",
+          "default": "INBOX"
+        }
+      ]
+    },
+    {
+      "name": "send_email",
+      "description": "Sends a new email to specified recipients.",
+      "required_parameters": [
+        {
+          "name": "to",
+          "type": "string",
+          "description": "Recipient email address(es)"
+        },
+        {
+          "name": "subject",
+          "type": "string",
+          "description": "Email subject"
+        },
+        {
+          "name": "body",
+          "type": "string",
+          "description": "Email body content"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "cc",
+          "type": "string",
+          "description": "CC recipient(s)",
+          "default": null
+        },
+        {
+          "name": "bcc",
+          "type": "string",
+          "description": "BCC recipient(s)",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "reply_to_email",
+      "description": "Replies to an existing email.",
+      "required_parameters": [
+        {
+          "name": "email_id",
+          "type": "string",
+          "description": "UUID of the email to reply to"
+        },
+        {
+          "name": "body",
+          "type": "string",
+          "description": "Reply content"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "folder",
+          "type": "string",
+          "description": "Email folder containing the email",
+          "default": "INBOX"
+        },
+        {
+          "name": "cc",
+          "type": "string",
+          "description": "CC recipient(s)",
+          "default": null
+        },
+        {
+          "name": "bcc",
+          "type": "string",
+          "description": "BCC recipient(s)",
+          "default": null
+        },
+        {
+          "name": "to",
+          "type": "string",
+          "description": "Override recipient email address(es)",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "create_draft",
+      "description": "Creates a draft email without sending it.",
+      "required_parameters": [
+        {
+          "name": "to",
+          "type": "string",
+          "description": "Recipient email address(es)"
+        },
+        {
+          "name": "subject",
+          "type": "string",
+          "description": "Email subject"
+        },
+        {
+          "name": "body",
+          "type": "string",
+          "description": "Email body content"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "cc",
+          "type": "string",
+          "description": "CC recipient(s)",
+          "default": null
+        },
+        {
+          "name": "bcc",
+          "type": "string",
+          "description": "BCC recipient(s)",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "search_emails",
+      "description": "Searches emails using various criteria like sender, subject, and date range.",
+      "required_parameters": [],
+      "optional_parameters": [
+        {
+          "name": "folder",
+          "type": "string",
+          "description": "Email folder to search in",
+          "default": "INBOX"
+        },
+        {
+          "name": "sender",
+          "type": "string",
+          "description": "Sender email or name to search for",
+          "default": null
+        },
+        {
+          "name": "subject",
+          "type": "string",
+          "description": "Subject text to search for",
+          "default": null
+        },
+        {
+          "name": "start_date",
+          "type": "string",
+          "description": "Start date for range search (DD-Mon-YYYY format)",
+          "default": null
+        },
+        {
+          "name": "end_date",
+          "type": "string",
+          "description": "End date for range search (DD-Mon-YYYY format)",
+          "default": null
+        },
+        {
+          "name": "unread_only",
+          "type": "boolean",
+          "description": "Only return unread emails",
+          "default": false
+        },
+        {
+          "name": "load_content",
+          "type": "boolean",
+          "description": "Load full email content",
+          "default": true
+        },
+        {
+          "name": "max_emails",
+          "type": "integer",
+          "description": "Maximum number of emails to return",
+          "default": 20
+        }
+      ]
+    },
+    {
+      "name": "list_folders",
+      "description": "Lists all available email folders in the account.",
+      "required_parameters": [],
+      "optional_parameters": []
+    },
+    {
+      "name": "mark_for_later_reply",
+      "description": "Marks an email to be replied to later in the conversation.",
+      "required_parameters": [
+        {
+          "name": "email_id",
+          "type": "string",
+          "description": "UUID of the email to mark"
+        }
+      ],
+      "optional_parameters": []
+    },
+    {
+      "name": "get_emails_for_later_reply",
+      "description": "Retrieves the list of emails that have been marked for later reply.",
+      "required_parameters": [],
+      "optional_parameters": []
+    }
+  ],
+  "complexity_category": "standard",
+  "recommended_examples": 45
+}

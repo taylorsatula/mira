@@ -1,0 +1,8 @@
+{
+  "host": "192.168.4.52",
+  "alias": "TV Backlight",
+  "model": "KL400L5",
+  "mac": "14:EB:B6:C6:A1:CC",
+  "device_type": "DeviceType.LightStrip",
+  "last_updated": "2025-05-11T20:48:20.908881+00:00"
+}

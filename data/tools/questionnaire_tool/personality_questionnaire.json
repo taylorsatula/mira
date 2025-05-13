@@ -1,0 +1,51 @@
+[
+  {
+    "id": "name",
+    "text": "What's your name?",
+    "allow_free_text": true
+  },
+  {
+    "id": "interests",
+    "text": "What are you interested in learning about today?",
+    "options": [
+      "Technology",
+      "Science",
+      "Arts & Culture",
+      "History",
+      "Business & Finance",
+      "Health & Wellness",
+      "Other (please specify)"
+    ],
+    "allow_free_text": true
+  },
+  {
+    "id": "communication_style",
+    "text": "How would you prefer I communicate with you?",
+    "options": [
+      "Brief and to the point",
+      "Detailed explanations",
+      "Conversational and friendly",
+      "Technical and precise"
+    ]
+  },
+  {
+    "id": "experience_level",
+    "text": "How would you describe your expertise in your area of interest?",
+    "options": [
+      "Beginner - I'm just getting started",
+      "Intermediate - I have some knowledge",
+      "Advanced - I'm quite knowledgeable",
+      "Expert - I have deep expertise"
+    ]
+  },
+  {
+    "id": "preferred_style",
+    "text": "What's your preferred learning or interaction style?",
+    "options": [
+      "Visual - diagrams, charts, images",
+      "Reading text explanations",
+      "Interactive Q&A",
+      "Examples and case studies"
+    ]
+  }
+]

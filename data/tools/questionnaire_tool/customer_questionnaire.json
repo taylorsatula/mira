@@ -1,0 +1,37 @@
+[
+  {
+    "id": "given_name",
+    "text": "What is the customer's first name?",
+    "preference_key": "given_name"
+  },
+  {
+    "id": "family_name",
+    "text": "What is the customer's last name?",
+    "preference_key": "family_name"
+  },
+  {
+    "id": "email_address",
+    "text": "What is the customer's email address?",
+    "preference_key": "email_address"
+  },
+  {
+    "id": "phone_number",
+    "text": "What is the customer's phone number?",
+    "preference_key": "phone_number"
+  },
+  {
+    "id": "full_address",
+    "text": "What is the customer's full address?",
+    "preference_key": "full_address"
+  },
+  {
+    "id": "reference_id",
+    "text": "What is the reference ID for this customer (optional)?",
+    "preference_key": "reference_id"
+  },
+  {
+    "id": "note",
+    "text": "Any additional notes about this customer (optional)?",
+    "preference_key": "note"
+  }
+]

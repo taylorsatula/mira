@@ -1,0 +1,190 @@
+[
+  {
+    "tool_name": "directions_tool",
+    "query": "How do I get from downtown Chicago to O'Hare Airport?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "I need directions from my home to the airport with some helpful landmarks along the way"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Can you show me the route from 123 Main Street to 456 Elm Street with detailed navigation instructions?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Walking directions from the train station to the museum, please"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Help me navigate from San Francisco to Silicon Valley"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "What's the best way to get to the restaurant from here?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "I want detailed turn-by-turn directions to my friend's new apartment"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Can you guide me from my current location to the nearest coffee shop?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Bicycle route from downtown to the park with some interesting points along the way"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "I need to get to the hospital. Can you help me find the most straightforward route?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Show me how to get from my office to the concert venue tonight"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Directions from New York City to Boston with some interesting stops"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "What's the best public transit route to get across town?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "I'm looking for a detailed route from my hotel to the nearest shopping center"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Can you help me navigate to the airport using the most scenic route?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Driving directions from my home to my parents' house"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "I need to get to my job interview. Can you help me find the best route?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Show me how to walk from the parking garage to the conference center"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "What's the most efficient way to get from point A to point B?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "I need directions from San Francisco to Los Angeles with some interesting landmarks along the way"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Can you help me navigate to the airport and tell me about the route?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "What's the best way to get from downtown to my friend's house in the suburbs? I want detailed instructions"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "I'm walking to a restaurant and would like step-by-step guidance with street descriptions"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Plan a route for my road trip that includes some scenic points of interest"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Can you help me navigate from my current location to the nearest coffee shop?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "I need turn-by-turn directions from my home to my office with some interesting landmarks along the way"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "What's the best route from San Francisco to Berkeley using public transit?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Give me walking directions to the museum, and point out any cool spots I might want to check out"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "I'm biking from my apartment to the park - can you show me the safest route?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Help me find my way to the restaurant, preferably avoiding major highways"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "What's the most scenic route from my hotel to the downtown area?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "I want directions that tell me more than just street names - include some local context"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Navigate me from LAX to Santa Monica with some interesting points of interest"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Can you guide me to the nearest grocery store with some helpful street descriptions?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "I need a detailed route from New York Penn Station to the Empire State Building"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Show me how to get to the art gallery, highlighting any notable buildings on the way"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "What's the best way to get from my current location to the nearest subway station?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Help me find a walking route that avoids steep hills in San Francisco"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "I want directions that sound like a friend is giving me guidance"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Navigate me from the airport to downtown with some local insights"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Can you show me how to get to the concert venue using public transportation?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Guide me from my current location to the nearest coffee shop, telling me about the neighborhood"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Can you help me get from downtown Chicago to O'Hare Airport with some interesting landmarks along the way?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "I need walking directions to the museum, and could you tell me about any cool spots I'll pass?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "What's the best route from my office to the airport, and can you give me some context about the neighborhoods I'll be traveling through?"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "I'm visiting San Francisco and want detailed navigation instructions that aren't just dry turn-by-turn directions"
+  },
+  {
+    "tool_name": "directions_tool",
+    "query": "Help me plan a bike route from my apartment to the coffee shop that highlights some interesting street details"
+  }
+]

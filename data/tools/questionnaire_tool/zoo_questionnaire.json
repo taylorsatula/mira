@@ -1,0 +1,54 @@
+[
+  {
+    "id": "zoo_name",
+    "text": "What is the name of your favorite zoo?",
+    "preference_key": "Zoo Name"
+  },
+  {
+    "id": "zoo_location",
+    "text": "Where is this zoo located (city and country)?",
+    "preference_key": "Location"
+  },
+  {
+    "id": "favorite_animal",
+    "text": "What is your favorite animal or exhibit at this zoo?",
+    "preference_key": "Favorite Exhibit"
+  },
+  {
+    "id": "last_visit",
+    "text": "When was the last time you visited this zoo?",
+    "preference_key": "Last Visit"
+  },
+  {
+    "id": "special_factor",
+    "text": "What makes this zoo special compared to others you've visited?",
+    "preference_key": "Special Factors"
+  },
+  {
+    "id": "memorable_experience",
+    "text": "Is there a specific memory or experience from this zoo that stands out?",
+    "preference_key": "Memorable Experience"
+  },
+  {
+    "id": "conservation",
+    "text": "How would you rate the zoo's conservation efforts (if you know about them)?",
+    "options": ["Excellent", "Good", "Average", "Poor", "Unknown"],
+    "preference_key": "Conservation Rating"
+  },
+  {
+    "id": "amenities",
+    "text": "What amenities did you appreciate at this zoo (food options, rest areas, etc.)?",
+    "preference_key": "Amenities"
+  },
+  {
+    "id": "recommendation",
+    "text": "Would you recommend this zoo to others?",
+    "options": ["Definitely Yes", "Probably Yes", "Not Sure", "Probably Not", "Definitely Not"],
+    "preference_key": "Recommendation"
+  },
+  {
+    "id": "improvements",
+    "text": "Is there anything you think could be improved about this zoo?",
+    "preference_key": "Suggested Improvements"
+  }
+]

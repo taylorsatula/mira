@@ -1,0 +1,138 @@
+[
+  {
+    "tool_name": "reminder_tool",
+    "query": "I need to set a reminder to call my dentist next Tuesday about my upcoming appointment"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Remind me to submit my expense report on Friday with John's contact details"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Create a reminder for my team meeting with Sarah next week at 2 PM, and include her email sarah.jones@company.com"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "What reminders do I have scheduled for today?"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Can you show me all my upcoming reminders for the next week?"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "I want to check the reminders I missed last month. Can you pull those up?"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "I finished the dentist appointment reminder, can you mark it as done?"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Update the status of reminder #4562 - task is complete now"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Just wrapped up the project milestone I had tracked. Check it off my list please."
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "I need to change the date of my dentist appointment reminder to next Thursday"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Can you modify the details for my project meeting reminder? The contact info and time are different now"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Update my birthday party reminder - I want to adjust the description and add Sarah's phone number"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "I want to remove the dentist appointment reminder I no longer need"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Can you help me get rid of the birthday party reminder from last week? It's taking up space."
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Please delete reminder #4532 - it's no longer relevant"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "I need to schedule a follow-up call with Sarah Johnson next Tuesday and make sure I don't forget"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Can you help me track a meeting I have coming up in two weeks with the marketing team? I want to add some notes about what to discuss"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "I just met a potential client and want to set a reminder to contact them in a week with a follow-up email"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Mark my dentist appointment from last week as completed and update the contact information"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "I need to remember to call my dentist next Tuesday at 2 PM about my upcoming appointment"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Remind me to pick up mom's birthday gift this weekend and send her a card"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Set a reminder for the team project deadline on March 15th with Sarah's contact info in case I need to follow up"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "I need to review my past reminders from last month. Can you help me find them?"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "I finished that doctor's appointment reminder, can you check it off?"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Just completed my quarterly tax review task. Update its status please."
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "This project milestone is done - mark it as completed in my reminders."
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Oops, the details for reminder #72 are incorrect. Can you modify the title and description?"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Update my meeting with Sarah - her email address changed and I want to adjust the time to 2:30 PM instead of 2 PM"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "I don't need this reminder anymore. Can you remove reminder 352?"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Oops, I scheduled this by mistake. Please get rid of the reminder about my dentist appointment next week."
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Cancel reminder ID 127 - that event is no longer happening"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Can you help me track all my upcoming medical appointments for the next month?"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "Remind me to send a birthday card to my mom on March 15th and store her phone number with the reminder"
+  },
+  {
+    "tool_name": "reminder_tool",
+    "query": "I want to create a reminder for my team project deadline that's happening in two weeks, with some additional context notes"
+  }
+]

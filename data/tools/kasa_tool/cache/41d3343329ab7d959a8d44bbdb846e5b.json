@@ -1,0 +1,8 @@
+{
+  "host": "192.168.4.56",
+  "alias": "Salt Lamps",
+  "model": "EP10",
+  "mac": "B0:A7:B9:FA:54:8F",
+  "device_type": "DeviceType.Plug",
+  "last_updated": "2025-05-11T20:48:21.288914+00:00"
+}

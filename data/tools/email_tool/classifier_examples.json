@@ -1,0 +1,810 @@
+[
+  {
+    "tool_name": "email_tool",
+    "query": "Show me my most recent emails"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Check my unread messages from Sarah"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Please return a list of emails from my Unsolicited folder"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Do I have any new Orders?"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Show me all of the newsletters that came in today"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Have I gotten any High Priority emails since we last spoke? I was waiting for one from my uncle Louie about the boat."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I want to look at emails I've received in the From Humans folder"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I wanna see the emails in the Customer Support folder"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "There are so many notification emails that arrived this week!"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Can you retrieve the last 50 messages from my inbox instead of just 20?"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Pull up everything in my Spam folder that might be important"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to see all emails from Amazon in my Purchases folder"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Check if I've received anything from my doctor in the last week"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Browse through the Travel folder and show me the most recent flight confirmations"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Open the email from John about the project proposal"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Show me the full content of that message with ID e7d8f9g0"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "In the email from J. Racenstein I think there is an order confirmation but I don't know what it is. Show the full content of the message from them in the Customer Support inbox."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Display the full content of all these emails"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I want to see what that email says in-full"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Please return the phone number for Billy in the email we just reviewed"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "This summary isn't detailed enough. I need to see the full body of the message."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Let me read the entire message from my sister about the family reunion"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Show me the full details of that shipping confirmation"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to see the attachment mentioned in that email"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Can you expand that truncated message from my landlord?"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Fetch the complete message with that concert ticket information"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Open up that email about my prescription refill so I can see all the details"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Get me the entire thread of that conversation with my insurance agent"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Mark that email from HR as read"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I've read the message about tomorrow's meeting, mark it as read"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I already looked at that message. Mark it read."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "You see everything in this inbox? Mark it read."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Yeah, that email is the one I was looking for. You can mark it read now."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Mark read"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I'm done reviewing these notification emails - mark them all as read"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Got it, thanks. Let's mark this email as read so I know I've seen it"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "That newsletter doesn't need my attention anymore - mark as read"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I've now seen all these messages from my bank. Please mark them read."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Make sure all the order confirmations are marked as read"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "That email from my insurance doesn't need the unread status anymore"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I've already seen what's in this email, so please change its status to read"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "All caught up on these apartment listings - mark the whole bunch as read"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Mark the budget approval email as unread so I remember to check it later"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Change that message from David back to unread status"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Please mark that email as unread. I'll probably need to look at it again."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Mark this as unread"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Oops! I shouldn't have opened that one. Please mark it as unread."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "These all need to be marked unread"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to act like I never saw that email"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Set the invoice email back to unread so I remember to pay it"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I want to come back to this message later - make it unread"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Change the status of that appointment confirmation to unread"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Need to show this email to my wife later - mark it as not read"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Let's pretend I haven't seen that birthday invitation yet"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Make this message appear new again so I don't forget about it"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Reset the read status of these concert announcements to unread"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Delete that spam email I just received"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Remove the message with the subject 'Free Trial Expired'"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "We've gotta get rid of all those messages"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Delete this email"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "We can delete this one now"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I don't need the email from Mike anymore. We should trash it."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Get rid of that message"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Please permanently delete all these sale notifications"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "That political fundraising email should be trashed immediately"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I want to erase that embarrassing message from my ex"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Remove all these outdated newsletters from my inbox"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Can you delete those social media notifications I don't care about?"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Trash all these promotional emails cluttering my inbox"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I've resolved this customer issue - please delete the original complaint email"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Move that invoice email to my Finance folder"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Take the message from my boss and put it in the Important folder"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "This email is incorrectly categorized. It should actually be in Notifications. Please move it."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Take every email from Jimmy and put them in the From Humans folder."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Email 2,4,7, and 9 need to be moved out of this folder and into the Archive"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Move this email into Receipts"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Move the message from Arnold in the inbox to the Customer Support inbox"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "These concert ticket confirmations should go in my Entertainment folder"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Transfer all the vacation planning emails to my Travel folder"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Put these charity donation receipts in my Tax Deductions folder"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Organize these family photos by moving them to the Family folder"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Move this doctor's appointment confirmation to my Health folder"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "These restaurant promotions should be in my Dining folder, not inbox"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Take all these home maintenance emails and move them to the House folder"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Send an email to alex@example.com about the schedule change"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Compose a message to the team letting them know I'll be late tomorrow"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Send an email to Janice about going to the movies next week. Her husband probably wants to come too so we should include that in the body of the message. The subject line should be Movies Double Date"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "The subject line should be Party At My House"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Email example@domain.net. The subject line should be Listen Up and the body should be a demand that you stop the land war in asia"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Email Davon"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Email name@address.biz"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to send a quick note to my mother about Sunday dinner"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Write an email to the property manager about the leak in my ceiling"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Send a message to my hiking group about changing the meet-up location"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to email the vet to reschedule my dog's appointment"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Email my insurance agent to ask about rental coverage while traveling"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Send a note to everyone@company.org with updates about the office closure"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to contact the dentist office to confirm my cleaning next week"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Reply to Jane's email and tell her I can meet at 3pm"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Respond to the client message with 'Thanks for your feedback, we'll look into it'"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "We need to reply to this message with a comment that the truck is ready for pickup"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Please reply to this email"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to send him a message back. We've gotta talk about this beach trip."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Reply to everyone in this conversation thread, please"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Hit him back about this email. We'll chat."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Write back to the mechanic and ask when my car will be ready"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Send a response to that event invitation saying I'll attend"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Reply to my brother's email with those vacation photos I mentioned"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Answer that question from my neighbor about borrowing the lawn mower"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to get back to my friend about that concert next month"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Respond to this job offer with some questions about the benefits"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Write back to that Craigslist seller asking if the item is still available"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Start a draft email to marketing@company.com about the new campaign"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Create a draft message to my manager regarding my vacation plans"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I want to create an email to Danny Kent but I don't want you to send it yet. We'll work on the body and save it for later."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Draft a new email"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to take a break. We'll work on this email again later. For now save it as a draft."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Please pull up my Drafts folder. I think you and I wrote one the other day I need to edit before I send."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Begin a draft to the contractor about the kitchen renovation"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Start composing an email to my landlord but save it as draft for now"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I want to prepare a message to the HOA board for review before sending"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Create a draft resignation letter that I can edit later"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Let's write a thank you note to my interview panel but keep it as draft"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Start an email to customer service about my refund but don't send it yet"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to prepare a message for my book club about next month's selection"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Help me begin drafting an email to my insurance company about the claim"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Find all emails from Microsoft received last month"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Search for messages with 'quarterly report' in the subject"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Look for any emails about concert tickets from February"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Search my inbox for anything related to 'mortgage refinance'"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Find messages from Amazon with shipping confirmations"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to find that email about bike repairs from last week"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Search for unread messages about the neighborhood watch program"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Find all emails with 'tax documents' in them from January until now"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Look through my Travel folder for emails about the Grand Canyon trip"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Search for messages from my doctor sent between March and April"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Find emails containing information about my new credit card"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Look for any messages with attachments from my accountant"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Find all the emails about that furniture delivery that was delayed"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Search for any emails from the school district about registration deadlines"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Show me all my email folders"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "What folders do I have in my email account?"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Show me all the folders related to record keeping"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I want to see the default folders that come with my email client"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "List all folders"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "What are the names of my current folders?"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Let me see folders that start with the letter S"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Display all available folders in my email account"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to see my folder structure to organize some emails"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Can you show me what categories I've set up for organizing emails?"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "What are all the different email folders I can move messages to?"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Show me the main folders I use for email organization"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I forget what folders I've created - can you remind me?"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Show the complete list of mail directories in my account"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Mark this vendor email for me to reply to later"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to think about this message from the accounting team, flag it for later reply"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I don't have time to reply to this email right now. We'll come back to it later."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Thank you. I want to set this email aside and we will work on it after we've worked through the other emails in the inbox."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to do some research before replying to this person. Set it aside for now."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Mark this email as reply later"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "This email has a lot of content. We've gotta check in with my wife before replying to it. Set it aside for later."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Flag this message for follow-up when I have more information"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I'll need to reply to this insurance question tomorrow after my appointment"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "This needs a thoughtful response - let's come back to it when I have more time"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Save this party invitation for later - I need to check my calendar first"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Let's put this contractor email in the 'needs reply' category for now"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I want to think about this job opportunity more carefully before responding"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "This requires a detailed response - mark it for when I have time to focus"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Show me all the emails I've flagged to reply to later"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "What messages did I mark for follow-up?"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Hello! I'm back. Where did we leave off on replying to emails I set aside"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Return the emails I set aside for later"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Which emails are set aside in my inbox?"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I bet there are messages I set aside and hadn't replied to yet. Please check for reply later emails and return a list to me."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Sorry, I got distracted, where were we? I think we were looking for emails I'd set aside to reply to later."
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Let's go through all the messages I've marked for later attention"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I have some time now - show me those emails I flagged for follow-up"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "What's in my 'need to reply' queue right now?"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Show me the list of emails I've been putting off responding to"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Fetch all those messages I saved for when I had more time"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I'm ready to tackle those emails I marked for later response"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "What's still waiting in my 'to respond' collection?"
+  },
+  {
+    "tool_name": "email_tool", 
+    "query": "I need to find that reservation confirmation and forward it to my wife"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "First show me unread messages, then let's organize them into appropriate folders"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Can you check both my Spam and Inbox folders for emails from my bank?"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I received an email about concert tickets last week but accidentally deleted it - can we find it?"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Let's clean up my inbox by moving receipts to the Finance folder and deleting promotions"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Reply to that event invitation and then create a draft email to coordinate with friends about carpooling"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "There should be an email from the doctor's office I marked for later reply - let's find it and respond now"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Search for emails about that hiking trip, create a new folder called 'Summer Adventures', and move them there"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Show me all unread messages from last week, mark the promotional ones as read, and delete the spam"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to find all messages relating to my insurance claim, organize them chronologically, and draft a follow-up email"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Check my Travel folder for the hotel confirmation, mark it unread, and then draft an email to the concierge about early check-in"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Search for emails with tax documents, create a new Tax Records 2024 folder, and move them all there"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Find that email about the broken dishwasher from last month and reply with photos of the latest leak"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "I need to clear out my inbox - show me all newsletters, mark them as read, and delete them"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Find all emails related to my upcoming dentist appointment and tell me when it's scheduled for"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Look for messages from my contractor in February, compile the list of materials we discussed, and draft a follow-up"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Get all emails from my motorcycle club, create a 'Rides' folder, and categorize them by month"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Search for that invitation to the dinner party, check if I responded, and if not, draft a reply"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Find emails about my streaming subscriptions and help me figure out which ones to cancel"
+  },
+  {
+    "tool_name": "email_tool",
+    "query": "Look through emails from my photography class instructor and create a list of the assignments I need to complete"
+  }
+]

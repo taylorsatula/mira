@@ -1,0 +1,202 @@
+[
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I need to collect some information from you."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Let me ask you a few questions about your preferences."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I'll need to gather some details before proceeding."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I need to know more about your requirements."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Please answer a few questions so I can help you better."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I'm going to ask you some multiple choice questions."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Let's collect the necessary information for your order."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Can you provide details about your current situation?"
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I need to fill out this form with your input."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Please answer the following questions for our records."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I'll need some specific information from you first."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Let me ask you a series of questions to get started."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "We need to gather some basic information before proceeding."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Could you answer these questions about your preferences?"
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Please provide the following information for our system."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I need to collect some data to pass to our service team."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Let's go through a quick information collection process."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Can you answer a few questions about your experience?"
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I need to gather some details for your consultation."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Please respond to these questions with your preferences."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I need to get some specifics about your property."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Let me collect the information we need for your booking."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Can I ask you some questions about your service needs?"
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "We'll need a few details to customize your experience."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I'd like to ask you about your goals for this project."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Please answer these questions about your property type."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I need to understand your expectations better."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Let me gather the required information for our records."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Can you tell me more about what you're looking for?"
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I'll ask you a series of questions to determine the best service."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Please provide some details about your schedule preferences."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I need to collect information about your home setup."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Let me ask you about your specific requirements."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Could you answer a few questions about your past experiences?"
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I need to know your preferences for the following options."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Let's collect some basic information for your profile."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Please answer these questions to help us prepare."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I'd like to get more details about your situation."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Can you provide information about your current setup?"
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I need to gather some specifics for your customized plan."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Let me ask about your priorities for this service."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Please tell me your preferences from these options."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I'd like to know more about your availability."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Can you answer a few questions about access to your property?"
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I need to collect some information for our technicians."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Let's go through some questions about your project scope."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Please provide details about any special considerations."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "I need to ask you some questions before we proceed."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Let me collect information about your specific needs."
+  },
+  {
+	"tool_name": "questionnaire_tool",
+	"query": "Can I get some additional details from you?"
+  }
+]

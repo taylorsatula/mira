@@ -1,0 +1,8 @@
+{
+  "host": "192.168.4.54",
+  "alias": "Dripping Lantern Top",
+  "model": "KL125",
+  "mac": "14:eb:b6:69:1a:8a",
+  "device_type": "DeviceType.Bulb",
+  "last_updated": "2025-05-11T20:57:48.618665+00:00"
+}

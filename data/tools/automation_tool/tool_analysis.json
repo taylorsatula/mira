@@ -1,0 +1,283 @@
+{
+  "tool_name": "automation_tool",
+  "tool_code": "\"\"\"\nAutomation tool for managing automated tasks and sequences.\n\nThis tool provides a unified interface for creating and managing both simple\nrecurring tasks and multi-step sequences with a common scheduling system.\nIt replaces the separate scheduler_tool and chain_tool with a single,\nmore intuitive interface.\n\"\"\"\n\nimport json\nimport logging\nfrom datetime import datetime\nfrom typing import Dict, Any, Optional\n\nfrom pydantic import BaseModel, Field\n\nfrom tools.repo import Tool\nfrom errors import ToolError, ErrorCode, error_context\nfrom task_manager.automation import AutomationType, AutomationStatus, TaskFrequency\nfrom task_manager.automation_engine import get_automation_engine\nfrom config import config\nfrom config.registry import registry\n\n# Configure logger\nlogger = logging.getLogger(__name__)\n\n\n# Define configuration class for AutomationTool\nclass AutomationToolConfig(BaseModel):\n    \"\"\"Configuration for the automation_tool.\"\"\"\n\n    enabled: bool = Field(\n        default=True, description=\"Whether this tool is enabled by default\"\n    )\n    max_automations_per_user: int = Field(\n        default=20, description=\"Maximum number of automations a user can create\"\n    )\n    confirm_before_delete: bool = Field(\n        default=True,\n        description=\"Whether to require explicit confirmation before deleting automations\",\n    )\n\n\n# Register with registry\nregistry.register(\"automation_tool\", AutomationToolConfig)\n\n\nclass AutomationTool(Tool):\n    \"\"\"\n    Tool for managing automated tasks and sequences.\n\n    This unified tool allows the creation and management of both simple tasks\n    and multi-step sequences with a common scheduling system. It includes features\n    for conditional execution, data passing between steps, error handling,\n    and a variety of scheduling options.\n    \"\"\"\n\n    name = \"automation_tool\"\n    description = \"\"\"\n    Creates and manages automated tasks and sequences that run at scheduled times without user intervention.\n    Use this tool when the user wants to automate tasks, create workflows, or set up recurring activities.\n    \n    This tool supports two types of automations:\n    \n    1. Simple Tasks: Execute a single operation at scheduled times\n       - Direct execution: Run a specific tool operation with predetermined parameters\n       - Orchestrated execution: Use Claude to interpret a task description and determine which tools to use\n       \n    2. Sequences: Execute a series of connected steps with data passing between them\n       - Each step can execute either directly or through Claude\n       - Support for conditional execution, error handling, and alternative paths\n       - Parameters can reference results from previous steps using template syntax\n    \n    The tool supports these operations:\n    \n    1. create_automation: Create a new task or sequence\n       - Required fields: name, type (simple_task or sequence), frequency\n       - For simple_task: execution_mode, tool_name/operation OR task_description\n       - For sequence: steps (list of step definitions)\n       - Optional: scheduled_time, day_of_week, day_of_month, timezone, etc.\n    \n    2. get_automations: List automations filtered by criteria\n       - Optional filters: type, status, frequency, limit, offset\n    \n    3. get_automation: Get detailed information about a specific automation\n       - Required: automation_id\n    \n    4. update_automation: Modify an existing automation\n       - Required: automation_id\n       - Optional: Any fields to update\n    \n    5. delete_automation: Remove an automation\n       - Required: automation_id\n    \n    6. execute_now: Run an automation immediately\n       - Required: automation_id\n       - Optional: initial_context (for sequences)\n    \n    7. pause_automation: Temporarily pause scheduled execution\n       - Required: automation_id\n    \n    8. resume_automation: Resume a paused automation\n       - Required: automation_id\n    \n    9. get_executions: View execution history for an automation\n       - Required: automation_id\n       - Optional: limit, offset\n    \n    10. get_execution_details: Get detailed information about a specific execution\n        - Required: execution_id\n    \n    This tool requires parameters to be passed as a JSON string in the \"kwargs\" field when using the direct APIs.\n    When interacting through Claude, you can use natural language to describe the automation you want to create.\n    \n    Examples:\n    - \"Create a daily reminder to check inventory at 9am\"\n    - \"Set up a weekly chain that generates a sales report and emails it to the team every Monday\"\n    - \"Make a sequence that processes customer data and sends personalized messages\"\n    \"\"\"\n\n    usage_examples = [\n        {\n            \"input\": {\n                \"operation\": \"create_automation\",\n                \"kwargs\": json.dumps(\n                    {\n                        \"name\": \"Daily Inventory Check\",\n                        \"type\": \"simple_task\",\n                        \"frequency\": \"daily\",\n                        \"scheduled_time\": \"09:00:00\",\n                        \"execution_mode\": \"direct\",\n                        \"tool_name\": \"reminder_tool\",\n                        \"operation\": \"add_reminder\",\n                        \"parameters\": {\n                            \"title\": \"Check inventory levels\",\n                            \"date\": \"today\",\n                            \"description\": \"Review stock levels for popular items\",\n                        },\n                    }\n                ),\n            },\n            \"output\": {\n                \"automation\": {\n                    \"id\": \"auto_12345\",\n                    \"name\": \"Daily Inventory Check\",\n                    \"type\": \"simple_task\",\n                    \"frequency\": \"daily\",\n                    \"scheduled_time\": \"2024-04-20T09:00:00+00:00\",\n                    \"next_execution_time\": \"2024-04-20T09:00:00+00:00\",\n                    \"status\": \"active\",\n                },\n                \"message\": \"Automation 'Daily Inventory Check' scheduled to run daily at 09:00:00\",\n            },\n        },\n        {\n            \"input\": {\n                \"operation\": \"create_automation\",\n                \"kwargs\": json.dumps(\n                    {\n                        \"name\": \"Weekly Sales Report\",\n                        \"type\": \"sequence\",\n                        \"frequency\": \"weekly\",\n                        \"day_of_week\": 1,  # Tuesday\n                        \"scheduled_time\": \"07:00:00\",\n                        \"steps\": [\n                            {\n                                \"name\": \"Generate Report\",\n                                \"position\": 1,\n                                \"execution_mode\": \"orchestrated\",\n                                \"task_description\": \"Generate a sales report for the previous week\",\n                                \"output_key\": \"report\",\n                            },\n                            {\n                                \"name\": \"Send Email\",\n                                \"position\": 2,\n                                \"execution_mode\": \"direct\",\n                                \"tool_name\": \"email_tool\",\n                                \"operation\": \"send_email\",\n                                \"parameters\": {\n                                    \"to\": \"sales@example.com\",\n                                    \"subject\": \"Weekly Sales Report\",\n                                    \"body\": \"{report.summary}\",\n                                },\n                                \"output_key\": \"email_result\",\n                            },\n                        ],\n                    }\n                ),\n            },\n            \"output\": {\n                \"automation\": {\n                    \"id\": \"auto_67890\",\n                    \"name\": \"Weekly Sales Report\",\n                    \"type\": \"sequence\",\n                    \"frequency\": \"weekly\",\n                    \"day_of_week\": 1,\n                    \"scheduled_time\": \"2024-04-23T07:00:00+00:00\",\n                    \"next_execution_time\": \"2024-04-23T07:00:00+00:00\",\n                    \"status\": \"active\",\n                },\n                \"message\": \"Automation 'Weekly Sales Report' scheduled to run weekly on Tuesday at 07:00:00\",\n            },\n        },\n        {\n            \"input\": {\n                \"operation\": \"get_automations\",\n                \"kwargs\": json.dumps({\"status\": \"active\"}),\n            },\n            \"output\": {\n                \"automations\": [\n                    {\n                        \"id\": \"auto_12345\",\n                        \"name\": \"Daily Inventory Check\",\n                        \"type\": \"simple_task\",\n                        \"frequency\": \"daily\",\n                        \"next_execution_time\": \"2024-04-20T09:00:00+00:00\",\n                        \"status\": \"active\",\n                    },\n                    {\n                        \"id\": \"auto_67890\",\n                        \"name\": \"Weekly Sales Report\",\n                        \"type\": \"sequence\",\n                        \"frequency\": \"weekly\",\n                        \"next_execution_time\": \"2024-04-23T07:00:00+00:00\",\n                        \"status\": \"active\",\n                    },\n                ],\n                \"count\": 2,\n                \"total\": 2,\n                \"message\": \"Found 2 active automations\",\n            },\n        },\n    ]\n\n    def __init__(self):\n        \"\"\"Initialize the automation tool.\"\"\"\n        super().__init__()\n\n        # Get or initialize the automation engine\n        self.engine = get_automation_engine()\n\n        if not self.engine:\n            logger.warning(\"Automation engine is not available\")\n\n    def run(self, operation: str, **kwargs) -> Dict[str, Any]:\n        \"\"\"\n        Execute an automation tool operation.\n\n        Args:\n            operation: The operation to perform\n            **kwargs: Operation-specific parameters\n\n        Returns:\n            Operation result\n\n        Raises:\n            ToolError: If the operation fails\n        \"\"\"\n        with error_context(\n            component_name=self.name,\n            operation=operation,\n            error_class=ToolError,\n            error_code=ErrorCode.TOOL_EXECUTION_ERROR,\n            logger=logger,\n        ):\n            # Check if automation engine is available\n            if not self.engine:\n                raise ToolError(\n                    \"Automation engine is not available\", ErrorCode.TOOL_UNAVAILABLE\n                )\n\n            # Parse kwargs JSON string if provided that way\n            if \"kwargs\" in kwargs and isinstance(kwargs[\"kwargs\"], str):\n                try:\n                    params = json.loads(kwargs[\"kwargs\"])\n                    kwargs = params\n                except json.JSONDecodeError as e:\n                    raise ToolError(\n                        f\"Invalid JSON in kwargs: {e}\", ErrorCode.TOOL_INVALID_INPUT\n                    )\n\n            # Route to the appropriate operation\n            if operation == \"create_automation\":\n                return self._create_automation(**kwargs)\n            elif operation == \"get_automations\":\n                return self._get_automations(**kwargs)\n            elif operation == \"get_automation\":\n                return self._get_automation(**kwargs)\n            elif operation == \"update_automation\":\n                return self._update_automation(**kwargs)\n            elif operation == \"delete_automation\":\n                return self._delete_automation(**kwargs)\n            elif operation == \"execute_now\":\n                return self._execute_now(**kwargs)\n            elif operation == \"pause_automation\":\n                return self._pause_automation(**kwargs)\n            elif operation == \"resume_automation\":\n                return self._resume_automation(**kwargs)\n            elif operation == \"get_executions\":\n                return self._get_executions(**kwargs)\n            elif operation == \"get_execution_details\":\n                return self._get_execution_details(**kwargs)\n            else:\n                raise ToolError(\n                    f\"Unknown operation: {operation}. Valid operations are: \"\n                    \"create_automation, get_automations, get_automation, \"\n                    \"update_automation, delete_automation, execute_now, \"\n                    \"pause_automation, resume_automation, get_executions, \"\n                    \"get_execution_details\",\n                    ErrorCode.TOOL_INVALID_INPUT,\n                )\n\n    def _create_automation(self, **kwargs) -> Dict[str, Any]:\n        \"\"\"\n        Create a new automation (simple task or sequence).\n\n        Args:\n            **kwargs: Automation parameters including:\n                name: Name of the automation\n                type: Type of automation (simple_task or sequence)\n                frequency: Execution frequency\n                scheduled_time: When to execute\n                various type-specific parameters\n\n        Returns:\n            Dict containing the created automation\n\n        Raises:\n            ToolError: If creation fails\n        \"\"\"\n        logger.info(f\"Creating automation: {kwargs.get('name')}\")\n\n        # Validate required parameters\n        if not kwargs.get(\"name\"):\n            raise ToolError(\"Automation name is required\", ErrorCode.TOOL_INVALID_INPUT)\n\n        # Check automation type\n        automation_type = kwargs.get(\"type\")\n        if not automation_type:\n            raise ToolError(\n                \"Automation type is required (simple_task or sequence)\",\n                ErrorCode.TOOL_INVALID_INPUT,\n            )\n\n        try:\n            auto_type = AutomationType(automation_type)\n        except ValueError:\n            raise ToolError(\n                f\"Invalid automation type: {automation_type}. Must be 'simple_task' or 'sequence'\",\n                ErrorCode.TOOL_INVALID_INPUT,\n            )\n\n        # Type-specific validation\n        if auto_type == AutomationType.SIMPLE_TASK:\n            execution_mode = kwargs.get(\"execution_mode\")\n\n            if not execution_mode:\n                # Infer execution mode from provided parameters\n                if kwargs.get(\"task_description\"):\n                    execution_mode = \"orchestrated\"\n                    kwargs[\"execution_mode\"] = \"orchestrated\"\n                else:\n                    execution_mode = \"direct\"\n                    kwargs[\"execution_mode\"] = \"direct\"\n\n            if execution_mode == \"direct\":\n                if not kwargs.get(\"tool_name\"):\n                    raise ToolError(\n                        \"tool_name is required for direct execution\",\n                        ErrorCode.TOOL_INVALID_INPUT,\n                    )\n                if not kwargs.get(\"operation\"):\n                    raise ToolError(\n                        \"operation is required for direct execution\",\n                        ErrorCode.TOOL_INVALID_INPUT,\n                    )\n            elif execution_mode == \"orchestrated\":\n                if not kwargs.get(\"task_description\"):\n                    raise ToolError(\n                        \"task_description is required for orchestrated execution\",\n                        ErrorCode.TOOL_INVALID_INPUT,\n                    )\n            else:\n                raise ToolError(\n                    f\"Invalid execution_mode: {execution_mode}. Must be 'direct' or 'orchestrated'\",\n                    ErrorCode.TOOL_INVALID_INPUT,\n                )\n\n        elif auto_type == AutomationType.SEQUENCE:\n            steps = kwargs.get(\"steps\")\n            if not steps or not isinstance(steps, list) or len(steps) == 0:\n                raise ToolError(\n                    \"At least one step is required for sequence type\",\n                    ErrorCode.TOOL_INVALID_INPUT,\n                )\n\n            # Set position for steps if not provided\n            for i, step in enumerate(steps):\n                if \"position\" not in step:\n                    step[\"position\"] = i + 1\n\n                # Validate step fields\n                if not step.get(\"name\"):\n                    raise ToolError(\n                        f\"Step {i+1} is missing a name\", ErrorCode.TOOL_INVALID_INPUT\n                    )\n\n                if not step.get(\"output_key\"):\n                    raise ToolError(\n                        f\"Step '{step.get('name', f'at position {i+1}')}' is missing an output_key\",\n                        ErrorCode.TOOL_INVALID_INPUT,\n                    )\n\n                # Check or infer execution mode\n                step_exec_mode = step.get(\"execution_mode\")\n                if not step_exec_mode:\n                    if step.get(\"task_description\"):\n                        step[\"execution_mode\"] = \"orchestrated\"\n                    else:\n                        step[\"execution_mode\"] = \"direct\"\n\n                # Validate based on execution mode\n                if step.get(\"execution_mode\") == \"direct\":\n                    if not step.get(\"tool_name\"):\n                        raise ToolError(\n                            f\"Step '{step.get('name')}' is missing tool_name for direct execution\",\n                            ErrorCode.TOOL_INVALID_INPUT,\n                        )\n                    if not step.get(\"operation\"):\n                        raise ToolError(\n                            f\"Step '{step.get('name')}' is missing operation for direct execution\",\n                            ErrorCode.TOOL_INVALID_INPUT,\n                        )\n                elif step.get(\"execution_mode\") == \"orchestrated\":\n                    if not step.get(\"task_description\"):\n                        raise ToolError(\n                            f\"Step '{step.get('name')}' is missing task_description for orchestrated execution\",\n                            ErrorCode.TOOL_INVALID_INPUT,\n                        )\n\n        # Create the automation\n        try:\n            automation = self.engine.create_automation(kwargs)\n\n            # Generate a human-readable message\n            frequency = automation.frequency.value\n            time_str = automation.scheduled_time.strftime(\"%H:%M:%S\")\n\n            if frequency == \"once\":\n                date_str = automation.scheduled_time.strftime(\"%Y-%m-%d\")\n                message = f\"Automation '{automation.name}' scheduled to run once on {date_str} at {time_str}\"\n            elif frequency == \"daily\":\n                message = f\"Automation '{automation.name}' scheduled to run daily at {time_str}\"\n            elif frequency == \"weekly\":\n                day_names = [\n                    \"Monday\",\n                    \"Tuesday\",\n                    \"Wednesday\",\n                    \"Thursday\",\n                    \"Friday\",\n                    \"Saturday\",\n                    \"Sunday\",\n                ]\n                day_name = (\n                    day_names[automation.day_of_week]\n                    if automation.day_of_week is not None\n                    else \"unknown day\"\n                )\n                message = f\"Automation '{automation.name}' scheduled to run weekly on {day_name} at {time_str}\"\n            elif frequency == \"monthly\":\n                day = automation.day_of_month or automation.scheduled_time.day\n                message = f\"Automation '{automation.name}' scheduled to run monthly on day {day} at {time_str}\"\n            else:\n                message = f\"Automation '{automation.name}' scheduled with {frequency} frequency\"\n\n            return {\"automation\": automation.to_dict(), \"message\": message}\n\n        except Exception as e:\n            raise ToolError(\n                f\"Failed to create automation: {str(e)}\", ErrorCode.TOOL_EXECUTION_ERROR\n            )\n\n    def _get_automations(\n        self,\n        type: Optional[str] = None,\n        status: Optional[str] = None,\n        frequency: Optional[str] = None,\n        limit: int = 10,\n        offset: int = 0,\n        **kwargs,\n    ) -> Dict[str, Any]:\n        \"\"\"\n        Get automations filtered by criteria.\n\n        Args:\n            type: Filter by automation type\n            status: Filter by automation status\n            frequency: Filter by execution frequency\n            limit: Maximum number of automations to return\n            offset: Offset for pagination\n\n        Returns:\n            Dict containing list of automations\n\n        Raises:\n            ToolError: If parameters are invalid\n        \"\"\"\n        logger.info(\n            f\"Getting automations with filters: type={type}, status={status}, frequency={frequency}\"\n        )\n\n        # Validate parameters\n        if status and status not in [s.value for s in AutomationStatus]:\n            raise ToolError(\n                f\"Invalid status: {status}. Valid values are: \"\n                + \", \".join([s.value for s in AutomationStatus]),\n                ErrorCode.TOOL_INVALID_INPUT,\n            )\n\n        if frequency and frequency not in [f.value for f in TaskFrequency]:\n            raise ToolError(\n                f\"Invalid frequency: {frequency}. Valid values are: \"\n                + \", \".join([f.value for f in TaskFrequency]),\n                ErrorCode.TOOL_INVALID_INPUT,\n            )\n\n        if type and type not in [t.value for t in AutomationType]:\n            raise ToolError(\n                f\"Invalid type: {type}. Valid values are: \"\n                + \", \".join([t.value for t in AutomationType]),\n                ErrorCode.TOOL_INVALID_INPUT,\n            )\n\n        # Get automations\n        result = self.engine.get_automations(\n            automation_type=type,\n            status=status,\n            frequency=frequency,\n            limit=limit,\n            offset=offset,\n            user_id=kwargs.get(\"user_id\"),\n        )\n\n        # Create descriptive message\n        type_str = f\" of type '{type}'\" if type else \"\"\n        status_str = f\" with status '{status}'\" if status else \"\"\n        frequency_str = f\" with {frequency} frequency\" if frequency else \"\"\n\n        message = f\"Found {result['count']} automation(s){type_str}{status_str}{frequency_str}\"\n\n        result[\"message\"] = message\n        return result\n\n    def _get_automation(self, automation_id: str, **kwargs) -> Dict[str, Any]:\n        \"\"\"\n        Get details of a specific automation.\n\n        Args:\n            automation_id: ID of the automation\n\n        Returns:\n            Dict containing automation details\n\n        Raises:\n            ToolError: If automation not found\n        \"\"\"\n        logger.info(f\"Getting automation: {automation_id}\")\n\n        automation = self.engine.get_automation(automation_id)\n        if not automation:\n            raise ToolError(\n                f\"Automation with ID '{automation_id}' not found\",\n                ErrorCode.TOOL_NOT_FOUND,\n            )\n\n        return {\n            \"automation\": automation.to_dict(),\n            \"message\": f\"Retrieved automation '{automation.name}'\",\n        }\n\n    def _update_automation(self, automation_id: str, **kwargs) -> Dict[str, Any]:\n        \"\"\"\n        Update an existing automation.\n\n        Args:\n            automation_id: ID of the automation to update\n            **kwargs: Fields to update\n\n        Returns:\n            Dict containing the updated automation\n\n        Raises:\n            ToolError: If automation not found or update invalid\n        \"\"\"\n        logger.info(f\"Updating automation: {automation_id}\")\n\n        # Update the automation\n        updated_automation = self.engine.update_automation(automation_id, kwargs)\n        if not updated_automation:\n            raise ToolError(\n                f\"Automation with ID '{automation_id}' not found\",\n                ErrorCode.TOOL_NOT_FOUND,\n            )\n\n        return {\n            \"automation\": updated_automation.to_dict(),\n            \"message\": f\"Automation '{updated_automation.name}' updated successfully\",\n        }\n\n    def _delete_automation(\n        self, automation_id: str, confirm: bool = False, **kwargs\n    ) -> Dict[str, Any]:\n        \"\"\"\n        Delete an automation.\n\n        Args:\n            automation_id: ID of the automation to delete\n            confirm: Confirmation flag (may be required based on config)\n\n        Returns:\n            Dict containing deletion confirmation\n\n        Raises:\n            ToolError: If automation not found or deletion not confirmed\n        \"\"\"\n        logger.info(f\"Deleting automation: {automation_id}\")\n\n        # Check if confirmation is required\n        confirm_required = config.automation_tool.confirm_before_delete\n        if confirm_required and not confirm:\n            raise ToolError(\n                \"Explicit confirmation is required to delete an automation. Set confirm=true to proceed.\",\n                ErrorCode.TOOL_INVALID_INPUT,\n            )\n\n        # Get automation name first for the message\n        automation = self.engine.get_automation(automation_id)\n        if not automation:\n            raise ToolError(\n                f\"Automation with ID '{automation_id}' not found\",\n                ErrorCode.TOOL_NOT_FOUND,\n            )\n\n        automation_name = automation.name\n\n        # Delete the automation\n        success = self.engine.delete_automation(automation_id)\n        if not success:\n            raise ToolError(\n                f\"Failed to delete automation with ID '{automation_id}'\",\n                ErrorCode.TOOL_EXECUTION_ERROR,\n            )\n\n        return {\n            \"automation_id\": automation_id,\n            \"message\": f\"Automation '{automation_name}' deleted successfully\",\n        }\n\n    def _execute_now(\n        self,\n        automation_id: str,\n        initial_context: Optional[Dict[str, Any]] = None,\n        **kwargs,\n    ) -> Dict[str, Any]:\n        \"\"\"\n        Execute an automation immediately.\n\n        Args:\n            automation_id: ID of the automation to execute\n            initial_context: Initial context data for sequences\n\n        Returns:\n            Dict containing execution confirmation\n\n        Raises:\n            ToolError: If automation not found or execution fails\n        \"\"\"\n        logger.info(f\"Executing automation now: {automation_id}\")\n\n        try:\n            execution = self.engine.execute_now(\n                automation_id=automation_id, initial_context=initial_context or {}\n            )\n\n            # Get automation name\n            automation = self.engine.get_automation(automation_id)\n            automation_name = automation.name if automation else \"Unknown\"\n\n            return {\n                \"success\": True,\n                \"message\": f\"Automation '{automation_name}' submitted for immediate execution\",\n                \"execution_id\": execution.id,\n                \"automation_id\": automation_id,\n            }\n        except Exception as e:\n            raise ToolError(\n                f\"Failed to execute automation: {str(e)}\",\n                ErrorCode.TOOL_EXECUTION_ERROR,\n            )\n\n    def _pause_automation(self, automation_id: str, **kwargs) -> Dict[str, Any]:\n        \"\"\"\n        Pause an automation's scheduled execution.\n\n        Args:\n            automation_id: ID of the automation to pause\n\n        Returns:\n            Dict containing pause confirmation\n\n        Raises:\n            ToolError: If automation not found or pause fails\n        \"\"\"\n        logger.info(f\"Pausing automation: {automation_id}\")\n\n        # Pause the automation\n        success = self.engine.pause_automation(automation_id)\n        if not success:\n            raise ToolError(\n                f\"Failed to pause automation with ID '{automation_id}'\",\n                ErrorCode.TOOL_EXECUTION_ERROR,\n            )\n\n        # Get automation name\n        automation = self.engine.get_automation(automation_id)\n        automation_name = automation.name if automation else \"Unknown\"\n\n        return {\n            \"automation_id\": automation_id,\n            \"message\": f\"Automation '{automation_name}' paused successfully\",\n        }\n\n    def _resume_automation(self, automation_id: str, **kwargs) -> Dict[str, Any]:\n        \"\"\"\n        Resume a paused automation.\n\n        Args:\n            automation_id: ID of the automation to resume\n\n        Returns:\n            Dict containing resume confirmation\n\n        Raises:\n            ToolError: If automation not found or resume fails\n        \"\"\"\n        logger.info(f\"Resuming automation: {automation_id}\")\n\n        # Resume the automation\n        result = self.engine.resume_automation(automation_id)\n\n        return {\n            \"automation_id\": automation_id,\n            \"message\": result.get(\"message\", \"Automation resumed successfully\"),\n            \"next_execution\": result.get(\"next_execution\"),\n        }\n\n    def _get_executions(\n        self, automation_id: str, limit: int = 10, offset: int = 0, **kwargs\n    ) -> Dict[str, Any]:\n        \"\"\"\n        Get execution history for an automation.\n\n        Args:\n            automation_id: ID of the automation\n            limit: Maximum number of executions to return\n            offset: Offset for pagination\n\n        Returns:\n            Dict containing list of executions\n\n        Raises:\n            ToolError: If automation not found\n        \"\"\"\n        logger.info(f\"Getting executions for automation: {automation_id}\")\n\n        # Get executions\n        result = self.engine.get_executions(\n            automation_id=automation_id, limit=limit, offset=offset\n        )\n\n        # Get automation name\n        automation = self.engine.get_automation(automation_id)\n        automation_name = automation.name if automation else \"Unknown\"\n\n        result[\"automation_name\"] = automation_name\n        result[\"message\"] = (\n            f\"Found {result['count']} execution(s) for automation '{automation_name}'\"\n        )\n\n        return result\n\n    def _get_execution_details(self, execution_id: str, **kwargs) -> Dict[str, Any]:\n        \"\"\"\n        Get detailed information about a specific execution.\n\n        Args:\n            execution_id: ID of the execution\n\n        Returns:\n            Dict containing execution details\n\n        Raises:\n            ToolError: If execution not found\n        \"\"\"\n        logger.info(f\"Getting execution details: {execution_id}\")\n\n        # Get execution details\n        execution = self.engine.get_execution_details(execution_id)\n        if not execution:\n            raise ToolError(\n                f\"Execution with ID '{execution_id}' not found\",\n                ErrorCode.TOOL_NOT_FOUND,\n            )\n\n        # Get automation name\n        automation = self.engine.get_automation(execution.automation_id)\n        automation_name = automation.name if automation else \"Unknown\"\n\n        return {\n            \"execution\": execution.to_dict(),\n            \"automation_name\": automation_name,\n            \"message\": f\"Retrieved execution details for '{automation_name}'\",\n        }\n",
+  "description": "A unified tool for creating and managing both simple recurring tasks and multi-step sequences with a common scheduling system, allowing for automated execution at scheduled times without user intervention.",
+  "operations": [
+    {
+      "name": "create_automation",
+      "description": "Creates a new automation (simple task or sequence) with specified scheduling parameters and execution details.",
+      "required_parameters": [
+        {
+          "name": "name",
+          "type": "string",
+          "description": "Name of the automation"
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "description": "Type of automation ('simple_task' or 'sequence')"
+        },
+        {
+          "name": "frequency",
+          "type": "string",
+          "description": "Execution frequency (once, daily, weekly, monthly)"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "scheduled_time",
+          "type": "string",
+          "description": "Time of day to execute the automation (HH:MM:SS format)",
+          "default": "current time"
+        },
+        {
+          "name": "day_of_week",
+          "type": "integer",
+          "description": "Day of week for weekly frequency (0-6, where 0 is Monday)",
+          "default": "null"
+        },
+        {
+          "name": "day_of_month",
+          "type": "integer",
+          "description": "Day of month for monthly frequency (1-31)",
+          "default": "null"
+        },
+        {
+          "name": "execution_mode",
+          "type": "string",
+          "description": "For simple_task: How to execute ('direct' or 'orchestrated')",
+          "default": "inferred from parameters"
+        },
+        {
+          "name": "tool_name",
+          "type": "string",
+          "description": "For direct execution: Name of the tool to use",
+          "default": "null"
+        },
+        {
+          "name": "operation",
+          "type": "string",
+          "description": "For direct execution: Operation to perform",
+          "default": "null"
+        },
+        {
+          "name": "parameters",
+          "type": "object",
+          "description": "For direct execution: Parameters to pass to the operation",
+          "default": "{}"
+        },
+        {
+          "name": "task_description",
+          "type": "string",
+          "description": "For orchestrated execution: Description of the task to perform",
+          "default": "null"
+        },
+        {
+          "name": "steps",
+          "type": "array",
+          "description": "For sequence type: List of step definitions",
+          "default": "[]"
+        }
+      ]
+    },
+    {
+      "name": "get_automations",
+      "description": "Retrieves a list of automations filtered by specified criteria.",
+      "required_parameters": [],
+      "optional_parameters": [
+        {
+          "name": "type",
+          "type": "string",
+          "description": "Filter by automation type ('simple_task' or 'sequence')",
+          "default": "null"
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "description": "Filter by automation status (active, paused, etc.)",
+          "default": "null"
+        },
+        {
+          "name": "frequency",
+          "type": "string",
+          "description": "Filter by execution frequency",
+          "default": "null"
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "description": "Maximum number of automations to return",
+          "default": 10
+        },
+        {
+          "name": "offset",
+          "type": "integer",
+          "description": "Offset for pagination",
+          "default": 0
+        }
+      ]
+    },
+    {
+      "name": "get_automation",
+      "description": "Retrieves detailed information about a specific automation.",
+      "required_parameters": [
+        {
+          "name": "automation_id",
+          "type": "string",
+          "description": "ID of the automation to retrieve"
+        }
+      ],
+      "optional_parameters": []
+    },
+    {
+      "name": "update_automation",
+      "description": "Modifies an existing automation with updated parameters.",
+      "required_parameters": [
+        {
+          "name": "automation_id",
+          "type": "string",
+          "description": "ID of the automation to update"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "name",
+          "type": "string",
+          "description": "New name for the automation",
+          "default": "existing value"
+        },
+        {
+          "name": "frequency",
+          "type": "string",
+          "description": "New execution frequency",
+          "default": "existing value"
+        },
+        {
+          "name": "scheduled_time",
+          "type": "string",
+          "description": "New scheduled time",
+          "default": "existing value"
+        },
+        {
+          "name": "day_of_week",
+          "type": "integer",
+          "description": "New day of week for weekly frequency",
+          "default": "existing value"
+        },
+        {
+          "name": "day_of_month",
+          "type": "integer",
+          "description": "New day of month for monthly frequency",
+          "default": "existing value"
+        },
+        {
+          "name": "steps",
+          "type": "array",
+          "description": "For sequence type: Updated list of steps",
+          "default": "existing value"
+        }
+      ]
+    },
+    {
+      "name": "delete_automation",
+      "description": "Removes an automation from the system.",
+      "required_parameters": [
+        {
+          "name": "automation_id",
+          "type": "string",
+          "description": "ID of the automation to delete"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "confirm",
+          "type": "boolean",
+          "description": "Confirmation flag for deletion",
+          "default": false
+        }
+      ]
+    },
+    {
+      "name": "execute_now",
+      "description": "Runs an automation immediately, regardless of its scheduled time.",
+      "required_parameters": [
+        {
+          "name": "automation_id",
+          "type": "string",
+          "description": "ID of the automation to execute"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "initial_context",
+          "type": "object",
+          "description": "Initial context data for sequences",
+          "default": "{}"
+        }
+      ]
+    },
+    {
+      "name": "pause_automation",
+      "description": "Temporarily suspends scheduled execution of an automation.",
+      "required_parameters": [
+        {
+          "name": "automation_id",
+          "type": "string",
+          "description": "ID of the automation to pause"
+        }
+      ],
+      "optional_parameters": []
+    },
+    {
+      "name": "resume_automation",
+      "description": "Resumes a previously paused automation.",
+      "required_parameters": [
+        {
+          "name": "automation_id",
+          "type": "string",
+          "description": "ID of the automation to resume"
+        }
+      ],
+      "optional_parameters": []
+    },
+    {
+      "name": "get_executions",
+      "description": "Retrieves execution history for a specific automation.",
+      "required_parameters": [
+        {
+          "name": "automation_id",
+          "type": "string",
+          "description": "ID of the automation to get execution history for"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "limit",
+          "type": "integer",
+          "description": "Maximum number of executions to return",
+          "default": 10
+        },
+        {
+          "name": "offset",
+          "type": "integer",
+          "description": "Offset for pagination",
+          "default": 0
+        }
+      ]
+    },
+    {
+      "name": "get_execution_details",
+      "description": "Retrieves detailed information about a specific execution instance.",
+      "required_parameters": [
+        {
+          "name": "execution_id",
+          "type": "string",
+          "description": "ID of the execution to retrieve details for"
+        }
+      ],
+      "optional_parameters": []
+    }
+  ],
+  "complexity_category": "standard",
+  "recommended_examples": 45
+}

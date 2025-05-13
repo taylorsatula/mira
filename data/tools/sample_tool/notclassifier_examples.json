@@ -1,0 +1,14 @@
+[
+	{
+		"tool_name": "sample_tool",
+		"query": "What is the weather in New York City?"
+	  },
+	  {
+		"tool_name": "sample_tool",
+		"query": "Is it raining right now?"
+	  },
+	  {
+		"tool_name": "sample_tool",
+		"query": "Get a forecast for the next 7 days."
+	  }
+]

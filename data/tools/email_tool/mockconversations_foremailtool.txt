@@ -1,0 +1,85 @@
+1st usecase:                                                                                                                                                                                                     
+User: "What's new in my inbox?"                                                                                                                                                                                   
+Assistant: [Does an IMAP refresh on the inbox] -> [Opens inbox] -> [Looks for unread emails] -> "There are more than 10 unread emails. Should I load them all?"                                                         
+
+User: "Yes"                                                                                                                                                                                                      
+Assistant: [Opens each unread email and categorizes them based on sender type, priority flags, and content type into buckets (From humans, priority emails with xyz predefined flag, notifications, newsletters and lists)] ->    
+"You have 8 emails from people, 3 priority emails, 2 notifications, and 11 newsletters. Which would you like to deal with first?"                                                                                
+
+User: "Let's look at the emails from real people"                                                                                                                                                                 
+Assistant: [Loads the content of the emails from humans bucket] -> "Here are the emails from people."
+
+User: "Thank you. Mark the emails from Diane and Michael so I can reply to them later in our conversation"                                                                                                       
+Assistant: [Stores the message IDs for those emails in a session variable so they can be referenced later] -> "That's done! What next?"                                                  
+
+User: "Delete the email from Fred and mark the emails from Cindy and Marty as read"                                                                                                                              
+Assistant: [Deletes email from Fred and marks the emails from Cindy and Marty as read] -> "Done! Next?"                                                                                                              
+
+User: "Let's move onto my notifications"                                                                                                                                                                          
+Assistant: [Accesses the notifications bucket and extracts key information (sender, subject, timestamp) from each unread message] -> "You have two notification emails. One is from CycleGear and the subject line     
+says your order is ready. The other one is from Amazon Hub and says your package wasn't able to be delivered."                                                                                                    
+
+User: "Thanks, why wasn't the Amazon package delivered?"                                                                                                                                                          
+Assistant: [Fetches the contents of the Amazon Hub email and summarizes] -> "It says that the locker was full. Do you want to read the full contents of the email?"                                                   
+
+User: "No thank you. Tell me more about the CycleGear email"                                                                                                                                                     
+Assistant: [Fetches the contents of the CycleGear email] -> "It says that your order is ready."                                                                                                                      
+
+User: "That isn't enough detail. Please load the full contents of the email."                                                                                                                                    
+Assistant: [Fetches the full contents of the email body and displays] -> "What would you like to do next?"                                                                                                         
+
+User: "Let's check out the newsletters"                                                                                                                                                                           
+Assistant: "Before closing out the notifications page would you like to mark all the new notification emails as read?"                                                                                           
+
+User: "Yes"                                                                                                                                                                                                      
+Assistant: [Marks notification emails as read] -> [Accesses the newsletters bucket] -> "Here are the subject lines of the unread newsletter emails:
+Email1
+Email2
+Email3
+Email4"                                                  
+
+User: "Open Email3"                                                                                                                                                                                              
+Assistant: [Loads contents of Email3 and displays] -> "Anything else?"                                                                                                                                       
+
+User: "Summarize Email2"                                                                                                                                                                                         
+Assistant: [Loads contents of Email2 and summarizes] -> "They are trying to reach you about your car's extended warranty."                                                                                             
+
+User: "Yeah, I bet they are. Move all these emails to the Trash"                                                                                                                                                 
+Assistant: [Moves all the newsletter emails to the trash (not direct delete)] -> "Would you like to look at the priority emails or reply to those emails you put to the side? Or something else?"                
+
+User: "Let's reply to those emails"                                                                                                                                                                               
+Assistant: [References the message IDs for the emails marked to reply later] -> "Would you like to reply to Diane or Michael first?"                                                                         
+
+User: "Diane"                                                                                                                                                                                                    
+Assistant: "Okay, what would you like to say to Diane?"                                                                                                                                                           
+
+User: "Beeboopoopoo"                                                                                                                                                                                             
+Assistant: [Composes reply with quoted original message, maintaining thread context] -> [Sends email] -> "Sent! There is only one email left in the reply-later bucket. Would you like to reply to Michael?"                                                                                                                                                                      
+
+User: "Yes, but save it to drafts"                                                                                                                                                                               
+Assistant: "Okay, what would you like to reply?"                                                                                                                                                     
+
+User: "Boobert"                                                                                                                                                                                                  
+Assistant: [Saves to drafts] -> "You're all caught up! Would you like to do anything else?"         
+
+User: "No thank you."                                                                                                                                                                                            
+Assistant: "Okay! Have a great day." -> [Session complete]                                                                                                                                                      
+
+2nd usecase:                                                                                                                                                                                                     
+User: "Do I have any new emails from Ricky?"                                                                                                                                                                      
+Assistant: [Executes search query filtering for: unread=true AND (from:contains('Ricky') OR from_address:contains('Ricky'))] -> [Nothing found] -> "No."                                                                               
+
+User: "Do I have any unread emails from Bobby?"                                                                                                                                                                  
+Assistant: [Executes search query filtering for: unread=true AND (from:contains('Bobby') OR from_address:contains('Bobby'))] -> [One found] -> [Opens the contents] -> [Displays the contents]                                                                                 
+
+User: "Show me the last three emails from Bobby"                                                                                                                                                                 
+Assistant: [Executes search query filtering for the last 3 emails from: (from:contains('Bobby') OR from_address:contains('Bobby'))] -> [Displays contents of each email] -> "Need anything else?"                                            
+
+User: "Yes"                                                                                                                                                                                                      
+Assistant: "How can I help?"                                                                                                                                                                                     
+
+User: "Show me all the emails from 2/2/2023-4/1/2023"                                                                                                                                                            
+Assistant: [Executes search query filtering for emails within the date range] -> [Presents results as a paginated list showing sender, date, subject, and first 50 characters of body] -> "Is there anything specific you're looking for in these emails?"                                                                                                                             
+
+User: "No, that's all I needed."
+Assistant: "Okay! Have a great day." -> [Session complete]

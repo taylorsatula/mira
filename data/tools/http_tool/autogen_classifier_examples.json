@@ -1,0 +1,166 @@
+[
+  {
+    "tool_name": "http_tool",
+    "query": "Can you fetch the latest weather data from the National Weather Service API?"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "I need to retrieve user profile information from our customer database endpoint"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Pull the current stock prices from the financial data API - include authorization headers"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Grab the most recent blog posts from our content management system's REST API, limit to 10 results"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Can you submit this registration form to the user signup endpoint?"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "I need to send these customer details to our backend API for processing"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Upload this JSON payload to the webhook URL with the authentication token"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Send these form values to the server and get the response in JSON format"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "I need to update the user profile details for this customer account on our backend system"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Can you modify the existing record at this endpoint with the new information I'm providing?"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Send these updated product specifications to replace the current entry in our inventory database"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Overwrite the current configuration settings with these new parameters for the remote service"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "I want to remove this user account from the system. Can you help me delete it?"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Please remove the draft post at https://myapi.com/posts/draft-123 - it's no longer needed"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Can you clear out this old customer record from the database? The client has requested complete removal of their information."
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "I need to permanently eliminate this temporary configuration entry from the server endpoint. Send a request to wipe it out."
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Can you fetch the latest weather data from the OpenWeatherMap API for San Francisco?"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "I need to submit a form with user registration details to this endpoint"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Send a DELETE request to remove this specific resource from the server"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Update the user profile information through the REST API"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Retrieve product details from this e-commerce API using its product ID"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Can you fetch the latest weather forecast for San Francisco from the National Weather Service API?"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Pull the current exchange rates from the European Central Bank's public API"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "I need to retrieve the GitHub profile information for username 'johndoe' - can you help me get those details?"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Grab the most recent stock quotes from the financial data endpoint, include the authorization header I sent earlier"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "I need to submit this user registration form to our backend API"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Can you help me send these survey results to our research database?"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Upload these new product details to our company's inventory management system"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Send a payment confirmation to the billing endpoint with these transaction details"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "I need to update my user profile information on the server"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Can you modify the existing record for customer ID 5742 with these new details?"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Send these updated configuration settings to the remote endpoint"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Overwrite the current resource with the latest information I'm providing"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Remove the old API endpoint configuration from my saved connections"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "I want to permanently delete this stored user record from the system"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Can you help me clear out the expired authentication token at https://myapi.com/tokens/current?"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Erase the draft project entry I no longer need - it's located at /projects/draft-123"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Can you fetch the latest weather data from the OpenWeatherMap API?"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "I need to send a new user registration payload to our backend endpoint"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Please remove this specific resource from our customer database API"
+  },
+  {
+    "tool_name": "http_tool",
+    "query": "Retrieve the current exchange rates from a financial data service"
+  }
+]
