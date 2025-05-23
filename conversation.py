@@ -30,7 +30,7 @@ from utils.timezone_utils import (
     parse_utc_time_string, get_default_timezone
 )
 
-from errors import ConversationError, ErrorCode, error_context
+from errors import ConversationError, ErrorCode, error_context, ToolError, _add_error_to_working_memory
 from config import config
 from api.llm_bridge import LLMBridge
 from tools.repo import ToolRepository
@@ -468,6 +468,21 @@ class Conversation:
                 assistant_response = self.llm_bridge.extract_text_content(response)
                 final_response = assistant_response
                 
+                # Extract and log any error analysis from the response
+                error_analysis = tag_parser.extract_error_analysis(assistant_response)
+                if error_analysis:
+                    self.logger.info(f"[{error_analysis['error_id']}] Error analysis: {error_analysis['analysis']}")
+                    
+                    # Remove the error from working memory to avoid clutter
+                    if self.working_memory:
+                        # Get items by category
+                        error_items = self.working_memory.get_items_by_category("error_for_analysis")
+                        for item in error_items:
+                            # Check if the item content contains our error_id
+                            if error_analysis['error_id'] in item.get("content", ""):
+                                self.working_memory.remove(item.get("id"))
+                                break
+                
                 # Check for need_tool tag
                 if tag_parser.has_need_tool(assistant_response):
                     self.logger.info("Detected <need_tool /> marker in assistant response")
@@ -679,10 +694,35 @@ class Conversation:
                     self.logger.info(f"Tool call successful: {tool_name} returned: {result_str[:100]}..." 
                                     if len(result_str) > 100 else result_str)
                 
+                except ToolError as e:
+                    # Handle ToolError specifically with recovery guidance
+                    error_id = str(uuid.uuid4())
+                    self.logger.error(f"[{error_id}] Tool error in {tool_name}: {e}")
+                    
+                    # Add to working memory for MIRA to analyze
+                    if self.working_memory:
+                        _add_error_to_working_memory(self.working_memory, e, error_id)
+                    
+                    # Include recovery strategy in error message
+                    error_message = str(e)
+                    if e.retry_with:
+                        error_message += f"\nSuggestion: Retry with parameters: {json.dumps(e.retry_with)}"
+                    elif e.try_instead:
+                        error_message += f"\nSuggestion: {e.try_instead}"
+                    elif e.needs_user_input:
+                        error_message += "\nThis error requires clarification from the user."
+                    elif e.permanent_failure:
+                        error_message += "\nThis operation cannot be completed due to a permanent failure."
+                    
+                    tool_results[tool_id] = {
+                        "content": error_message,
+                        "is_error": True
+                    }
+                
                 except Exception as e:
-                    # We still need to catch exceptions here to continue processing
-                    # other tools even if one fails, but we log properly
-                    self.logger.error(f"Tool execution error: {tool_name}: {e}")
+                    # Handle other exceptions
+                    error_id = str(uuid.uuid4())
+                    self.logger.error(f"[{error_id}] Unexpected error in {tool_name}: {e}")
                     tool_results[tool_id] = {
                         "content": f"Error: {e}",
                         "is_error": True

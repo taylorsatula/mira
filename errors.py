@@ -7,7 +7,10 @@ for different types of errors that can occur within the system.
 from contextlib import contextmanager
 from enum import Enum
 import logging
-from typing import Optional, Dict, Any, Type, Callable, Union
+from typing import Optional, Dict, Any, Type, Callable, Union, List
+import json
+import uuid
+import datetime
 
 
 class ErrorCode(Enum):
@@ -21,12 +24,16 @@ class ErrorCode(Enum):
     - 4xx: Tool errors
     - 5xx: Conversation errors
     - 6xx: Stimulus errors
+    - 7xx: Network errors
+    - 8xx: Data validation errors
     - 9xx: Uncategorized/system errors
     """
     # Configuration errors (1xx)
     CONFIG_NOT_FOUND = 101
     INVALID_CONFIG = 102
     MISSING_ENV_VAR = 103
+    CONFIG_PARSE_ERROR = 104
+    CONFIG_VALIDATION_ERROR = 105
 
     # API errors (2xx)
     API_CONNECTION_ERROR = 201
@@ -34,6 +41,10 @@ class ErrorCode(Enum):
     API_RATE_LIMIT_ERROR = 203
     API_RESPONSE_ERROR = 204
     API_TIMEOUT_ERROR = 205
+    API_QUOTA_EXCEEDED = 206
+    API_INVALID_REQUEST = 207
+    API_SERVER_ERROR = 208
+    API_SERVICE_UNAVAILABLE = 209
 
     # File operation errors (3xx)
     FILE_NOT_FOUND = 301
@@ -41,6 +52,9 @@ class ErrorCode(Enum):
     FILE_READ_ERROR = 303
     FILE_WRITE_ERROR = 304
     INVALID_JSON = 305
+    FILE_TOO_LARGE = 306
+    FILE_LOCKED = 307
+    DIRECTORY_NOT_FOUND = 308
 
     # Tool errors (4xx)
     TOOL_NOT_FOUND = 401
@@ -55,21 +69,47 @@ class ErrorCode(Enum):
     TOOL_CIRCULAR_DEPENDENCY = 410
     TOOL_UNAVAILABLE = 411
     TOOL_AMBIGUOUS_INPUT = 412
+    TOOL_DEPENDENCY_MISSING = 413
+    TOOL_OPERATION_NOT_SUPPORTED = 414
+    TOOL_RESOURCE_NOT_FOUND = 415
+    TOOL_PERMISSION_DENIED = 416
 
     # Conversation errors (5xx)
     CONVERSATION_NOT_FOUND = 501
     CONTEXT_OVERFLOW = 502
     INVALID_INPUT = 503
+    CONVERSATION_EXPIRED = 504
+    CONVERSATION_LOCKED = 505
 
     # Stimulus errors (6xx)
     STIMULUS_INVALID = 601
     STIMULUS_PROCESSING_ERROR = 602
     STIMULUS_HANDLER_NOT_FOUND = 603
     STIMULUS_TYPE_INVALID = 604
+    STIMULUS_TIMEOUT = 605
+
+    # Network errors (7xx)
+    NETWORK_UNREACHABLE = 701
+    DNS_RESOLUTION_ERROR = 702
+    SSL_CERTIFICATE_ERROR = 703
+    PROXY_CONNECTION_ERROR = 704
+    CONNECTION_REFUSED = 705
+    CONNECTION_TIMEOUT = 706
+
+    # Data validation errors (8xx)
+    PARAMETER_MISSING = 801
+    PARAMETER_TYPE_ERROR = 802
+    PARAMETER_RANGE_ERROR = 803
+    PARAMETER_FORMAT_ERROR = 804
+    DATA_INTEGRITY_ERROR = 805
+    SCHEMA_VALIDATION_ERROR = 806
 
     # Uncategorized/system errors (9xx)
     UNKNOWN_ERROR = 901
     NOT_IMPLEMENTED = 902
+    TEMPORARY_FAILURE = 903
+    SYSTEM_OVERLOAD = 904
+    MAINTENANCE_MODE = 905
 
 
 class AgentError(Exception):
@@ -83,7 +123,7 @@ class AgentError(Exception):
     def __init__(
         self,
         message: str,
-        code: ErrorCode = ErrorCode.UNKNOWN_ERROR,
+        code: Union[ErrorCode, str] = ErrorCode.UNKNOWN_ERROR,
         details: Optional[Dict[str, Any]] = None
     ):
         """
@@ -91,7 +131,7 @@ class AgentError(Exception):
 
         Args:
             message: Human-readable error message
-            code: Error code from the ErrorCode enum
+            code: Error code from the ErrorCode enum or string-based tool error code
             details: Additional error details for debugging or logging
         """
         self.message = message
@@ -100,7 +140,8 @@ class AgentError(Exception):
         super().__init__(self.message)
 
     def __str__(self) -> str:
-        return f"[{self.code.name}] {self.message}"
+        code_name = self.code.name if isinstance(self.code, ErrorCode) else self.code
+        return f"[{code_name}] {self.message}"
 
 
 class ConfigError(AgentError):
@@ -140,15 +181,62 @@ class FileOperationError(AgentError):
 
 
 class ToolError(AgentError):
-    """Exception raised for tool-related errors."""
+    """
+    Exception raised for tool-related errors with recovery guidance.
+    
+    Supports four recovery outcomes:
+    1. retry_with: Try again with corrected parameters
+    2. try_instead: Try an alternative approach
+    3. needs_user_input: Need clarification from user
+    4. permanent_failure: Unrecoverable, stop trying
+    """
 
     def __init__(
         self,
         message: str,
-        code: ErrorCode = ErrorCode.TOOL_EXECUTION_ERROR,
-        details: Optional[Dict[str, Any]] = None
+        code: Union[ErrorCode, str] = ErrorCode.TOOL_EXECUTION_ERROR,
+        details: Optional[Dict[str, Any]] = None,
+        retry_with: Optional[Dict[str, Any]] = None,
+        try_instead: Optional[str] = None,
+        needs_user_input: bool = False,
+        permanent_failure: bool = False
     ):
+        """
+        Initialize a ToolError with recovery guidance.
+        
+        Args:
+            message: Clear error message explaining what went wrong
+            code: Error code (ErrorCode enum or string for tool-specific codes)
+            details: Additional error context for debugging
+            retry_with: Corrected parameters to retry with
+            try_instead: Alternative approach to try
+            needs_user_input: Whether user clarification is needed
+            permanent_failure: Whether this is unrecoverable
+        """
         super().__init__(message, code, details)
+        self.retry_with = retry_with
+        self.try_instead = try_instead
+        self.needs_user_input = needs_user_input
+        self.permanent_failure = permanent_failure
+        
+        # Validate that only one recovery option is specified
+        recovery_options = [
+            retry_with is not None,
+            try_instead is not None,
+            needs_user_input,
+            permanent_failure
+        ]
+        if sum(recovery_options) > 1:
+            raise ValueError("Only one recovery option should be specified")
+    
+    def get_recovery_strategy(self) -> Dict[str, Any]:
+        """Get the recovery strategy as a dictionary."""
+        return {
+            "retry_with": self.retry_with,
+            "try_instead": self.try_instead,
+            "needs_user_input": self.needs_user_input,
+            "permanent_failure": self.permanent_failure
+        }
 
 
 class ConversationError(AgentError):
@@ -175,12 +263,48 @@ class StimulusError(AgentError):
         super().__init__(message, code, details)
 
 
+def _add_error_to_working_memory(working_memory, error: Union[AgentError, ToolError], error_id: str):
+    """
+    Add an error to working memory for MIRA to analyze.
+    
+    Args:
+        working_memory: The working memory instance
+        error: The error that occurred
+        error_id: Unique identifier for this error occurrence
+    """
+    error_info = {
+        "error_id": error_id,
+        "code": error.code.name if isinstance(error.code, ErrorCode) else error.code,
+        "message": error.message,
+        "details": error.details,
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z"
+    }
+    
+    # Add recovery strategy if it's a ToolError
+    if isinstance(error, ToolError):
+        error_info["recovery_strategy"] = error.get_recovery_strategy()
+    
+    # Add to working memory
+    working_memory.add(
+        content=(
+            "# Error Analysis Request\n"
+            "An error just occurred. Analyze this error based on the recent conversation "
+            "and explain in ONE SENTENCE what the user was trying to do when it occurred. "
+            f'Include your analysis inside a <error_analysis error_id="{error_id}">'
+            "YOUR ANALYSIS HERE</error_analysis> tag within your thought process.\n\n"
+            f"Error details:\n{json.dumps(error_info, indent=2)}"
+        ),
+        category="error_for_analysis"
+    )
+
+
 @contextmanager
 def error_context(
     component_name: str,
     operation: Optional[str] = None,
     error_class: Type[AgentError] = AgentError,
-    error_code: ErrorCode = ErrorCode.UNKNOWN_ERROR,
+    error_code: Union[ErrorCode, str] = ErrorCode.UNKNOWN_ERROR,
+    working_memory=None,
     logger: Optional[logging.Logger] = None
 ):
     """
@@ -195,6 +319,7 @@ def error_context(
         operation: Description of the operation (for error messages)
         error_class: The AgentError subclass to use for wrapping
         error_code: Error code to use for non-AgentError exceptions
+        working_memory: Optional working memory instance for error analysis
         logger: Logger to use (if None, creates a new one)
         
     Yields:
@@ -210,9 +335,17 @@ def error_context(
     try:
         yield
     except Exception as e:
-        # If it's already an AgentError, just log and re-raise
+        # Generate a unique error ID for tracking
+        error_id = str(uuid.uuid4())
+        
+        # If it's already an AgentError, log and add to working memory
         if isinstance(e, AgentError):
-            logger.error(f"{component_name} error: {e}")
+            logger.error(f"[{error_id}] {component_name} error: {e}")
+            
+            # Add to working memory for analysis if available
+            if working_memory:
+                _add_error_to_working_memory(working_memory, e, error_id)
+                
             raise
             
         # Generate error message
@@ -223,16 +356,32 @@ def error_context(
         # Log and wrap other exceptions - sanitize for sensitive data
         error_string = str(e)
         # Redact potentially sensitive information 
-        if "token" in error_string.lower() or "bearer" in error_string.lower() or "key" in error_string.lower() or "auth" in error_string.lower():
+        if any(sensitive in error_string.lower() for sensitive in ["token", "bearer", "key", "auth", "password", "secret"]):
             error_string = "[REDACTED SENSITIVE INFORMATION]"
             
-        logger.error(f"{error_msg}: {error_string}")
+        logger.error(f"[{error_id}] {error_msg}: {error_string}")
         
-        raise error_class(
-            f"{error_msg}: {error_string}",
-            error_code,
-            {"original_error": error_string}
-        )
+        # Create error with appropriate code
+        if isinstance(error_code, str):
+            # String-based error code (tool-specific)
+            wrapped_error = error_class(
+                f"{error_msg}: {error_string}",
+                error_code,
+                {"original_error": error_string, "error_id": error_id}
+            )
+        else:
+            # ErrorCode enum
+            wrapped_error = error_class(
+                f"{error_msg}: {error_string}",
+                error_code,
+                {"original_error": error_string, "error_id": error_id}
+            )
+        
+        # Add to working memory if available
+        if working_memory and isinstance(wrapped_error, (AgentError, ToolError)):
+            _add_error_to_working_memory(working_memory, wrapped_error, error_id)
+        
+        raise wrapped_error
 
 
 def handle_error(error: Exception) -> str:

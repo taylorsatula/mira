@@ -36,6 +36,7 @@ class TagParser:
         - <workflow_revisit_step id="step_id" />
         - <workflow_complete />
         - <workflow_cancel />
+        - <error_analysis error_id="uuid">analysis text</error_analysis>
         
         Args:
             text: The text to parse for tags
@@ -49,6 +50,10 @@ class TagParser:
                     "action": "start"/"complete_step"/"skip_step"/"revisit_step"/"complete"/"cancel",
                     "id": "workflow_id" or "step_id" (depending on action),
                     "data": {key-value pairs for data attributes} (only for complete_step)
+                },
+                "error_analysis": {
+                    "error_id": "uuid",
+                    "analysis": "analysis text"
                 }
             }
         """
@@ -60,6 +65,10 @@ class TagParser:
                 "action": None,
                 "id": None,
                 "data": {}
+            },
+            "error_analysis": {
+                "error_id": None,
+                "analysis": None
             }
         }
         
@@ -134,6 +143,13 @@ class TagParser:
             result["workflow"]["action"] = "cancel"
             self.logger.info("Found workflow_cancel tag")
         
+        # Check for error analysis tag
+        error_analysis_match = re.search(r'<error_analysis\s+error_id="([^"]+)">(.+?)</error_analysis>', text, re.DOTALL)
+        if error_analysis_match:
+            result["error_analysis"]["error_id"] = error_analysis_match.group(1)
+            result["error_analysis"]["analysis"] = error_analysis_match.group(2).strip()
+            self.logger.info(f"Found error_analysis tag for error_id: {result['error_analysis']['error_id']}")
+        
         return result
     
     def extract_topic_changed(self, text: str) -> bool:
@@ -182,6 +198,23 @@ class TagParser:
         
         if workflow["action"] is not None:
             return workflow
+        return None
+    
+    def extract_error_analysis(self, text: str) -> Optional[Dict[str, str]]:
+        """
+        Extract error analysis from text.
+        
+        Args:
+            text: The text to check for error analysis tag
+            
+        Returns:
+            Dictionary with error_id and analysis if found, None otherwise
+        """
+        tags = self.parse_tags(text)
+        error_analysis = tags["error_analysis"]
+        
+        if error_analysis["error_id"] is not None:
+            return error_analysis
         return None
 
 
