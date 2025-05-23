@@ -12,6 +12,9 @@ import json
 import uuid
 import datetime
 
+# Import dedicated error loggers
+from utils.error_logging import system_error_logger, tool_error_logger
+
 
 class ErrorCode(Enum):
     """
@@ -340,7 +343,11 @@ def error_context(
         
         # If it's already an AgentError, log and add to working memory
         if isinstance(e, AgentError):
-            logger.error(f"[{error_id}] {component_name} error: {e}")
+            # Log to appropriate error logger
+            if isinstance(e, ToolError):
+                tool_error_logger.error(f"[{error_id}] {component_name} - {e}")
+            else:
+                system_error_logger.error(f"[{error_id}] {component_name} - {e}")
             
             # Add to working memory for analysis if available
             if working_memory:
@@ -359,8 +366,6 @@ def error_context(
         if any(sensitive in error_string.lower() for sensitive in ["token", "bearer", "key", "auth", "password", "secret"]):
             error_string = "[REDACTED SENSITIVE INFORMATION]"
             
-        logger.error(f"[{error_id}] {error_msg}: {error_string}")
-        
         # Create error with appropriate code
         if isinstance(error_code, str):
             # String-based error code (tool-specific)
@@ -376,6 +381,12 @@ def error_context(
                 error_code,
                 {"original_error": error_string, "error_id": error_id}
             )
+        
+        # Log to appropriate error logger
+        if error_class == ToolError or isinstance(wrapped_error, ToolError):
+            tool_error_logger.error(f"[{error_id}] {error_msg}: {error_string}")
+        else:
+            system_error_logger.error(f"[{error_id}] {error_msg}: {error_string}")
         
         # Add to working memory if available
         if working_memory and isinstance(wrapped_error, (AgentError, ToolError)):

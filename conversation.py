@@ -35,6 +35,7 @@ from config import config
 from api.llm_bridge import LLMBridge
 from tools.repo import ToolRepository
 from utils.tag_parser import parser as tag_parser
+from utils.error_logging import error_analysis_logger
 
 
 @dataclass
@@ -471,7 +472,10 @@ class Conversation:
                 # Extract and log any error analysis from the response
                 error_analysis = tag_parser.extract_error_analysis(assistant_response)
                 if error_analysis:
-                    self.logger.info(f"[{error_analysis['error_id']}] Error analysis: {error_analysis['analysis']}")
+                    # Log to dedicated error analysis logger for persistence
+                    error_analysis_logger.info(
+                        f"[{error_analysis['error_id']}] Analysis: {error_analysis['analysis']}"
+                    )
                     
                     # Remove the error from working memory to avoid clutter
                     if self.working_memory:
@@ -697,7 +701,7 @@ class Conversation:
                 except ToolError as e:
                     # Handle ToolError specifically with recovery guidance
                     error_id = str(uuid.uuid4())
-                    self.logger.error(f"[{error_id}] Tool error in {tool_name}: {e}")
+                    # Tool errors are logged by error_context in tool execution
                     
                     # Add to working memory for MIRA to analyze
                     if self.working_memory:
@@ -720,9 +724,7 @@ class Conversation:
                     }
                 
                 except Exception as e:
-                    # Handle other exceptions
-                    error_id = str(uuid.uuid4())
-                    self.logger.error(f"[{error_id}] Unexpected error in {tool_name}: {e}")
+                    # Handle other exceptions - these get logged by error_context
                     tool_results[tool_id] = {
                         "content": f"Error: {e}",
                         "is_error": True
