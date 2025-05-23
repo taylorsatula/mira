@@ -1,0 +1,226 @@
+{
+  "192.168.4.51": {
+    "host": "192.168.4.51",
+    "alias": "Porch Lantern",
+    "model": "HS200",
+    "mac": "B4:B0:24:4B:4D:24",
+    "device_type": "DeviceType.WallSwitch",
+    "last_updated": "2025-05-21T03:28:45.321737+00:00"
+  },
+  "Porch Lantern": {
+    "host": "192.168.4.51",
+    "alias": "Porch Lantern",
+    "model": "HS200",
+    "mac": "B4:B0:24:4B:4D:24",
+    "device_type": "DeviceType.WallSwitch",
+    "last_updated": "2025-05-21T03:28:45.321737+00:00"
+  },
+  "192.168.4.52": {
+    "host": "192.168.4.52",
+    "alias": "TV Backlight",
+    "model": "KL400L5",
+    "mac": "14:EB:B6:C6:A1:CC",
+    "device_type": "DeviceType.LightStrip",
+    "last_updated": "2025-05-21T03:28:44.587559+00:00"
+  },
+  "TV Backlight": {
+    "host": "192.168.4.52",
+    "alias": "TV Backlight",
+    "model": "KL400L5",
+    "mac": "14:EB:B6:C6:A1:CC",
+    "device_type": "DeviceType.LightStrip",
+    "last_updated": "2025-05-21T03:28:44.587559+00:00"
+  },
+  "192.168.4.55": {
+    "host": "192.168.4.55",
+    "alias": "Dripping Lantern Middle",
+    "model": "KL125",
+    "mac": "14:eb:b6:68:fe:14",
+    "device_type": "DeviceType.Bulb",
+    "last_updated": "2025-05-20T02:15:06.868418+00:00"
+  },
+  "Dripping Lantern Middle": {
+    "host": "192.168.4.55",
+    "alias": "Dripping Lantern Middle",
+    "model": "KL125",
+    "mac": "14:eb:b6:68:fe:14",
+    "device_type": "DeviceType.Bulb",
+    "last_updated": "2025-05-20T02:15:06.868418+00:00"
+  },
+  "192.168.4.54": {
+    "host": "192.168.4.54",
+    "alias": "Dripping Lantern Top",
+    "model": "KL125",
+    "mac": "14:eb:b6:69:1a:8a",
+    "device_type": "DeviceType.Bulb",
+    "last_updated": "2025-05-20T02:15:07.072222+00:00"
+  },
+  "Dripping Lantern Top": {
+    "host": "192.168.4.54",
+    "alias": "Dripping Lantern Top",
+    "model": "KL125",
+    "mac": "14:eb:b6:69:1a:8a",
+    "device_type": "DeviceType.Bulb",
+    "last_updated": "2025-05-20T02:15:07.072222+00:00"
+  },
+  "192.168.4.48": {
+    "host": "192.168.4.48",
+    "alias": "Island Underglow",
+    "model": "KL400L5",
+    "mac": "5C:A6:E6:81:0B:BA",
+    "device_type": "DeviceType.LightStrip",
+    "last_updated": "2025-05-21T03:28:45.268477+00:00"
+  },
+  "Island Underglow": {
+    "host": "192.168.4.48",
+    "alias": "Island Underglow",
+    "model": "KL400L5",
+    "mac": "5C:A6:E6:81:0B:BA",
+    "device_type": "DeviceType.LightStrip",
+    "last_updated": "2025-05-21T03:28:45.268477+00:00"
+  },
+  "192.168.4.60": {
+    "host": "192.168.4.60",
+    "alias": "Neon",
+    "model": "EP10",
+    "mac": "B4:B0:24:EA:91:72",
+    "device_type": "DeviceType.Plug",
+    "last_updated": "2025-05-21T03:28:44.618300+00:00"
+  },
+  "Neon": {
+    "host": "192.168.4.60",
+    "alias": "Neon",
+    "model": "EP10",
+    "mac": "B4:B0:24:EA:91:72",
+    "device_type": "DeviceType.Plug",
+    "last_updated": "2025-05-21T03:28:44.618300+00:00"
+  },
+  "192.168.4.58": {
+    "host": "192.168.4.58",
+    "alias": "Hanging Lights",
+    "model": "EP10",
+    "mac": "B0:A7:B9:FA:23:CE",
+    "device_type": "DeviceType.Plug",
+    "last_updated": "2025-05-21T03:28:44.898440+00:00"
+  },
+  "Hanging Lights": {
+    "host": "192.168.4.58",
+    "alias": "Hanging Lights",
+    "model": "EP10",
+    "mac": "B0:A7:B9:FA:23:CE",
+    "device_type": "DeviceType.Plug",
+    "last_updated": "2025-05-21T03:28:44.898440+00:00"
+  },
+  "192.168.4.49": {
+    "host": "192.168.4.49",
+    "alias": "Humidifer",
+    "model": "EP10",
+    "mac": "B4:B0:24:EA:D2:73",
+    "device_type": "DeviceType.Plug",
+    "last_updated": "2025-05-21T03:28:44.649839+00:00"
+  },
+  "Humidifer": {
+    "host": "192.168.4.49",
+    "alias": "Humidifer",
+    "model": "EP10",
+    "mac": "B4:B0:24:EA:D2:73",
+    "device_type": "DeviceType.Plug",
+    "last_updated": "2025-05-21T03:28:44.649839+00:00"
+  },
+  "192.168.4.50": {
+    "host": "192.168.4.50",
+    "alias": "Air Purifier",
+    "model": "EP10",
+    "mac": "B0:A7:B9:FA:38:C2",
+    "device_type": "DeviceType.Plug",
+    "last_updated": "2025-05-21T03:28:45.071111+00:00"
+  },
+  "Air Purifier": {
+    "host": "192.168.4.50",
+    "alias": "Air Purifier",
+    "model": "EP10",
+    "mac": "B0:A7:B9:FA:38:C2",
+    "device_type": "DeviceType.Plug",
+    "last_updated": "2025-05-21T03:28:45.071111+00:00"
+  },
+  "192.168.4.56": {
+    "host": "192.168.4.56",
+    "alias": "Salt Lamps",
+    "model": "EP10",
+    "mac": "B0:A7:B9:FA:54:8F",
+    "device_type": "DeviceType.Plug",
+    "last_updated": "2025-05-21T03:28:44.928355+00:00"
+  },
+  "Salt Lamps": {
+    "host": "192.168.4.56",
+    "alias": "Salt Lamps",
+    "model": "EP10",
+    "mac": "B0:A7:B9:FA:54:8F",
+    "device_type": "DeviceType.Plug",
+    "last_updated": "2025-05-21T03:28:44.928355+00:00"
+  },
+  "192.168.4.57": {
+    "host": "192.168.4.57",
+    "alias": "KJPR Mirror",
+    "model": "EP10",
+    "mac": "B4:B0:24:EA:D3:C3",
+    "device_type": "DeviceType.Plug",
+    "last_updated": "2025-05-21T03:28:45.028631+00:00"
+  },
+  "KJPR Mirror": {
+    "host": "192.168.4.57",
+    "alias": "KJPR Mirror",
+    "model": "EP10",
+    "mac": "B4:B0:24:EA:D3:C3",
+    "device_type": "DeviceType.Plug",
+    "last_updated": "2025-05-21T03:28:45.028631+00:00"
+  },
+  "192.168.4.53": {
+    "host": "192.168.4.53",
+    "alias": "Dripping Lantern Bottom",
+    "model": "KL125",
+    "mac": "14:eb:b6:e7:d5:45",
+    "device_type": "DeviceType.Bulb",
+    "last_updated": "2025-05-20T02:15:06.564284+00:00"
+  },
+  "Dripping Lantern Bottom": {
+    "host": "192.168.4.53",
+    "alias": "Dripping Lantern Bottom",
+    "model": "KL125",
+    "mac": "14:eb:b6:e7:d5:45",
+    "device_type": "DeviceType.Bulb",
+    "last_updated": "2025-05-20T02:15:06.564284+00:00"
+  },
+  "192.168.4.132": {
+    "host": "192.168.4.132",
+    "alias": "Pendant - Bedroom Side",
+    "model": "KL135",
+    "mac": "98:25:4a:70:14:83",
+    "device_type": "DeviceType.Bulb",
+    "last_updated": "2025-05-21T03:28:44.863116+00:00"
+  },
+  "Pendant - Bedroom Side": {
+    "host": "192.168.4.132",
+    "alias": "Pendant - Bedroom Side",
+    "model": "KL135",
+    "mac": "98:25:4a:70:14:83",
+    "device_type": "DeviceType.Bulb",
+    "last_updated": "2025-05-21T03:28:44.863116+00:00"
+  },
+  "192.168.4.133": {
+    "host": "192.168.4.133",
+    "alias": "Pendant - Homepod",
+    "model": "KL135",
+    "mac": "98:25:4a:70:17:d5",
+    "device_type": "DeviceType.Bulb",
+    "last_updated": "2025-05-21T03:28:45.194416+00:00"
+  },
+  "Pendant - Homepod": {
+    "host": "192.168.4.133",
+    "alias": "Pendant - Homepod",
+    "model": "KL135",
+    "mac": "98:25:4a:70:17:d5",
+    "device_type": "DeviceType.Bulb",
+    "last_updated": "2025-05-21T03:28:45.194416+00:00"
+  }
+}

@@ -1,8 +1,0 @@
-{
-  "host": "192.168.4.51",
-  "alias": "Porch Lantern",
-  "model": "HS200",
-  "mac": "B4:B0:24:4B:4D:24",
-  "device_type": "DeviceType.WallSwitch",
-  "last_updated": "2025-05-11T20:48:20.871147+00:00"
-}

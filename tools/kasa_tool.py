@@ -17,7 +17,7 @@ import asyncio
 import json
 import logging
 import os
-import hashlib
+import threading
 from typing import Dict, List, Any, Optional, Union, Set, Tuple
 from datetime import datetime, timedelta
 
@@ -120,6 +120,7 @@ registry.register("kasa_tool", KasaToolConfig)
 class DeviceCache:
     """
     Manages caching of discovered devices to minimize network operations.
+    Uses a single devices.json file to store all device information.
     """
     
     def __init__(self, cache_dir: str, cache_duration: int):
@@ -132,83 +133,97 @@ class DeviceCache:
         """
         self.cache_dir = cache_dir
         self.cache_duration = cache_duration
+        self.devices_file = os.path.join(cache_dir, "devices.json")
+        self.cache_lock = threading.Lock()
         
         # Create cache directory if it doesn't exist
         os.makedirs(cache_dir, exist_ok=True)
-    
-    def get_cache_path(self, key: str) -> str:
-        """
-        Get the cache file path for a given key.
         
-        Args:
-            key: Cache key
-            
-        Returns:
-            Path to the cache file
-        """
-        # Create a hash of the key for the filename to avoid invalid characters
-        key_hash = hashlib.md5(key.encode()).hexdigest()
-        return os.path.join(self.cache_dir, f"{key_hash}.json")
+        # Initialize devices cache file if it doesn't exist
+        if not os.path.exists(self.devices_file):
+            self._save_cache({})
     
-    def is_valid(self, cache_path: str) -> bool:
+    def is_valid(self) -> bool:
         """
-        Check if a cache file is valid and not expired.
+        Check if the cache file is valid and not expired.
         
-        Args:
-            cache_path: Path to the cache file
-            
         Returns:
             True if cache is valid, False otherwise
         """
         # Check if file exists
-        if not os.path.exists(cache_path):
+        if not os.path.exists(self.devices_file):
             return False
             
         # Check if cache is expired based on file modification time
         # Use utc_now timestamp for consistent timezone handling
-        cache_mtime = os.path.getmtime(cache_path)
+        cache_mtime = os.path.getmtime(self.devices_file)
         cache_age = utc_now().timestamp() - cache_mtime
         return cache_age < self.cache_duration
     
     def get(self, key: str) -> Optional[Dict[str, Any]]:
         """
-        Get data from cache if available and valid.
+        Get device data from cache if available and valid.
         
         Args:
-            key: Cache key
+            key: Device identifier (host or alias)
             
         Returns:
-            Cached data or None if not available
+            Cached device data or None if not available
         """
-        cache_path = self.get_cache_path(key)
-        
         # Check if cache is valid
-        if not self.is_valid(cache_path):
+        if not self.is_valid():
             return None
             
-        # Read from cache
-        try:
-            with open(cache_path, 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            logging.warning(f"Failed to load cache for {key}: {str(e)}")
-            return None
+        # Read all devices from cache
+        devices = self._load_cache()
+        
+        # Return the specific device if found
+        return devices.get(key)
     
     def set(self, key: str, data: Dict[str, Any]) -> None:
         """
-        Save data to cache.
+        Save device data to cache.
         
         Args:
-            key: Cache key
-            data: Data to cache
+            key: Device identifier (host or alias)
+            data: Device data to cache
         """
-        cache_path = self.get_cache_path(key)
+        with self.cache_lock:
+            # Load current devices cache
+            devices = self._load_cache()
+            
+            # Update device data
+            devices[key] = data
+            
+            # Save the updated cache
+            self._save_cache(devices)
+    
+    def _load_cache(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Load all devices from cache file.
         
+        Returns:
+            Dictionary of all cached devices
+        """
         try:
-            with open(cache_path, 'w') as f:
-                json.dump(data, f, indent=2)
+            with open(self.devices_file, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            logging.warning(f"Failed to load devices cache: {str(e)}")
+            return {}
+    
+    def _save_cache(self, devices: Dict[str, Dict[str, Any]]) -> None:
+        """
+        Save all devices to cache file.
+        
+        Args:
+            devices: Dictionary of all devices to cache
+        """
+        try:
+            with open(self.devices_file, 'w') as f:
+                json.dump(devices, f, indent=2)
         except Exception as e:
-            logging.warning(f"Failed to cache data for {key}: {str(e)}")
+            logging.warning(f"Failed to save devices cache: {str(e)}")
 
 
 # -------------------- MAIN TOOL CLASS --------------------
@@ -225,66 +240,84 @@ class KasaTool(AsyncioToolBase):
 
     name = "kasa_tool"
     
-    description = """
-    Controls TP-Link Kasa smart home devices on your local network. Use this tool to discover
-    and manage Kasa devices like smart plugs, light bulbs, switches, and light strips.
+    simple_description = """
+    Controls TP-Link Kasa smart home devices on your local network. Use this tool to manage Kasa devices like smart plugs, light bulbs, switches, and light strips."""
     
+    anthropic_implementation = """
     OPERATIONS:
-    - discover_devices: Find all Kasa devices on your local network
+    NOTE: This tool features smart fuzzy name matching! You don't need to know exact device names - just use a descriptive name and it will try to match. For example, if you know there's a hanging light, you can directly use "hanging lights" without discovering devices first.
+    
+    - power_control: Turn a device on or off
       Parameters:
-        target (optional): The network address to target for discovery (default: 255.255.255.255)
-        timeout (optional): Timeout in seconds for discovery (default: 5)
-        username (optional): Username for devices requiring authentication
-        password (optional): Password for devices requiring authentication
+        device_id (required): The device name or identifier (e.g., "Hanging Lights", "TV Backlight")
+        state (required): The desired state ("on" or "off")
         
     - get_device_info: Get detailed information about a specific device
       Parameters:
-        device_id (required): The device identifier (IP address, hostname, or alias)
-        
-    - power_control: Turn a device on or off
-      Parameters:
-        device_id (required): The device identifier
-        state (required): The desired state ("on" or "off")
+        device_id (required): The device name or identifier
         
     - set_brightness: Set the brightness of a light bulb or light strip
       Parameters:
-        device_id (required): The device identifier
+        device_id (required): The device name or identifier
         brightness (required): Brightness level (0-100)
         
     - set_color: Set the color of a light bulb or light strip
       Parameters:
-        device_id (required): The device identifier
+        device_id (required): The device name or identifier
         hue (required): Hue value (0-360)
         saturation (required): Saturation value (0-100)
         value (optional): Brightness value (0-100)
         
     - set_color_temp: Set the color temperature of a light bulb
       Parameters:
-        device_id (required): The device identifier
+        device_id (required): The device name or identifier
         temperature (required): Color temperature in Kelvin
         
     - get_energy_usage: Get energy usage data for supported devices
       Parameters:
-        device_id (required): The device identifier
+        device_id (required): The device name or identifier
         period (optional): Period to retrieve ("realtime", "today", "month")
         
     - set_device_alias: Set a new name for the device
       Parameters:
-        device_id (required): The device identifier
+        device_id (required): The device name or identifier
         alias (required): New name for the device
         
     - get_child_devices: Get information about child devices for power strips
       Parameters:
-        device_id (required): The device identifier of the parent device
+        device_id (required): The device name or identifier of the parent device
         
     - control_child_device: Control a specific outlet on a power strip
       Parameters:
-        device_id (required): The device identifier of the parent device
+        device_id (required): The device name or identifier of the parent device
         child_id (required): The ID or index of the child device
         state (required): The desired state ("on" or "off")
+        
+    - discover_devices: (STANDALONE OPERATION) Find all Kasa devices on the local network. 
+      Only needed when adding new devices or if the fuzzy matcher can't find what you need.
+      Parameters:
+        target (optional): The network address to target for discovery (default: 255.255.255.255)
+        timeout (optional): Timeout in seconds for discovery (default: 5)
+        username (optional): Username for devices requiring authentication
+        password (optional): Password for devices requiring authentication
+    
+    COMMON DEVICE NAMES AVAILABLE:
+    - "Hanging Lights" - A plug device controlling hanging lights
+    - "TV Backlight" - A light strip behind the TV
+    - "Dripping Lantern Top/Middle/Bottom" - Bulbs in a lantern fixture
+    - "Porch Lantern" - Switch for porch lighting
+    - "Island Underglow" - Light strip under kitchen island
+    - And others like "Neon", "Salt Lamps", "Air Purifier", etc.
+    
+    FUZZY NAME MATCHING:
+    The tool will automatically try to match device names even if not exact. For example:
+    - "hanging light" → matches "Hanging Lights"
+    - "tv light" → matches "TV Backlight"
+    - "lantern" → will suggest the multiple lantern options
     
     RESPONSE FORMAT:
     - All operations return a success flag and operation-specific data
+    - If an ambiguous device name is given, suggestions will be provided
     
     LIMITATIONS:
     - Only works with devices on the same local network
@@ -295,63 +328,89 @@ class KasaTool(AsyncioToolBase):
     usage_examples = [
         {
             "input": {
+                "operation": "power_control",
+                "device_id": "Hanging Lights",
+                "state": "off"
+            },
+            "output": {
+                "success": True,
+                "device": {
+                    "id": "192.168.4.58",
+                    "alias": "Hanging Lights",
+                    "model": "EP10",
+                    "state": "off"
+                },
+                "message": "Turned Hanging Lights off"
+            }
+        },
+        {
+            "input": {
+                "operation": "power_control",
+                "device_id": "Hanging Lights",
+                "state": "on"
+            },
+            "output": {
+                "success": True,
+                "device": {
+                    "id": "192.168.4.58",
+                    "alias": "Hanging Lights",
+                    "model": "EP10",
+                    "state": "on"
+                },
+                "message": "Turned Hanging Lights on"
+            }
+        },
+        {
+            "input": {
+                "operation": "set_brightness",
+                "device_id": "TV Backlight",
+                "brightness": 75
+            },
+            "output": {
+                "success": True,
+                "device": {
+                    "id": "192.168.4.52",
+                    "alias": "TV Backlight",
+                    "model": "KL400L5",
+                    "state": "on",
+                    "brightness": 75
+                },
+                "message": "Set brightness of TV Backlight to 75%"
+            }
+        },
+        {
+            "input": {
                 "operation": "discover_devices"
             },
             "output": {
                 "success": True,
                 "devices": [
                     {
-                        "id": "192.168.1.100",
-                        "alias": "Living Room Light",
-                        "model": "KL130",
-                        "type": "bulb",
+                        "id": "192.168.4.58",
+                        "alias": "Hanging Lights",
+                        "model": "EP10",
+                        "type": "plug",
+                        "state": "on",
+                        "features": []
+                    },
+                    {
+                        "id": "192.168.4.52",
+                        "alias": "TV Backlight",
+                        "model": "KL400L5",
+                        "type": "lightstrip",
                         "state": "on",
                         "features": ["brightness", "color", "temperature"]
                     },
                     {
-                        "id": "192.168.1.101",
-                        "alias": "Office Plug",
-                        "model": "HS110",
-                        "type": "plug",
-                        "state": "off",
-                        "features": ["energy"]
+                        "id": "192.168.4.54",
+                        "alias": "Dripping Lantern Top",
+                        "model": "KL125",
+                        "type": "bulb",
+                        "state": "on",
+                        "features": ["brightness", "color", "temperature"]
                     }
                 ],
-                "message": "Found 2 Kasa devices on the network"
-            }
-        },
-        {
-            "input": {
-                "operation": "power_control",
-                "device_id": "Living Room Light",
-                "state": "off"
-            },
-            "output": {
-                "success": True,
-                "device": {
-                    "id": "192.168.1.100",
-                    "alias": "Living Room Light",
-                    "model": "KL130",
-                    "state": "off"
-                },
-                "message": "Turned Living Room Light off"
-            }
-        },
-        {
-            "input": {
-                "operation": "set_brightness",
-                "device_id": "Living Room Light",
-                "brightness": 75
-            },
-            "output": {
-                "success": True,
-                "device": {
-                    "id": "192.168.1.100",
-                    "alias": "Living Room Light",
-                    "state": "on",
-                    "brightness": 75
-                },
-                "message": "Set brightness of Living Room Light to 75%"
+                "message": "Found 3 Kasa devices on the network"
             }
         }
     ]
@@ -1115,19 +1174,58 @@ class KasaTool(AsyncioToolBase):
             self.logger.warning(f"Error loading device mapping: {e}")
             return {}
 
-    def _find_best_device_match(self, query: str) -> str:
+    def _calculate_name_similarity(self, query: str, device_name: str) -> float:
         """
-        Find the best device match in the in-memory cache based on name similarity.
+        Calculate similarity score between query and device name.
+        
+        Args:
+            query: Normalized query string
+            device_name: Normalized device name
+            
+        Returns:
+            Similarity score (0-100, higher is better match)
+        """
+        # Exact match gets highest score
+        if query == device_name:
+            return 100
+        # Contained words get medium scores
+        elif query in device_name:
+            return 80
+        elif device_name in query:
+            return 70
+        else:
+            # Calculate word overlap
+            query_words = set(query.split())
+            name_words = set(device_name.split())
+
+            if query_words and name_words:
+                common_words = query_words.intersection(name_words)
+                total_words = len(query_words.union(name_words))
+
+                if common_words:
+                    # Percentage of matching words
+                    return 60 * len(common_words) / total_words
+        
+        return 0  # No match
+    
+    def _find_best_device_match(self, query: str) -> Union[str, Dict[str, Any]]:
+        """
+        Find the best device match from all available sources based on name similarity.
+        
+        This enhanced version:
+        1. Checks both in-memory and persistent cache with unified logic
+        2. Returns a single best match if clear
+        3. Returns multiple options if ambiguous rather than raising an error
+        4. Provides available devices when no match is found
 
         Args:
             query: The device name or identifier to match
 
         Returns:
-            The best matching device identifier
-
-        Raises:
-            ToolError: If no match found or multiple ambiguous matches found
+            Either the best matching device identifier (str) or a dict with potential matches
         """
+        from config import config
+        
         # Return exact match if exists
         if query in self._device_instances:
             return query
@@ -1137,65 +1235,78 @@ class KasaTool(AsyncioToolBase):
 
         # Track potential matches with scores
         candidates = {}
-
-        # Look through cached devices for matches
+        
+        # Get all potential device sources
+        sources = []
+        
+        # 1. Add in-memory devices
         for device_id, device in self._device_instances.items():
+            alias = device.alias if hasattr(device, 'alias') else None
+            if alias:
+                sources.append({
+                    "id": device_id,
+                    "alias": alias,
+                    "source": "memory"
+                })
+        
+        # 2. Add devices from persistent cache if enabled
+        if config.kasa_tool.cache_enabled:
+            cached_devices = self.cache._load_cache()
+            for key, device_data in cached_devices.items():
+                # Only add if not already in-memory
+                if key not in self._device_instances:
+                    alias = device_data.get('alias')
+                    if alias:
+                        sources.append({
+                            "id": key,
+                            "alias": alias,
+                            "host": device_data.get('host'),
+                            "model": device_data.get('model'),
+                            "source": "cache"
+                        })
+        
+        # Evaluate all sources with the same logic
+        for device in sources:
+            device_id = device["id"]
+            alias = device["alias"]
+            
             # Skip IP addresses - we're looking for name matches
             if '.' in device_id and device_id.replace('.', '').isdigit():
                 continue
-
-            # Skip empty device IDs
-            if not device_id:
-                continue
-
-            # Get the device alias if available
-            alias = device.alias if hasattr(device, 'alias') else ""
+                
+            # Skip empty aliases
             if not alias:
                 continue
-
+                
             # Normalize the alias
             norm_alias = alias.lower().replace("the ", "").strip()
-
-            # Score the match (higher is better)
-            score = 0
-
-            # Exact match gets highest score
-            if norm_query == norm_alias:
-                score = 100
-            # Contained words get medium scores
-            elif norm_query in norm_alias:
-                score = 80
-            elif norm_alias in norm_query:
-                score = 70
-            else:
-                # Calculate word overlap
-                query_words = set(norm_query.split())
-                alias_words = set(norm_alias.split())
-
-                if query_words and alias_words:
-                    common_words = query_words.intersection(alias_words)
-                    total_words = len(query_words.union(alias_words))
-
-                    if common_words:
-                        # Percentage of matching words
-                        score = 60 * len(common_words) / total_words
-
+            
+            # Calculate match score using unified logic
+            score = self._calculate_name_similarity(norm_query, norm_alias)
+            
             # Record candidate if score is above threshold
             if score > 50:
-                # Store both score and device_id -> alias mapping
-                candidates[device_id] = {"score": score, "alias": alias}
-                self.logger.debug(f"Match candidate: '{device_id}' (alias: '{alias}', score: {score})")
+                candidates[device_id] = {
+                    "score": score,
+                    "alias": alias,
+                    "source": device["source"]
+                }
+                self.logger.debug(f"Match candidate: '{device_id}' (alias: '{alias}', score: {score}, source: {device['source']})")
 
         # If no candidates found
         if not candidates:
-            raise ToolError(
-                f"No device found matching '{query}'",
-                ErrorCode.TOOL_NOT_FOUND
-            )
-
+            # Return information about no match but don't raise an error
+            available_devices = [s["alias"] for s in sources if s["alias"] and not ('.' in s["id"] and s["id"].replace('.', '').isdigit())]
+            return {
+                "match_type": "none",
+                "query": query,
+                "message": f"No device found matching '{query}'. Try discover_devices or use one of the available devices.",
+                "available_devices": sorted(list(set(available_devices)))  # Remove duplicates and sort
+            }
+        
         # Sort candidates by score (highest first)
         sorted_candidates = sorted(candidates.items(), key=lambda x: x[1]["score"], reverse=True)
-
+        
         # Check for clear winner vs ambiguous matches
         if len(sorted_candidates) == 1:
             # Only one match - return it
@@ -1204,48 +1315,65 @@ class KasaTool(AsyncioToolBase):
             score = candidates[best_match_id]["score"]
             self.logger.info(f"Found match for '{query}': '{alias}' (device_id: '{best_match_id}', score: {score})")
             return best_match_id
-
+            
         # Check if there's a clear winner (significantly higher score)
         best_score = sorted_candidates[0][1]["score"]
         second_best_score = sorted_candidates[1][1]["score"] if len(sorted_candidates) > 1 else 0
-
+        
         if best_score > second_best_score + 20:  # Clear winner if 20+ points higher
             best_match_id = sorted_candidates[0][0]
             alias = candidates[best_match_id]["alias"]
             self.logger.info(f"Found best match for '{query}': '{alias}' (device_id: '{best_match_id}', score: {best_score})")
             return best_match_id
-
-        # Ambiguous matches - suggest options
-        top_matches = [candidates[candidate[0]]["alias"] for candidate in sorted_candidates[:3]]
-        suggestion = ", ".join([f"'{match}'" for match in top_matches])
-
-        raise ToolError(
-            f"Ambiguous device name '{query}'. Did you mean one of: {suggestion}?",
-            ErrorCode.TOOL_AMBIGUOUS_INPUT
-        )
+            
+        # Ambiguous matches - return options instead of raising an error
+        devices_list = []
+        for candidate_id, candidate_info in sorted_candidates[:5]:  # Limit to top 5 matches
+            devices_list.append({
+                "id": candidate_id,
+                "alias": candidate_info["alias"],
+                "score": candidate_info["score"],
+                "source": candidate_info.get("source", "unknown")
+            })
+            
+        return {
+            "match_type": "ambiguous",
+            "query": query,
+            "message": f"Multiple potential devices match '{query}'. Please choose one of the following devices.",
+            "devices": devices_list
+        }
     
     async def _get_device_by_id(
         self,
         device_id: str,
-        force_discovery: bool = False
+        force_discovery: bool = False,
+        return_match_info: bool = False
     ) -> Any:
         """
         Get a device by its identifier, using cache when available.
+        
+        Enhanced version that:
+        1. Uses the smart fuzzy matcher
+        2. Returns helpful options when ambiguous
+        3. Provides list of available devices when no match
+        4. Falls back to discovery as a last resort
+        5. Can return match info instead of raising errors
 
         Args:
             device_id: The device identifier (IP address, hostname, or alias)
             force_discovery: Whether to force device discovery
+            return_match_info: If True, return match info dict instead of raising errors
 
         Returns:
-            Device object
+            Device object, or a dict with match info if ambiguous or not found and return_match_info=True
 
         Raises:
-            ToolError: If device cannot be found
+            ToolError: If device cannot be found and return_match_info=False
         """
         from kasa import Device, Credentials, Discover
         from config import config
 
-        # Check for cached instance first
+        # Check for cached instance first (exact match)
         if device_id in self._device_instances and not force_discovery:
             device = self._device_instances[device_id]
             try:
@@ -1256,11 +1384,14 @@ class KasaTool(AsyncioToolBase):
                 self.logger.warning(f"Error updating cached device {device_id}: {e}")
                 # Continue to try other methods if update fails
 
-        # Try fuzzy matching if we have cached devices and not forcing discovery
-        if self._device_instances and not force_discovery:
-            try:
-                # Find best match based on name similarity
-                best_match_id = self._find_best_device_match(device_id)
+        # Apply smart fuzzy matching if not forcing discovery
+        if not force_discovery:
+            # Get the best match or information about available matches
+            match_result = self._find_best_device_match(device_id)
+            
+            # If a string is returned, it's a single best match ID
+            if isinstance(match_result, str):
+                best_match_id = match_result
                 if best_match_id in self._device_instances:
                     device = self._device_instances[best_match_id]
                     try:
@@ -1272,11 +1403,59 @@ class KasaTool(AsyncioToolBase):
                         return device
                     except Exception as e:
                         self.logger.warning(f"Error updating fuzzy-matched device {best_match_id}: {e}")
-                else:
-                    self.logger.warning(f"Found fuzzy match '{best_match_id}' but device instance not available")
-            except ToolError as e:
-                # Log but continue to other methods if fuzzy matching fails or is ambiguous
-                self.logger.info(f"Fuzzy matching: {str(e)}")
+                        # Continue to other methods
+                
+                # Try connecting to a device from the cache
+                if config.kasa_tool.cache_enabled:
+                    cached_devices = self.cache._load_cache()
+                    if best_match_id in cached_devices:
+                        device_data = cached_devices[best_match_id]
+                        host = device_data.get('host')
+                        if host:
+                            try:
+                                # Try to connect to the device
+                                device = await Device.connect(host=host, config=None)
+                                if device:
+                                    self.logger.info(f"Connected to cached device: {best_match_id}")
+                                    self._device_instances[device_id] = device
+                                    self._device_instances[device.host] = device
+                                    if device.alias:
+                                        self._device_instances[device.alias] = device
+                                    return device
+                            except Exception as e:
+                                self.logger.warning(f"Error connecting to cached device {host}: {e}")
+                                # Continue to other methods
+            
+            # If a dict is returned, handle different match types
+            elif isinstance(match_result, dict):
+                match_type = match_result.get("match_type")
+                
+                # Ambiguous matches - either return info or raise error
+                if match_type == "ambiguous":
+                    devices = match_result.get("devices", [])
+                    if return_match_info:
+                        return match_result
+                    
+                    # Convert to a better error message
+                    suggestions = ", ".join([f"'{d['alias']}'" for d in devices])
+                    raise ToolError(
+                        f"Ambiguous device name '{device_id}'. Did you mean one of: {suggestions}?",
+                        ErrorCode.TOOL_AMBIGUOUS_INPUT
+                    )
+                
+                # No matches - return info or try discovery
+                elif match_type == "none":
+                    if return_match_info:
+                        return match_result
+                        
+                    # Log and continue to discovery
+                    available = match_result.get("available_devices", [])
+                    if available:
+                        suggestions = ", ".join([f"'{d}'" for d in available[:5]])  # Show up to 5
+                        self.logger.info(f"No match for '{device_id}'. Available: {suggestions}")
+                    else:
+                        self.logger.info(f"No device found matching '{device_id}'")
+                    # Continue to discovery
         
         # Setup credentials for possible use later
         credentials = None
@@ -1286,11 +1465,10 @@ class KasaTool(AsyncioToolBase):
                 config.kasa_tool.default_password
             )
 
-        # Only do direct connection if forcing discovery or if device ID looks like an IP address
-        if force_discovery or ('.' in device_id and not device_id.startswith('.')):
+        # Direct connection for IP addresses
+        if '.' in device_id and not device_id.startswith('.'):
             try:
                 self.logger.info(f"Attempting direct connection to: {device_id}")
-                # Try to connect directly
                 device = await Discover.discover_single(
                     device_id,
                     credentials=credentials
@@ -1298,66 +1476,19 @@ class KasaTool(AsyncioToolBase):
 
                 if device:
                     # Store in thread-local storage
-                    device_instances = self.get_thread_data('device_instances', {})
-                    device_instances[device_id] = device
-                    device_instances[device.host] = device
+                    self._device_instances[device_id] = device
+                    self._device_instances[device.host] = device
                     if device.alias:
-                        device_instances[device.alias] = device
-                    self.set_thread_data('device_instances', device_instances)
+                        self._device_instances[device.alias] = device
                     return device
             except Exception as e:
                 self.logger.warning(f"Error connecting directly to {device_id}: {e}")
-                # Continue to try other methods if connection fails
-        
-        # Check for cached devices by alias
-        # Loop through all devices and try to match by alias
-        devices_to_check = []
-
-        # Get from cache if available and enabled
-        if config.kasa_tool.cache_enabled and not force_discovery:
-            self.logger.info(f"Checking persistent cache for device: {device_id}")
-            # Get all cached devices
-            cache_dir = config.kasa_tool.cache_directory
-            if os.path.exists(cache_dir):
-                for cache_file in os.listdir(cache_dir):
-                    if cache_file.endswith('.json'):
-                        cache_path = os.path.join(cache_dir, cache_file)
-                        try:
-                            with open(cache_path, 'r') as f:
-                                device_data = json.load(f)
-                                if device_data.get('host') or device_data.get('alias'):
-                                    devices_to_check.append(device_data)
-                        except Exception as e:
-                            self.logger.warning(f"Error reading cache file {cache_file}: {e}")
-        
-        # Check if any cached device matches by alias
-        for device_data in devices_to_check:
-            if (device_data.get('alias') == device_id or 
-                device_data.get('host') == device_id):
-                try:
-                    # Try to connect to the device
-                    device = await Device.connect(
-                        host=device_data.get('host'),
-                        config=None
-                    )
-                    
-                    if device:
-                        # Log that we're using a device from persistent cache
-                        self.logger.info(f"Using device from persistent cache: {device_id}")
-                        self._device_instances[device_id] = device
-                        self._device_instances[device.host] = device
-                        if device.alias:
-                            self._device_instances[device.alias] = device
-                        return device
-                except Exception as e:
-                    self.logger.warning(f"Error connecting to cached device {device_data.get('host')}: {e}")
-                    # Continue to next cached device
+                # Continue to discovery
         
         # If still not found and discovery is allowed
         if config.kasa_tool.attempt_discovery_when_not_found or force_discovery:
             try:
-                # Only do network discovery as a last resort when cache fails
-                self.logger.info(f"Device {device_id} not found in cache. Running network discovery.")
+                self.logger.info(f"Device '{device_id}' not found in cache. Running network discovery.")
                 # Perform device discovery
                 found_devices = await Discover.discover(
                     target=config.kasa_tool.discovery_target,
@@ -1365,30 +1496,58 @@ class KasaTool(AsyncioToolBase):
                     credentials=credentials
                 )
                 
-                # Check if any discovered device matches by alias
+                # No devices found during discovery
+                if not found_devices:
+                    raise ToolError(
+                        f"No devices found on the network. Check that your devices are powered on and connected.",
+                        ErrorCode.TOOL_NOT_FOUND
+                    )
+                
+                # Cache and check discovered devices
+                device_names = []
                 for host, device in found_devices.items():
                     try:
                         await device.update()
                         
-                        # Cache all discovered devices
+                        # Cache the device
                         self._cache_device(device)
                         
                         # Add to in-memory cache
                         self._device_instances[host] = device
                         if device.alias:
                             self._device_instances[device.alias] = device
+                            device_names.append(device.alias)
                             
                         # Check if this device matches the requested ID
                         if device.alias == device_id or host == device_id:
                             return device
                     except Exception as e:
                         self.logger.warning(f"Error updating discovered device {host}: {e}")
-                        # Continue to next discovered device
+                
+                # If we found devices but none matched, suggest them
+                if device_names:
+                    suggestions = ", ".join([f"'{name}'" for name in device_names[:5]])
+                    raise ToolError(
+                        f"Device '{device_id}' not found. Available devices: {suggestions}",
+                        ErrorCode.TOOL_NOT_FOUND
+                    )
+            except ToolError:
+                # Re-raise tool errors
+                raise
             except Exception as e:
                 self.logger.warning(f"Error during device discovery: {e}")
                 # Continue to final error
         
         # If we get here, device was not found
+        if return_match_info:
+            return {
+                "match_type": "none",
+                "query": device_id,
+                "message": f"Device '{device_id}' not found in cache or network. Try discover_devices operation or use a different device name.",
+                "available_devices": []
+            }
+            
+        # Otherwise raise error
         raise ToolError(
             f"Device '{device_id}' not found in cache or network. Make sure it is connected to your network or try discover_devices operation first.",
             ErrorCode.TOOL_NOT_FOUND

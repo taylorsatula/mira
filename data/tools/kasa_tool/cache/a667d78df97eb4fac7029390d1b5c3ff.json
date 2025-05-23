@@ -1,8 +1,0 @@
-{
-  "host": "192.168.4.48",
-  "alias": "Island Underglow",
-  "model": "KL400L5",
-  "mac": "5C:A6:E6:81:0B:BA",
-  "device_type": "DeviceType.LightStrip",
-  "last_updated": "2025-05-11T20:48:20.956578+00:00"
-}
