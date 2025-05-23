@@ -328,7 +328,9 @@ class LLMBridge:
         stream: bool = False,
         callback: Optional[Callable] = None,
         cache_control: Optional[Dict[str, str]] = None,
-        dynamic_content: Optional[str] = None
+        dynamic_content: Optional[str] = None,
+        extended_thinking: Optional[bool] = None,
+        extended_thinking_budget: Optional[int] = None
     ) -> Union[Dict[str, Any], Any]:
         """
         Generate a response from the LLM.
@@ -343,6 +345,8 @@ class LLMBridge:
             callback: Optional callback function to process streaming chunks
             cache_control: Optional cache control parameters for prompt caching
             dynamic_content: Optional dynamic content to append after cached system prompt
+            extended_thinking: Whether to enable extended thinking for this request
+            extended_thinking_budget: Token budget for extended thinking (min: 1024, recommended: 16000)
 
         Returns:
             If stream=False: API response as a dictionary
@@ -350,10 +354,26 @@ class LLMBridge:
 
         Raises:
             APIError: If the API request fails
+            
+        Extended Thinking Notes:
+            - Extended thinking is a Claude 3.7+ feature that shows step-by-step reasoning
+            - Limitations:
+              * Incompatible with temperature modifications (temperature param will be removed)
+              * Cannot be used with response pre-filling
+              * Thinking budget must be less than max_tokens
+              * Minimum thinking budget is 1024 tokens
+            - Recommended thinking budget is 16,000 tokens
+            - All thinking tokens count towards your API billing
         """
         # Use provided values or defaults from config
         temperature = temperature if temperature is not None else self.temperature
         max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+        
+        # Get extended thinking configuration (from method args or config)
+        use_extended_thinking = extended_thinking if extended_thinking is not None else \
+            getattr(config.api, "extended_thinking", False)
+        thinking_budget = extended_thinking_budget if extended_thinking_budget is not None else \
+            getattr(config.api, "extended_thinking_budget", 16000)  # 16k tokens recommended default
 
         # Prepare request parameters
         params = {
@@ -362,6 +382,32 @@ class LLMBridge:
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        
+        # Add extended thinking if enabled
+        if use_extended_thinking:
+            # Extended thinking is incompatible with custom temperature settings
+            # Remove temperature parameter when extended thinking is enabled
+            if "temperature" in params:
+                self.logger.warning("Extended thinking is incompatible with temperature modifications. Removing temperature parameter.")
+                del params["temperature"]
+            
+            # Validate thinking budget meets minimum requirements
+            if thinking_budget < 1024:
+                thinking_budget = 1024
+                self.logger.warning("Extended thinking budget increased to minimum 1024 tokens")
+            
+            # Ensure max_tokens is large enough for thinking budget and response
+            if max_tokens < thinking_budget:
+                # Set to thinking_budget (internal) plus original max_tokens (for response)
+                params["max_tokens"] = thinking_budget + max_tokens
+                self.logger.warning(f"Increased max_tokens to {params['max_tokens']} to accommodate thinking budget")
+            
+            # Use the thinking parameter as per current API spec
+            params["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": thinking_budget
+            }
+            self.logger.debug(f"Extended thinking enabled with budget of {thinking_budget} tokens")
 
         # Add optional parameters if provided
         if system_prompt:
@@ -540,3 +586,4 @@ class LLMBridge:
 
         self.logger.debug(f"Extracted {len(tool_calls)} tool calls from response")
         return tool_calls
+        

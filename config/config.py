@@ -59,6 +59,14 @@ class ApiConfig(BaseModel):
         default=5,
         description="Maximum number of requests allowed in a burst"
     )
+    extended_thinking: bool = Field(
+        default=False,
+        description="Whether to enable extended thinking capability"
+    )
+    extended_thinking_budget: int = Field(
+        default=4096,
+        description="Token budget for extended thinking when enabled (min: 1024)"
+    )
 
 
 class PathConfig(BaseModel):

@@ -220,13 +220,18 @@ def error_context(
         if operation:
             error_msg += f" during {operation}"
             
-        # Log and wrap other exceptions
-        logger.error(f"{error_msg}: {str(e)}")
+        # Log and wrap other exceptions - sanitize for sensitive data
+        error_string = str(e)
+        # Redact potentially sensitive information 
+        if "token" in error_string.lower() or "bearer" in error_string.lower() or "key" in error_string.lower() or "auth" in error_string.lower():
+            error_string = "[REDACTED SENSITIVE INFORMATION]"
+            
+        logger.error(f"{error_msg}: {error_string}")
         
         raise error_class(
-            f"{error_msg}: {str(e)}",
+            f"{error_msg}: {error_string}",
             error_code,
-            {"original_error": str(e)}
+            {"original_error": error_string}
         )
 
 

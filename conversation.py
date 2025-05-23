@@ -321,6 +321,19 @@ class Conversation:
         if not user_input or user_input.strip() == "":
             error_msg = "Empty message content is not allowed"
             self.logger.warning(error_msg)
+            
+            # Check if we're in the middle of a tool execution chain
+            is_tool_execution_active = False
+            if self.messages and len(self.messages) >= 2:
+                last_msg = self.messages[-1]
+                # Check if last message was a tool result or has tool calls
+                if ((last_msg.role == "user" and last_msg.metadata.get("is_tool_result", False)) or
+                    (last_msg.role == "assistant" and last_msg.metadata.get("has_tool_calls", False))):
+                    is_tool_execution_active = True
+                    self.logger.info("Blank message received during tool execution - suppressing error")
+                    return "I'm still processing your previous request. Please wait a moment or send a new message."
+            
+            # If not in tool execution, raise the error as before
             raise ConversationError(error_msg, ErrorCode.INVALID_INPUT)
             
         # Add user message to conversation
