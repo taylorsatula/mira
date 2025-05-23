@@ -1,0 +1,202 @@
+[
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Book a new 60-minute deep tissue massage with Maria in Square for this Friday at 3pm"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Schedule a haircut appointment in Square for client ID CUST789XYZ with stylist James next Monday morning"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Add a new 45-minute consultation to our Square calendar with Dr. Thompson for next Wednesday"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Create a Square booking for Sarah's color and cut service with Jennifer on May 25th at 2:30pm"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Set up a new appointment in Square for Mike Johnson for a beard trim next Tuesday afternoon"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Book Alex for a 90-minute Swedish massage in our Square system for May 21st at 10am"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Create a new Square booking for a manicure and pedicure with technician Lisa for this Saturday"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Add a facial appointment to our Square calendar for customer Rachel Wong next Thursday morning"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Set up a 30-minute follow-up appointment in Square with trainer Marcus for client David Chen"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Book a teeth whitening service in our Square system for patient Sandra Martinez on June 2nd"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Reschedule Julie's haircut in Square from Thursday at 1pm to Friday at 3:30pm"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Change my Square booking ID BK781923 from a 60-minute to a 90-minute massage"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Update appointment APPT920365 in Square to switch from stylist Kelly to stylist Marcus"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Move Robert's chiropractic appointment in Square from Monday to Wednesday same time"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Add a hot stone therapy to Emma's existing massage booking in Square for tomorrow"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Extend Jason's Square appointment this Friday from 30 minutes to 45 minutes"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Change the customer on Square booking #BK872134 from Michael Brown to Michelle Brown"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Push back all of tomorrow's Square appointments by 1 hour due to staff meeting"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Update David's booking in Square to add a beard trim to his existing haircut appointment"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Modify Jessica's Square appointment to include her daughter for a joint session"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Update Melissa Johnson's email address in our Square customer database to melissa.new@example.com"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Change phone number for customer ID CUST456ABC in Square to 555-987-6543"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Add a note to Rebecca Smith's Square profile that she prefers fragrance-free products"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Update James Wilson's company information in our Square customer database to IBM"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Change the home address for customer Patricia Chen in our Square system"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Add a birthday date of March 15th to customer record CUST873261 in Square"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Modify Kevin's customer details in Square to indicate he's allergic to latex"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Update both the email and phone for customer Amanda Rogers in our Square database"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Change Thomas Jackson's reference ID in our Square system to TJ-VIP-2025"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Update customer CUST683910's last name in Square from Smith to Smith-Johnson after marriage"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Check if any massage therapists are available in Square this Saturday between 1-5pm"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Find open appointment slots in our Square calendar for haircuts with Jennifer next week"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Show available times in Square for a 60-minute facial on Friday afternoon"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "What's Dr. Roberts' availability in our Square schedule for next Thursday and Friday?"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Find the first available 30-minute consultation slot in Square with any therapist"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Check our Square calendar for any openings for a deep tissue massage this weekend"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Are there any available slots for a teeth cleaning in our Square booking system next Tuesday?"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Show all open appointment times in Square at our downtown location for tomorrow"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Check if stylist Marcus has any 45-minute openings in Square on Wednesday"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Find available slots in our Square calendar for couples massages this month"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Record check payment #1234 for $85 for appointment BK983421 in Square"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Mark Sarah Johnson's consultation as paid by check number 5678 in our Square system"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Process a check payment of $120.50 for order ID ORD23947 in Square"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Record that client Michael Chen paid for his appointment by check #9012 in Square"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Mark order LCPG78352 in Square as paid with check payment of $65"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Register a $225 check payment from Acme Corp for their booking in our Square system"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Record a check payment for Jessica's hair coloring appointment in Square"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Mark Kevin's massage therapy session in Square as paid by check #3456 for $95"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Process a check payment of $150 in Square for the team training session with order ID ORD87532"
+  },
+  {
+    "tool_name": "squareviahttp_tool",
+    "query": "Record that Emily paid $55 by check for her manicure appointment in our Square system"
+  }
+]

@@ -1,0 +1,345 @@
+{
+  "tool_name": "squareviahttp_tool",
+  "tool_code": "\"\"\"\nSquare API integration tool using HTTP requests.\n\nThis module provides a streamlined interface to the Square API using direct HTTP requests,\nfocusing on key operations like managing customers, customer groups, bookings, and catalog items.\n\"\"\"\n\nimport os\nimport json\nimport logging\nimport uuid\nimport requests\nfrom typing import Dict, List, Any, Optional\nfrom pydantic import BaseModel, Field\n\nfrom tools.repo import Tool\nfrom errors import ErrorCode, error_context, ToolError\nfrom config.registry import registry\n\n\n# Define configuration class for SquareViaHttpTool\nclass SquareViaHttpToolConfig(BaseModel):\n    \"\"\"Configuration for the squareviahttp_tool.\"\"\"\n    enabled: bool = Field(default=True, description=\"Whether this tool is enabled by default\")\n    base_url: str = Field(default=\"https://connect.squareup.com\", description=\"Base URL for Square API\")\n    api_version: str = Field(default=\"v2\", description=\"Square API version\")\n    timeout: int = Field(default=30, description=\"Timeout in seconds for API requests\")\n    max_retries: int = Field(default=3, description=\"Maximum number of retries for failed requests\")\n    pagination_auto_merge: bool = Field(default=True, description=\"Whether to automatically merge paginated results\")\n    pagination_limit: int = Field(default=1000, description=\"Maximum total items to return when auto-merging paginated results\")\n\n# Register with registry\nregistry.register(\"squareviahttp_tool\", SquareViaHttpToolConfig)\n\n\nclass SquareViaHttpTool(Tool):\n    \"\"\"\n    Square API interaction tool that uses HTTP requests directly.\n    \n    This tool provides a streamlined interface to the Square API for managing\n    customers, customer groups, bookings, and catalog items. It uses direct HTTP\n    requests rather than a client library for more transparency and control.\n    \"\"\"\n    \n    name = \"squareviahttp_tool\"\n    \n    simple_description = \"\"\"\n    Manages customer data, bookings, and catalog items in Square. Use this tool to integrate with\n    a Square-powered business system, including customer management, appointment booking, and\n    product catalog operations.\n    \"\"\"\n    \n    anthropic_details = \"\"\"\n    CUSTOMER OPERATIONS:\n    \n    - list_customers: Get a paginated list of customers (automatically merges all pages)\n      Parameters:\n        cursor (optional): Pagination cursor for retrieving next set of results\n        limit (optional): Maximum number of results (default 100, range 1-100)\n    \n    - create_customer: Create a new customer\n      Parameters:\n        given_name (required): Customer's first name\n        family_name (required): Customer's last name\n        company_name (required): Customer's company name\n        email_address (required): Customer's email address\n        phone_number (required): Customer's phone number\n        reference_id (optional): A reference ID for the customer\n        note (optional): A note about the customer\n        address (optional): Dictionary containing address fields with the following structure:\n          {\n            \"address_line_1\": \"500 Electric Ave\",\n            \"address_line_2\": \"Suite 600\",\n            \"locality\": \"New York\",             # City\n            \"administrative_district_level_1\": \"NY\",  # State/Province\n            \"postal_code\": \"10003\",             # Zip/Postal code\n            \"country\": \"US\"                     # Two-letter country code\n          }\n        \n    - search_customers: Search for customers by name, email, phone, etc.\n      Parameters:\n        query (optional): Dictionary containing search filters, example:\n          {\n            \"filter\": {\n              \"email_address\": {\n                \"exact\": \"example@example.com\"\n              }\n            },\n            \"sort\": {\n              \"field\": \"CREATED_AT\",\n              \"order\": \"ASC\"\n            }\n          }\n        limit (optional): Maximum number of results (default 100, range 1-100)\n        cursor (optional): Pagination cursor for subsequent calls\n    \n    - retrieve_customer: Get a specific customer by ID\n      Parameters:\n        customer_id (required): The ID of the customer to retrieve\n    \n    - update_customer: Update an existing customer\n      Parameters:\n        customer_id (required): The ID of the customer to update\n        given_name (optional): Customer's first name\n        family_name (optional): Customer's last name\n        company_name (optional): Customer's company name\n        email_address (optional): Customer's email address\n        phone_number (optional): Customer's phone number\n        reference_id (optional): A reference ID for the customer\n        note (optional): A note about the customer\n        address (optional): Dictionary containing address fields\n    \n    - add_customer_to_group: Add a customer to a group\n      Parameters:\n        customer_id (required): The ID of the customer\n        group_id (required): The ID of the customer group\n    \n    - remove_customer_from_group: Remove a customer from a group\n      Parameters:\n        customer_id (required): The ID of the customer\n        group_id (required): The ID of the customer group\n        \n    CUSTOMER GROUP OPERATIONS:\n    \n    - list_customer_groups: Get a list of customer groups (automatically merges all pages)\n      Parameters:\n        cursor (optional): Pagination cursor for retrieving next set of results\n        limit (optional): Maximum number of results (default 50, range 1-50)\n    \n    - create_customer_group: Create a new customer group\n      Parameters:\n        name (required): The name of the customer group\n        \n    - retrieve_customer_group: Get a specific customer group by ID\n      Parameters:\n        group_id (required): The ID of the customer group to retrieve\n        \n    - update_customer_group: Update an existing customer group\n      Parameters:\n        group_id (required): The ID of the customer group to update\n        name (required): The new name for the customer group\n        \n    BOOKING OPERATIONS:\n    \n    - create_booking: Create a new booking\n      Parameters:\n        start_at (required): Start time for the booking in RFC 3339 format (e.g., \"2023-04-25T10:00:00Z\")\n        location_id (required): Square location ID\n        customer_id (optional): Square customer ID\n        appointment_segments (required): Array of appointment segments with the following structure:\n          [\n            {\n              \"duration_minutes\": 30,                   # Duration in minutes\n              \"service_variation_id\": \"VARIATION_ID\",   # ID of the service variation (from catalog)\n              \"service_variation_version\": 1234,        # Version number of the service variation\n              \"team_member_id\": \"TEAM_MEMBER_ID\"        # ID of the staff member performing the service\n            }\n          ]\n        \n    - search_availability: Search for available booking times\n      Parameters:\n        query (required): Dictionary containing search criteria with the following structure:\n          {\n            \"filter\": {\n              \"start_at_range\": {\n                \"start_at\": \"2023-04-25T00:00:00Z\",  # Start of time range\n                \"end_at\": \"2023-04-30T00:00:00Z\"     # End of time range\n              },\n              \"location_id\": \"LOCATION_ID\",          # Square location ID\n              \"segment_filters\": [\n                {\n                  \"service_variation_id\": \"VARIATION_ID\",  # ID of the service variation\n                  \"team_member_id_filter\": {\n                    \"any\": [\"TEAM_MEMBER_ID\"]             # Team member ID(s)\n                  }\n                }\n              ]\n            }\n          }\n        \n    - update_booking: Update an existing booking\n      Parameters:\n        booking_id (required): ID of the booking to update\n        booking (required): Dictionary containing updated booking details\n        \n    - cancel_booking: Cancel a booking\n      Parameters:\n        booking_id (required): ID of the booking to cancel\n        booking_version (optional): Current version of the booking\n        \n    CATALOG OPERATIONS:\n    \n    - list_catalog: Get a list of catalog items (automatically merges all pages)\n      Parameters:\n        cursor (optional): Pagination cursor\n        types (optional): Comma-separated list of catalog object types\n        \n    - retrieve_catalog_object: Get a specific catalog object by ID\n      Parameters:\n        object_id (required): The ID of the catalog object to retrieve\n        include_related_objects (optional): Whether to include related objects in response\n\n    - search_catalog_items: Search for catalog items with service variations for bookings\n      Parameters:\n        query (optional): Dictionary containing search filters, example for services:\n          {\n            \"product_types\": [\"APPOINTMENTS_SERVICE\"],\n            \"sort\": {\n              \"field\": \"UPDATED_AT\",\n              \"order\": \"DESC\"\n            }\n          }\n        cursor (optional): Pagination cursor\n        limit (optional): Maximum number of results per page\n        \n    PAYMENT OPERATIONS:\n    \n    - mark_appointment_paid_by_check: Record a check payment for an appointment/order\n      Parameters:\n        order_id (required): The ID of the order or appointment being paid\n        amount (required): Payment amount (in dollars as integer or float; will be converted to cents)\n        currency (optional): Three-letter currency code (default: \"USD\")\n        description (optional): Note about the payment (default: \"Check payment for appointment\")\n        idempotency_key (optional): Unique key to prevent duplicate payments (auto-generated UUID if not provided)\n        autocomplete (optional): Whether to auto-complete the payment (default: true)\n\n    BOOKABLE SERVICE ITEM STRUCTURE:\n    \n    When working with bookable services in the catalog, the data structure is:\n    \n    1. CatalogItem (parent object)\n       - name: Name of the service\n       - product_type: APPOINTMENTS_SERVICE\n       \n    2. CatalogItemVariation (child object)\n       - name: Name of the specific service variation\n       - price_money: Price of the service\n       - service_duration: Duration in milliseconds (e.g., 1800000 for 30 minutes)\n       - available_for_booking: true/false\n       - team_member_ids: Array of team member IDs who can perform this service\n    \n    For CREATE/UPDATE operations on bookable services, use this structure:\n    {\n      \"object\": {\n        \"type\": \"ITEM\",\n        \"id\": \"#ServiceItem\",\n        \"item_data\": {\n          \"name\": \"Haircut Service\",\n          \"product_type\": \"APPOINTMENTS_SERVICE\",\n          \"variations\": [\n            {\n              \"type\": \"ITEM_VARIATION\",\n              \"id\": \"#ServiceVariation\",\n              \"item_variation_data\": {\n                \"item_id\": \"#ServiceItem\",\n                \"name\": \"Men's Haircut\",\n                \"price_money\": {\n                  \"amount\": 3000,\n                  \"currency\": \"USD\"\n                },\n                \"service_duration\": 1800000,\n                \"available_for_booking\": true,\n                \"team_member_ids\": [\"TMXUrsBWWcHTt79t\"]\n              }\n            }\n          ]\n        }\n      }\n    }\n\n    USAGE NOTES:\n    \n    - This tool automatically handles pagination for list operations, merging all pages of results\n    - When creating customers, given_name, family_name, company_name, email_address, and phone_number are required\n    - Search operations support complex filters for precise querying of data\n    - Booking operations require setup of service items in the catalog with proper durations and team members\n    - All date/time values should be in RFC 3339 format (e.g., \"2023-04-25T10:00:00Z\")\n\n    LIMITATIONS:\n    \n    - Does not handle payment processing - use the dedicated Square payment APIs for that\n    - Does not support bulk operations (must be done one at a time)\n    - Rate limits apply to all Square API operations\n    \"\"\"\n    \n    # For compatibility with description field that some parts of codebase might use\n    @property\n    def description(self):\n        return f\"{self.simple_description}\\n\\n{self.anthropic_details}\"\n    \n    usage_examples = [\n        {\n            \"input\": {\"operation\": \"list_customers\"},\n            \"output\": {\n                \"success\": True,\n                \"status_code\": 200,\n                \"data\": {\n                    \"customers\": [\n                        {\n                            \"id\": \"JDKYHBWT1D4F8MFH63DBMEN8Y4\",\n                            \"given_name\": \"Amelia\",\n                            \"family_name\": \"Earhart\",\n                            \"email_address\": \"amelia.earhart@example.com\"\n                        }\n                    ]\n                }\n            }\n        },\n        {\n            \"input\": {\n                \"operation\": \"create_customer\",\n                \"given_name\": \"John\",\n                \"family_name\": \"Doe\",\n                \"company_name\": \"Example Company\",\n                \"email_address\": \"john.doe@example.com\",\n                \"phone_number\": \"+14155551234\",\n                \"address\": {\n                    \"address_line_1\": \"500 Electric Ave\",\n                    \"locality\": \"New York\",\n                    \"administrative_district_level_1\": \"NY\",\n                    \"postal_code\": \"10003\",\n                    \"country\": \"US\"\n                }\n            },\n            \"output\": {\n                \"success\": True,\n                \"status_code\": 200,\n                \"data\": {\n                    \"customer\": {\n                        \"id\": \"JDKYHBWT1D4F8MFH63DBMEN8Y4\",\n                        \"created_at\": \"2023-06-15T20:21:54.859Z\",\n                        \"given_name\": \"John\",\n                        \"family_name\": \"Doe\",\n                        \"company_name\": \"Example Company\",\n                        \"email_address\": \"john.doe@example.com\",\n                        \"phone_number\": \"+14155551234\",\n                        \"address\": {\n                            \"address_line_1\": \"500 Electric Ave\",\n                            \"locality\": \"New York\",\n                            \"administrative_district_level_1\": \"NY\",\n                            \"postal_code\": \"10003\",\n                            \"country\": \"US\"\n                        }\n                    }\n                }\n            }\n        },\n        {\n            \"input\": {\n                \"operation\": \"search_availability\",\n                \"query\": {\n                    \"filter\": {\n                        \"start_at_range\": {\n                            \"start_at\": \"2023-10-20T00:00:00Z\",\n                            \"end_at\": \"2023-10-21T00:00:00Z\"\n                        },\n                        \"location_id\": \"LOCATION_ID\",\n                        \"segment_filters\": [\n                            {\n                                \"service_variation_id\": \"SERVICE_VARIATION_ID\",\n                                \"team_member_id_filter\": {\n                                    \"any\": [\"TEAM_MEMBER_ID\"]\n                                }\n                            }\n                        ]\n                    }\n                }\n            },\n            \"output\": {\n                \"success\": True,\n                \"status_code\": 200,\n                \"data\": {\n                    \"availabilities\": [\n                        {\n                            \"start_at\": \"2023-10-20T10:00:00Z\",\n                            \"location_id\": \"LOCATION_ID\",\n                            \"appointment_segments\": [\n                                {\n                                    \"duration_minutes\": 30,\n                                    \"service_variation_id\": \"SERVICE_VARIATION_ID\",\n                                    \"team_member_id\": \"TEAM_MEMBER_ID\"\n                                }\n                            ]\n                        }\n                    ]\n                }\n            }\n        },\n        {\n            \"input\": {\n                \"operation\": \"mark_appointment_paid_by_check\",\n                \"order_id\": \"LCPGUSXNRYQ2XKWCJYQM7AVSMY\",\n                \"amount\": 75.50,\n                \"currency\": \"USD\",\n                \"description\": \"Check #1234 for haircut service\"\n            },\n            \"output\": {\n                \"success\": True,\n                \"status_code\": 200,\n                \"data\": {\n                    \"payment\": {\n                        \"id\": \"DST8F5FNMNX8R14MHTR0HCNX5C\",\n                        \"created_at\": \"2023-10-10T19:15:12.975Z\",\n                        \"updated_at\": \"2023-10-10T19:15:13.975Z\",\n                        \"amount_money\": {\n                            \"amount\": 7550,\n                            \"currency\": \"USD\"\n                        },\n                        \"status\": \"COMPLETED\",\n                        \"source_type\": \"EXTERNAL\",\n                        \"external_details\": {\n                            \"type\": \"OTHER\",\n                            \"source\": \"Check Payment\"\n                        },\n                        \"order_id\": \"LCPGUSXNRYQ2XKWCJYQM7AVSMY\",\n                        \"note\": \"Check #1234 for haircut service\"\n                    }\n                }\n            }\n        }\n    ]\n\n    def __init__(self):\n        \"\"\"\n        Initialize the Square via HTTP Tool with configuration and setup.\n        \"\"\"\n        super().__init__()\n        self.logger.info(\"SquareViaHttpTool initialized\")\n        \n    def run(self, operation: str, **params) -> Dict[str, Any]:\n        \"\"\"\n        Execute a Square API operation with the specified parameters.\n\n        Args:\n            operation: Square API operation to perform (e.g., \"list_customers\", \"create_customer\")\n            **params: Parameters for the specific operation\n\n        Returns:\n            Dictionary containing the API response with the following structure:\n            {\n                \"success\": bool,\n                \"status_code\": int,\n                \"data\": Any  # The parsed JSON response from Square\n            }\n\n        Raises:\n            ToolError: If the operation is invalid or if the API request fails\n        \"\"\"\n        # Import config when needed (avoids circular imports)\n        from config import config\n        \n        # Get api_key\n        try:\n            api_key = config.square_api_key\n        except Exception as e:\n            raise ToolError(\n                f\"Failed to get Square API key: {str(e)}\",\n                ErrorCode.TOOL_INITIALIZATION_ERROR\n            )\n        \n        self.logger.info(f\"Executing Square operation: {operation}\")\n        \n        # Use the main error context for the entire operation\n        with error_context(\n            component_name=self.name,\n            operation=f\"executing {operation}\",\n            error_class=ToolError,\n            error_code=ErrorCode.TOOL_EXECUTION_ERROR,\n            logger=self.logger\n        ):\n            # Validate operation\n            method, endpoint_template, required_params = self._get_operation_details(operation)\n            \n            # Validate required parameters\n            for param in required_params:\n                if param not in params:\n                    raise ToolError(\n                        f\"Missing required parameter '{param}' for operation '{operation}'\",\n                        ErrorCode.TOOL_INVALID_INPUT,\n                        {\"operation\": operation, \"missing_param\": param}\n                    )\n            \n            # Prepare the request\n            base_url = config.squareviahttp_tool.base_url\n            api_version = config.squareviahttp_tool.api_version\n            timeout = params.pop(\"timeout\", config.squareviahttp_tool.timeout)\n            \n            # Replace path parameters in the endpoint template\n            endpoint = endpoint_template\n            for param_name in [\"customer_id\", \"group_id\", \"booking_id\", \"object_id\"]:\n                if f\"{{{param_name}}}\" in endpoint and param_name in params:\n                    endpoint = endpoint.replace(f\"{{{param_name}}}\", str(params[param_name]))\n            \n            # Construct URL\n            url = f\"{base_url}/{api_version}/{endpoint}\"\n            \n            # Prepare headers\n            headers = {\n                \"Square-Version\": \"2023-09-20\",\n                \"Authorization\": f\"Bearer {api_key}\",\n                \"Content-Type\": \"application/json\"\n            }\n            \n            # Check if we need to handle pagination\n            needs_pagination = config.squareviahttp_tool.pagination_auto_merge\n            is_list_operation = operation in [\"list_customers\", \"list_customer_groups\", \"list_catalog\"]\n            is_search_operation = operation in [\"search_customers\", \"search_catalog_items\"]\n            \n            if needs_pagination and (is_list_operation or is_search_operation):\n                return self._handle_paginated_request(operation, method, url, headers, params, timeout)\n            \n            # Prepare request parameters based on HTTP method\n            request_params = {}\n            if method == \"GET\":\n                # For GET requests, use query parameters\n                # Filter out path parameters that were already used in the URL\n                query_params = {k: v for k, v in params.items() \n                               if v is not None and k not in [\"customer_id\", \"group_id\", \"booking_id\", \"object_id\"]}\n                request_params[\"params\"] = query_params\n                request_params[\"json\"] = None\n            else:\n                # For POST/PUT/DELETE, use JSON body\n                # Convert special parameters to the format Square expects\n                request_body = self._prepare_request_body(operation, params)\n                request_params[\"json\"] = request_body\n            \n            # Make the request directly using requests library\n            self.logger.debug(f\"Making Square API request: {method} {url}\")\n            \n            try:\n                # Prepare request kwargs\n                request_kwargs = {\n                    \"method\": method,\n                    \"url\": url,\n                    \"headers\": headers,\n                    \"timeout\": timeout\n                }\n                \n                # Add params or json based on HTTP method\n                if method == \"GET\":\n                    request_kwargs[\"params\"] = request_params.get(\"params\", {})\n                else:\n                    request_kwargs[\"json\"] = request_params.get(\"json\", {})\n                \n                # Execute the request\n                http_response = requests.request(**request_kwargs)\n                \n                # Try to parse response as JSON\n                try:\n                    response_data = http_response.json()\n                except ValueError:\n                    # If not JSON, use text\n                    response_data = http_response.text\n                \n                # Create a standardized response\n                response = {\n                    \"success\": 200 <= http_response.status_code < 300,\n                    \"status_code\": http_response.status_code,\n                    \"data\": response_data\n                }\n                \n                # Check for API errors\n                if not response[\"success\"]:\n                    self._handle_error_response(operation, response)\n                    \n            except requests.exceptions.Timeout:\n                raise ToolError(\n                    f\"Square API request timed out after {timeout} seconds\",\n                    ErrorCode.API_TIMEOUT_ERROR,\n                    {\"url\": url, \"method\": method}\n                )\n            except requests.exceptions.ConnectionError as e:\n                raise ToolError(\n                    f\"Connection error with Square API: {str(e)}\",\n                    ErrorCode.API_CONNECTION_ERROR,\n                    {\"url\": url, \"method\": method}\n                )\n            except requests.exceptions.RequestException as e:\n                raise ToolError(\n                    f\"Error making request to Square API: {str(e)}\",\n                    ErrorCode.API_RESPONSE_ERROR,\n                    {\"url\": url, \"method\": method}\n                )\n            \n            return {\n                \"success\": True,\n                \"status_code\": response.get(\"status_code\", 200),\n                \"data\": response.get(\"data\", {})\n            }\n            \n    def _prepare_request_body(self, operation: str, params: Dict[str, Any]) -> Dict[str, Any]:\n        \"\"\"\n        Prepare the request body based on the operation type.\n        \n        Args:\n            operation: The Square operation name\n            params: Parameters for the operation\n            \n        Returns:\n            Dictionary containing the properly formatted request body\n        \"\"\"\n        request_body = {}\n        \n        # Handle special cases for different operations\n        if operation == \"mark_appointment_paid_by_check\":\n            # Generate a unique idempotency key\n            idempotency_key = params.get(\"idempotency_key\", str(uuid.uuid4()))\n            \n            # Convert amount to integer cents if it's a float\n            amount = params[\"amount\"]\n            if isinstance(amount, float):\n                amount = int(amount * 100)\n            \n            currency = params.get(\"currency\", \"USD\")\n            description = params.get(\"description\", \"Check payment for appointment\")\n            order_id = params[\"order_id\"]\n            autocomplete = params.get(\"autocomplete\", True)\n            \n            # Create the payment request\n            request_body = {\n                \"source_id\": \"EXTERNAL\",\n                \"idempotency_key\": idempotency_key,\n                \"amount_money\": {\n                    \"amount\": amount,\n                    \"currency\": currency\n                },\n                \"order_id\": order_id,\n                \"autocomplete\": autocomplete,\n                \"external_details\": {\n                    \"type\": \"OTHER\",\n                    \"source\": \"Check Payment\"\n                },\n                \"note\": description\n            }\n            \n        elif operation == \"search_customers\":\n            # Structure the query dict properly\n            request_body = {\n                \"query\": params.get(\"query\", {}),\n                \"limit\": params.get(\"limit\", 100),\n            }\n            if \"cursor\" in params:\n                request_body[\"cursor\"] = params[\"cursor\"]\n        elif operation == \"search_catalog_items\":\n            request_body = {\n                \"text_filter\": params.get(\"text_filter\"),\n                \"object_types\": params.get(\"object_types\", [\"ITEM\"]),\n                \"query\": params.get(\"query\", {}),\n                \"limit\": params.get(\"limit\", 100),\n            }\n            if \"cursor\" in params:\n                request_body[\"cursor\"] = params[\"cursor\"]\n        elif operation == \"create_customer_group\":\n            # Nest the name in a \"group\" object\n            request_body = {\n                \"group\": {\n                    \"name\": params[\"name\"]\n                }\n            }\n        elif operation == \"update_customer_group\":\n            # Nest the name in a \"group\" object\n            request_body = {\n                \"group\": {\n                    \"name\": params[\"name\"]\n                }\n            }\n        elif operation == \"create_booking\":\n            # Special structure for bookings\n            booking = {\n                \"start_at\": params[\"start_at\"],\n                \"location_id\": params[\"location_id\"],\n            }\n            \n            if \"customer_id\" in params:\n                booking[\"customer_id\"] = params[\"customer_id\"]\n            \n            if \"appointment_segments\" in params:\n                booking[\"appointment_segments\"] = params[\"appointment_segments\"]\n            \n            request_body = {\n                \"booking\": booking\n            }\n        elif operation == \"update_booking\":\n            request_body = {\"booking\": params[\"booking\"]}\n        elif operation == \"cancel_booking\":\n            if \"booking_version\" in params:\n                request_body = {\"booking_version\": params[\"booking_version\"]}\n        elif operation == \"search_availability\":\n            request_body = {\"query\": params[\"query\"]}\n        elif operation == \"create_customer\":\n            # Pass through all parameters for customer creation\n            customer_fields = [\n                \"given_name\", \"family_name\", \"company_name\", \"email_address\",\n                \"phone_number\", \"reference_id\", \"note\", \"address\"\n            ]\n            customer_data = {k: v for k, v in params.items() if k in customer_fields and v is not None}\n            request_body = {\"customer\": customer_data}\n        elif operation == \"update_customer\":\n            # Remove customer_id from request body since it's in the URL\n            customer_fields = [\n                \"given_name\", \"family_name\", \"company_name\", \"email_address\",\n                \"phone_number\", \"reference_id\", \"note\", \"address\"\n            ]\n            customer_data = {k: v for k, v in params.items() if k in customer_fields and v is not None}\n            request_body = {\"customer\": customer_data}\n        else:\n            # For other operations, pass through relevant parameters\n            request_body = {k: v for k, v in params.items() \n                          if v is not None and k not in [\"customer_id\", \"group_id\", \"object_id\", \"booking_id\"]}\n            \n        return request_body\n        \n    def _handle_error_response(self, operation: str, response: Dict[str, Any]) -> None:\n        \"\"\"\n        Handle error responses from the Square API.\n        \n        Args:\n            operation: The Square operation name\n            response: The HTTP response data\n            \n        Raises:\n            ToolError: With details about the API error\n        \"\"\"\n        error_detail = response.get(\"data\", {})\n        error_message = \"Square API request failed\"\n        \n        # Try to extract a meaningful error message\n        if isinstance(error_detail, dict) and \"errors\" in error_detail:\n            errors = error_detail[\"errors\"]\n            if errors and isinstance(errors, list) and len(errors) > 0:\n                error_message = f\"Square API error: {errors[0].get('detail', 'Unknown error')}\"\n        \n        raise ToolError(\n            error_message,\n            ErrorCode.API_RESPONSE_ERROR,\n            {\"operation\": operation, \"status_code\": response.get(\"status_code\"), \"errors\": error_detail}\n        )\n        \n    def _handle_paginated_request(self, operation: str, method: str, url: str, \n                                 headers: Dict[str, str], params: Dict[str, Any], \n                                 timeout: int) -> Dict[str, Any]:\n        \"\"\"\n        Handle a paginated request by automatically fetching all pages.\n        \n        Args:\n            operation: The Square operation name\n            method: HTTP method\n            url: Base URL for the request\n            headers: Request headers\n            params: Request parameters\n            timeout: Request timeout\n            \n        Returns:\n            Dictionary with combined results from all pages\n        \"\"\"\n        from config import config\n        \n        # Import config\n        pagination_limit = config.squareviahttp_tool.pagination_limit\n        \n        # Initialize variables\n        all_results = []\n        result_field = self._get_result_field_for_operation(operation)\n        cursor = params.get(\"cursor\", None)\n        total_count = 0\n        \n        # Set the default limit if not provided\n        if is_list_operation := operation.startswith(\"list_\"):\n            if \"limit\" not in params:\n                params[\"limit\"] = 100 if operation == \"list_customers\" else 50\n        elif is_search_operation := operation.startswith(\"search_\"):\n            if \"limit\" not in params and \"query\" in params:\n                params[\"query\"][\"limit\"] = 100\n        \n        # Prepare first request\n        request_params = {}\n        if method == \"GET\":\n            # For GET requests, use query parameters\n            query_params = {k: v for k, v in params.items() \n                           if v is not None and k not in [\"customer_id\", \"group_id\", \"booking_id\", \"object_id\"]}\n            if cursor:\n                query_params[\"cursor\"] = cursor\n            request_params[\"params\"] = query_params\n            request_params[\"json\"] = None\n        else:\n            # For POST requests, use JSON body\n            request_body = self._prepare_request_body(operation, params)\n            if cursor:\n                request_body[\"cursor\"] = cursor\n            request_params[\"json\"] = request_body\n        \n        # Loop through all pages\n        while True:\n            # Make the request directly using requests library\n            self.logger.debug(f\"Making paginated Square API request: {method} {url}\")\n            \n            try:\n                # Prepare request kwargs\n                request_kwargs = {\n                    \"method\": method,\n                    \"url\": url,\n                    \"headers\": headers,\n                    \"timeout\": timeout\n                }\n                \n                # Add params or json based on HTTP method\n                if method == \"GET\":\n                    request_kwargs[\"params\"] = request_params.get(\"params\", {})\n                else:\n                    request_kwargs[\"json\"] = request_params.get(\"json\", {})\n                \n                # Execute the request\n                http_response = requests.request(**request_kwargs)\n                \n                # Try to parse response as JSON\n                try:\n                    response_data = http_response.json()\n                except ValueError:\n                    # If not JSON, use text\n                    response_data = http_response.text\n                \n                # Create a standardized response\n                response = {\n                    \"success\": 200 <= http_response.status_code < 300,\n                    \"status_code\": http_response.status_code,\n                    \"data\": response_data\n                }\n                \n                # Check for API errors\n                if not response[\"success\"]:\n                    self._handle_error_response(operation, response)\n                    \n            except requests.exceptions.Timeout:\n                raise ToolError(\n                    f\"Square API request timed out after {timeout} seconds\",\n                    ErrorCode.API_TIMEOUT_ERROR,\n                    {\"url\": url, \"method\": method}\n                )\n            except requests.exceptions.ConnectionError as e:\n                raise ToolError(\n                    f\"Connection error with Square API: {str(e)}\",\n                    ErrorCode.API_CONNECTION_ERROR,\n                    {\"url\": url, \"method\": method}\n                )\n            except requests.exceptions.RequestException as e:\n                raise ToolError(\n                    f\"Error making request to Square API: {str(e)}\",\n                    ErrorCode.API_RESPONSE_ERROR,\n                    {\"url\": url, \"method\": method}\n                )\n            \n            # Extract data and cursor\n            data = response.get(\"data\", {})\n            \n            # Get results and add to our list\n            if result_field in data:\n                results = data[result_field]\n                if isinstance(results, list):\n                    all_results.extend(results)\n                    total_count += len(results)\n            \n            # Check if we need to fetch the next page\n            next_cursor = data.get(\"cursor\", None)\n            if not next_cursor or total_count >= pagination_limit:\n                break\n            \n            # Update cursor for next request\n            if method == \"GET\":\n                request_params[\"params\"][\"cursor\"] = next_cursor\n            else:\n                request_params[\"json\"][\"cursor\"] = next_cursor\n        \n        # Create final response with all pages\n        result = {\n            \"success\": True,\n            \"status_code\": 200,\n            \"data\": {\n                result_field: all_results\n            }\n        }\n        \n        # Include metadata if available\n        if \"count\" in data:\n            result[\"data\"][\"count\"] = data[\"count\"]\n        \n        return result\n    \n    def _get_result_field_for_operation(self, operation: str) -> str:\n        \"\"\"\n        Get the result field name for a given operation.\n        \n        Args:\n            operation: The Square operation name\n            \n        Returns:\n            String name of the field containing the results\n        \"\"\"\n        operation_result_map = {\n            \"list_customers\": \"customers\",\n            \"search_customers\": \"customers\",\n            \"list_customer_groups\": \"groups\",\n            \"list_catalog\": \"objects\",\n            \"search_catalog_items\": \"items\"\n        }\n        \n        return operation_result_map.get(operation, \"objects\")\n    \n    def _get_operation_details(self, operation: str) -> tuple:\n        \"\"\"\n        Get the HTTP method, endpoint, and required parameters for a Square operation.\n        \n        Args:\n            operation: The Square operation name\n            \n        Returns:\n            Tuple of (HTTP method, endpoint, required parameters list)\n            \n        Raises:\n            ToolError: If the operation is not supported\n        \"\"\"\n        operations = {\n            # Customer operations\n            \"list_customers\": (\"GET\", \"customers\", []),\n            \"create_customer\": (\"POST\", \"customers\", [\"given_name\", \"family_name\", \"company_name\", \"email_address\", \"phone_number\", \"address\"]),\n            \"search_customers\": (\"POST\", \"customers/search\", []),\n            \"retrieve_customer\": (\"GET\", \"customers/{customer_id}\", [\"customer_id\"]),\n            \"update_customer\": (\"PUT\", \"customers/{customer_id}\", [\"customer_id\"]),\n            \"add_customer_to_group\": (\"PUT\", \"customers/{customer_id}/groups/{group_id}\", [\"customer_id\", \"group_id\"]),\n            \"remove_customer_from_group\": (\"DELETE\", \"customers/{customer_id}/groups/{group_id}\", [\"customer_id\", \"group_id\"]),\n            \n            # Customer group operations\n            \"list_customer_groups\": (\"GET\", \"customers/groups\", []),\n            \"create_customer_group\": (\"POST\", \"customers/groups\", [\"name\"]),\n            \"retrieve_customer_group\": (\"GET\", \"customers/groups/{group_id}\", [\"group_id\"]),\n            \"update_customer_group\": (\"PUT\", \"customers/groups/{group_id}\", [\"group_id\", \"name\"]),\n            \n            # Booking operations\n            \"create_booking\": (\"POST\", \"bookings\", [\"start_at\", \"location_id\", \"appointment_segments\"]),\n            \"search_availability\": (\"POST\", \"bookings/availability/search\", [\"query\"]),\n            \"retrieve_booking\": (\"GET\", \"bookings/{booking_id}\", [\"booking_id\"]),\n            \"update_booking\": (\"PUT\", \"bookings/{booking_id}\", [\"booking_id\", \"booking\"]),\n            \"cancel_booking\": (\"POST\", \"bookings/{booking_id}/cancel\", [\"booking_id\"]),\n            \n            # Catalog operations\n            \"list_catalog\": (\"GET\", \"catalog/list\", []),\n            \"retrieve_catalog_object\": (\"GET\", \"catalog/object/{object_id}\", [\"object_id\"]),\n            \"search_catalog_items\": (\"POST\", \"catalog/search\", []),\n            \n            # Payment operations\n            \"mark_appointment_paid_by_check\": (\"POST\", \"payments\", [\"order_id\", \"amount\"])\n        }\n        \n        if operation not in operations:\n            raise ToolError(\n                f\"Unsupported Square operation: {operation}\",\n                ErrorCode.TOOL_INVALID_INPUT,\n                {\"available_operations\": list(operations.keys())}\n            )\n        \n        method, endpoint_template, required_params = operations[operation]\n        \n        # We just return the endpoint template - path param replacement happens in run()\n        return method, endpoint_template, required_params",
+  "description": "A comprehensive tool for interacting with the Square API via direct HTTP requests, enabling management of customers, bookings, catalog items, and related business operations.",
+  "operations": [
+    {
+      "name": "list_customers",
+      "description": "Retrieve a paginated list of all customers, automatically merging multiple pages of results.",
+      "required_parameters": [],
+      "optional_parameters": [
+        {
+          "name": "cursor",
+          "type": "string",
+          "description": "Pagination cursor for retrieving subsequent result pages",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "description": "Maximum number of results to return per page",
+          "default": 100
+        }
+      ]
+    },
+    {
+      "name": "create_customer",
+      "description": "Create a new customer in the Square system with comprehensive contact and address information.",
+      "required_parameters": [
+        {
+          "name": "given_name",
+          "type": "string",
+          "description": "Customer's first name"
+        },
+        {
+          "name": "family_name",
+          "type": "string",
+          "description": "Customer's last name"
+        },
+        {
+          "name": "company_name",
+          "type": "string",
+          "description": "Customer's company name"
+        },
+        {
+          "name": "email_address",
+          "type": "string",
+          "description": "Customer's email address"
+        },
+        {
+          "name": "phone_number",
+          "type": "string",
+          "description": "Customer's phone number"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "reference_id",
+          "type": "string",
+          "description": "External reference ID for the customer",
+          "default": null
+        },
+        {
+          "name": "note",
+          "type": "string",
+          "description": "Additional notes about the customer",
+          "default": null
+        },
+        {
+          "name": "address",
+          "type": "dictionary",
+          "description": "Detailed address information",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "search_customers",
+      "description": "Search for customers using complex filtering and sorting criteria.",
+      "required_parameters": [],
+      "optional_parameters": [
+        {
+          "name": "query",
+          "type": "dictionary",
+          "description": "Search filter and sorting configuration",
+          "default": {}
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "description": "Maximum number of results to return",
+          "default": 100
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "description": "Pagination cursor for subsequent result pages",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "retrieve_customer",
+      "description": "Fetch detailed information for a specific customer by their unique ID.",
+      "required_parameters": [
+        {
+          "name": "customer_id",
+          "type": "string",
+          "description": "Unique identifier of the customer to retrieve"
+        }
+      ],
+      "optional_parameters": []
+    },
+    {
+      "name": "update_customer",
+      "description": "Modify an existing customer's information in the Square system.",
+      "required_parameters": [
+        {
+          "name": "customer_id",
+          "type": "string",
+          "description": "Unique identifier of the customer to update"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "given_name",
+          "type": "string",
+          "description": "Updated first name",
+          "default": null
+        },
+        {
+          "name": "family_name",
+          "type": "string",
+          "description": "Updated last name",
+          "default": null
+        },
+        {
+          "name": "email_address",
+          "type": "string",
+          "description": "Updated email address",
+          "default": null
+        },
+        {
+          "name": "phone_number",
+          "type": "string",
+          "description": "Updated phone number",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "add_customer_to_group",
+      "description": "Add a specific customer to a designated customer group.",
+      "required_parameters": [
+        {
+          "name": "customer_id",
+          "type": "string",
+          "description": "Unique identifier of the customer"
+        },
+        {
+          "name": "group_id",
+          "type": "string",
+          "description": "Unique identifier of the customer group"
+        }
+      ],
+      "optional_parameters": []
+    },
+    {
+      "name": "remove_customer_from_group",
+      "description": "Remove a customer from a specific customer group.",
+      "required_parameters": [
+        {
+          "name": "customer_id",
+          "type": "string",
+          "description": "Unique identifier of the customer"
+        },
+        {
+          "name": "group_id",
+          "type": "string",
+          "description": "Unique identifier of the customer group"
+        }
+      ],
+      "optional_parameters": []
+    },
+    {
+      "name": "list_customer_groups",
+      "description": "Retrieve a paginated list of all customer groups, automatically merging multiple pages of results.",
+      "required_parameters": [],
+      "optional_parameters": [
+        {
+          "name": "cursor",
+          "type": "string",
+          "description": "Pagination cursor for retrieving subsequent result pages",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "description": "Maximum number of results to return per page",
+          "default": 50
+        }
+      ]
+    },
+    {
+      "name": "create_customer_group",
+      "description": "Create a new customer group in the Square system.",
+      "required_parameters": [
+        {
+          "name": "name",
+          "type": "string",
+          "description": "Name of the customer group"
+        }
+      ],
+      "optional_parameters": []
+    },
+    {
+      "name": "create_booking",
+      "description": "Create a new booking for a specific service, location, and time.",
+      "required_parameters": [
+        {
+          "name": "start_at",
+          "type": "string",
+          "description": "Start time for the booking in RFC 3339 format"
+        },
+        {
+          "name": "location_id",
+          "type": "string",
+          "description": "Square location ID for the booking"
+        },
+        {
+          "name": "appointment_segments",
+          "type": "array",
+          "description": "Details of service segments for the booking"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "customer_id",
+          "type": "string",
+          "description": "Square customer ID associated with the booking",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "search_availability",
+      "description": "Search for available booking times based on specific service and location criteria.",
+      "required_parameters": [
+        {
+          "name": "query",
+          "type": "dictionary",
+          "description": "Search criteria for availability"
+        }
+      ],
+      "optional_parameters": []
+    },
+    {
+      "name": "mark_appointment_paid_by_check",
+      "description": "Record a check payment for a specific order or appointment.",
+      "required_parameters": [
+        {
+          "name": "order_id",
+          "type": "string",
+          "description": "Unique identifier of the order being paid"
+        },
+        {
+          "name": "amount",
+          "type": "number",
+          "description": "Payment amount in dollars"
+        }
+      ],
+      "optional_parameters": [
+        {
+          "name": "currency",
+          "type": "string",
+          "description": "Three-letter currency code",
+          "default": "USD"
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "description": "Payment description",
+          "default": "Check payment for appointment"
+        },
+        {
+          "name": "idempotency_key",
+          "type": "string",
+          "description": "Unique key to prevent duplicate payments",
+          "default": "auto-generated UUID"
+        },
+        {
+          "name": "autocomplete",
+          "type": "boolean",
+          "description": "Whether to auto-complete the payment",
+          "default": true
+        }
+      ]
+    },
+    {
+      "name": "list_catalog",
+      "description": "Retrieve a paginated list of catalog items, automatically merging multiple pages of results.",
+      "required_parameters": [],
+      "optional_parameters": [
+        {
+          "name": "cursor",
+          "type": "string",
+          "description": "Pagination cursor for retrieving subsequent result pages",
+          "default": null
+        },
+        {
+          "name": "types",
+          "type": "string",
+          "description": "Comma-separated list of catalog object types",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "search_catalog_items",
+      "description": "Search for catalog items using complex filtering and sorting criteria.",
+      "required_parameters": [],
+      "optional_parameters": [
+        {
+          "name": "query",
+          "type": "dictionary",
+          "description": "Search filter and sorting configuration",
+          "default": {}
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "description": "Pagination cursor for subsequent result pages",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "description": "Maximum number of results to return",
+          "default": 100
+        }
+      ]
+    }
+  ],
+  "complexity_category": "standard",
+  "recommended_examples": 45
+}
