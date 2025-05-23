@@ -46,8 +46,8 @@ class CalendarToolConfig(BaseModel):
         description="Dictionary of calendar entries keyed by unique identifier"
     )
     default_calendar_url: str = Field(
-        default="https://calendar.google.com/calendar/ical/a8hin9meea2nnatan6f87837ig%40group.calendar.google.com/private-2c4208fb60a802fb80b83f73b034201d/basic.ics",
-        description="Default iCalendar URL to use (for simple configuration)"
+        default=None,
+        description="Default iCalendar URL to use (for simple configuration). MUST be set using DEFAULT_CALENDAR_URL environment variable."
     )
     default_url: str = Field(
         default="",
@@ -393,21 +393,21 @@ class ICalProvider(CalendarProvider):
             response = requests.get(self.url, timeout=30)
             response.raise_for_status()
             
-            # Parse the iCalendar content
-            calendar = caldav.lib.error.vcal.VCalendar(response.text)
+            # Parse the iCalendar content using icalendar library
+            from icalendar import Calendar
+            calendar = Calendar.from_ical(response.text)
             
             events = []
             event_count = 0
             
             # Extract events from the calendar
-            for component in calendar.components():
-                if component.name == 'VEVENT':
+            for component in calendar.walk('VEVENT'):
                     dtstart = component.get('dtstart')
                     if not dtstart:
                         continue
                         
                     # Get event start time
-                    event_start = dtstart.value
+                    event_start = dtstart.dt
                     
                     # Skip events outside our date range
                     if isinstance(event_start, datetime):
@@ -423,7 +423,7 @@ class ICalProvider(CalendarProvider):
                     # Get event end time
                     dtend = component.get('dtend')
                     if dtend:
-                        event_end = dtend.value
+                        event_end = dtend.dt
                     else:
                         # Default to 1 hour for events without end time
                         if isinstance(event_start, datetime):
@@ -467,19 +467,29 @@ class ICalProvider(CalendarProvider):
                         # All-day event
                         end_str = str(event_end)
                     
+                    # Get UID value or generate one if not present
+                    uid = component.get('uid')
+                    uid_value = str(uid) if uid else str(uuid.uuid4())
+                    
+                    # Get summary value or use default
+                    summary = component.get('summary')
+                    summary_value = str(summary) if summary else 'No Title'
+                    
                     event_info = {
-                        "event_id": str(component.get('uid', str(uuid.uuid4()))),
-                        "summary": str(component.get('summary', 'No Title')),
+                        "event_id": uid_value,
+                        "summary": summary_value,
                         "start": start_str,
                         "end": end_str
                     }
                     
                     # Add optional properties if available
-                    if component.get('description'):
-                        event_info["description"] = str(component.get('description'))
+                    description = component.get('description')
+                    if description:
+                        event_info["description"] = str(description)
                         
-                    if component.get('location'):
-                        event_info["location"] = str(component.get('location'))
+                    location = component.get('location')
+                    if location:
+                        event_info["location"] = str(location)
                     
                     events.append(event_info)
                     event_count += 1
@@ -999,6 +1009,17 @@ class CalendarTool(Tool):
             from config import config
             tool_config = config.get_tool_config("calendar_tool")
             
+            # Load default calendar URL from environment - required, no fallback
+            default_calendar_url = os.environ.get("DEFAULT_CALENDAR_URL")
+            if not default_calendar_url:
+                raise ToolError(
+                    "DEFAULT_CALENDAR_URL environment variable must be set",
+                    ErrorCode.MISSING_ENV_VAR,
+                    {"param": "DEFAULT_CALENDAR_URL"}
+                )
+            tool_config.default_calendar_url = default_calendar_url
+            self.logger.info("Using calendar URL from environment variable")
+            
             # Create cache directory if it doesn't exist
             self.logger.info(f"Using cache directory: {tool_config.cache_directory}")
             self.cache = CalendarCache(tool_config.cache_directory, tool_config.cache_duration)
@@ -1021,8 +1042,20 @@ class CalendarTool(Tool):
             class MinimalConfig(BaseModel):
                 cache_directory: str = Field(default=fallback_cache_dir)
                 cache_duration: int = Field(default=fallback_duration)
+                default_calendar_url: str = Field(default=None)
             
+            # Initialize minimal config
             self.config = MinimalConfig()
+            
+            # Load default calendar URL from environment - required, no fallback
+            default_calendar_url = os.environ.get("DEFAULT_CALENDAR_URL")
+            if not default_calendar_url:
+                raise ToolError(
+                    "DEFAULT_CALENDAR_URL environment variable must be set",
+                    ErrorCode.MISSING_ENV_VAR,
+                    {"param": "DEFAULT_CALENDAR_URL"}
+                )
+            self.config.default_calendar_url = default_calendar_url
         
     def _create_caldav_provider(self, url: str, username: str, password: str) -> CalDAVProvider:
         """
@@ -1087,18 +1120,26 @@ class CalendarTool(Tool):
         # Get a list of calendars to fetch
         calendars = dict(self.config.calendars)  # Make a copy
         
-        # Check if there's a default calendar URL configured - if so, add it to the list
-        if self.config.default_calendar_url:
-            # Create a CalendarEntry for the default URL if it doesn't exist in calendars
-            default_url = self.config.default_calendar_url
-            default_entry = CalendarEntry(
-                name="Default Calendar",
-                url=default_url,
-                type="ical"
+        # Use the default calendar URL from environment variable (must be set per our rule)
+        # At this point, default_calendar_url must exist because we checked during initialization
+        # If it doesn't exist due to some unexpected reason, this is an error
+        default_url = self.config.default_calendar_url
+        if not default_url:
+            raise ToolError(
+                "DEFAULT_CALENDAR_URL environment variable must be set",
+                ErrorCode.MISSING_ENV_VAR,
+                {"param": "DEFAULT_CALENDAR_URL"}
             )
-            # Add to calendars if not already present
-            if "default" not in calendars:
-                calendars["default"] = default_entry
+        
+        # Create a CalendarEntry for the default URL if it doesn't exist in calendars
+        default_entry = CalendarEntry(
+            name="Default Calendar",
+            url=default_url,
+            type="ical"
+        )
+        # Add to calendars if not already present
+        if "default" not in calendars:
+            calendars["default"] = default_entry
         
         if not calendars:
             # No calendars configured, return empty result
@@ -1265,16 +1306,17 @@ class CalendarTool(Tool):
                 return self._fetch_all_calendars(calendar_name, start_date, end_date)
                 
             elif action == "read_ical_url":
-                # If no ical_url provided, try to use the default calendar URL
+                # If no ical_url provided, use the default calendar URL from environment
                 if not ical_url:
-                    if self.config.default_calendar_url:
-                        ical_url = self.config.default_calendar_url
-                    else:
+                    # At this point, default_calendar_url must exist because we checked during initialization
+                    # If it doesn't exist due to some unexpected reason, this is an error
+                    if not self.config.default_calendar_url:
                         raise ToolError(
-                            "iCalendar URL must be provided or configured in settings",
-                            ErrorCode.TOOL_INVALID_INPUT,
-                            {"param": "ical_url"}
+                            "DEFAULT_CALENDAR_URL environment variable must be set",
+                            ErrorCode.MISSING_ENV_VAR,
+                            {"param": "DEFAULT_CALENDAR_URL"}
                         )
+                    ical_url = self.config.default_calendar_url
                 
                 ValidationUtils.require_non_empty_string(ical_url, "ical_url")
                 

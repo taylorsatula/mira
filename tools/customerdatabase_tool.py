@@ -50,10 +50,10 @@ class CustomerDatabaseTool(Tool):
     """
 
     name = "customerdatabase_tool"
-    simple_description = """Manages a comprehensive customer directory using database storage with robust search and location-based capabilities. This tool allows you to retrieve details about existing customers. DO NOT use this tool if you believe you need to create a new customer or edit an existing customer's details.. If you need to create a new customer/edit details use square_tool instead."""
+    simple_description = """Manages a comprehensive customer directory using database storage with robust search and location-based capabilities. This tool allows you to retrieve details about existing customers. DO NOT use this tool if you believe you need to create a new customer or edit an existing customer's details. If you need to create a new customer/edit details use squareviahttp_tool instead."""
     
     implementation_details = """
-This tool maintains a SQLite database for customer data with support for importing from external systems (currently Square). It provides efficient searching and retrieving of customer data through multiple operations:
+This tool maintains a SQLite database for customer data with support for importing from external systems (currently Square via HTTP API). It provides efficient searching and retrieving of customer data through multiple operations:
 
 1. search_customers: Find customers by various identifiers including name, email, phone number, or address. 
    - Requires 'query' parameter with your search term
@@ -73,6 +73,8 @@ This tool maintains a SQLite database for customer data with support for importi
 
 4. rebuild_directory: Refresh the customer database from external systems.
    - Optional 'source' parameter (currently only supports 'square')
+   - Uses the squareviahttp_tool to retrieve customer data directly from Square API
+   - Automatically handles pagination to retrieve all customers
    - Returns status information about the rebuild operation"""
 
     description = simple_description + implementation_details
@@ -169,13 +171,30 @@ This tool maintains a SQLite database for customer data with support for importi
             )
             
         try:
-            # Import square_tool here to avoid circular imports
-            from tools.square_tool import SquareTool
+            # Import squareviahttp_tool here to avoid circular imports
+            self.logger.info("Attempting to import Square HTTP tool module...")
+            try:
+                from tools.squareviahttp_tool import SquareViaHttpTool
+                self.logger.info("Successfully imported SquareViaHttpTool module")
+            except ImportError as import_err:
+                self.logger.error(f"Failed to import SquareViaHttpTool: {import_err}")
+                raise ToolError(
+                    f"Cannot rebuild from Square: module import failed: {import_err}",
+                    ErrorCode.TOOL_EXECUTION_ERROR
+                )
             
             self.logger.info("Rebuilding customer directory from Square API...")
             
-            # Create a Square tool instance
-            square_tool = SquareTool()
+            # Create a Square tool instance with error handling
+            try:
+                square_tool = SquareViaHttpTool()
+                self.logger.info("Successfully created SquareViaHttpTool instance")
+            except Exception as instance_err:
+                self.logger.error(f"Failed to create SquareViaHttpTool instance: {instance_err}")
+                raise ToolError(
+                    f"Square tool initialization failed: {instance_err}",
+                    ErrorCode.TOOL_EXECUTION_ERROR
+                )
             
             # Track customer IDs we find for deletion logic
             found_customer_ids = set()
@@ -183,59 +202,49 @@ This tool maintains a SQLite database for customer data with support for importi
             # Create database instance
             db = self.db
             
-            # Fetch all customers with pagination from Square
-            cursor = None
-            total_fetched = 0
-            new_count = 0
-            
             # Get existing customer IDs from database
             with db.get_session() as session:
                 existing_ids = {id for id, in session.query(Customer.id).all()}
 
-            while True:
-                # Get a batch of customers from Square
-                result = square_tool.run(
-                    operation="list_customers",
-                    cursor=cursor,
-                    limit=100
-                )
+            # Get all customers from Square at once
+            new_count = 0
+            total_fetched = 0
+            
+            # Get all customers from Square using squareviahttp_tool
+            # This automatically handles pagination and merges results
+            result = square_tool.run(operation="list_customers")
+            
+            # Extract customers from the response
+            # The HTTP tool returns data in a different structure than the original square_tool
+            customers = result.get("data", {}).get("customers", [])
+            total_fetched = len(customers)
+            
+            # Process each customer - add new ones or update existing
+            for customer_data in customers:
+                customer_id = customer_data.get("id")
+                if not customer_id:
+                    continue
 
-                customers = result.get("customers", [])
-                if not customers:
-                    break
+                # Track that we found this customer
+                found_customer_ids.add(customer_id)
 
-                # Process each customer - only add new ones
-                for customer_data in customers:
-                    customer_id = customer_data.get("id")
-                    if not customer_id:
-                        continue
+                # Create or update customer in database
+                try:
+                    customer = Customer.from_dict(customer_data)
+                    
+                    if customer_id in existing_ids:
+                        # Update existing customer
+                        db.update(customer)
+                    else:
+                        # Add new customer
+                        db.add(customer)
+                        new_count += 1
+                except Exception as e:
+                    self.logger.error(f"Error processing customer {customer_id}: {e}")
 
-                    # Track that we found this customer
-                    found_customer_ids.add(customer_id)
-
-                    # Create or update customer in database
-                    try:
-                        customer = Customer.from_dict(customer_data)
-                        
-                        if customer_id in existing_ids:
-                            # Update existing customer
-                            db.update(customer)
-                        else:
-                            # Add new customer
-                            db.add(customer)
-                            new_count += 1
-                    except Exception as e:
-                        self.logger.error(f"Error processing customer {customer_id}: {e}")
-
-                total_fetched += len(customers)
-                self.logger.info(
-                    f"Processed {len(customers)} customers, total: {total_fetched}, new: {new_count}"
-                )
-
-                # Get the next cursor for pagination
-                cursor = result.get("cursor")
-                if not cursor:
-                    break
+            self.logger.info(
+                f"Processed {total_fetched} customers, new: {new_count}"
+            )
 
             # Delete customers that are no longer in Square
             deleted_count = 0
@@ -646,26 +655,18 @@ This tool maintains a SQLite database for customer data with support for importi
             
             # If no results with coordinates, try rebuilding the directory
             if not results_with_distance:
-                self.logger.info(
-                    "No customers with coordinates found. Rebuilding directory..."
-                )
-                result = self.rebuild_directory()
-                
-                if result.get("success", False):
-                    # Re-run the search after rebuilding
-                    return self.find_closest_customers(
-                        lat=lat,
-                        lng=lng,
-                        limit=limit,
-                        max_distance=max_distance,
-                        exclude_customer_id=exclude_customer_id
-                    )
+                # Don't try to rebuild and search again - that causes infinite recursion
+                # Just tell the user there are no customers with coordinates
+                if max_distance is not None:
+                    msg = f"No customers found within {max_distance} meters of the specified location"
                 else:
-                    self.logger.error("Failed to rebuild customer directory")
-                    raise ToolError(
-                        "No customers found with coordinates within the specified range",
-                        ErrorCode.TOOL_EXECUTION_ERROR,
-                    )
+                    msg = "No customers found with coordinates within the specified range"
+                
+                self.logger.info(msg)
+                raise ToolError(
+                    msg,
+                    ErrorCode.TOOL_EXECUTION_ERROR,
+                )
             
             self.logger.info(f"Found {len(results_with_distance)} nearby customers")
             return {"customers": results_with_distance}

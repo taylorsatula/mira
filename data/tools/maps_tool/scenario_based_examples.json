@@ -1,0 +1,482 @@
+[
+  {
+    "tool_name": "maps_tool",
+    "query": "Convert the address '1600 Amphitheatre Parkway, Mountain View, CA' into precise geographic coordinates"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Transform the landmark description 'Eiffel Tower' into its exact latitude and longitude for mapping"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Standardize the location input 'near Golden Gate Bridge' to precise GPS coordinates"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Parse the street address 'Empire State Building, New York' into geographic reference points"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Translate the natural language location 'downtown Chicago' into machine-readable geographic data"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Extract precise geocoding information for 'Sydney Opera House, Australia'"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Generate exact coordinate mapping for the written location '221B Baker Street, London'"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Convert descriptive location 'center of Central Park, NYC' into precise lat/long measurements"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Resolve geographic coordinates for the postal address 'Times Square, Manhattan'"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Transform colloquial location description 'near the Space Needle in Seattle' into precise GPS points"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Geocode the informal location marker 'where the Brooklyn Bridge meets Manhattan'"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Process the street-level address '123 Main Street, Springfield' into geographic reference system"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Map the landmark description 'Cristo Redentor statue in Rio' to its exact global positioning"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Convert semantic location description 'heart of Silicon Valley' into precise coordinate data"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Translate the complex location input 'intersection of Sunset and Vine in Los Angeles' to coordinates"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Generate geographic reference points for 'Buckingham Palace entrance'"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Extract machine-readable location data for 'top of the Empire State Building observation deck'"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Resolve precise geographic positioning for 'middle of Central Park lake'"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Transform the natural language location 'where Rodeo Drive begins in Beverly Hills' into coordinates"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Geocode the descriptive location 'base of the Statue of Liberty' into exact latitude and longitude"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I have GPS coordinates 40.7128° N, 74.0060° W - can you translate these into a human-readable street address?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Convert these precise coordinates (51.5074° N, 0.1278° W) into a full postal location description"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "What's the exact address information for these latitude and longitude points: 34.0522° N, 118.2437° W?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Help me understand the geographic context of these coordinates: 37.7749° N, -122.4194° W"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I need to transform raw GPS data (45.4215° N, 75.6972° W) into a readable location description"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can this tool decode geographic coordinates into a complete street-level address?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Translate these geographic coordinates to their precise urban/regional context: 40.4168° N, 3.7038° W"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I want to understand the full location details behind these specific latitude/longitude points"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Perform reverse geocoding for coordinates 48.8566° N, 2.3522° E to get complete address information"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Extract the human-readable location details from these GPS coordinates: 35.6762° N, 139.6503° E"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "What physical address corresponds to these exact geographic coordinates?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Resolve these coordinates (52.5200° N, 13.4050° E) into a comprehensive location description"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I'm looking to convert precise GPS data into a meaningful street-level address"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Transform coordinate data (43.6532° N, 79.3832° W) into a complete geographic context"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Decode the location information for these specific latitude and longitude points"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I need to understand the exact urban location represented by these geographic coordinates"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you provide a full address breakdown for these precise GPS points: 37.3382° N, 121.8863° W?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Reverse geocode these coordinates to reveal their complete location context"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Translate raw geographic coordinates into a comprehensive address description"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Help me understand the precise location details behind these GPS coordinates (55.7558° N, 37.6173° E)"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you pull the full place details for the Google Maps place ID ChIJN1t_tDeuEmsRUsoyG83frY4?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Retrieve comprehensive location data for this specific business identifier from the maps database"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I need to get all available metadata for the restaurant with unique location reference XYZ789"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Extract the complete profile information for this mapped location using its system identifier"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "What are the full details associated with this place ID: MAPS_LOCATION_12345?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Look up the comprehensive attributes for this specific geographic point in the mapping system"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you fetch all stored information about this precise location using its unique reference code?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Retrieve the extended place profile for the venue with internal tracking number LOC_REFERENCE_6789"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I want to get the detailed location metadata for this specific geographic entry"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Pull the complete set of attributes for this mapped business using its system identifier"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Gather all available information about this location from the mapping database"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Extract the full profile details for the place with reference code PLACE_DETAIL_4567"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Retrieve the comprehensive location information using this specific place identifier"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "What detailed data can you provide about this mapped location using its unique system code?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I need to access the complete profile for this geographic point in the mapping system"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Fetch all stored attributes for the location with internal tracking identifier MAP_LOC_2023"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you provide the full set of details for this specific mapped venue?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Lookup the comprehensive information associated with this place reference number"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Get the complete location profile for this geographic entry using its unique identifier"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Retrieve the extended metadata for this specific mapped location using its system ID"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you help me find all coffee shops within a 1-kilometer radius of my current GPS coordinates?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "List all open restaurants near 40.7128° N, 74.0060° W that are currently serving lunch"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I want to discover pet-friendly amenities within walking distance of my hotel in downtown Chicago"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Show me gas stations and convenience stores within 5 miles of my current location"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Locate all public parks and recreational spaces around these exact coordinates: 37.7749° N, 122.4194° W"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Use my smartphone's geolocation to find emergency medical facilities nearby"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Discover wheelchair-accessible restaurants and cafes within a 2-kilometer radius"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I need to find ATMs and banking services near my current street address"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you map out all grocery stores and supermarkets within a 3-mile radius of my location?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Help me find bike repair shops and cycling-related services near my current position"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "List museums, art galleries, and cultural centers within walking distance of my current coordinates"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Identify all electric vehicle charging stations within a 10-kilometer range"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Show me fitness centers and gyms that are currently open near my present location"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Find child-friendly restaurants and play areas within a 2-mile radius"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Locate coworking spaces and professional meeting venues near my current GPS point"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Discover local farmers markets and fresh produce vendors within a 5-kilometer range"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Help me find veterinary clinics and pet care services near my current address"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Show all bookstores, libraries, and reading spaces within walking distance"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Identify craft breweries, wine bars, and local drinking establishments nearby"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Find hiking trails, nature reserves, and outdoor recreation areas within a 10-mile radius"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you help me pinpoint the exact GPS coordinates for the Statue of Liberty using maps search?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I need to find all coffee shops within a 2-mile radius of downtown Chicago"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Search for 'historic landmarks' in San Francisco and show me their precise locations"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Look up the exact address of the Empire State Building using geospatial search"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can I get the geographical coordinates for the Golden Gate Bridge?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Find and map all pediatric clinics in the Manhattan area"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Perform a location search for 'best sushi restaurants near me'"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I want to use geolocation to identify every museum in Washington D.C."
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Search for 'tech company headquarters' in Silicon Valley with detailed location data"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Help me locate all national parks in Colorado using precise mapping"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you find the exact street address for the Smithsonian Museum?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Perform a geospatial search for 'vintage bookstores' in Portland, Oregon"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I need to map out all universities in the Boston metropolitan area"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Search for 'hiking trails' in the Rocky Mountain National Park with precise GPS tracking"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Find the geographical boundaries of Central Park in New York City"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Use location search to identify all farmers markets in Seattle"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you help me pinpoint the exact location of NASA's Johnson Space Center?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Search for 'historic churches' in New Orleans with their precise coordinates"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Locate all microbreweries in San Diego using advanced geospatial search"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I want to find the exact geographic positioning of the Grand Canyon visitor center"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Calculate the exact driving distance between San Francisco and Los Angeles using precise geographic coordinates"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Help me determine how far my hiking trail is by measuring point-to-point distance between GPS waypoints"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "What's the precise kilometers between these two latitude/longitude markers I recorded during my expedition?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you compute the straight-line distance between my current location and the campsite coordinates?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I need to verify the total kilometers traveled for my road trip route using specific geospatial tracking"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Calculate maritime navigation distance between two offshore research station coordinates"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Measure the exact aerial distance between mountain peaks for my geological survey report"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Determine precise kilometers separating these wilderness tracking points for wildlife migration study"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Help me calculate the exact ground distance for my urban planning project's proposed infrastructure route"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Compute the geodesic distance between remote scientific research locations in Antarctica"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I want to calculate the precise kilometers between these geological survey markers using coordinate precision"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Can you help me measure the exact distance for my cross-country cycling route planning?"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Verify the total kilometers between multiple wilderness checkpoint coordinates for my expedition tracking"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Calculate the straight-line distance between remote weather monitoring stations"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Determine the precise geographic distance for my archaeological site mapping project"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Help me compute the exact kilometers between these marine research buoy locations"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "I need to measure the point-to-point distance for my environmental impact assessment route"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Calculate the geodetic distance between remote seismic monitoring stations"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Compute the precise kilometers separating these wilderness conservation area boundary markers"
+  },
+  {
+    "tool_name": "maps_tool",
+    "query": "Help me verify the exact ground distance between multiple GPS tracking points for my ecological research"
+  }
+]

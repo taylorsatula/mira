@@ -124,11 +124,13 @@ def save_tool_feedback(system: Dict[str, Any], feedback_text: str, conversation:
                 # Handle lists with complex objects
                 content = [str(item) if not isinstance(item, (str, int, float, bool, dict, list, type(None))) else item for item in content]
             
+            # Use the Message's to_dict method to ensure proper serialization
+            message_dict = message.to_dict()
             last_messages.append({
-                "role": message.role,
-                "content": content,
-                "timestamp": message.created_at,
-                "id": message.id
+                "role": message_dict["role"],
+                "content": content,  # Use our sanitized content
+                "timestamp": message_dict["created_at"],  # Use the already serialized datetime
+                "id": message_dict["id"]
             })
         
         # Get active tools information
