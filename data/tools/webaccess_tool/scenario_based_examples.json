@@ -1,0 +1,242 @@
+[
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Send a POST request to the GitHub API to create a new repository"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Retrieve weather data from OpenWeatherMap using an authenticated HTTP GET request"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Make an HTTP request to fetch cryptocurrency price information from Binance API"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Submit form data to a web service using a secure POST method with custom headers"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Pull latest stock market data from a financial API with a configurable HTTP GET request"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Send authentication credentials to a REST API endpoint using a secure HTTP POST"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Retrieve user profile information from a social media API via HTTP request"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Make an HTTP DELETE request to remove a specific resource from a web service"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Execute a PUT request to update user settings on a web application's backend"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Fetch real-time transit information by sending a parameterized HTTP GET request"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Send JSON payload to a webhook for tracking customer interactions"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Retrieve geolocation data from an IP address lookup service using HTTP request"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Make an authenticated request to a cloud storage API to list available files"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Send a PATCH request to update partial information on a web service endpoint"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Execute an HTTP request to validate an email address through verification service"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Retrieve scientific research data from an academic API using configured parameters"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Make a cross-origin HTTP request to fetch data from an external web service"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Send monitoring metrics to a logging API using a custom HTTP POST method"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Fetch real-time translation results from a language translation web service"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Execute a complex HTTP request with multiple headers to interact with a microservice API"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Can you perform a comprehensive web search about emerging AI technologies, filtering results from reputable tech journals and academic sources?"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Search the internet for recent developments in climate change policy, prioritizing scientific and governmental reports"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "I need a detailed web research report on current global economic trends, including sources from financial analysis websites"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Conduct a web search to gather the most recent information about renewable energy innovations, focusing on peer-reviewed sources"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Use web search functionality to compile a current overview of geopolitical tensions in the Middle East from multiple international news sources"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Find and aggregate the latest medical research about COVID-19 variants from scientific databases and medical journals"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Perform a targeted web search about startup ecosystem trends in Southeast Asia, pulling information from business and technology websites"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Can you do a deep web search to collect comprehensive information about recent advancements in quantum computing?"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Search the web and compile a report on emerging cybersecurity threats, prioritizing sources from cybersecurity research institutions"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Use web search to gather current information about space exploration missions from NASA, ESA, and other international space agencies"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Conduct a web research investigation into sustainable agriculture technologies, focusing on academic and industry innovation sources"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Perform a multi-source web search about the latest developments in machine learning and artificial intelligence applications"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Search the internet to create a comprehensive overview of global cryptocurrency market trends from financial analysis platforms"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Use web search functionality to compile a detailed report on current international educational technology innovations"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Gather web-based research about emerging biotechnology breakthroughs from scientific publications and research institutions"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Conduct a comprehensive web search about urban sustainability initiatives in major global cities"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Search the internet for current information about mental health research and emerging psychological treatment methodologies"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Perform a targeted web search to collect the latest information about electric vehicle technology and market developments"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Use web search to compile a report on recent advancements in renewable energy storage technologies"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Conduct a detailed web research investigation into global microplastics pollution and mitigation strategies"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Can you extract the main text content from this complex news article, removing ads and navigation elements?"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Use webpage extraction to parse the research paper's body text from this academic website"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Pull the readable content from this blog post, stripping out comments and sidebar widgets"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Help me extract just the primary article text from this long-form journalism piece"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "I need the core text content from this webpage, excluding headers, footers, and menus"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Can this tool clean up the text from this technical documentation page, removing code blocks and navigation?"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Extract the main content from this product review, filtering out marketing elements"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Use webpage extraction to get a clean text version of this scientific article"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Pull the primary text content from this interview transcript webpage"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Help me parse the readable text from this dense government report website"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Can you extract the article body from this news site, removing all surrounding page elements?"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Use webpage content extraction to get a clean text version of this research blog post"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Pull the main text from this online magazine article, excluding ads and navigation"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Help me extract the core content from this complex multi-section webpage"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Can this tool parse the primary text from this technical tutorial page?"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Extract the readable content from this lengthy online white paper"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Use webpage extraction to clean up the text from this complex corporate report"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Pull the main article text from this travel blog, removing sidebars and comments"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Help me get a clean text version of this detailed scientific research webpage"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Can you extract the primary content from this multilayered news analysis page?"
+  }
+]

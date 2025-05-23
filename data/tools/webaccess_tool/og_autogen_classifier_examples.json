@@ -1,0 +1,122 @@
+[
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Make a GET request to https://api.openweathermap.org/data/2.5/weather with my API key"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Can you fetch data from the endpoint https://api.example.com/users/123?"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Send a POST request to https://api.github.com/gists with my authentication token"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Make an API call to fetch current bitcoin prices from CoinGecko"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Send this JSON data to https://hooks.slack.com/services/T00000/B00000/XXX using POST"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Could you use the HTTP DELETE method to remove my resource at https://myapi.com/items/12345?"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Update my profile information using a PUT request to https://api.example.com/profile"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Search the web for the latest information about quantum computing breakthroughs"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Can you find some recent news articles about SpaceX launches?"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Look up the weather forecast for Madison, Alabama for this weekend"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Find scientific papers published in 2024 about mRNA vaccine development"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Search the internet for reviews of the Sony WH-1000XM5 headphones"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Find information online about the best electric cars in 2025"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Can you search the web for recipes using butternut squash and sage?"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Extract the main content from this webpage: https://www.example.com/blog/article-123"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Grab the text from this news article at https://news.example.com/2025/05/technology-report"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Can you extract just the main article content from https://www.scientificjournal.org/papers/quantum-computing"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Parse this webpage and give me the important information: https://docs.python.org/3/whatsnew/3.12.html"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Extract the markdown content from this documentation page: https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Pull just the recipe instructions and ingredients from https://cooking.nytimes.com/recipes/12345-banana-bread"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Use the fetch API to get current stock data for AAPL"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Check what's the current exchange rate between USD and Euro by fetching from an API"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Use a web search to help me understand the latest developments in AI regulation"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Can you check the documentation for React hooks at their official website?"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Parse the webpage at https://example.com/pricing and extract the pricing table"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Fetch the current weather conditions for New York City using a weather API"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Make an HTTP request to retrieve my account details from https://api.myservice.com/account"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Look up the most recent NASA Mars rover images online"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Extract the main text content from this research paper URL: https://arxiv.org/abs/2304.12345"
+  },
+  {
+    "tool_name": "webaccess_tool",
+    "query": "Find the latest COVID-19 statistics for California by searching online"
+  }
+]
