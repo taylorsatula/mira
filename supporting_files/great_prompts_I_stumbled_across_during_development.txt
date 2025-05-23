@@ -10,6 +10,33 @@
 - Thank you for conceptualizing what the updated architecture may look like. Now I want you to Ultrathink about the BEST way to implement this architecture edit before proceeding. Once you have a mental model you want to work with step back and look at it with a critical eye. If it stands up that is great BUT if it does not you should ultrathink again and again until you have a plan that can stand up to criticism. This may include looking back and making changes to the steps you'd already worked on. Take as much time as you need and don't forget to reference the core tenants in CLAUDE.md. Return a report on your findings. 
 
 
+---------------------
+I need a comprehensive diagnostic analysis of @tools/squareapi_tool.py . Please examine it with a fine-toothed comb to identify all potential issues,
+  inconsistencies, and architectural problems.
+
+  Specifically:
+  1. Trace all execution paths and identify potential failure points
+  2. Examine dependencies and import structures
+  3. Analyze data flow between components and methods
+  4. Identify any incomplete implementations or TODO items
+  5. Check for proper error handling and recovery paths
+  6. Review thread safety and concurrency issues
+  7. Evaluate overall architecture and design patterns
+
+  Don't just skim the surface - dig deep into the implementation details and look for subtle interactions between different parts of the system.
+  Consider both the obvious issues and the potential edge cases.
+
+  After your analysis, provide a detailed report that:
+  - Lists all identified issues in order of severity
+  - Explains the root cause of each problem
+  - Describes potential impact on system behavior
+  - Includes line number references where appropriate
+  - Groups related issues under clear headings
+
+  Please be thorough and critical - I need to understand all the potential problems before attempting to fix them.
+
+
+--------------------
 
 
 
