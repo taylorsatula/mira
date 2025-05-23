@@ -90,7 +90,7 @@
   },
   {
     "dependencies": [],
-    "description": "Manages a comprehensive customer directory using database storage with robust search and location-based capabilities. This tool allows you to retrieve details about existing customers. DO NOT use this tool if you believe you need to create a new customer or edit an existing customer's details.. If you need to create a new customer/edit details use square_tool instead.\nThis tool maintains a SQLite database for customer data with support for importing from external systems (currently Square). It provides efficient searching and retrieving of customer data through multiple operations:\n\n1. search_customers: Find customers by various identifiers including name, email, phone number, or address. \n   - Requires 'query' parameter with your search term\n   - Optional 'category' parameter to specify search type: 'name', 'given_name', 'family_name', 'email', 'phone', 'address', or 'any' (default)\n   - Returns matching customer records with contact details\n\n2. find_closest_customers: Locate nearby customers using geographical coordinates.\n   - Requires 'lat' and 'lng' parameters (latitude/longitude)\n   - Optional 'limit' parameter to specify maximum number of results (default: 1)\n   - Optional 'max_distance' parameter to set maximum distance in meters\n   - Optional 'exclude_customer_id' to omit a specific customer\n   - Returns customers sorted by proximity with distance information\n\n3. get_customer: Retrieve a specific customer record by ID.\n   - Requires 'customer_id' parameter\n   - Returns complete customer information\n\n4. rebuild_directory: Refresh the customer database from external systems.\n   - Optional 'source' parameter (currently only supports 'square')\n   - Returns status information about the rebuild operation",
+    "description": "Manages a comprehensive customer directory using database storage with robust search and location-based capabilities. This tool allows you to retrieve details about existing customers. DO NOT use this tool if you believe you need to create a new customer or edit an existing customer's details. If you need to create a new customer/edit details use squareviahttp_tool instead.\nThis tool maintains a SQLite database for customer data with support for importing from external systems (currently Square via HTTP API). It provides efficient searching and retrieving of customer data through multiple operations:\n\n1. search_customers: Find customers by various identifiers including name, email, phone number, or address. \n   - Requires 'query' parameter with your search term\n   - Optional 'category' parameter to specify search type: 'name', 'given_name', 'family_name', 'email', 'phone', 'address', or 'any' (default)\n   - Returns matching customer records with contact details\n\n2. find_closest_customers: Locate nearby customers using geographical coordinates.\n   - Requires 'lat' and 'lng' parameters (latitude/longitude)\n   - Optional 'limit' parameter to specify maximum number of results (default: 1)\n   - Optional 'max_distance' parameter to set maximum distance in meters\n   - Optional 'exclude_customer_id' to omit a specific customer\n   - Returns customers sorted by proximity with distance information\n\n3. get_customer: Retrieve a specific customer record by ID.\n   - Requires 'customer_id' parameter\n   - Returns complete customer information\n\n4. rebuild_directory: Refresh the customer database from external systems.\n   - Optional 'source' parameter (currently only supports 'square')\n   - Uses the squareviahttp_tool to retrieve customer data directly from Square API\n   - Automatically handles pagination to retrieve all customers\n   - Returns status information about the rebuild operation",
     "name": "customerdatabase_tool",
     "parameters": {
       "kwargs": {
@@ -180,20 +180,6 @@
   {
     "dependencies": [],
     "description": "Base class for all tools",
-    "name": "http_tool",
-    "parameters": {
-      "params": {
-        "description": "Optional query parameters as a dictionary",
-        "type": "any"
-      }
-    },
-    "required_parameters": [
-      "params"
-    ]
-  },
-  {
-    "dependencies": [],
-    "description": "\n    Controls TP-Link Kasa smart home devices on your local network. Use this tool to discover\n    and manage Kasa devices like smart plugs, light bulbs, switches, and light strips.\n    \n    OPERATIONS:\n    - discover_devices: Find all Kasa devices on your local network\n      Parameters:\n        target (optional): The network address to target for discovery (default: 255.255.255.255)\n        timeout (optional): Timeout in seconds for discovery (default: 5)\n        username (optional): Username for devices requiring authentication\n        password (optional): Password for devices requiring authentication\n        \n    - get_device_info: Get detailed information about a specific device\n      Parameters:\n        device_id (required): The device identifier (IP address, hostname, or alias)\n        \n    - power_control: Turn a device on or off\n      Parameters:\n        device_id (required): The device identifier\n        state (required): The desired state (\"on\" or \"off\")\n        \n    - set_brightness: Set the brightness of a light bulb or light strip\n      Parameters:\n        device_id (required): The device identifier\n        brightness (required): Brightness level (0-100)\n        \n    - set_color: Set the color of a light bulb or light strip\n      Parameters:\n        device_id (required): The device identifier\n        hue (required): Hue value (0-360)\n        saturation (required): Saturation value (0-100)\n        value (optional): Brightness value (0-100)\n        \n    - set_color_temp: Set the color temperature of a light bulb\n      Parameters:\n        device_id (required): The device identifier\n        temperature (required): Color temperature in Kelvin\n        \n    - get_energy_usage: Get energy usage data for supported devices\n      Parameters:\n        device_id (required): The device identifier\n        period (optional): Period to retrieve (\"realtime\", \"today\", \"month\")\n        \n    - set_device_alias: Set a new name for the device\n      Parameters:\n        device_id (required): The device identifier\n        alias (required): New name for the device\n        \n    - get_child_devices: Get information about child devices for power strips\n      Parameters:\n        device_id (required): The device identifier of the parent device\n        \n    - control_child_device: Control a specific outlet on a power strip\n      Parameters:\n        device_id (required): The device identifier of the parent device\n        child_id (required): The ID or index of the child device\n        state (required): The desired state (\"on\" or \"off\")\n    \n    RESPONSE FORMAT:\n    - All operations return a success flag and operation-specific data\n    \n    LIMITATIONS:\n    - Only works with devices on the same local network\n    - Some operations may require device-specific parameters\n    - Some devices may require authentication\n    ",
     "name": "kasa_tool",
     "parameters": {
       "kwargs": {
@@ -327,59 +313,71 @@
   },
   {
     "dependencies": [],
-    "description": "\n    Retrieves detailed weather information for any specified location. This tool provides current \n    weather data including temperature, conditions, humidity, and wind speed. Use this tool whenever \n    the user asks about weather conditions for a specific location or needs weather-related information \n    for planning purposes.\n    \n    The 'location' parameter accepts any city or region name and is required. The 'units' parameter \n    controls temperature format and defaults to celsius but can be set to fahrenheit. The optional \n    'include_forecast' parameter, when set to true, will return a 5-day weather forecast in addition \n    to current conditions.\n    \n    Note that this tool generates fictional weather data and should not be used for actual weather \n    planning or emergency situations. Response times are typically under 1 second. The tool does not \n    provide historical weather data or severe weather warnings.\n    ",
-    "name": "weather_tool",
+    "description": "Provides access to Square API for managing bookings, customers, and catalog information. Use this tool when the user needs to interact with Square's business management platform.\n    This tool enables interaction with Square API for various operations including:\n   \n    1. Bookings API:\n       - Create bookings with customer details, services, and time slots\n       - Retrieve, update, and cancel existing bookings\n       - Search for available time slots and existing bookings\n       \n    2. Customers API:\n       - Create and update customer profiles\n       - Search for customers by name, email, phone\n       - Retrieve customer details and history\n       \n    3. Catalog API:\n       - Manage services, items, and categories\n       - Search catalog for available services\n       - Retrieve pricing and availability information\n    \n    Each operation provides automatic validation of required parameters and helpful\n    error messages to guide correct API usage. Default values are provided for common\n    parameters like location_id and team_member_id to simplify requests.\n    ",
+    "name": "squareapi_tool",
     "parameters": {
-      "include_forecast": {
-        "description": "Whether to include a 5-day forecast (defaults to False)",
-        "type": "bool"
+      "kwargs": {
+        "description": "Parameter: kwargs",
+        "type": "any"
       },
-      "location": {
-        "description": "The city or location to get weather for (required)",
-        "type": "str"
-      },
-      "units": {
-        "description": "Temperature units ('celsius' or 'fahrenheit', defaults to configured default)",
+      "operation": {
+        "description": "Operation to perform (see below for valid operations) **kwargs: Operation-specific parameters",
         "type": "str"
       }
     },
     "required_parameters": [
-      "location"
+      "operation",
+      "kwargs"
     ]
   },
   {
     "dependencies": [],
-    "description": "\n    Translates communicative intent into different languages in a natural, culturally \n    appropriate way, considering provided context. Use this tool when users want to know \n    how to express something in another language with proper cultural and situational awareness.\n    \n    This tool does not perform word-for-word translation, but rather understands what \n    the user wants to communicate and produces natural phrasing that a native speaker \n    would use in the specific context. It adjusts for different formality levels, \n    social situations, and can provide pronunciation guides or cultural usage notes.\n    \n    Parameters:\n    - intent: The core message to translate (what you want to say/ask)\n    - target_language: The language to translate the intent into\n    - context: Additional background information that affects how the intent should be expressed\n    - formality_level: Level of formality (casual, neutral, formal, honorific) - defaults to neutral\n    - include_pronunciation: Whether to include a pronunciation guide - defaults to false\n    - include_cultural_notes: Whether to include cultural usage notes - defaults to false\n    \n    This tool is particularly useful for:\n    1. Preparing to communicate in foreign countries with proper social awareness\n    2. Learning culturally appropriate expressions for specific situations\n    3. Generating natural-sounding phrases beyond what simple translation tools provide\n    \n    The tool uses Claude 3.7 Sonnet specifically for optimal translation quality.\n    ",
-    "name": "translation_tool",
+    "description": "\n    Retrieves weather forecast data and calculates heat stress indices for specified locations.\n    Use this tool to get weather forecasts, heat stress information, and related data for planning\n    field work activities based on expected weather conditions.\n    \n    OPERATIONS:\n    - get_forecast: Retrieves weather forecast data for a specific location\n      Parameters:\n        latitude (required): Latitude of the location (-90 to 90)\n        longitude (required): Longitude of the location (-180 to 180)\n        forecast_type (optional): Type of forecast to retrieve (hourly, daily). Default is hourly.\n        date (optional): Specific date for forecast in ISO format (YYYY-MM-DD). If not provided, returns forecast from current date.\n        parameters (optional): Specific parameters to retrieve, comma-separated or as a list. If not provided, returns all available parameters.\n        \n    - get_heat_stress: Retrieves weather data and calculates heat stress indices for a specific location\n      Parameters:\n        latitude (required): Latitude of the location (-90 to 90)\n        longitude (required): Longitude of the location (-180 to 180)\n        forecast_type (optional): Type of forecast to retrieve (hourly, daily). Default is hourly.\n        date (optional): Specific date for forecast in ISO format (YYYY-MM-DD). If not provided, returns forecast from current date.\n        parameters (optional): Additional specific parameters to retrieve beyond those needed for heat stress calculation.\n    \n    RESPONSE FORMAT:\n    - For get_forecast operations: Weather data including requested parameters\n    - For get_heat_stress operations: Weather data plus WBGT values and heat stress risk levels\n    \n    LIMITATIONS:\n    - Forecasts are limited to 7 days into the future\n    - Historical data is not available through this tool\n    - Heat stress calculations are approximations and should be used as guidance, not as definitive safety indicators\n    - Some parameters may not be available for all locations or time periods\n    ",
+    "name": "weather_tool",
     "parameters": {
-      "context": {
-        "description": "Additional background information that affects how the intent should be expressed",
+      "date": {
+        "description": "Specific date for forecast in ISO format (YYYY-MM-DD)",
         "type": "typing.Optional[str]"
       },
-      "formality_level": {
-        "description": "Level of formality (casual, neutral, formal, honorific)",
+      "forecast_type": {
+        "description": "Type of forecast to retrieve (hourly, daily)",
+        "type": "typing.Optional[str]"
+      },
+      "latitude": {
+        "description": "Latitude of the location (-90 to 90)",
+        "type": "typing.Union[float, str]"
+      },
+      "longitude": {
+        "description": "Longitude of the location (-180 to 180)",
+        "type": "typing.Union[float, str]"
+      },
+      "operation": {
+        "description": "The operation to perform (get_forecast, get_heat_stress)",
         "type": "str"
       },
-      "include_cultural_notes": {
-        "description": "Whether to include cultural usage notes",
-        "type": "bool"
-      },
-      "include_pronunciation": {
-        "description": "Whether to include a pronunciation guide",
-        "type": "bool"
-      },
-      "intent": {
-        "description": "The core message to translate (what you want to say/ask)",
-        "type": "str"
-      },
-      "target_language": {
-        "description": "The language to translate into",
-        "type": "str"
+      "parameters": {
+        "description": "Specific parameters to retrieve (comma-separated or list)",
+        "type": "typing.Union[str, typing.List[str], NoneType]"
       }
     },
     "required_parameters": [
-      "intent",
-      "target_language"
+      "operation",
+      "latitude",
+      "longitude"
+    ]
+  },
+  {
+    "dependencies": [],
+    "description": "\n    Provides comprehensive web access capabilities including HTTP requests, web searches, and webpage content extraction.\n    This integrated tool allows you to interact with web resources through direct HTTP requests to APIs,\n    perform web searches for up-to-date information, and extract clean content from webpages.\n    Use this tool whenever you need to access, search, or extract information from the web.\n    \n    This tool combines three web access capabilities:\n    \n    1. HTTP REQUEST FUNCTIONALITY:\n       Makes HTTP requests to external APIs and web services with various methods, parameters, and headers.\n       \n       Operations:\n       - GET: Retrieve data from a specified URL\n         Parameters:\n           url (required): The URL to send the request to\n           params (optional): Query parameters as a dictionary\n           headers (optional): HTTP headers as a dictionary\n           timeout (optional, default=30): Request timeout in seconds\n           response_format (optional, default=\"json\"): Format to return the response in (\"json\", \"text\", or \"full\")\n    \n       - POST: Send data to a specified URL\n         Parameters:\n           url (required): The URL to send the request to\n           data (optional): Form data to send (as a string or dictionary)\n           json (optional): JSON data to send (as a dictionary)\n           params (optional): Query parameters as a dictionary\n           headers (optional): HTTP headers as a dictionary\n           timeout (optional, default=30): Request timeout in seconds\n           response_format (optional, default=\"json\"): Format to return the response in (\"json\", \"text\", or \"full\")\n    \n       - PUT: Update data at a specified URL (parameters same as POST)\n    \n       - DELETE: Delete data at a specified URL (parameters similar to GET)\n    \n    2. WEB SEARCH FUNCTIONALITY:\n       Performs web searches to find up-to-date information from the internet.\n       \n       Operations:\n       - Search the web for information\n         Parameters:\n           query (required): The search query to send to the search engine\n           max_results (optional, default=3): Maximum number of results to return\n           allowed_domains (optional): List of domains to include in results\n           blocked_domains (optional): List of domains to exclude from results\n    \n    3. WEBPAGE EXTRACTION FUNCTIONALITY:\n       Extracts content from webpages using Claude's understanding of web content.\n       \n       Operations:\n       - Extract content from a webpage at a given URL\n         Parameters:\n           url (required): The URL of the webpage to extract content from\n           extraction_prompt (optional): Custom prompt to guide the extraction (default focuses on main content)\n           format (optional, default=\"text\"): Output format - \"text\", \"markdown\", or \"html\"\n           include_metadata (optional, default=False): Whether to include page metadata in the output\n           timeout (optional, default=30): Request timeout in seconds\n    \n    USAGE NOTES:\n    - Use http_request for direct API calls when you know the specific endpoint and parameters\n    - Use web_search when you need to find information but don't have a specific URL\n    - Use webpage_extract when you have a URL but need to get clean, readable content from it\n    - These capabilities can be used together: search for content, then extract from the best result URLs\n    \n    LIMITATIONS:\n    - Cannot make requests to internal network addresses (security restriction)\n    - Search quality depends on query formulation\n    - Very large pages may exceed processing limits\n    - Some websites may block automated access\n    - JavaScript-rendered content may not be fully captured\n    ",
+    "name": "webaccess_tool",
+    "parameters": {
+      "params": {
+        "description": "Parameter: params",
+        "type": "any"
+      }
+    },
+    "required_parameters": [
+      "params"
     ]
   }
 ]
