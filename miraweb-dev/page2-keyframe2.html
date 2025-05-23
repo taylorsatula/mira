@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIRA - Chat Demo</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .chat-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            padding: 20px;
+        }
+        
+        .message-input {
+            display: flex;
+            align-items: center;
+            width: 80%;
+            max-width: 600px;
+            background-color: white;
+            border-radius: 24px;
+            padding: 12px 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e0e0e0;
+            transition: all 0.5s ease-in-out;
+        }
+        
+        .shrink-pill {
+            width: 36px;
+            height: 36px;
+            padding: 0;
+            border-radius: 50%;
+            transform: translateY(40px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .message-text {
+            color: #333;
+            font-size: 16px;
+            flex-grow: 1;
+            min-height: 24px;
+            opacity: 1;
+            transition: opacity 0.3s ease-in-out;
+        }
+        
+        .hide-text {
+            opacity: 0;
+            width: 0;
+            overflow: hidden;
+        }
+        
+        .send-button {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background-color: #4285f4;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            margin-left: 10px;
+            flex-shrink: 0;
+            visibility: hidden;
+        }
+        
+        .send-button svg {
+            width: 20px;
+            height: 20px;
+            fill: white;
+        }
+        
+        .button-press {
+            animation: buttonPress 0.4s ease-in-out;
+        }
+        
+        @keyframes buttonPress {
+            0% { transform: scale(1); background-color: #4285f4; }
+            30% { transform: scale(0.9); background-color: #3367d6; }
+            60% { transform: scale(1.1); background-color: #3367d6; }
+            100% { transform: scale(1); background-color: #4285f4; }
+        }
+        
+        .cursor {
+            display: inline-block;
+            width: 1px;
+            height: 18px;
+            background-color: #333;
+            margin-left: 2px;
+            animation: blink 1s infinite;
+        }
+        
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="message-input">
+            <div class="message-text"></div>
+            <div class="send-button">
+                <svg viewBox="0 0 24 24">
+                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
+                </svg>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const messageText = document.querySelector('.message-text');
+            const sendButton = document.querySelector('.send-button');
+            const text = "I'd like to check my email";
+            let cursor = document.createElement('span');
+            cursor.className = 'cursor';
+            
+            // Start the sequence
+            setTimeout(startTyping, 500);
+            
+            function startTyping() {
+                // Add cursor at the beginning
+                messageText.appendChild(cursor);
+                
+                let i = 0;
+                const typingInterval = setInterval(() => {
+                    if (i < text.length) {
+                        // Add character before the cursor
+                        messageText.insertBefore(
+                            document.createTextNode(text.charAt(i)), 
+                            cursor
+                        );
+                        i++;
+                    } else {
+                        clearInterval(typingInterval);
+                        finishTyping();
+                    }
+                }, 100);
+            }
+            
+            function finishTyping() {
+                // Wait a moment after typing is complete
+                setTimeout(() => {
+                    // Show the send button
+                    sendButton.style.visibility = 'visible';
+                    
+                    // Wait a moment before animating button press
+                    setTimeout(() => {
+                        sendButton.classList.add('button-press');
+                        
+                        // Remove the cursor when the button is pressed
+                        cursor.remove();
+                        
+                        // Wait for the press animation to complete then shrink pill
+                        setTimeout(() => {
+                            // Hide the text
+                            messageText.classList.add('hide-text');
+                            
+                            // Shrink the pill and push it down
+                            setTimeout(() => {
+                                document.querySelector('.message-input').classList.add('shrink-pill');
+                            }, 100);
+                        }, 500);
+                    }, 300);
+                }, 300);
+            }
+        });
+    </script>
+</body>
+</html>

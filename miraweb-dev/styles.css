@@ -1,0 +1,146 @@
+:root {
+    --gold-primary: #c6973b;
+    --gold-light: #e0b458;
+    --gold-dark: #8c6a24;
+    --brown-dark: #3a2b15;
+    --brown-light: #5d442a;
+    --text-color: #333;
+    --background: #f9f4e8;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Georgia, serif;
+    background-color: var(--background);
+    color: var(--text-color);
+    line-height: 1.6;
+}
+
+.container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+@media (min-width: 768px) {
+    .container {
+        flex-direction: row;
+        align-items: center;
+        gap: 4rem;
+    }
+}
+
+.logo-container {
+    margin-bottom: 2rem;
+}
+
+@media (min-width: 768px) {
+    .logo-container {
+        margin-bottom: 0;
+    }
+}
+
+.logo-border {
+}
+
+.mascot {
+    width: 240px;
+    height: 246px;
+    background-image: url('apple-touch-icon.png');
+    background-size: cover;
+}
+
+.content {
+    text-align: center;
+    max-width: 600px;
+}
+
+@media (min-width: 768px) {
+    .content {
+        text-align: left;
+    }
+}
+
+h1 {
+    font-size: 4rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    color: var(--gold-primary);
+    letter-spacing: 2px;
+	font-family: 'Celsius Flower', Georgia, serif;
+}
+
+h2 {
+    font-size: 1.5rem;
+    font-weight: 400;
+    margin-bottom: 1.5rem;
+    color: var(--brown-light);
+    letter-spacing: 1px;
+}
+
+ghost {
+	opacity:  0.5;
+}
+
+.tagline {
+    font-size: 1.25rem;
+    font-style: italic;
+    margin-bottom: 1.5rem;
+    color: var(--gold-dark);
+}
+
+.description {
+    margin-bottom: 2rem;
+    font-size: 1rem;
+    line-height: 1.8;
+}
+
+.cta {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+@media (min-width: 768px) {
+    .cta {
+        justify-content: flex-start;
+    }
+}
+
+.button {
+    display: inline-block;
+    padding: 0.75rem 1.5rem;
+    background-color: transparent;
+    color: var(--gold-primary);
+    text-decoration: none;
+    border: 2px solid var(--gold-primary);
+    border-radius: 2rem;
+    font-weight: 700;
+    transition: all 0.3s ease;
+}
+
+.button:hover {
+    background-color: var(--gold-primary);
+    color: white;
+}
+
+.button.primary {
+    background-color: var(--gold-primary);
+    color: white;
+}
+
+.button.primary:hover {
+    background-color: var(--gold-dark);
+    border-color: var(--gold-dark);
+}
