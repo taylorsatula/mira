@@ -1,0 +1,123 @@
+{
+  "id": "wakeup-scene",
+  "name": "Wakeup Scene",
+  "description": "Gradually turns on bedroom lights with calm blue colors in the morning",
+  "type": "sequence",
+  "frequency": "daily",
+  "scheduled_time": "07:00:00",
+  "timezone": "America/Chicago",
+  "status": "active",
+  "error_policy": "continue",
+  "timeout": 300,
+  "max_executions": null,
+  "user_id": "system",
+  
+  "steps": [
+    {
+      "id": "turn-on-bedroom-pendant",
+      "name": "Turn on Bedroom Pendant Light",
+      "position": 1,
+      "description": "Turn on the Dripping Lantern Top light with light blue color at 30% brightness",
+      "execution_mode": "direct",
+      "tool_name": "kasa_tool",
+      "operation": "power_control",
+      "parameters": {
+        "device_id": "Dripping Lantern Top",
+        "state": "on"
+      },
+      "output_key": "pendant_light_result",
+      "condition_type": "always",
+      "max_retries": 2,
+      "retry_delay": 5
+    },
+    {
+      "id": "set-pendant-color",
+      "name": "Set Pendant Light Color",
+      "position": 2,
+      "description": "Set the Dripping Lantern Top light to light blue color",
+      "execution_mode": "direct",
+      "tool_name": "kasa_tool",
+      "operation": "set_color",
+      "parameters": {
+        "device_id": "Dripping Lantern Top",
+        "hue": 210,
+        "saturation": 70,
+        "value": 30
+      },
+      "output_key": "pendant_color_result",
+      "condition_type": "always",
+      "max_retries": 2,
+      "retry_delay": 5
+    },
+    {
+      "id": "turn-on-underglow",
+      "name": "Turn on Island Underglow",
+      "position": 3,
+      "description": "Turn on the Island Underglow light strip",
+      "execution_mode": "direct",
+      "tool_name": "kasa_tool",
+      "operation": "power_control",
+      "parameters": {
+        "device_id": "Island Underglow",
+        "state": "on"
+      },
+      "output_key": "underglow_result",
+      "condition_type": "always",
+      "max_retries": 2,
+      "retry_delay": 5
+    },
+    {
+      "id": "set-underglow-color",
+      "name": "Set Underglow Color",
+      "position": 4,
+      "description": "Set the Island Underglow to light blue color at 20% brightness",
+      "execution_mode": "direct",
+      "tool_name": "kasa_tool",
+      "operation": "set_color",
+      "parameters": {
+        "device_id": "Island Underglow",
+        "hue": 210,
+        "saturation": 70,
+        "value": 20
+      },
+      "output_key": "underglow_color_result",
+      "condition_type": "always",
+      "max_retries": 2,
+      "retry_delay": 5
+    },
+    {
+      "id": "turn-on-hanging-lights",
+      "name": "Turn on Hanging Lights",
+      "position": 5,
+      "description": "Turn on the Hanging Lights",
+      "execution_mode": "direct",
+      "tool_name": "kasa_tool",
+      "operation": "power_control",
+      "parameters": {
+        "device_id": "Hanging Lights",
+        "state": "on"
+      },
+      "output_key": "hanging_lights_result",
+      "condition_type": "always",
+      "max_retries": 2,
+      "retry_delay": 5
+    },
+    {
+      "id": "turn-on-salt-lamps",
+      "name": "Turn on Salt Lamps",
+      "position": 6,
+      "description": "Turn on the Salt Lamps for ambient lighting",
+      "execution_mode": "direct",
+      "tool_name": "kasa_tool",
+      "operation": "power_control",
+      "parameters": {
+        "device_id": "Salt Lamps",
+        "state": "on"
+      },
+      "output_key": "salt_lamps_result",
+      "condition_type": "always",
+      "max_retries": 2,
+      "retry_delay": 5
+    }
+  ]
+}
