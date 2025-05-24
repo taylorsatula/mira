@@ -340,6 +340,9 @@ class Conversation:
         # Add user message to conversation
         self.add_message("user", user_input)
         
+        # Update working memory from all registered managers (including LT_Memory)
+        self.working_memory.update_all_managers()
+        
         # Workflow detection and processing
         if self.workflow_manager and not self.workflow_manager.get_active_workflow():
             # Try to detect a workflow (only if no workflow is currently active)

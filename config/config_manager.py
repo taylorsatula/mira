@@ -24,6 +24,7 @@ from config.config import (
     DatabaseConfig,
     ToolRelevanceConfig,
     OnloadCheckerConfig,
+    MemoryConfig,
 )
 from errors import ConfigError, ErrorCode
 
@@ -53,6 +54,7 @@ class AppConfig(BaseModel):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     tool_relevance: ToolRelevanceConfig = Field(default_factory=ToolRelevanceConfig)
     onload_checker: OnloadCheckerConfig = Field(default_factory=OnloadCheckerConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     
     # Cache for system prompts (non-model field)
     prompt_cache: Dict[str, str] = Field(default_factory=dict, exclude=True)
@@ -201,6 +203,9 @@ class AppConfig(BaseModel):
         
         # Create prompts directory
         Path(config.paths.prompts_dir).mkdir(parents=True, exist_ok=True)
+        
+        # Create LT_Memory directories
+        Path(config.paths.data_dir, "lt_memory").mkdir(parents=True, exist_ok=True)
     
     def get(self, key: str, default: Any = None) -> Any:
         """

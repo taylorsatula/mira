@@ -7,6 +7,7 @@ ensure type safety and validation of configuration values.
 
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
+from config.memory_config import MemoryConfig
 
 class ApiConfig(BaseModel):
     """API configuration settings."""

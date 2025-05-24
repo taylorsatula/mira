@@ -5,6 +5,7 @@ A Python-based AI agent system with persistent memory capabilities, asynchronous
 ## Purpose
 
 Mira is a framework for building conversational AI agents that can:
+- **(NEW)** Advanced persistent memory system with self-editing capabilities inspired by MemGPT
 - (Autonomously) Maintain persistent knowledge history across sessions
 - Use and invoke a whole host of tools
   - MIRA can zero-shot generate tools by dropping an open-source API into a special foloder and running a 'create tool' command! full system integration on next startup. zero oversight.
@@ -12,6 +13,17 @@ Mira is a framework for building conversational AI agents that can:
 - Generate and curate its own training data
 - interact with local SQLite databases
 - Do self-directed async tasks (both cron-style and directive-style)
+
+### LT_Memory Features
+
+MIRA now includes a sophisticated long-term memory system (LT_Memory) that provides:
+
+- **Self-Editing Core Memory**: Persistent memory blocks that the AI can modify using memory functions like `core_memory_append` and `core_memory_replace`
+- **Vector-Indexed Archival Memory**: Store and search through unlimited conversation history using semantic similarity
+- **Knowledge Graph**: Automatically extract entities and relationships from conversations
+- **Automated Memory Maintenance**: Scheduled consolidation, importance scoring, and memory optimization
+- **PostgreSQL + pgvector**: Production-ready storage with native vector operations
+- **ONNX-Optimized Embeddings**: Fast embedding generation with CPU optimization
 
 
 ## Installation
@@ -27,9 +39,31 @@ Mira is a framework for building conversational AI agents that can:
    pip install -r requirements.txt
    ```
 
-3. Set up environment variables (create a `.env` file):
+3. Set up PostgreSQL and pgvector for LT_Memory:
+   ```bash
+   # Install PostgreSQL and pgvector
+   sudo apt-get install postgresql postgresql-contrib postgresql-14-pgvector
+   
+   # Create database
+   sudo -u postgres psql
+   CREATE DATABASE lt_memory;
+   CREATE USER mira WITH PASSWORD 'secure_password';
+   GRANT ALL PRIVILEGES ON DATABASE lt_memory TO mira;
+   \c lt_memory
+   CREATE EXTENSION vector;
+   CREATE EXTENSION "uuid-ossp";
+   \q
+   ```
+
+4. Set up environment variables (create a `.env` file):
    ```
    ANTHROPIC_API_KEY=your_api_key_here
+   LT_MEMORY_DATABASE_URL=postgresql://mira:secure_password@localhost/lt_memory
+   ```
+
+5. Initialize LT_Memory system:
+   ```bash
+   python scripts/setup_lt_memory.py
    ```
 
 ## Usage

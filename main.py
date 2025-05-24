@@ -28,6 +28,7 @@ from conversation import Conversation
 from onload_checker import OnLoadChecker, add_stimuli_to_conversation
 from utils import automation_controller
 from working_memory import WorkingMemory, TimeManager, SystemStatusManager, UserInfoManager, ReminderManager
+from lt_memory.integration import initialize_lt_memory, check_lt_memory_requirements
 
 
 def parse_arguments():
@@ -345,6 +346,36 @@ def initialize_system(args) -> Dict[str, Any]:
         logger.info(f"System initialized with conversation ID: {conversation.conversation_id}")
         logger.info("Automation systems initialized and started")
         
+        # Initialize LT_Memory - REQUIRED for operation
+        logger.info("Checking LT_Memory requirements...")
+        lt_memory_status = check_lt_memory_requirements()
+        if not all(lt_memory_status.values()):
+            missing = [k for k, v in lt_memory_status.items() if not v]
+            raise AgentError(
+                f"LT_Memory requirements not met: {missing}. "
+                f"Please ensure PostgreSQL with pgvector is installed and "
+                f"LT_MEMORY_DATABASE_URL environment variable is set.",
+                ErrorCode.MISSING_ENV_VAR
+            )
+        
+        logger.info("Initializing LT_Memory system...")
+        lt_memory_components = initialize_lt_memory(
+            config, 
+            working_memory, 
+            tool_repo,
+            automation_engine
+        )
+        
+        # Verify initialization was successful
+        if not lt_memory_components.get("manager"):
+            raise AgentError(
+                "LT_Memory initialization failed - memory manager not created",
+                ErrorCode.INITIALIZATION_FAILED
+            )
+        
+        lt_memory = lt_memory_components
+        logger.info("LT_Memory system initialized successfully")
+        
         # Now that we have a conversation, add token tracking to the LLM bridge
         def token_tracking_decorator(func: Callable) -> Callable:
             @functools.wraps(func)
@@ -389,7 +420,8 @@ def initialize_system(args) -> Dict[str, Any]:
             'time_manager': time_manager,
             'user_info_manager': user_info_manager,
             'system_status_manager': system_status_manager,
-            'reminder_manager': reminder_manager
+            'reminder_manager': reminder_manager,
+            'lt_memory': lt_memory
         }
 
 
