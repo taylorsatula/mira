@@ -1,8 +1,7 @@
 """
-WSGI entry point for the AI agent system.
+WSGI/ASGI entry point for the AI agent system.
 
-This module creates a WSGI-compatible application object that web servers
-can use to communicate with the application.
+This module creates a WSGI-compatible application object using FastAPI with a2wsgi adapter.
 """
 import os
 import sys
@@ -15,15 +14,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # This prevents deadlocks when the process is forked
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# Create a WSGI application
-from api.flask_app import create_app
+# Use FastAPI with a2wsgi adapter for WSGI compatibility
+from a2wsgi import ASGIMiddleware
+from api.fastapi_app import app as fastapi_app
 
-# Create the application instance
-application = create_app()
-
-# For WSGI servers that expect the 'app' variable instead of 'application'
+# Create WSGI-compatible wrapper
+application = ASGIMiddleware(fastapi_app)
 app = application
 
 # This allows the file to be run directly for testing
 if __name__ == "__main__":
-    application.run(host='0.0.0.0', port=8000, debug=True)
+    import uvicorn
+    uvicorn.run("api.fastapi_app:app", host='0.0.0.0', port=8000, reload=True)

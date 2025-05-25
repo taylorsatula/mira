@@ -55,8 +55,10 @@ except Exception as e1:
     
     # Try direct import as fallback
     try:
-        from api.flask_app import create_app
-        application = create_app()
+        # FastAPI with a2wsgi adapter
+        from a2wsgi import ASGIMiddleware
+        from api.fastapi_app import app as fastapi_app
+        application = ASGIMiddleware(fastapi_app)
     except Exception as e2:
         error2 = str(e2)
         sys.stderr.write(f"Error creating application directly: {error2}\n")

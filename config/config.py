@@ -48,9 +48,37 @@ class ApiConfig(BaseModel):
         default=3,
         description="Maximum number of retries for failed API requests"
     )
-    timeout: int = Field(
-        default=60,
-        description="Timeout in seconds for API requests"
+
+class ApiServerConfig(BaseModel):
+    """FastAPI server configuration settings."""
+    
+    host: str = Field(
+        default="0.0.0.0",
+        description="Host address for the FastAPI server"
+    )
+    port: int = Field(
+        default=8000,
+        description="Port for the FastAPI server"
+    )
+    workers: int = Field(
+        default=1,
+        description="Number of uvicorn workers"
+    )
+    log_level: str = Field(
+        default="info",
+        description="Log level for uvicorn server"
+    )
+    enable_cors: bool = Field(
+        default=True,
+        description="Enable CORS middleware"
+    )
+    cors_origins: List[str] = Field(
+        default=["*"],
+        description="Allowed CORS origins"
+    )
+    request_timeout: int = Field(
+        default=300,
+        description="Request timeout in seconds"
     )
     rate_limit_rpm: int = Field(
         default=10,

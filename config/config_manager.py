@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 from config.config import (
     ApiConfig,
+    ApiServerConfig,
     PathConfig,
     ConversationConfig,
     ToolConfig,
@@ -46,6 +47,7 @@ class AppConfig(BaseModel):
     
     # Core configurations defined explicitly
     api: ApiConfig = Field(default_factory=ApiConfig)
+    api_server: ApiServerConfig = Field(default_factory=ApiServerConfig)
     paths: PathConfig = Field(default_factory=PathConfig)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     tools: ToolConfig = Field(default_factory=ToolConfig)
