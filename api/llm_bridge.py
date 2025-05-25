@@ -43,7 +43,6 @@ class LLMBridge:
         self.max_tokens = config.api.max_tokens
         self.temperature = config.api.temperature
         self.max_retries = config.api.max_retries
-        self.timeout = config.api.timeout
 
         # Initialize the API client
         try:
@@ -55,12 +54,12 @@ class LLMBridge:
             )
 
         # Rate limiting variables
-        self.rate_limit_rpm = config.api.rate_limit_rpm
+        self.rate_limit_rpm = config.api_server.rate_limit_rpm
         self.min_request_interval = 60.0 / self.rate_limit_rpm
         self.last_request_time = 0.0
         
         # Token bucket for burst handling
-        self.token_bucket_size = config.api.burst_limit if hasattr(config.api, "burst_limit") else 3
+        self.token_bucket_size = config.api_server.burst_limit
         self.tokens = self.token_bucket_size  # Start with a full bucket
         self.last_token_refill = time.time()
 
@@ -371,9 +370,9 @@ class LLMBridge:
         
         # Get extended thinking configuration (from method args or config)
         use_extended_thinking = extended_thinking if extended_thinking is not None else \
-            getattr(config.api, "extended_thinking", False)
+            getattr(config.api_server, "extended_thinking", False)
         thinking_budget = extended_thinking_budget if extended_thinking_budget is not None else \
-            getattr(config.api, "extended_thinking_budget", 16000)  # 16k tokens recommended default
+            getattr(config.api_server, "extended_thinking_budget", 16000)  # 16k tokens recommended default
 
         # Prepare request parameters
         params = {

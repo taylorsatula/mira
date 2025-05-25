@@ -103,6 +103,140 @@ Once running, you can use these commands:
 - `/tokens` - Show token usage counts
 - `/toolfeedback [feedback]` - Save feedback about tool activation with LLM analysis to improve tool classification
 
+### API Server Mode
+
+MIRA can also run as a FastAPI web server, providing RESTful API endpoints for programmatic interaction:
+
+#### Starting the API Server
+
+1. **Direct launch** (recommended for development):
+   ```bash
+   python run_api.py
+   ```
+
+2. **Using uvicorn directly**:
+   ```bash
+   uvicorn api.fastapi_app:app --host 0.0.0.0 --port 8000 --reload
+   ```
+
+3. **Production deployment**:
+   ```bash
+   uvicorn api.fastapi_app:app --host 0.0.0.0 --port 8000 --workers 4
+   ```
+
+#### API Endpoints
+
+**Health Check**
+- `GET /health` - Returns server status
+
+**Chat Endpoints**
+- `POST /api/chat` - Send a message and get a response
+- `POST /api/chat/stream` - Send a message and get a streaming response (Server-Sent Events)
+
+**Server Status**
+- `GET /api/status` - Get API status, provider info, and queue statistics
+
+**Queue Management** (Ollama only)
+- `POST /api/queue/status` - Check position of request in queue
+- `POST /api/queue/cancel` - Cancel a pending request
+
+#### API Usage Examples
+
+**Basic Chat Request**:
+```bash
+curl -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello, how are you?"}'
+```
+
+**Streaming Chat Request**:
+```bash
+curl -X POST http://localhost:8000/api/chat/stream \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{"message": "Tell me a story", "conversation_id": "optional-id"}'
+```
+
+**Python Example**:
+```python
+import requests
+
+# Basic chat
+response = requests.post(
+    'http://localhost:8000/api/chat',
+    json={'message': 'What tools do you have available?'}
+)
+data = response.json()
+print(f"Response: {data['response']}")
+print(f"Conversation ID: {data['conversation_id']}")
+
+# With conversation continuity
+response2 = requests.post(
+    'http://localhost:8000/api/chat',
+    json={
+        'message': 'Use the reminder tool to set a reminder for tomorrow',
+        'conversation_id': data['conversation_id']
+    }
+)
+```
+
+#### Authentication
+
+If the `IOS_APITOKEN` environment variable is set, all API endpoints (except `/health`) require Bearer token authentication:
+
+```bash
+curl -X POST http://localhost:8000/api/chat \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello"}'
+```
+
+#### Configuration
+
+Configure the API server using environment variables:
+
+```bash
+# Server settings
+API_HOST=0.0.0.0
+API_PORT=8000
+API_WORKERS=1
+API_LOG_LEVEL=info
+API_RELOAD=false
+
+# Authentication (optional)
+IOS_APITOKEN=your-secure-token-here
+
+# Required core settings
+SECRET_KEY=your-secret-key
+ANTHROPIC_API_KEY=your-anthropic-key
+```
+
+#### Interactive API Documentation
+
+When the server is running, visit:
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+These provide interactive documentation where you can test endpoints directly from your browser.
+
+#### Deployment
+
+**Docker Deployment**:
+```dockerfile
+FROM python:3.9-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+EXPOSE 8000
+CMD ["python", "run_api.py"]
+```
+
+**WSGI/ASGI Deployment**:
+- Use `wsgi.py` for WSGI servers (automatically wraps FastAPI with a2wsgi)
+- Use `passenger_wsgi.py` for Passenger-based hosting (A2Hosting, etc.)
+- Direct ASGI: `uvicorn api.fastapi_app:app`
+
 
 ## Features
 

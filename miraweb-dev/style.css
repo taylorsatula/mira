@@ -1,0 +1,422 @@
+/* Reset and Base Styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --bg-primary: #000;
+    --text-primary: #fff;
+    --text-secondary: rgba(255, 255, 255, 0.9);
+    --text-ghost: rgba(255, 255, 255, 0.3);
+    --border-primary: #fff;
+    --border-secondary: rgba(255, 255, 255, 0.1);
+    --accent-tool: #00ff00;
+    --accent-workflow: #ff00ff;
+    --hover-bg: rgba(255, 255, 255, 0.1);
+    --focus-shadow: rgba(255, 255, 255, 0.3);
+    --font-primary: 'Avenir', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+    --transition-fast: 0.2s ease;
+    --transition-normal: 0.3s ease;
+    --transition-slow: 0.5s ease-out;
+}
+
+body {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-primary);
+    font-weight: 100;
+    height: 100vh;
+    overflow: hidden;
+    position: relative;
+}
+
+/* Layout Structure */
+.app-header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 101;
+    padding: 20px;
+}
+
+.main-content {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+/* History Sidebar */
+.history-drawer {
+    position: fixed;
+    left: -350px;
+    top: 0;
+    width: 350px;
+    height: 100vh;
+    background: var(--bg-primary);
+    border-right: 3px solid var(--border-primary);
+    transition: left var(--transition-normal);
+    overflow-y: auto;
+    z-index: 100;
+}
+
+.history-drawer.open {
+    left: 0;
+}
+
+.history-toggle {
+    width: 40px;
+    height: 40px;
+    background: transparent;
+    border: 3px solid var(--border-primary);
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 4px;
+    transition: all var(--transition-normal);
+}
+
+.history-toggle:hover {
+    background: var(--hover-bg);
+}
+
+.history-toggle span {
+    width: 20px;
+    height: 3px;
+    background: var(--border-primary);
+    transition: all var(--transition-normal);
+}
+
+.history-content {
+    padding: 60px 20px 20px;
+}
+
+.history-item {
+    margin-bottom: 20px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border-secondary);
+    font-size: 14px;
+}
+
+.history-item:last-child {
+    border-bottom: none;
+}
+
+.history-user {
+    font-weight: bold;
+    margin-bottom: 8px;
+    color: var(--accent-tool);
+}
+
+.history-mira {
+    opacity: 0.9;
+    line-height: 1.6;
+}
+
+/* Response Section */
+.response-section {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10vh 20px 20px;
+    min-height: 0;
+}
+
+.response-container {
+    max-width: 700px;
+    width: 100%;
+    opacity: 0;
+    transition: opacity var(--transition-normal);
+}
+
+.response-container.active {
+    opacity: 1;
+}
+
+.response-box {
+    color: var(--text-primary);
+    font-size: 18px;
+    line-height: 1.8;
+    animation: bubbleUp var(--transition-slow);
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+
+.response-content {
+    max-height: calc(100vh - 300px);
+    overflow-y: auto;
+    padding-right: 20px;
+}
+
+/* Custom Scrollbar */
+.response-content::-webkit-scrollbar,
+.history-drawer::-webkit-scrollbar {
+    width: 6px;
+}
+
+.response-content::-webkit-scrollbar-track,
+.history-drawer::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.response-content::-webkit-scrollbar-thumb,
+.history-drawer::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+}
+
+.response-content::-webkit-scrollbar-thumb:hover,
+.history-drawer::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.4);
+}
+
+/* Status Section */
+.status-section {
+    position: relative;
+    height: 40px;
+    margin-bottom: 20px;
+}
+
+.status-indicators {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    height: 100%;
+    align-items: center;
+}
+
+.indicator {
+    width: 24px;
+    height: 24px;
+    opacity: 0;
+    transition: all var(--transition-normal);
+    cursor: pointer;
+    position: relative;
+    background: none;
+    border: none;
+    padding: 0;
+}
+
+.indicator svg {
+    width: 100%;
+    height: 100%;
+    fill: var(--accent-tool);
+    transition: all var(--transition-normal);
+}
+
+.workflow-indicator svg {
+    fill: var(--accent-workflow);
+}
+
+.indicator.active {
+    opacity: 1;
+    animation: pulse 2s infinite;
+}
+
+/* Workflow Popover */
+.workflow-popover {
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%) scale(0.9);
+    background: var(--bg-primary);
+    border: 1px solid #666;
+    border-radius: 13px;
+    padding: 20px;
+    max-width: 400px;
+    opacity: 0;
+    pointer-events: none;
+    transition: all var(--transition-normal);
+    font-size: 14px;
+    margin-bottom: 10px;
+}
+
+.workflow-popover.active {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+    pointer-events: auto;
+}
+
+.workflow-step {
+    padding: 8px 0;
+    opacity: 0.5;
+}
+
+.workflow-step.active {
+    opacity: 1;
+    font-weight: bold;
+}
+
+.workflow-step.completed {
+    opacity: 0.7;
+    text-decoration: line-through;
+}
+
+/* Input Section */
+.input-section {
+    padding: 20px 20px 40px;
+}
+
+.input-form {
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.input-wrapper {
+    position: relative;
+}
+
+.input-field {
+    width: 100%;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-primary);
+    border-radius: 12px;
+    padding: 16px 60px 16px 24px;
+    font-size: 15px;
+    outline: none;
+    transition: all var(--transition-fast);
+    font-family: inherit;
+}
+
+.input-field:focus {
+    transform: scale(1.02);
+    box-shadow: 0 0 0 2px var(--focus-shadow);
+}
+
+.ghost-text {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    padding: 16px 60px 16px 24px;
+    color: var(--text-ghost);
+    pointer-events: none;
+    font-size: 15px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    font-family: inherit;
+}
+
+.send-button {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 36px;
+    height: 36px;
+    background: var(--text-primary);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-fast);
+}
+
+.send-button:hover {
+    transform: translateY(-50%) scale(1.1);
+}
+
+.send-button:active {
+    transform: translateY(-50%) scale(0.95);
+}
+
+.send-button svg {
+    width: 20px;
+    height: 20px;
+    fill: var(--bg-primary);
+}
+
+/* Animations */
+@keyframes bubbleUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes wooshOut {
+    to {
+        opacity: 0;
+        transform: translateY(-20px) scale(0.95);
+    }
+}
+
+@keyframes pulse {
+    0%, 100% { 
+        transform: scale(1); 
+    }
+    50% { 
+        transform: scale(1.15); 
+    }
+}
+
+.response-box.exiting {
+    animation: wooshOut var(--transition-normal) ease-out forwards;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .history-drawer {
+        width: 280px;
+        left: -280px;
+    }
+    
+    .response-section {
+        padding: 5vh 15px 15px;
+    }
+    
+    .response-box {
+        font-size: 16px;
+    }
+    
+    .input-field {
+        font-size: 14px;
+        padding: 14px 50px 14px 20px;
+    }
+    
+    .ghost-text {
+        font-size: 14px;
+        padding: 14px 50px 14px 20px;
+    }
+    
+    .send-button {
+        width: 32px;
+        height: 32px;
+    }
+}
+
+/* Focus Styles for Accessibility */
+button:focus-visible,
+input:focus-visible {
+    outline: 2px solid var(--text-primary);
+    outline-offset: 2px;
+}
+
+/* Print Styles */
+@media print {
+    body {
+        background: white;
+        color: black;
+    }
+    
+    .history-toggle,
+    .status-section,
+    .input-section {
+        display: none;
+    }
+}
