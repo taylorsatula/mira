@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIRA</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #000;
+            color: #fff;
+            font-family: 'Avenir', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+            font-weight: 100;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Response area - simplified */
+        .response-wrapper {
+            position: fixed;
+            top: 10vh;
+            bottom: 140px; /* Space for indicators + input */
+            left: 0;
+            right: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            overflow: hidden;
+        }
+
+        .response-container {
+            max-width: 700px;
+            width: 90%;
+            max-height: 100%;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: auto;
+            position: relative;
+        }
+
+        .response-container.active {
+            opacity: 1;
+        }
+
+        .response-box {
+            color: #fff;
+            font-size: 18px;
+            line-height: 1.8;
+            animation: bubbleUp 0.5s ease-out;
+            word-break: break-word;
+            overflow-wrap: break-word;
+        }
+
+        /* Scrollable content */
+        .response-content {
+            max-height: calc(100vh - 200px);
+            overflow-y: auto;
+            padding-right: 20px;
+            position: relative;
+        }
+
+
+        .response-content::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .response-content::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .response-content::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+
+        .response-content::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.4);
+        }
+
+
+        @keyframes bubbleUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes wooshOut {
+            to {
+                opacity: 0;
+                transform: translateY(-20px) scale(0.95);
+            }
+        }
+
+        .response-box.exiting {
+            animation: wooshOut 0.3s ease-out forwards;
+        }
+
+        /* Input pill */
+        .input-container {
+            position: fixed;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: min(600px, 90vw);
+        }
+
+        .input-pill {
+            width: 100%;
+            background: #000;
+            color: #fff;
+            border: 1px solid #fff;
+            border-radius: 12px;
+            padding: 16px 60px 16px 24px;
+            font-size: 15px;
+            outline: none;
+            transition: all 0.2s ease;
+            font-family: inherit;
+        }
+
+        .input-pill:focus {
+            transform: scale(1.02);
+            box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.3);
+        }
+
+        /* Status indicators */
+        .status-indicators {
+            position: fixed;
+            bottom: 110px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 20px;
+            height: 30px;
+        }
+
+        .indicator {
+            width: 24px;
+            height: 24px;
+            opacity: 0;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .indicator svg {
+            width: 100%;
+            height: 100%;
+            fill: #00ff00;
+            transition: all 0.3s ease;
+        }
+
+        .indicator.active {
+            opacity: 1;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.15); }
+        }
+
+        .workflow-indicator svg {
+            fill: #ff00ff;
+        }
+
+        /* Workflow popover */
+        .workflow-popover {
+            position: fixed;
+            bottom: 150px;
+            left: 50%;
+            transform: translateX(-50%) scale(0.9);
+            background: #000;
+            color: #fff;
+            border: 1px solid #666;
+            border-radius: 13px;
+            padding: 20px;
+            max-width: 400px;
+            opacity: 0;
+            pointer-events: none;
+            transition: all 0.3s ease;
+            font-size: 14px;
+        }
+
+        .workflow-popover.active {
+            opacity: 1;
+            transform: translateX(-50%) scale(1);
+            pointer-events: auto;
+        }
+
+        .workflow-step {
+            padding: 8px 0;
+            opacity: 0.5;
+        }
+
+        .workflow-step.active {
+            opacity: 1;
+            font-weight: bold;
+        }
+
+        .workflow-step.completed {
+            opacity: 0.7;
+            text-decoration: line-through;
+        }
+
+        /* History sidebar */
+        .history-drawer {
+            position: fixed;
+            left: -350px;
+            top: 0;
+            width: 350px;
+            height: 100vh;
+            background: #000;
+            color: #fff;
+            border-right: 3px solid #fff;
+            transition: left 0.3s ease;
+            overflow-y: auto;
+            z-index: 100;
+        }
+
+        .history-drawer.open {
+            left: 0;
+        }
+
+        .history-toggle {
+            position: fixed;
+            left: 20px;
+            top: 20px;
+            width: 40px;
+            height: 40px;
+            background: transparent;
+            border: 3px solid #fff;
+            border-radius: 4px;
+            cursor: pointer;
+            z-index: 101;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 4px;
+            transition: all 0.3s ease;
+        }
+
+        .history-toggle:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .history-toggle span {
+            width: 20px;
+            height: 3px;
+            background: #fff;
+            transition: all 0.3s ease;
+        }
+
+        .history-drawer-content {
+            padding: 60px 20px 20px;
+        }
+
+        .history-item {
+            margin-bottom: 20px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 14px;
+        }
+
+        .history-item:last-child {
+            border-bottom: none;
+        }
+
+        .history-user {
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #00ff00;
+        }
+
+        .history-mira {
+            opacity: 0.9;
+            line-height: 1.6;
+        }
+
+        /* Ghost text for typing indicator */
+        .ghost-text {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            padding: 16px 60px 16px 24px;
+            color: rgba(255, 255, 255, 0.3);
+            pointer-events: none;
+            font-size: 15px;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            font-family: inherit;
+        }
+
+        .send-button {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 36px;
+            height: 36px;
+            background: #fff;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+
+        .send-button:hover {
+            transform: translateY(-50%) scale(1.1);
+        }
+
+        .send-button:active {
+            transform: translateY(-50%) scale(0.95);
+        }
+
+        .send-button svg {
+            width: 20px;
+            height: 20px;
+            fill: #000;
+        }
+    </style>
+</head>
+<body>
+    <!-- History sidebar -->
+    <div class="history-drawer" id="historyDrawer">
+        <div class="history-drawer-content" id="historyContent">
+            <!-- History items will be added here -->
+        </div>
+    </div>
+
+    <!-- History toggle button -->
+    <button class="history-toggle" id="historyToggle" aria-label="Toggle history">
+        <span></span>
+        <span></span>
+        <span></span>
+    </button>
+
+    <!-- Response wrapper -->
+    <div class="response-wrapper">
+        <div class="response-container" id="responseContainer">
+            <div class="response-box" id="responseBox">
+                <div class="response-content" id="responseContent">
+                    <!-- MIRA's response will appear here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Status indicators -->
+    <div class="status-indicators">
+        <div class="indicator tool-indicator" id="toolIndicator" title="Tool active">
+            <svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" viewBox="0 0 512 512" style="enable-background:new 0 0 512 512;" xml:space="preserve">
+                <g>
+                    <path d="M507.49,101.721L352.211,256L507.49,410.279c2.807-5.867,4.51-12.353,4.51-19.279V121C512,114.073,510.297,107.588,507.49,101.721z"/>
+                    <path d="M467,76H45c-6.927,0-13.412,1.703-19.279,4.51l198.463,197.463c17.548,17.548,46.084,17.548,63.632,0L486.279,80.51C480.412,77.703,473.927,76,467,76z"/>
+                    <path d="M4.51,101.721C1.703,107.588,0,114.073,0,121v270c0,6.927,1.703,13.413,4.51,19.279L159.789,256L4.51,101.721z"/>
+                    <path d="M331,277.211l-21.973,21.973c-29.239,29.239-76.816,29.239-106.055,0L181,277.211L25.721,431.49C31.588,434.297,38.073,436,45,436h422c6.927,0,13.412-1.703,19.279-4.51L331,277.211z"/>
+                </g>
+            </svg>
+        </div>
+        <div class="indicator workflow-indicator" id="workflowIndicator" title="Workflow active">
+            <svg clip-rule="evenodd" fill-rule="evenodd" stroke-linejoin="round" stroke-miterlimit="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <g>
+                    <path d="m8.75 11v2c0 .597.237 1.169.659 1.591s.994.659 1.591.659h2c.597 0 1.169-.237 1.591-.659s.659-.994.659-1.591v-2c0-.597-.237-1.169-.659-1.591s-.994-.659-1.591-.659h-2c-.597 0-1.169.237-1.591.659s-.659.994-.659 1.591z"/>
+                    <path d="m1.25 3.5v2c0 .597.237 1.169.659 1.591s.994.659 1.591.659h2c.597 0 1.169-.237 1.591-.659s.659-.994.659-1.591v-2c0-.597-.237-1.169-.659-1.591s-.994-.659-1.591-.659h-2c-.597 0-1.169.237-1.591.659s-.659.994-.659 1.591z"/>
+                    <path d="m16.25 18.5v2c0 .597.237 1.169.659 1.591s.994.659 1.591.659h2c.597 0 1.169-.237 1.591-.659s.659-.994.659-1.591v-2c0-.597-.237-1.169-.659-1.591s-.994-.659-1.591-.659h-2c-.597 0-1.169.237-1.591.659s-.659.994-.659 1.591z"/>
+                    <path d="m7 5.25h13c.332 0 .649.132.884.366.234.235.366.552.366.884v3.5c0 .332-.132.649-.366.884-.235.234-.552.366-.884.366h-3c-.414 0-.75.336-.75.75s.336.75.75.75h3c.729 0 1.429-.29 1.945-.805.515-.516.805-1.216.805-1.945 0-1.083 0-2.417 0-3.5 0-.729-.29-1.429-.805-1.945-.516-.515-1.216-.805-1.945-.805-4.084 0-13 0-13 0-.414 0-.75.336-.75.75s.336.75.75.75z"/>
+                    <path d="m13 18.75h-9c-.332 0-.649-.132-.884-.366-.234-.235-.366-.552-.366-.884 0-1.083 0-2.417 0-3.5 0-.332.132-.649.366-.884.235-.234.552-.366.884-.366h5.5c.414 0 .75-.336.75-.75s-.336-.75-.75-.75h-5.5c-.729 0-1.429.29-1.945.805-.515.516-.805 1.216-.805 1.945v3.5c0 .729.29 1.429.805 1.945.516.515 1.216.805 1.945.805h9c.414 0 .75-.336.75-.75s-.336-.75-.75-.75z"/>
+                    <path d="m19.53 13.47-1.469-1.47s1.469-1.47 1.469-1.47c.293-.292.293-.768 0-1.06-.292-.293-.768-.293-1.06 0l-2 2c-.293.293-.293.767 0 1.06l2 2c.292.293.768.293 1.06 0 .293-.292.293-.768 0-1.06z"/>
+                    <path d="m12.53 22.03 2-2c.293-.293.293-.767 0-1.06l-2-2c-.292-.293-.768-.293-1.06 0-.293.292-.293.768 0 1.06l1.469 1.47s-1.469 1.47-1.469 1.47c-.293.292-.293.768 0 1.06.292.293.768.293 1.06 0z"/>
+                </g>
+            </svg>
+        </div>
+    </div>
+
+    <!-- Workflow popover -->
+    <div class="workflow-popover" id="workflowPopover">
+        <div id="workflowSteps">
+            <!-- Workflow steps will be added here -->
+        </div>
+    </div>
+
+    
+    <!-- Input container -->
+    <div class="input-container">
+        <input type="text" class="input-pill" id="messageInput" placeholder="Message MIRA..." autocomplete="off">
+        <div class="ghost-text" id="ghostText"></div>
+        <button class="send-button" id="sendButton" aria-label="Send message">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+            </svg>
+        </button>
+    </div>
+
+    <script>
+        // Sample data for demonstration
+        const sampleHistory = [
+            { user: "What's the weather like?", mira: "I'll check the current weather for you. It's currently 72°F and sunny." },
+            { user: "Set a reminder for tomorrow", mira: "I've set a reminder for tomorrow at 9:00 AM." }
+        ];
+
+        const sampleWorkflowSteps = [
+            { text: "Analyzing request", status: "completed" },
+            { text: "Gathering context", status: "completed" },
+            { text: "Processing information", status: "active" },
+            { text: "Generating response", status: "pending" }
+        ];
+
+        // DOM elements
+        const historyDrawer = document.getElementById('historyDrawer');
+        const historyToggle = document.getElementById('historyToggle');
+        const historyContent = document.getElementById('historyContent');
+        const responseContainer = document.getElementById('responseContainer');
+        const responseBox = document.getElementById('responseBox');
+        const responseContent = document.getElementById('responseContent');
+        const messageInput = document.getElementById('messageInput');
+        const ghostText = document.getElementById('ghostText');
+        const sendButton = document.getElementById('sendButton');
+        const toolIndicator = document.getElementById('toolIndicator');
+        const workflowIndicator = document.getElementById('workflowIndicator');
+        const workflowPopover = document.getElementById('workflowPopover');
+        const workflowSteps = document.getElementById('workflowSteps');
+
+        // History drawer toggle
+        historyToggle.addEventListener('click', () => {
+            historyDrawer.classList.toggle('open');
+        });
+
+        // Populate history
+        sampleHistory.forEach(item => {
+            const historyItem = document.createElement('div');
+            historyItem.className = 'history-item';
+            historyItem.innerHTML = `
+                <div class="history-user">You: ${item.user}</div>
+                <div class="history-mira">MIRA: ${item.mira}</div>
+            `;
+            historyContent.appendChild(historyItem);
+        });
+
+        // Input handling
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && messageInput.value.trim()) {
+                sendMessage(messageInput.value);
+                messageInput.value = '';
+            }
+        });
+
+        // Send message simulation
+        function sendMessage(message) {
+            // Add to history
+            const historyItem = document.createElement('div');
+            historyItem.className = 'history-item';
+            historyItem.innerHTML = `
+                <div class="history-user">You: ${message}</div>
+                <div class="history-mira">MIRA: Thinking...</div>
+            `;
+            historyContent.insertBefore(historyItem, historyContent.firstChild);
+
+            // Show response with animation
+            if (responseContainer.classList.contains('active')) {
+                responseBox.classList.add('exiting');
+                setTimeout(() => {
+                    responseBox.classList.remove('exiting');
+                    showResponse(message);
+                }, 300);
+            } else {
+                showResponse(message);
+            }
+
+            // Simulate tool/workflow activity
+            simulateActivity();
+        }
+
+        function showResponse(text) {
+            responseContent.textContent = text;
+            responseContainer.classList.add('active');
+            
+        }
+
+
+        // Simulate tool and workflow activity
+        function simulateActivity() {
+            // Show tool indicator
+            toolIndicator.classList.add('active');
+            setTimeout(() => {
+                toolIndicator.classList.remove('active');
+            }, 2000);
+
+            // Show workflow indicator
+            setTimeout(() => {
+                workflowIndicator.classList.add('active');
+                populateWorkflowSteps();
+            }, 500);
+
+            setTimeout(() => {
+                workflowIndicator.classList.remove('active');
+                workflowPopover.classList.remove('active');
+            }, 4000);
+        }
+
+        // Workflow popover
+        workflowIndicator.addEventListener('click', () => {
+            if (workflowIndicator.classList.contains('active')) {
+                workflowPopover.classList.toggle('active');
+            }
+        });
+
+        function populateWorkflowSteps() {
+            workflowSteps.innerHTML = '';
+            sampleWorkflowSteps.forEach(step => {
+                const stepDiv = document.createElement('div');
+                stepDiv.className = `workflow-step ${step.status}`;
+                stepDiv.textContent = step.text;
+                workflowSteps.appendChild(stepDiv);
+            });
+        }
+
+        // Ghost text simulation
+        function simulateGhostText() {
+            const phrases = ["Thinking about quantum mechanics...", "Planning tomorrow's schedule...", "Checking the weather..."];
+            let currentPhrase = "";
+            let phraseIndex = 0;
+            let charIndex = 0;
+
+            setInterval(() => {
+                if (messageInput.value === "" && Math.random() > 0.98) {
+                    currentPhrase = phrases[phraseIndex % phrases.length];
+                    charIndex = 0;
+                    phraseIndex++;
+                    
+                    const typeInterval = setInterval(() => {
+                        if (charIndex <= currentPhrase.length) {
+                            ghostText.textContent = currentPhrase.substring(0, charIndex);
+                            charIndex++;
+                        } else {
+                            setTimeout(() => {
+                                ghostText.textContent = "";
+                            }, 1000);
+                            clearInterval(typeInterval);
+                        }
+                    }, 50);
+                }
+            }, 3000);
+        }
+
+        // Start ghost text simulation
+        simulateGhostText();
+    </script>
+</body>
+</html>
