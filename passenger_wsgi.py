@@ -23,12 +23,7 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"      # Accelerate
 os.environ["NUMEXPR_NUM_THREADS"] = "1"         # Numexpr
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # HuggingFace tokenizers
 
-# Configure PyTorch to use fewer threads if available
-try:
-    import torch
-    torch.set_num_threads(1)
-except ImportError:
-    pass  # PyTorch not installed yet
+# PyTorch configuration removed - now using ONNX only
 
 # Simple minimal WSGI application for when everything else fails
 def minimal_error_app(environ, start_response, error_msg):

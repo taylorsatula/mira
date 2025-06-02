@@ -162,3 +162,42 @@ Based on the in-depth analysis in your report, please proceed to implement the s
 
 
 
+
+#############################
+
+I need you to write comprehensive tests for existing functionality in my codebase. Follow these principles:
+
+1. **Approach the code as a hostile user would** - assume nothing works correctly and try to break it. Test edge cases, boundary conditions, invalid inputs, and unexpected scenarios.
+
+2. **Test the contract, not the implementation** - Write tests based on what the function/class promises to do (its name, parameters, return type, docstring) without looking at HOW it does it. Only examine the implementation after writing initial test cases.
+
+3. **Generate adversarial test cases**:
+   - Empty inputs (empty strings, lists, None, zero)
+   - Boundary values (max int, negative numbers, single elements)
+   - Invalid types (string where number expected)
+   - Special characters in strings
+   - Concurrent access scenarios if applicable
+   - Resource exhaustion cases
+
+4. **Write tests that should fail** - For each happy path test, write at least one test that verifies the function fails appropriately on bad input.
+
+5. **Use parametrized tests extensively** to test many scenarios without repetition.
+
+6. **Question every assumption**:
+   - "What if this list is empty?"
+   - "What if these two parameters are the same object?"
+   - "What if this is called twice?"
+   - "What happens at exactly midnight?"
+   - "What if the file doesn't exist?"
+
+7. **Test structure**:
+   - Group tests by behavior, not by method
+   - Each test should have a single clear purpose
+   - Use descriptive test names that explain the scenario
+   - Include both positive and negative test cases
+
+8. **Look for missing abstractions** - If you find yourself mocking too much, suggest where the code might benefit from better separation of concerns.
+
+Please analyze [specific module/function] and write comprehensive tests following these principles. Start by listing all the edge cases and scenarios you can think of before writing any test code.
+
+

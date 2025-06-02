@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Setup script for LT_Memory system.
+Setup script for MIRA's ONNX embedding system.
 
-This script helps initialize the LT_Memory database and download required models.
+This script downloads and sets up the ONNX embedding model used system-wide
+for tool relevance, workflows, and LT_Memory. Also helps initialize the 
+LT_Memory database if needed.
 """
 
 import os
@@ -111,7 +113,7 @@ def initialize_database():
 
 def main():
     """Main setup function."""
-    print("LT_Memory Setup Script")
+    print("MIRA ONNX Embedding & LT_Memory Setup Script")
     print("=" * 50)
     
     # Check prerequisites
@@ -144,7 +146,7 @@ def main():
         print("Failed to initialize database")
         return False
     
-    print("\n✅ LT_Memory setup completed successfully!")
+    print("\n✅ MIRA ONNX embedding and LT_Memory setup completed successfully!")
     print("\nNext steps:")
     print("1. Set LT_MEMORY_DATABASE_URL environment variable")
     print("2. Run MIRA with: python main.py")

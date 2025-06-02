@@ -52,7 +52,7 @@ class ToolRelevanceEngine:
         
         Args:
             tool_repo: Repository of available tools
-            model: Pre-loaded SentenceTransformer model to use
+            model: Pre-loaded ONNX embedding model to use
         """
         self.logger = logging.getLogger("tool_relevance_engine")
         self.tool_repo = tool_repo
@@ -705,7 +705,7 @@ class MultiLabelClassifier:
         Args:
             thread_limit: Maximum number of threads to use for classifier operations
             cache_dir: Directory for storing cached classifier data
-            model: Pre-loaded SentenceTransformer model to use (for sharing)
+            model: Pre-loaded ONNX embedding model to use (for sharing)
         """
         self.logger = logging.getLogger("multi_label_classifier")
         self.cache_dir = cache_dir
@@ -725,44 +725,14 @@ class MultiLabelClassifier:
     
     def _initialize_model(self) -> None:
         """
-        Initialize the MiniLM model for embeddings.
+        Initialize the ONNX embedding model.
         
-        This method loads the sentence-transformers model with int8 quantization
-        for reduced memory usage.
+        This method is no longer needed as the model is passed in during initialization.
         """
-        
-        try:
-            # Import the required libraries
-            from sentence_transformers import SentenceTransformer
-            import torch
-            from typing import cast, Any
-            
-            # Set thread limit for PyTorch
-            torch.set_num_threads(self.thread_limit)
-            
-            # Load the model with int8 quantization
-            self.logger.info(f"Loading {config.tool_relevance.embedding_model} model with int8 quantization")
-            model = SentenceTransformer(config.tool_relevance.embedding_model, device="cpu")
-            self.model = cast(Any, model)
-            if self.model is not None:
-                self.model.to(torch.device('cpu'))
-            
-            # Convert to int8
-            try:
-                if self.model is not None:
-                    self.model.half()  # Convert to fp16 first (may help with quantization) #ANNOTATION I see errors during startup in this step. Is this correctly coded?
-                    self.model = torch.quantization.quantize_dynamic(
-                        self.model, {torch.nn.Linear}, dtype=torch.qint8
-                    )
-                self.logger.info("Model quantized to int8")
-            except Exception as e:
-                self.logger.warning(f"Failed to quantize model: {e}")
-            
-            self.logger.info("Model loaded successfully")
-        
-        except Exception as e:
-            self.logger.error(f"Error initializing model: {e}")
-            self.model = None
+        if self.model is None:
+            self.logger.error("No ONNX model provided")
+        else:
+            self.logger.info("Using provided ONNX embedding model")
     
     def calculate_text_similarity(self, text1: str, text2: str) -> float:
         """
@@ -1119,7 +1089,7 @@ class MultiLabelClassifier:
     
     def _compute_embedding(self, text: str) -> Optional[List[float]]:
         """
-        Compute an embedding for text using the MiniLM model.
+        Compute an embedding for text using the ONNX model.
         
         Args:
             text: Text to embed
@@ -1143,21 +1113,16 @@ class MultiLabelClassifier:
                     self.logger.warning("Text too long, truncating to 8192 characters")
                     text = text[:8192]
                 
-                # Compute embedding
-                model = self.model
-                if model is not None and hasattr(model, 'encode'):
-                    embedding = model.encode(text)
-                    
-                    # Convert to Python list
-                    result = embedding.tolist()
-                    
-                    # Add to cache
-                    self.embedding_cache[text] = result
-                    
-                    return result
-                else:
-                    self.logger.error("Model is None or does not have encode method")
-                    return None
+                # Compute embedding using ONNX model
+                embedding = self.model.encode(text)
+                
+                # Convert to Python list
+                result = embedding.tolist()
+                
+                # Add to cache
+                self.embedding_cache[text] = result
+                
+                return result
         
         except Exception as e:
             self.logger.error(f"Error computing embedding: {e}")

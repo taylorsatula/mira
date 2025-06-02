@@ -16,7 +16,7 @@ from lt_memory.models.base import (
     Base, MemoryBlock, BlockHistory, MemoryPassage, 
     MemoryEntity, MemoryRelation, MemorySnapshot
 )
-from lt_memory.utils.onnx_embeddings import ONNXEmbeddingModel
+from utils.onnx_embeddings import ONNXEmbeddingModel
 from lt_memory.utils.embeddings import EmbeddingCache
 from lt_memory.utils.pg_vector_store import PGVectorStore
 from errors import error_context, ErrorCode

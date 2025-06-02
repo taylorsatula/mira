@@ -16,7 +16,6 @@ from glob import glob
 from typing import Dict, List, Any, Optional, Tuple, Set, cast
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 from tools.repo import ToolRepository
 from errors import ErrorCode, error_context, ToolError
@@ -47,7 +46,7 @@ class WorkflowManager:
 
         Args:
             tool_repo: Repository of available tools
-            model: Pre-loaded SentenceTransformer model to use for embedding computations
+            model: Pre-loaded ONNX embedding model to use for embedding computations
             workflows_dir: Directory containing workflow definition files
             llm_bridge: LLM bridge instance for dynamic operations
             working_memory: Working memory instance for storing workflow content
@@ -104,7 +103,7 @@ class WorkflowManager:
         
         # Use the provided model
         self.model = model
-        self.logger.info("Using provided SentenceTransformer model")
+        self.logger.info("Using provided ONNX embedding model")
         
         # Store LLM bridge for dynamic operations
         self.llm_bridge = llm_bridge

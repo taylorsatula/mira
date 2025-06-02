@@ -30,9 +30,9 @@ GRANT ALL PRIVILEGES ON DATABASE lt_memory TO mira;
 export LT_MEMORY_DATABASE_URL="postgresql://mira:secure_password@localhost/lt_memory"
 ```
 
-4. Download ONNX model:
+4. Setup ONNX model:
 ```bash
-python -m transformers.onnx --model=sentence-transformers/all-MiniLM-L6-v2 --feature=default onnx/
+python scripts/setup_onnx.py
 ```
 
 ### Initialize Database

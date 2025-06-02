@@ -205,12 +205,12 @@ def initialize_system(args) -> Dict[str, Any]:
         # Import necessary modules
         from tool_relevance_engine import ToolRelevanceEngine
         from tools.workflows.workflow_manager import WorkflowManager
-        from sentence_transformers import SentenceTransformer
+        from utils.onnx_embeddings import ONNXEmbeddingModel
         
-        # Load SentenceTransformer model once to share between components
-        logger.info("Loading shared SentenceTransformer model")
-        shared_model = SentenceTransformer(config.tool_relevance.embedding_model)
-        logger.info("Shared SentenceTransformer model loaded successfully")
+        # Load ONNX model once to share between components
+        logger.info("Loading shared ONNX embedding model")
+        shared_model = ONNXEmbeddingModel(thread_limit=config.tool_relevance.thread_limit)
+        logger.info("Shared ONNX embedding model loaded successfully")
         
         # Initialize the ToolRelevanceEngine with shared model
         tool_relevance_engine = ToolRelevanceEngine(tool_repo, shared_model)

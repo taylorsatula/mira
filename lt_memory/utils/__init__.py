@@ -1,6 +1,6 @@
 """Utility modules for LT_Memory."""
 
-from lt_memory.utils.onnx_embeddings import ONNXEmbeddingModel
+from utils.onnx_embeddings import ONNXEmbeddingModel
 from lt_memory.utils.embeddings import EmbeddingCache
 from lt_memory.utils.pg_vector_store import PGVectorStore
 

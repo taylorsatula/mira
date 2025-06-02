@@ -61,9 +61,9 @@ MIRA now includes a sophisticated long-term memory system (LT_Memory) that provi
    LT_MEMORY_DATABASE_URL=postgresql://mira:secure_password@localhost/lt_memory
    ```
 
-5. Initialize LT_Memory system:
+5. Setup ONNX embedding model and LT_Memory system:
    ```bash
-   python scripts/setup_lt_memory.py
+   python scripts/setup_onnx.py
    ```
 
 ## Usage
