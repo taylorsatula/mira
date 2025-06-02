@@ -4,10 +4,10 @@
 
 ### Technical Integrity
 - **Brutal Technical Honesty**: Immediately and bluntly reject technically unsound, infeasible, ill-advised, short-sighted, and other poor ideas & commands from the human. Do not soften criticism or dance around problems. Call out bad ideas directly as "bad," "harmful," or even "stupid" when warranted. Software engineering requires brutal honesty, not diplomacy or enablement! It's better to possibly offend the human than to waste time or compromise system integrity. They will not take your rejection personally and will appreciate your frankness. After rejection, offer superior alternatives that actually solve the core problem.
-
+- **Voice**: Write naturally without performance or personality. No emojis, no formatting spam, no fake excitement. Talk like a competent colleague, not a hype man.
 ### Security & Reliability
 - **Environment Variable Usage**: Values that use environment variables should NEVER have fallbacks or defaults. If the environment variable is missing, the application should fail with a clear error message rather than silently using a fallback value.
-- **Backwards Compatibility**: This project is pre-1.0. Breaking changes are preferred! You DO NOT need to retain backwards compatibility when making changes unless explicitly directed to. Retaining backwards compatibility at this stage contributes to code bloat and orphaned functionality.
+- **Backwards Compatibility**: Breaking changes are preferred as long as you let the user know beforehand! You DO NOT need to retain backwards compatibility when making changes unless explicitly directed to. Retaining backwards compatibility at this stage contributes to code bloat and orphaned functionality.
 
 ### Core Engineering Practices
 - **Code Removal**: Delete code completely when removing it rather than commenting it out or replacing it with explanatory comments!

@@ -1,0 +1,194 @@
+================================================================================
+                          MIRA ARCHITECTURE FLOW DIAGRAM
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                               USER INTERFACE                                 │
+│                         ┌─────────────┬─────────────┐                       │
+│                         │   CLI/Chat  │   REST API  │                       │
+│                         └──────┬──────┴──────┬──────┘                       │
+└────────────────────────────────┼─────────────┼──────────────────────────────┘
+                                 │             │
+                                 ▼             ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           CONVERSATION MANAGER                               │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ • Message History & Context Building                                 │   │
+│  │ • Response Tag Detection (<need_tool/>, <topic_changed/>)           │   │
+│  │ • Tool Execution Loop Management                                    │   │
+│  │ • Workflow State Control                                           │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└────────────┬──────────────────────┬─────────────────────┬──────────────────┘
+             │                      │                     │
+             ▼                      ▼                     ▼
+┌──────────────────────┐ ┌────────────────────┐ ┌────────────────────────────┐
+│   DYNAMIC CONTEXT    │ │  INTELLIGENT TOOL  │ │   PERSISTENT MEMORY        │
+│   WORKING MEMORY     │ │    SELECTION       │ │      SYSTEM                │
+├──────────────────────┤ ├────────────────────┤ ├────────────────────────────┤
+│ • Current State      │ │ • ML Classifier    │ │ • Semantic Search         │
+│ • Active Reminders   │ │ • Context-Aware    │ │ • Entity Relationships    │
+│ • User Preferences   │ │ • Tool Persistence │ │ • Memory Consolidation    │
+│ • System Status      │ │ • Relevance Score  │ │ • Vector Embeddings       │
+│ • Tool Guidance      │ └────────┬───────────┘ │ • Automated Archival      │
+└──────────┬───────────┘          │             └────────────┬───────────────┘
+           │                      │                          │
+           │                      ▼                          │
+           │         ┌────────────────────────┐              │
+           │         │    TOOL REPOSITORY     │              │
+           │         ├────────────────────────┤              │
+           │         │ • Tool Discovery       │              │
+           │         │ • Execution Engine     │              │
+           │         │ • Error Recovery       │              │
+           │         │ • Multi-Tool Support   │              │
+           │         └────────────────────────┘              │
+           │                      │                          │
+           └──────────┬───────────┴───────────┬──────────────┘
+                      │                       │
+                      ▼                       ▼
+         ┌────────────────────────────────────────────────┐
+         │          CONTEXT ASSEMBLY ENGINE               │
+         │  ┌─────────────────────────────────────────┐  │
+         │  │ System Prompt + Working Memory Content  │  │
+         │  │ + Relevant Long-term Memories          │  │
+         │  │ + Enabled Tool Definitions             │  │
+         │  │ + Conversation History                 │  │
+         │  └─────────────────────────────────────────┘  │
+         └────────────────────┬───────────────────────────┘
+                              │
+                              ▼
+         ┌────────────────────────────────────────────────┐
+         │             LLM PROVIDER LAYER                 │
+         │         ┌──────────┬──────────┐               │
+         │         │ Cloud AI │ Local AI │               │
+         │         └──────────┴──────────┘               │
+         └────────────────────┬───────────────────────────┘
+                              │
+                              ▼
+         ┌────────────────────────────────────────────────┐
+         │              RESPONSE PROCESSING               │
+         │  • Tool Call Detection & Execution            │
+         │  • Memory Update Triggers                     │
+         │  • Context Persistence                        │
+         │  • Error Handling & Recovery                  │
+         └────────────────────┬───────────────────────────┘
+                              │
+                              ▼
+                     [Return to User]
+
+================================================================================
+                              KEY INNOVATIONS
+================================================================================
+
+1. DYNAMIC CONTEXT INJECTION
+   Components register content providers → Working Memory → System Prompt
+   Allows real-time context updates without prompt rewriting
+
+2. INTELLIGENT TOOL SELECTION
+   ML-based relevance scoring prevents context overload
+   Tools dynamically enabled based on conversation needs
+
+3. DUAL-LAYER MEMORY ARCHITECTURE
+   Working Memory: Fast, session-based, dynamic
+   Long-term Memory: Persistent, searchable, consolidated
+
+4. GRACEFUL ERROR RECOVERY
+   Structured error contexts guide the AI to recover intelligently
+   Tools provide specific recovery suggestions
+
+5. WORKFLOW ORCHESTRATION
+   Multi-step processes with state management
+   Automatic tool selection suspension during workflows
+
+================================================================================
+
+================================================================================
+                        TYPICAL MESSAGE EXCHANGE FLOW
+================================================================================
+
+User: "What's the weather like today? Also remind me to call Mom at 3pm"
+
+Step 1: MESSAGE RECEPTION
+------------------------------------------------------------------------
+• User's message enters through CLI or API interface
+• Conversation Manager receives and logs the message
+• System prepares for processing
+
+Step 2: CONTEXT PREPARATION
+------------------------------------------------------------------------
+• Working Memory updates current timestamp (e.g., "Monday, Jan 27, 2025, 2:15 PM")
+• System checks for any active reminders to display
+• User preferences and recent interaction history loaded
+
+Step 3: INTELLIGENT TOOL SELECTION
+------------------------------------------------------------------------
+• ML Classifier analyzes message content
+• Identifies need for: Weather Tool + Reminder Tool
+• Relevance scores calculated based on keywords and context
+• Only these 2 tools (out of potentially dozens) are activated
+
+Step 4: MEMORY SEARCH
+------------------------------------------------------------------------
+• Long-term Memory performs semantic search
+• Finds: "User's mom's name is Sarah"
+• Finds: "User prefers temperature in Fahrenheit"
+• Relevant memories queued for context injection
+
+Step 5: CONTEXT ASSEMBLY
+------------------------------------------------------------------------
+• System Prompt loaded with:
+  - Base instructions
+  - Working Memory content (current time, location)
+  - Relevant memories ("Mom = Sarah", "prefers °F")
+  - Only the 2 enabled tool definitions
+  - Recent conversation history
+
+Step 6: LLM PROCESSING
+------------------------------------------------------------------------
+• Assembled context sent to AI model
+• Model recognizes it needs to:
+  1. Call weather_tool for current conditions
+  2. Call reminder_tool to set the 3pm reminder
+
+Step 7: TOOL EXECUTION
+------------------------------------------------------------------------
+• Weather Tool executes:
+  - Fetches current location
+  - Queries weather API
+  - Returns: "72°F, partly cloudy"
+  
+• Reminder Tool executes:
+  - Creates reminder: "Call Mom (Sarah)"
+  - Sets time: "3:00 PM today"
+  - Returns confirmation
+
+Step 8: RESPONSE GENERATION
+------------------------------------------------------------------------
+• LLM incorporates tool results
+• Generates natural response:
+  "It's currently 72°F and partly cloudy today. I've set a reminder 
+   for you to call Sarah at 3:00 PM today."
+
+Step 9: POST-PROCESSING
+------------------------------------------------------------------------
+• Response checked for special tags
+• Working Memory updated with new reminder
+• Conversation saved to history
+• Long-term Memory stores: "User asked about weather on Jan 27"
+
+Step 10: DELIVERY
+------------------------------------------------------------------------
+• Formatted response returned to user
+• System ready for next interaction
+• Tool relevance maintained for follow-up questions
+
+================================================================================
+                           WHAT MAKES THIS SPECIAL
+================================================================================
+
+• EFFICIENCY: Only loads tools actually needed (2 vs potentially 20+)
+• CONTEXTUAL: Remembers "Mom" = "Sarah" from past conversations  
+• PROACTIVE: Updates working memory with the new reminder
+• INTELLIGENT: Handles multiple requests in single message
+• CONTINUOUS: Maintains context for natural follow-up questions
+
+================================================================================

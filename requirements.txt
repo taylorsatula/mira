@@ -15,6 +15,8 @@ uvicorn[standard]>=0.21.0
 sse-starlette>=1.6.1
 python-multipart>=0.0.5
 a2wsgi>=1.7.0
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
 
 # LT_Memory dependencies
 psycopg2-binary>=2.9.0
