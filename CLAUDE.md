@@ -128,6 +128,9 @@ Multiple lines work fine
 Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
+### Post-Commit Summary
+- **Always Create Recap**: After every commit, provide a detailed ✅ **Commit Successfully Created** summary with commit hash, file stats, key accomplishments, benefits, and next steps for the user.
+
 ### Documentation References
 - **Tool Creation**: Refer to `HOW_TO_BUILD_A_TOOL.md` for step-by-step guidance
 - **Tool Documentation**: See `docs/TOOL_DEF_BESTPRACTICE.md` for writing tool descriptions
