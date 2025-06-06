@@ -382,6 +382,37 @@ class LLMBridge:
             "temperature": temperature,
         }
         
+        # Apply caching to conversation history if cache_control is provided
+        if cache_control and messages:
+            # Use cache_control configuration as provided (no TTL modification)
+            cache_config = cache_control.copy()
+            # Find the last user message
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i].get("role") == "user":
+                    # Make a copy of messages to avoid modifying the original
+                    messages = messages.copy()
+                    messages[i] = messages[i].copy()
+                    
+                    # Convert content to structured format if it's a string
+                    if isinstance(messages[i]["content"], str):
+                        messages[i]["content"] = [
+                            {
+                                "type": "text",
+                                "text": messages[i]["content"],
+                                "cache_control": cache_config
+                            }
+                        ]
+                    # If content is already a list, add cache_control to the last block
+                    elif isinstance(messages[i]["content"], list) and messages[i]["content"]:
+                        messages[i]["content"] = messages[i]["content"].copy()
+                        messages[i]["content"][-1] = messages[i]["content"][-1].copy()
+                        messages[i]["content"][-1]["cache_control"] = cache_config
+                    
+                    # Update params with modified messages
+                    params["messages"] = messages
+                    self.logger.debug("Added cache control to last user message")
+                    break
+        
         # Add extended thinking if enabled
         if use_extended_thinking:
             # Extended thinking is incompatible with custom temperature settings
@@ -410,24 +441,10 @@ class LLMBridge:
 
         # Add optional parameters if provided
         if system_prompt:
-            # Format system content as structured blocks with caching
-            if dynamic_content and cache_control:
-                # Create structured system blocks
-                system_blocks = [
-                    {
-                        "type": "text",
-                        "text": system_prompt,
-                        "cache_control": cache_control
-                    },
-                    {
-                        "type": "text",
-                        "text": dynamic_content
-                    }
-                ]
-                params["system"] = system_blocks
-                self.logger.debug("Using structured system blocks with caching")
+            # Combine system prompt and dynamic content without caching
+            if dynamic_content:
+                params["system"] = system_prompt + "\n\n" + dynamic_content
             else:
-                # Simple string system prompt without caching
                 params["system"] = system_prompt
         
         if tools:

@@ -123,6 +123,7 @@ class ErrorCode(Enum):
     TEMPORARY_FAILURE = 903
     SYSTEM_OVERLOAD = 904
     MAINTENANCE_MODE = 905
+    INITIALIZATION_FAILED = 906
 
 
 class AgentError(Exception):

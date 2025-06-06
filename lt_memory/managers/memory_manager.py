@@ -5,7 +5,7 @@ Central memory manager orchestrating all LT_Memory operations.
 import uuid
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime, UTC
+from datetime import datetime, timedelta
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
@@ -13,13 +13,14 @@ from sqlalchemy.pool import QueuePool
 import numpy as np
 
 from lt_memory.models.base import (
-    Base, MemoryBlock, BlockHistory, MemoryPassage, 
-    MemoryEntity, MemoryRelation, MemorySnapshot
+    Base, MemoryBlock, BlockHistory, MemoryPassage, MemorySnapshot, ArchivedConversation
 )
 from utils.onnx_embeddings import ONNXEmbeddingModel
 from lt_memory.utils.embeddings import EmbeddingCache
 from lt_memory.utils.pg_vector_store import PGVectorStore
-from errors import error_context, ErrorCode
+from lt_memory.utils.summarization import SummarizationEngine
+from errors import error_context, ErrorCode, ToolError
+from utils.timezone_utils import utc_now, format_utc_iso
 
 logger = logging.getLogger(__name__)
 
@@ -32,14 +33,16 @@ class MemoryManager:
     a unified interface for memory operations.
     """
     
-    def __init__(self, config):
+    def __init__(self, config, llm_bridge=None):
         """
         Initialize memory manager with configuration.
         
         Args:
             config: Application configuration object
+            llm_bridge: LLM bridge for text generation (optional)
         """
         self.config = config
+        self.llm_bridge = llm_bridge
         
         # Create database engine with connection pooling
         self.engine = self._create_engine()
@@ -53,8 +56,8 @@ class MemoryManager:
             memory_cache_size=1000
         )
         self.embedding_model = ONNXEmbeddingModel(
-            config.memory.onnx_model_path,
-            config.memory.onnx_tokenizer
+            model_path=config.memory.onnx_model_path,
+            thread_limit=4  # Use default thread limit
         )
         
         # Initialize vector store
@@ -63,19 +66,22 @@ class MemoryManager:
             dimension=config.memory.embedding_dim
         )
         
+        # Initialize summarization engine
+        self.summarization_engine = SummarizationEngine(
+            llm_bridge=self.llm_bridge
+        )
+        
         # Import component managers here to avoid circular imports
         from lt_memory.managers.block_manager import BlockManager
         from lt_memory.managers.passage_manager import PassageManager
-        from lt_memory.managers.entity_manager import EntityManager
         from lt_memory.managers.consolidation_engine import ConsolidationEngine
-        from lt_memory.managers.batch_processor import BatchConversationProcessor
+        from lt_memory.managers.conversation_archive import ConversationArchive
         
         # Initialize component managers
         self.block_manager = BlockManager(self)
         self.passage_manager = PassageManager(self)
-        self.entity_manager = EntityManager(self)
         self.consolidation_engine = ConsolidationEngine(self)
-        self.batch_processor = BatchConversationProcessor(self)
+        self.conversation_archive = ConversationArchive(self)
         
         # Initialize core memory blocks if not exist
         self._initialize_core_blocks()
@@ -197,18 +203,16 @@ class MemoryManager:
                 b.label: {
                     "value": b.value,
                     "version": b.version,
-                    "updated_at": b.updated_at.isoformat()
+                    "updated_at": format_utc_iso(b.updated_at)
                 } 
                 for b in blocks
             }
             
             # Get counts for statistics
-            entity_count = session.query(MemoryEntity).count()
             passage_count = session.query(MemoryPassage).count()
             
             # Get recent activity metrics
-            from datetime import timedelta
-            recent_cutoff = datetime.now(UTC) - timedelta(hours=24)
+            recent_cutoff = utc_now() - timedelta(hours=24)
             recent_passages = session.query(MemoryPassage).filter(
                 MemoryPassage.created_at > recent_cutoff
             ).count()
@@ -217,7 +221,6 @@ class MemoryManager:
             snapshot = MemorySnapshot(
                 conversation_id=conversation_id,
                 blocks_snapshot=blocks_data,
-                entity_count=entity_count,
                 passage_count=passage_count,
                 reason=reason,
                 context={
@@ -268,7 +271,7 @@ class MemoryManager:
                     # Update block
                     block.value = block_data["value"]
                     block.version += 1
-                    block.updated_at = datetime.now(UTC)
+                    block.updated_at = utc_now()
             
             session.commit()
             logger.info(f"Restored from snapshot {snapshot_id}")
@@ -290,31 +293,12 @@ class MemoryManager:
                         MemoryPassage.importance_score
                     ).scalar() or 0
                 },
-                "entities": {
-                    "count": session.query(MemoryEntity).count(),
-                    "types": {}
-                },
-                "relations": {
-                    "count": session.query(MemoryRelation).count()
-                },
                 "snapshots": {
                     "count": session.query(MemorySnapshot).count()
                 },
                 "embedding_cache": self.embedding_cache.get_stats()
             }
             
-            # Get entity type breakdown
-            entity_types = session.execute(
-                text("""
-                SELECT entity_type, COUNT(*) as count 
-                FROM memory_entities 
-                GROUP BY entity_type
-                """)
-            ).fetchall()
-            
-            stats["entities"]["types"] = {
-                row[0] or "unknown": row[1] for row in entity_types
-            }
             
             return stats
     

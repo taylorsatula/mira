@@ -37,7 +37,7 @@ class ONNXEmbeddingModel:
         with error_context("ONNXEmbeddingModel", "initialization", error_code=ErrorCode.TOOL_INITIALIZATION_ERROR):
             # Use provided path or default
             if model_path is None:
-                model_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "onnx", "model.onnx")
+                model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "onnx", "model.onnx")
             
             self.model_path = Path(model_path)
             if not self.model_path.exists():
@@ -47,8 +47,9 @@ class ONNXEmbeddingModel:
                     permanent_failure=True
                 )
             
-            # Load tokenizer - hardcoded for all-MiniLM-L6-v2
-            self.tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+            # Load tokenizer from local onnx directory
+            tokenizer_path = self.model_path.parent
+            self.tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_path))
             
             # Create ONNX session with optimization
             sess_options = ort.SessionOptions()
@@ -64,11 +65,18 @@ class ONNXEmbeddingModel:
                 })
             ]
             
-            self.session = ort.InferenceSession(
-                str(self.model_path), 
-                sess_options, 
-                providers=providers
-            )
+            try:
+                self.session = ort.InferenceSession(
+                    str(self.model_path), 
+                    sess_options, 
+                    providers=providers
+                )
+            except Exception as e:
+                raise ToolError(
+                    f"Failed to create ONNX session: {e}",
+                    code=ErrorCode.TOOL_INITIALIZATION_ERROR,
+                    permanent_failure=True
+                )
             
             # Get input/output names
             self.input_names = [i.name for i in self.session.get_inputs()]
