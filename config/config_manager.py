@@ -257,21 +257,29 @@ class AppConfig(BaseModel):
             )
         return value
     
-    @property #ANNOTATION why do all of these need to be redundantly specified? Is there a good reason? Can't we just look for things that should have had an environmental variable and crash out if none is specified or a non-empty-string default is not given? Like,, if we don't have an Anthropic key we aren't getting off the ground but if we don't have a Square key that tool just won't work. This would also reduce our dependance on having to update a bunch of code sections when adding new tools or w/e.
+    @property
     def api_key(self) -> str:
         """
-        Get the Anthropic API key.
+        Get the LLM provider API key from environment variable.
+        
+        For local providers, returns empty string.
+        For remote providers, looks for LLM_PROVIDER_API_KEY environment variable.
         
         Returns:
-            API key string
+            API key string (empty for local providers)
             
         Raises:
-            ConfigError: If the API key is not set
+            ConfigError: If the API key is not set for remote providers
         """
-        api_key = os.getenv("ANTHROPIC_API_KEY")
+        # Local providers don't need API keys
+        if self.api.provider == "local":
+            return ""
+            
+        # Remote providers need LLM_PROVIDER_API_KEY
+        api_key = os.getenv("LLM_PROVIDER_API_KEY")
         if not api_key:
             raise ConfigError(
-                "Anthropic API key not found. Set ANTHROPIC_API_KEY environment variable.",
+                "LLM provider API key not found. Set LLM_PROVIDER_API_KEY environment variable.",
                 ErrorCode.MISSING_ENV_VAR
             )
         return api_key

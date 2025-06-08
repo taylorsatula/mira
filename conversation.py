@@ -32,7 +32,7 @@ from utils.timezone_utils import (
 
 from errors import ConversationError, ErrorCode, error_context, ToolError, _add_error_to_working_memory
 from config import config
-from api.llm_bridge import LLMBridge
+from api.llm_provider import LLMProvider
 from tools.repo import ToolRepository
 from utils.tag_parser import parser as tag_parser
 from utils.error_logging import error_analysis_logger
@@ -124,7 +124,7 @@ class Conversation:
         self,
         conversation_id: str,
         system_prompt: str,
-        llm_bridge: LLMBridge,
+        llm_bridge: LLMProvider,
         tool_repo: ToolRepository,
         tool_relevance_engine: 'ToolRelevanceEngine',
         workflow_manager: 'WorkflowManager',
@@ -413,7 +413,7 @@ class Conversation:
                 
                 # Working memory contains all dynamic content including workflow hints
                 
-                # Define cache control for prompt caching
+                # Enable caching for static content and conversation history
                 cache_control = {"type": "ephemeral"}
                 
                 # Generate response (streaming or standard)
@@ -599,11 +599,14 @@ class Conversation:
                 # If no tool calls, add the response to conversation and break the loop
                 if not tool_calls:
                     # Extract topic change tag from the response and update tool relevance engine
+                    topic_changed = False
                     if self.tool_relevance_engine and not self.tool_relevance_engine.suspended:
                         topic_changed = self.extract_topic_changed_tag(assistant_response)
                         self.tool_relevance_engine.set_topic_changed(topic_changed)
                     
-                    self.add_message("assistant", assistant_response)
+                    # Store topic change metadata with the message
+                    metadata = {"topic_changed": topic_changed}
+                    self.add_message("assistant", assistant_response, metadata=metadata)
                     break
                 
                 # Otherwise, process the tool calls and continue the loop
@@ -776,7 +779,7 @@ class Conversation:
     def from_dict(
         cls,
         data: Dict[str, Any],
-        llm_bridge: LLMBridge,
+        llm_bridge: LLMProvider,
         tool_repo: ToolRepository,
         tool_relevance_engine: 'ToolRelevanceEngine',
         workflow_manager: 'WorkflowManager',

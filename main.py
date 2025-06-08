@@ -20,14 +20,13 @@ from typing import Dict, Any, Optional, Callable, Union, List
 
 from config import config
 from errors import handle_error, AgentError, error_context, ErrorCode, FileOperationError
-from api.llm_bridge import LLMBridge
-from anthropic.types import Usage
+from api.llm_provider import LLMProvider
 from tools.repo import ToolRepository
 from tools.tool_feedback import save_tool_feedback
 from conversation import Conversation
 from onload_checker import OnLoadChecker, add_stimuli_to_conversation
 from utils import automation_controller
-from working_memory import WorkingMemory, TimeManager, SystemStatusManager, UserInfoManager, ReminderManager
+from working_memory import WorkingMemory, TimeManager, SystemStatusManager, ReminderManager
 from lt_memory.integration import initialize_lt_memory, check_lt_memory_requirements
 
 
@@ -168,30 +167,12 @@ def initialize_system(args) -> Dict[str, Any]:
         data_dir = Path(config.paths.data_dir)
         os.makedirs(data_dir, exist_ok=True)
 
-        # Initialize LLM bridge based on configured provider
-        provider = getattr(config.api, "provider", "anthropic").lower()
-
-        if provider == "ollama":
-            # Import and initialize Ollama bridge
-            try:
-                from api.ollama_bridge import OllamaBridge
-                ollama_url = getattr(config.api, "ollama_url", "http://localhost:11434")
-                ollama_model = getattr(config.api, "ollama_model", "qwen")
-
-                llm_bridge = OllamaBridge(
-                    base_url=ollama_url,
-                    model=ollama_model
-                )
-                logger.info(f"Initialized Ollama bridge with model {ollama_model}")
-            except ImportError as e:
-                logger.error(f"Failed to initialize Ollama bridge: {e}. Falling back to Anthropic API.")
-                from api.llm_bridge import LLMBridge
-                llm_bridge = LLMBridge()
-        else:
-            # Default to Anthropic
-            from api.llm_bridge import LLMBridge
-            llm_bridge = LLMBridge()
-            logger.info(f"Initialized Anthropic bridge with model {getattr(config.api, 'model', 'default')}")
+        # Initialize unified LLM provider
+        llm_bridge = LLMProvider()
+        logger.info(
+            f"Initialized LLM provider: type={config.api.provider}, "
+            f"endpoint={config.api.api_endpoint}, model={config.api.model}"
+        )
 
         # Initialize tool repository
         tool_repo = ToolRepository()
@@ -233,9 +214,6 @@ def initialize_system(args) -> Dict[str, Any]:
         time_manager = TimeManager(working_memory)
         logger.info("Initialized TimeManager for datetime information")
 
-        # Initialize UserInfoManager to handle user information (standalone trinket)
-        user_info_manager = UserInfoManager(working_memory, config)
-        logger.info("Initialized UserInfoManager for user information")
 
         # Initialize SystemStatusManager to handle system status (standalone trinket)
         system_status_manager = SystemStatusManager(working_memory)
@@ -363,7 +341,8 @@ def initialize_system(args) -> Dict[str, Any]:
             config, 
             working_memory, 
             tool_repo,
-            automation_engine
+            automation_engine,
+            llm_bridge
         )
         
         # Verify initialization was successful
@@ -375,6 +354,14 @@ def initialize_system(args) -> Dict[str, Any]:
         
         lt_memory = lt_memory_components
         logger.info("LT_Memory system initialized successfully")
+        
+        # Initialize ConversationArchiveManager trinket
+        from working_memory import ConversationArchiveManager
+        conversation_archive_manager = ConversationArchiveManager(
+            working_memory=working_memory,
+            conversation_archive_bridge=lt_memory_components["conversation_archive_bridge"]
+        )
+        logger.info("Initialized ConversationArchiveManager trinket")
         
         # Now that we have a conversation, add token tracking to the LLM bridge
         def token_tracking_decorator(func: Callable) -> Callable:
@@ -418,9 +405,9 @@ def initialize_system(args) -> Dict[str, Any]:
             'automation_engine': automation_engine,
             'working_memory': working_memory,
             'time_manager': time_manager,
-            'user_info_manager': user_info_manager,
             'system_status_manager': system_status_manager,
             'reminder_manager': reminder_manager,
+            'conversation_archive_manager': conversation_archive_manager,
             'lt_memory': lt_memory
         }
 

@@ -14,28 +14,23 @@ class ApiConfig(BaseModel):
 
     # Provider configuration
     provider: str = Field(
-        default="anthropic",
-        description="LLM provider to use ('anthropic' or 'ollama')"
+        default="local",
+        description="LLM provider type: 'local' for local servers or 'remote' for cloud APIs"
     )
-
-    # Anthropic model settings
+    
+    # API endpoint configuration
+    api_endpoint: str = Field(
+        default="http://localhost:11434/v1/chat/completions",
+        description="Full API endpoint URL including the path (e.g., 'http://localhost:11434/v1/chat/completions' for local Ollama)"
+    )
+    
+    # Model configuration
     model: str = Field(
-        default="claude-3-5-haiku-20241022", # Haiku is much faster and still skilled for common tasks
-#       default="claude-3-7-sonnet-20250219",
-        description="Anthropic model to use for API requests when provider is 'anthropic'"
+        default="hermes3:8b",
+        description="Model to use for API requests (e.g., 'gpt-4', 'llama2', 'mixtral')"
     )
 
-    # Ollama model settings
-    ollama_url: str = Field(
-        default="http://localhost:11434",
-        description="URL for the Ollama API server when provider is 'ollama'"
-    )
-    ollama_model: str = Field(
-        default="qwen3:4b",
-        description="Ollama model name to use when provider is 'ollama'"
-    )
-
-    # Common settings for both providers
+    # Common settings for all providers
     max_tokens: int = Field(
         default=1000,
         description="Maximum number of tokens to generate in responses"
@@ -47,6 +42,10 @@ class ApiConfig(BaseModel):
     max_retries: int = Field(
         default=3,
         description="Maximum number of retries for failed API requests"
+    )
+    timeout: int = Field(
+        default=60,
+        description="Request timeout in seconds"
     )
 
 class ApiServerConfig(BaseModel):

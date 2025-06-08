@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -21,6 +22,9 @@ from main import initialize_system, parse_arguments, save_conversation
 from conversation import Conversation
 from errors import error_context, AgentError, handle_error, ErrorCode
 from config import config
+from auth import auth_router, get_current_user, get_current_user_optional, User
+from auth.security_middleware import SecurityHeadersMiddleware
+from auth.csrf_middleware import CSRFMiddleware
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -72,14 +76,28 @@ def create_app() -> FastAPI:
         version="1.0.0"
     )
     
-    # CORS configuration
+    # Security middleware - order matters, security headers should be first
+    app.add_middleware(SecurityHeadersMiddleware)
+    
+    # CSRF protection
+    app.add_middleware(CSRFMiddleware)
+    
+    # Trusted host middleware
+    allowed_hosts = os.environ.get("ALLOWED_HOSTS", "localhost").split(",")
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+    
+    # CORS configuration - restrict origins for security
+    allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Configure appropriately for production
+        allow_origins=allowed_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST"],
+        allow_headers=["Authorization", "Content-Type", "X-CSRF-Token"],
     )
+    
+    # Add authentication router
+    app.include_router(auth_router)
     
     # Initialize the system
     args = parse_arguments()
@@ -90,20 +108,6 @@ def create_app() -> FastAPI:
         request_queue = system_components['llm_bridge'].request_queue
         logger.info("Request queue available for Ollama multi-user support")
     
-    # Security scheme
-    security = HTTPBearer(auto_error=False)
-    
-    # Authentication dependency
-    async def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
-        """Verify API token if configured."""
-        api_token = os.environ.get('IOS_APITOKEN')
-        if not api_token:
-            return None  # No authentication required if no token configured
-            
-        if not credentials or credentials.credentials != api_token:
-            logger.warning("Invalid API token in request")
-            raise HTTPException(status_code=401, detail="Invalid API token")
-        return credentials.credentials
     
     # Helper functions
     async def get_or_create_conversation(conversation_id: Optional[str], user_id: Optional[str]) -> tuple[Conversation, str]:
@@ -177,8 +181,8 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
     
     @app.get("/api/status", response_model=StatusResponse)
-    async def get_api_status(token: Optional[str] = Depends(verify_token)):
-        """Return status information about the API."""
+    async def get_api_status(current_user: User = Depends(get_current_user)):
+        """Return status information about the API - requires authentication."""
         try:
             provider = getattr(config.api, 'provider', 'anthropic')
             
@@ -201,13 +205,16 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(e))
     
     @app.post("/api/chat", response_model=ChatResponse)
-    async def chat(request: ChatRequest, token: Optional[str] = Depends(verify_token)):
-        """Chat endpoint for single response."""
+    async def chat(
+        request: ChatRequest,
+        current_user: User = Depends(get_current_user)
+    ):
+        """Chat endpoint for single response - requires authentication."""
         try:
-            # Get or create conversation
+            # Get or create conversation using authenticated user's ID
             conversation, conv_id = await get_or_create_conversation(
                 request.conversation_id, 
-                request.user_id
+                str(current_user.id)
             )
             
             # Handle special commands
@@ -249,13 +256,16 @@ def create_app() -> FastAPI:
             )
     
     @app.post("/api/chat/stream")
-    async def chat_stream(request: ChatRequest, token: Optional[str] = Depends(verify_token)):
-        """Streaming chat endpoint using Server-Sent Events."""
+    async def chat_stream(
+        request: ChatRequest,
+        current_user: User = Depends(get_current_user)
+    ):
+        """Streaming chat endpoint using Server-Sent Events - requires authentication."""
         try:
-            # Get or create conversation
+            # Get or create conversation using authenticated user's ID
             conversation, conv_id = await get_or_create_conversation(
                 request.conversation_id,
-                request.user_id
+                str(current_user.id)
             )
             
             # Handle special commands
@@ -346,8 +356,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(e))
     
     @app.post("/api/queue/status", response_model=QueueStatusResponse)
-    async def queue_status(request: QueueStatusRequest, token: Optional[str] = Depends(verify_token)):
-        """Check queue position for a request (Ollama only)."""
+    async def queue_status(
+        request: QueueStatusRequest,
+        current_user: User = Depends(get_current_user)
+    ):
+        """Check queue position for a request (Ollama only) - requires authentication."""
         if not request_queue:
             raise HTTPException(
                 status_code=400,
@@ -373,8 +386,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(e))
     
     @app.post("/api/queue/cancel")
-    async def cancel_request(request: CancelRequest, token: Optional[str] = Depends(verify_token)):
-        """Cancel a pending request (Ollama only)."""
+    async def cancel_request(
+        request: CancelRequest,
+        current_user: User = Depends(get_current_user)
+    ):
+        """Cancel a pending request (Ollama only) - requires authentication."""
         if not request_queue:
             raise HTTPException(
                 status_code=400,
