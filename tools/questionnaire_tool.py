@@ -5,7 +5,7 @@ from typing import Dict, List, Any, Optional
 from pydantic import BaseModel, Field
 from tools.repo import Tool
 from errors import ErrorCode, error_context, ToolError
-from api.llm_bridge import LLMBridge
+from api.llm_provider import LLMProvider
 from config.registry import registry
 
 # Define configuration class for QuestionnaireTool
@@ -101,12 +101,12 @@ Use this tool whenever you need to gather multiple pieces of structured informat
 #         }
     ]
 
-    def __init__(self, llm_bridge: LLMBridge):
+    def __init__(self, llm_provider: LLMProvider):
         """
         Initialize the questionnaire tool.
         
         Args:
-            llm_bridge: LLMBridge instance for generating dynamic content
+            llm_provider: LLMBridge instance for generating dynamic content
         """
         super().__init__()
         # Tool-specific state
@@ -115,7 +115,7 @@ Use this tool whenever you need to gather multiple pieces of structured informat
         
         self.data_dir = config.paths.data_dir
         self.questionnaire_dir = os.path.join(self.data_dir, "tools", "questionnaire_tool")
-        self.llm_bridge = llm_bridge
+        self.llm_provider = llm_provider
         
         # Ensure directories exist
         os.makedirs(self.data_dir, exist_ok=True)
@@ -230,11 +230,11 @@ Use this tool whenever you need to gather multiple pieces of structured informat
                 questions = self._load_questionnaire_file(questionnaire_id)
                 
             # Process dynamic questions if needed
-            if self.llm_bridge:
+            if self.llm_provider:
                 questions = self._process_dynamic_questions(questions, context_data)
                 
             # Filter out questions that have already been answered
-            if context_data and self.llm_bridge:
+            if context_data and self.llm_provider:
                 original_count = len(questions)
                 questions = self.filter_answered_questions(questions, context_data)
                 filtered_count = original_count - len(questions)
@@ -272,7 +272,7 @@ Use this tool whenever you need to gather multiple pieces of structured informat
         questionnaire_id_clean = questionnaire_id.replace('.json', '').lower()
         
         # Check if this is a natural language request
-        if self.llm_bridge and len(questionnaire_id_clean.split()) > 1:
+        if self.llm_provider and len(questionnaire_id_clean.split()) > 1:
             # Try to match the natural language request to a questionnaire
             try:
                 # Get available questionnaires
@@ -294,8 +294,8 @@ Available topics: {', '.join(questionnaire_topics)}
 Return only the exact name of the best matching topic from the list."""
                     
                     messages = [{"role": "user", "content": prompt}]
-                    response = self.llm_bridge.generate_response(messages)
-                    matched_topic = self.llm_bridge.extract_text_content(response).strip().lower()
+                    response = self.llm_provider.generate_response(messages)
+                    matched_topic = self.llm_provider.extract_text_content(response).strip().lower()
                     
                     self.logger.info(f"LLM matched request '{questionnaire_id}' to topic: {matched_topic}")
                     questionnaire_id_clean = matched_topic
@@ -422,7 +422,7 @@ Return only the exact name of the best matching topic from the list."""
         Returns:
             List of questions that still need to be answered
         """
-        if not context_data or not self.llm_bridge:
+        if not context_data or not self.llm_provider:
             return questions
             
         # Create a combined context string
@@ -448,8 +448,8 @@ Answer with ONLY "yes" or "no".
             
             try:
                 messages = [{"role": "user", "content": prompt}]
-                response = self.llm_bridge.generate_response(messages)
-                content = self.llm_bridge.extract_text_content(response).strip().lower()
+                response = self.llm_provider.generate_response(messages)
+                content = self.llm_provider.extract_text_content(response).strip().lower()
                 
                 # If the answer is not clearly "yes", include the question
                 if content != "yes":
@@ -500,7 +500,7 @@ Answer with ONLY "yes" or "no".
                         prompt = prompt.replace(placeholder, str(value))
                 
                 # Get options from LLM
-                if prompt and self.llm_bridge:
+                if prompt and self.llm_provider:
                     self.logger.debug(f"Generating dynamic options with prompt: {prompt}")
                     try:
                         # Create message format for the bridge
@@ -509,8 +509,8 @@ Answer with ONLY "yes" or "no".
                         ]
                         
                         # Call the LLM to generate options
-                        response = self.llm_bridge.generate_response(messages)
-                        content = self.llm_bridge.extract_text_content(response)
+                        response = self.llm_provider.generate_response(messages)
+                        content = self.llm_provider.extract_text_content(response)
                         
                         # Parse options (assuming one per line)
                         options = [line.strip() for line in content.strip().split('\n') if line.strip()]
@@ -609,7 +609,7 @@ Answer with ONLY "yes" or "no".
                 next_questions = questions[i+1:]
                 dynamic_next = [q for q in next_questions if q.get('dynamic_type') == 'llm_options']
                 
-                if dynamic_next and self.llm_bridge:
+                if dynamic_next and self.llm_provider:
                     # Process the next dynamic questions with updated context
                     questions[i+1:] = self._process_dynamic_questions(next_questions, working_context)
         

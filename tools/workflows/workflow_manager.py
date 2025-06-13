@@ -38,7 +38,7 @@ class WorkflowManager:
         tool_repo: ToolRepository,
         model,
         workflows_dir: Optional[str] = None,
-        llm_bridge = None,
+        llm_provider = None,
         working_memory = None
     ):
         """
@@ -48,7 +48,7 @@ class WorkflowManager:
             tool_repo: Repository of available tools
             model: Pre-loaded ONNX embedding model to use for embedding computations
             workflows_dir: Directory containing workflow definition files
-            llm_bridge: LLM bridge instance for dynamic operations
+            llm_provider: LLM bridge instance for dynamic operations
             working_memory: Working memory instance for storing workflow content
         """
         self.logger = logging.getLogger("workflow_manager")
@@ -106,7 +106,7 @@ class WorkflowManager:
         self.logger.info("Using provided ONNX embedding model")
         
         # Store LLM bridge for dynamic operations
-        self.llm_bridge = llm_bridge
+        self.llm_provider = llm_provider
         
         # Load workflow definitions
         self.load_workflows()
@@ -687,14 +687,14 @@ You can navigate the workflow using these commands:
 - Complete each step fully before moving to the next step
 """
 
-    def start_workflow(self, workflow_id: str, triggering_message: str = None, llm_bridge = None) -> Dict[str, Any]:
+    def start_workflow(self, workflow_id: str, triggering_message: str = None, llm_provider = None) -> Dict[str, Any]:
         """
         Start a workflow.
 
         Args:
             workflow_id: ID of the workflow to start
             triggering_message: Optional message that triggered the workflow, used for initial data extraction
-            llm_bridge: Optional LLMBridge instance for extracting data from the triggering message
+            llm_provider: Optional LLMBridge instance for extracting data from the triggering message
 
         Returns:
             Dictionary containing workflow information
@@ -724,8 +724,8 @@ You can navigate the workflow using these commands:
         self.workflow_data = {}
 
         # Attempt to extract initial data from the triggering message if provided
-        if triggering_message and llm_bridge:
-            extracted_data = self._extract_initial_data(workflow_id, triggering_message, llm_bridge)
+        if triggering_message and llm_provider:
+            extracted_data = self._extract_initial_data(workflow_id, triggering_message, llm_provider)
             if extracted_data:
                 self.workflow_data.update(extracted_data)
                 self.logger.info(f"Extracted initial data from triggering message: {extracted_data}")
@@ -790,7 +790,7 @@ You can navigate the workflow using these commands:
             "workflow_data": self.workflow_data
         }
         
-    def _extract_initial_data(self, workflow_id: str, message: str, llm_bridge) -> Dict[str, Any]:
+    def _extract_initial_data(self, workflow_id: str, message: str, llm_provider) -> Dict[str, Any]:
         """
         Extract initial data for a workflow from a triggering message using the LLM.
         
@@ -799,13 +799,13 @@ You can navigate the workflow using these commands:
         Args:
             workflow_id: ID of the workflow
             message: The message to extract data from
-            llm_bridge: LLMBridge instance for LLM access
+            llm_provider: LLMBridge instance for LLM access
             
         Returns:
             Dictionary of extracted data that matches the workflow's data schema
         """
         workflow = self.workflows.get(workflow_id)
-        if not workflow or not message or not llm_bridge:
+        if not workflow or not message or not llm_provider:
             return {}
             
         # Get the data schema for this workflow
@@ -846,7 +846,7 @@ You can navigate the workflow using these commands:
             user_message = f"Extract data from this message: {message}"
             
             # Use a small, non-streaming model for this query
-            response = llm_bridge.generate_response(
+            response = llm_provider.generate_response(
                 messages=[{"role": "user", "content": user_message}],
                 system_prompt=system_prompt,
                 temperature=0.0,  # Use zero temperature for deterministic extraction
@@ -854,7 +854,7 @@ You can navigate the workflow using these commands:
             )
             
             # Extract the text content from the response
-            response_text = llm_bridge.extract_text_content(response)
+            response_text = llm_provider.extract_text_content(response)
             
             # Parse the JSON response
             import json
@@ -1291,7 +1291,7 @@ You can navigate the workflow using these commands:
                     # Check for special case of dynamic tool selection
                     if "specialcase__decideviallm" in step["tools"]:
                         # Get tools via LLM reasoning if LLM bridge is available
-                        if self.llm_bridge:
+                        if self.llm_provider:
                             self.logger.info(f"Determining required tools dynamically for step {step_id}")
                             dynamic_tools = self.determine_required_tools(self.active_workflow_id, step_id)
                             if dynamic_tools:
@@ -1632,7 +1632,7 @@ You can navigate the workflow using these commands:
         
         try:
             # Get LLM response
-            response = self.llm_bridge.generate_response(
+            response = self.llm_provider.generate_response(
                 messages=[{"role": "user", "content": user_message}],
                 system_prompt=system_prompt,
                 temperature=0.0,  # Use zero temperature for deterministic selection
@@ -1640,7 +1640,7 @@ You can navigate the workflow using these commands:
             )
             
             # Extract and parse tool list
-            response_text = self.llm_bridge.extract_text_content(response)
+            response_text = self.llm_provider.extract_text_content(response)
             
             # Handle various response formats
             try:

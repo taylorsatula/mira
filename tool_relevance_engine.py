@@ -669,7 +669,7 @@ class ToolRelevanceEngine:
         
     def set_topic_changed(self, topic_changed: bool) -> None:
         """
-        Set the topic changed flag based on LLM response.
+        Set the topic changed flag for tool relevance context management.
         
         This method is called by the conversation manager after analyzing
         the LLM's response for topic change tags.
@@ -678,7 +678,7 @@ class ToolRelevanceEngine:
             topic_changed: Boolean indicating whether the topic has changed
         """
         self.topic_changed = topic_changed
-        self.logger.info(f"Topic change flag set to: {topic_changed}")
+        self.logger.info(f"Tool relevance topic change flag set to: {topic_changed}")
 
 
 class MultiLabelClassifier:
@@ -1089,7 +1089,7 @@ class MultiLabelClassifier:
     
     def _compute_embedding(self, text: str) -> Optional[List[float]]:
         """
-        Compute an embedding for text using the ONNX model.
+        Compute an embedding for text using the shared context embedding utility.
         
         Args:
             text: Text to embed
@@ -1097,35 +1097,13 @@ class MultiLabelClassifier:
         Returns:
             List of embedding values, or None if computation fails
         """
-        # Check cache first
-        if text in self.embedding_cache:
-            return self.embedding_cache[text]
-        
-        if self.model is None:
-            self.logger.error("Model not initialized, cannot compute embedding")
-            return None
-        
         try:
-            # Limit concurrent computations
-            with self.thread_semaphore:
-                # Truncate very long texts to avoid memory issues
-                if len(text) > 8192:
-                    self.logger.warning("Text too long, truncating to 8192 characters")
-                    text = text[:8192]
-                
-                # Compute embedding using ONNX model
-                embedding = self.model.encode(text)
-                
-                # Convert to Python list
-                result = embedding.tolist()
-                
-                # Add to cache
-                self.embedding_cache[text] = result
-                
-                return result
-        
+            from utils.conversation_context_embedding import get_conversation_context_embedding
+            context_embedding = get_conversation_context_embedding()
+            return context_embedding.get_embedding(text)
+            
         except Exception as e:
-            self.logger.error(f"Error computing embedding: {e}")
+            self.logger.error(f"Error computing embedding via shared utility: {e}")
             return None
     
     def classify_message_with_scores(self, message: str) -> List[Tuple[str, float]]:

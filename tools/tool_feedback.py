@@ -14,19 +14,19 @@ from pathlib import Path
 
 from config import config
 from conversation import Conversation
-from api.llm_bridge import LLMBridge
+from api.llm_provider import LLMProvider
 
 
 def analyze_feedback_with_llm(
     feedback_data: Dict[str, Any], 
-    llm_bridge: LLMBridge
+    llm_provider: LLMProvider
 ) -> Dict[str, Any]:
     """
     Analyze tool feedback using LLM to provide insights for improving tool classification.
     
     Args:
         feedback_data: Dictionary containing feedback and context information
-        llm_bridge: LLM Bridge instance for making API calls
+        llm_provider: LLM Bridge instance for making API calls
         
     Returns:
         Dictionary containing the LLM analysis of the feedback
@@ -66,14 +66,14 @@ def analyze_feedback_with_llm(
         messages = [{"role": "user", "content": prompt}]
         
         # Make the API call
-        response = llm_bridge.generate_response(
+        response = llm_provider.generate_response(
             messages=messages,
             system_prompt="""You are an expert AI system analyzer specializing in tool classification systems. Analyze semantic similarity patterns between queries and examples. Provide ONLY concrete suggestions like 'Add training example X' or 'Adjust threshold for tool Y from 0.8 to 0.7'. Focus on specific words/phrases that caused matching issues. Use 2-3 sentences maximum. Be extremely specific and actionable. Mention exact similarity scores, specific words that caused incorrect matches, and suggest concrete examples like: "Add example: 'Check my Square bookings for next week' to square_tool".""",
             temperature=0.2  # Lower temperature for more precise response
         )
         
         # Extract the text from the response
-        response_text = llm_bridge.extract_text_content(response)
+        response_text = llm_provider.extract_text_content(response)
         
         # Return the analysis
         return {
@@ -106,7 +106,7 @@ def save_tool_feedback(system: Dict[str, Any], feedback_text: str, conversation:
     try:
         # Get the components from the system
         tool_relevance_engine = system.get('tool_relevance_engine')
-        llm_bridge = system.get('llm_bridge')
+        llm_provider = system.get('llm_provider')
         
         # Create feedback directory
         feedback_dir = Path(config.paths.persistent_dir) / "tool_feedback"
@@ -193,9 +193,9 @@ def save_tool_feedback(system: Dict[str, Any], feedback_text: str, conversation:
         
         # Generate LLM analysis if bridge is available
         llm_analysis = None
-        if llm_bridge:
+        if llm_provider:
             logging.info("Generating LLM analysis of tool feedback...")
-            analysis_result = analyze_feedback_with_llm(feedback_entry, llm_bridge)
+            analysis_result = analyze_feedback_with_llm(feedback_entry, llm_provider)
             feedback_entry["llm_analysis"] = analysis_result
             llm_analysis = analysis_result.get("analysis")
         else:

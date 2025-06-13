@@ -37,21 +37,10 @@ class MemoryConfig(BaseModel):
         description="Core memory blocks and their character limits"
     )
     
-    # ONNX model settings
-    onnx_model_path: str = Field(
-        default_factory=lambda: os.getenv(
-            "LT_MEMORY_ONNX_MODEL",
-            "onnx/model.onnx"
-        ),
-        description="Path to ONNX model file"
-    )
-    onnx_tokenizer: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2",
-        description="Tokenizer name for ONNX model"
-    )
+    # Embedding settings
     embedding_dim: int = Field(
-        default=384,
-        description="Embedding dimension size"
+        default=1024,
+        description="Embedding dimension size (1024 for OpenAI text-embedding-3-small)"
     )
     embedding_batch_size: int = Field(
         default=32,
@@ -84,12 +73,17 @@ class MemoryConfig(BaseModel):
         description="Days before memory enters cold storage"
     )
     
-    # Knowledge graph settings
-    entity_extraction_enabled: bool = Field(
-        default=True,
-        description="Enable entity extraction and knowledge graph"
+    # Fact extraction settings
+    fact_similarity_threshold: float = Field(
+        default=0.85,
+        description="Similarity threshold for fact deduplication"
     )
-    relationship_inference_enabled: bool = Field(
+    auto_expire_enabled: bool = Field(
         default=True,
-        description="Enable relationship inference between entities"
+        description="Enable automatic expiration of old facts"
     )
+    fact_extraction_batch_size: int = Field(
+        default=10,
+        description="Number of facts to extract per LLM call"
+    )
+    

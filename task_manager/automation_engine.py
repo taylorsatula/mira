@@ -28,7 +28,7 @@ from task_manager.automation import (
     StepExecutionStatus, ConditionType
 )
 from tools.repo import ToolRepository
-from api.llm_bridge import LLMBridge
+from api.llm_provider import LLMProvider
 from config import config
 from utils.timezone_utils import (
     utc_now, ensure_utc, convert_to_timezone, convert_from_utc,
@@ -237,19 +237,19 @@ class AutomationEngine:
     def __init__(
         self,
         tool_repo: Optional[ToolRepository] = None,
-        llm_bridge: Optional[LLMBridge] = None
+        llm_provider: Optional[LLMProvider] = None
     ):
         """
         Initialize the automation engine.
 
         Args:
             tool_repo: Repository of available tools
-            llm_bridge: LLM bridge for orchestrated steps
+            llm_provider: LLM bridge for orchestrated steps
         """
         self.db = Database()
         # Store the provided tool_repo - important to use the same one as the main application
         self.tool_repo = tool_repo or ToolRepository()
-        self.llm_bridge = llm_bridge or LLMBridge()
+        self.llm_provider = llm_provider or LLMProvider()
         self.template_engine = TemplateEngine()
 
         # Keep track of which automations are currently being executed
@@ -972,7 +972,7 @@ class AutomationEngine:
         conversation = Conversation(
             conversation_id=conversation_id,
             system_prompt=system_prompt,
-            llm_bridge=self.llm_bridge,
+            llm_provider=self.llm_provider,
             tool_repo=self.tool_repo
         )
         
@@ -1068,7 +1068,7 @@ class AutomationEngine:
         conversation = Conversation(
             conversation_id=conversation_id,
             system_prompt=system_prompt,
-            llm_bridge=self.llm_bridge,
+            llm_provider=self.llm_provider,
             tool_repo=self.tool_repo
         )
         
@@ -1852,14 +1852,14 @@ def get_automation_engine() -> AutomationEngine:
 
 def initialize_automation_engine(
     tool_repo: Optional[ToolRepository] = None,
-    llm_bridge: Optional[LLMBridge] = None
+    llm_provider: Optional[LLMProvider] = None
 ) -> AutomationEngine:
     """
     Initialize the automation engine and start the scheduler.
 
     Args:
         tool_repo: The tool repository to use (should be shared with main app)
-        llm_bridge: The LLM bridge to use
+        llm_provider: The LLM bridge to use
 
     Returns:
         The initialized automation engine
@@ -1870,7 +1870,7 @@ def initialize_automation_engine(
         # Create the engine with the shared tool repository
         _automation_engine = AutomationEngine(
             tool_repo=tool_repo,
-            llm_bridge=llm_bridge
+            llm_provider=llm_provider
         )
 
     _automation_engine.start_scheduler()

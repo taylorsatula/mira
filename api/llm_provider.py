@@ -25,21 +25,43 @@ class LLMProvider:
     OpenAI chat completions API interface.
     """
     
-    def __init__(self):
-        """Initialize the LLM provider with configuration."""
+    def __init__(self, 
+                 provider_type: Optional[str] = None,
+                 api_endpoint: Optional[str] = None,
+                 model: Optional[str] = None,
+                 max_tokens: Optional[int] = None,
+                 temperature: Optional[float] = None,
+                 max_retries: Optional[int] = None,
+                 timeout: Optional[int] = None,
+                 api_key: Optional[str] = None):
+        """Initialize the LLM provider with configuration.
+        
+        Args:
+            provider_type: Override provider type ("local" or "remote")
+            api_endpoint: Override API endpoint URL
+            model: Override model name
+            max_tokens: Override max tokens
+            temperature: Override temperature
+            max_retries: Override max retries
+            timeout: Override timeout
+            api_key: Override API key
+        """
         self.logger = logging.getLogger("llm_provider")
         
-        # Get configuration
-        self.provider_type = config.api.provider  # "local" or "remote"
-        self.api_endpoint = config.api.api_endpoint
-        self.model = config.api.model
-        self.max_tokens = config.api.max_tokens
-        self.temperature = config.api.temperature
-        self.max_retries = config.api.max_retries
-        self.timeout = config.api.timeout
+        # Get configuration with optional overrides
+        self.provider_type = provider_type if provider_type is not None else config.api.provider
+        self.api_endpoint = api_endpoint if api_endpoint is not None else config.api.api_endpoint
+        self.model = model if model is not None else config.api.model
+        self.max_tokens = max_tokens if max_tokens is not None else config.api.max_tokens
+        self.temperature = temperature if temperature is not None else config.api.temperature
+        self.max_retries = max_retries if max_retries is not None else config.api.max_retries
+        self.timeout = timeout if timeout is not None else config.api.timeout
         
-        # Get API key (empty string for local providers)
-        self.api_key = config.api_key
+        # Get API key with override
+        if api_key is not None:
+            self.api_key = api_key
+        else:
+            self.api_key = config.api_key
         
         # Thread lock to serialize requests and prevent race conditions
         self._request_lock = threading.Lock()
@@ -71,6 +93,7 @@ class LLMProvider:
         tools: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
         callback: Optional[Callable] = None,
+        dynamic_content: Optional[str] = None,
         **kwargs  # Ignore provider-specific parameters
     ) -> Dict[str, Any]:
         """
@@ -94,7 +117,7 @@ class LLMProvider:
         """
         # Build request body
         request_body = self._build_request_body(
-            messages, system_prompt, temperature, max_tokens, tools
+            messages, system_prompt, temperature, max_tokens, tools, dynamic_content
         )
         
         # Make the request with thread safety
@@ -117,17 +140,24 @@ class LLMProvider:
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        tools: Optional[List[Dict[str, Any]]] = None
+        tools: Optional[List[Dict[str, Any]]] = None,
+        dynamic_content: Optional[str] = None
     ) -> Dict[str, Any]:
         """Build the OpenAI-format request body."""
         # Format messages
         formatted_messages = []
         
-        # Add system prompt if provided
-        if system_prompt:
+        # Combine system prompt with dynamic content
+        if system_prompt or dynamic_content:
+            content_parts = []
+            if system_prompt:
+                content_parts.append(system_prompt)
+            if dynamic_content:
+                content_parts.append(dynamic_content)
+            
             formatted_messages.append({
                 "role": "system",
-                "content": system_prompt
+                "content": "\n\n".join(content_parts)
             })
         
         # Add conversation messages

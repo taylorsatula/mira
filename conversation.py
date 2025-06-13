@@ -124,7 +124,7 @@ class Conversation:
         self,
         conversation_id: str,
         system_prompt: str,
-        llm_bridge: LLMProvider,
+        llm_provider: LLMProvider,
         tool_repo: ToolRepository,
         tool_relevance_engine: 'ToolRelevanceEngine',
         workflow_manager: 'WorkflowManager',
@@ -136,7 +136,7 @@ class Conversation:
         Args:
             conversation_id: Unique identifier for the conversation
             system_prompt: System prompt for the conversation
-            llm_bridge: LLM bridge instance
+            llm_provider: LLM bridge instance
             tool_repo: Tool repository instance
             tool_relevance_engine: Tool relevance engine instance
             workflow_manager: Workflow manager instance
@@ -156,7 +156,7 @@ class Conversation:
         self.metadata: Dict[str, Any] = {}
         
         # Set up conversation components
-        self.llm_bridge = llm_bridge
+        self.llm_provider = llm_provider
         self.tool_repo = tool_repo
         self.tool_relevance_engine = tool_relevance_engine
         self.workflow_manager = workflow_manager
@@ -178,6 +178,10 @@ class Conversation:
         # Initialize token tracking
         self.tokens_in = 0
         self.tokens_out = 0
+        
+        # Topic change detection and management
+        self.topic_changed = False
+        self._message_counter = 0  # Track message sequence for topic change tracking
         
         # Initialize tag handling state
         self._tried_loading_all_tools = False
@@ -208,6 +212,20 @@ class Conversation:
         
         # Add the message to the conversation
         self.messages.append(message)
+        
+        # Add to shared context embedding utility for tool classification ONLY
+        # Memory operations use their own OpenAI embeddings for higher quality
+        # Only add user messages since they represent what user is asking about
+        if role == "user":
+            try:
+                from utils.conversation_context_embedding import get_conversation_context_embedding
+                context_embedding = get_conversation_context_embedding()
+                context_embedding.add_message(role, content)
+            except Exception as e:
+                self.logger.warning(f"Error updating conversation context embedding: {e}")
+        
+        # Increment message counter for topic change tracking
+        self._message_counter += 1
         
         # Prune history if needed #ANNOTATION We should keep a complete conversation history stored somewhere outside the context window so that when the conversation is complete and saves we can go through it.
         if self.max_history and len(self.messages) > self.max_history * 2:
@@ -271,6 +289,36 @@ class Conversation:
         """
         # Use the tag parser module
         return tag_parser.extract_topic_changed(response_text)
+    
+    def set_topic_changed(self, topic_changed: bool) -> None:
+        """
+        Set the topic changed flag and notify all dependent systems.
+        
+        This method coordinates topic change handling across all conversation components.
+        
+        Args:
+            topic_changed: Boolean indicating whether the topic has changed
+        """
+        self.topic_changed = topic_changed
+        self.logger.info(f"Topic change detected: {topic_changed}")
+        
+        if topic_changed:
+            # Notify tool relevance engine
+            if self.tool_relevance_engine:
+                self.tool_relevance_engine.set_topic_changed(True)
+            
+            # Flush shared context embedding cache (tool classification only)
+            try:
+                from utils.conversation_context_embedding import get_conversation_context_embedding
+                context_embedding = get_conversation_context_embedding()
+                context_embedding.flush_context()
+                self.logger.info("Flushed shared context embedding cache due to topic change")
+            except Exception as e:
+                self.logger.error(f"Error flushing shared context embedding cache: {e}")
+        else:
+            # Notify tool relevance engine that topic continued
+            if self.tool_relevance_engine:
+                self.tool_relevance_engine.set_topic_changed(False)
         
     def _load_all_tools(self) -> None:
         """
@@ -418,7 +466,7 @@ class Conversation:
                 
                 # Generate response (streaming or standard)
                 if stream:
-                    response = self.llm_bridge.generate_response(
+                    response = self.llm_provider.generate_response(
                         messages=messages,
                         system_prompt=static_content,
                         temperature=temperature,
@@ -446,7 +494,7 @@ class Conversation:
                         final_message = response.get_final_message()
                         response = final_message
                 else:
-                    response = self.llm_bridge.generate_response(
+                    response = self.llm_provider.generate_response(
                         messages=messages,
                         system_prompt=static_content,
                         temperature=temperature,
@@ -469,7 +517,7 @@ class Conversation:
                 
                 
                 # Extract text content for final return value
-                assistant_response = self.llm_bridge.extract_text_content(response)
+                assistant_response = self.llm_provider.extract_text_content(response)
                 final_response = assistant_response
                 
                 # Extract and log any error analysis from the response
@@ -532,7 +580,7 @@ class Conversation:
                                 self.workflow_manager.start_workflow(
                                     workflow_id,
                                     triggering_message=triggering_message, 
-                                    llm_bridge=self.llm_bridge
+                                    llm_provider=self.llm_provider
                                 )
                                 self.logger.info(f"Started workflow: {workflow_id}")
                                 # Suspend tool relevance engine
@@ -586,7 +634,7 @@ class Conversation:
                                 self.logger.error(f"Error cancelling workflow: {e}")
                 
                 # Check for tool calls
-                tool_calls = self.llm_bridge.extract_tool_calls(response)
+                tool_calls = self.llm_provider.extract_tool_calls(response)
                 
                 # Log tool calls for debugging
                 if tool_calls:
@@ -598,11 +646,9 @@ class Conversation:
                 
                 # If no tool calls, add the response to conversation and break the loop
                 if not tool_calls:
-                    # Extract topic change tag from the response and update tool relevance engine
-                    topic_changed = False
-                    if self.tool_relevance_engine and not self.tool_relevance_engine.suspended:
-                        topic_changed = self.extract_topic_changed_tag(assistant_response)
-                        self.tool_relevance_engine.set_topic_changed(topic_changed)
+                    # Extract topic change tag from the response and notify all systems
+                    topic_changed = self.extract_topic_changed_tag(assistant_response)
+                    self.set_topic_changed(topic_changed)
                     
                     # Store topic change metadata with the message
                     metadata = {"topic_changed": topic_changed}
@@ -779,7 +825,7 @@ class Conversation:
     def from_dict(
         cls,
         data: Dict[str, Any],
-        llm_bridge: LLMProvider,
+        llm_provider: LLMProvider,
         tool_repo: ToolRepository,
         tool_relevance_engine: 'ToolRelevanceEngine',
         workflow_manager: 'WorkflowManager',
@@ -790,7 +836,7 @@ class Conversation:
 
         Args:
             data: Dictionary representation of the conversation
-            llm_bridge: LLM bridge instance
+            llm_provider: LLM bridge instance
             tool_repo: Tool repository instance
             tool_relevance_engine: Tool relevance engine instance
             workflow_manager: Workflow manager instance
@@ -810,7 +856,7 @@ class Conversation:
         conversation = cls(
             conversation_id=conversation_id,
             system_prompt=system_prompt,
-            llm_bridge=llm_bridge,
+            llm_provider=llm_provider,
             tool_repo=tool_repo,
             tool_relevance_engine=tool_relevance_engine,
             workflow_manager=workflow_manager,

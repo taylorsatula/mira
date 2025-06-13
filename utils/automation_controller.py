@@ -16,7 +16,7 @@ from task_manager.automation_engine import (
 from task_manager.automation import (
     AutomationExecution, ExecutionStatus, AutomationType, TriggerType
 )
-from api.llm_bridge import LLMBridge
+from api.llm_provider import LLMProvider
 from tools.repo import ToolRepository
 from db import Database
 
@@ -31,7 +31,7 @@ _is_running = False
 
 def initialize_systems(
     tool_repo: Optional[ToolRepository] = None,
-    llm_bridge: Optional[LLMBridge] = None
+    llm_provider: Optional[LLMProvider] = None
 ) -> Dict[str, Any]:
     """
     Initialize all automation systems.
@@ -41,7 +41,7 @@ def initialize_systems(
     
     Args:
         tool_repo: Repository of available tools
-        llm_bridge: LLM bridge for LLM-orchestrated execution
+        llm_provider: LLM bridge for LLM-orchestrated execution
         
     Returns:
         Dictionary containing all initialized components
@@ -56,7 +56,7 @@ def initialize_systems(
     # Initialize the automation engine with the shared tool repository
     engine = initialize_automation_engine(
         tool_repo=tool_repo,
-        llm_bridge=llm_bridge
+        llm_provider=llm_provider
     )
 
     # Set flag

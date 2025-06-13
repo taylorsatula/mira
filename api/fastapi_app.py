@@ -104,8 +104,8 @@ def create_app() -> FastAPI:
     system_components = initialize_system(args)
     
     # Get the request queue for Ollama if available
-    if hasattr(system_components['llm_bridge'], 'request_queue'):
-        request_queue = system_components['llm_bridge'].request_queue
+    if hasattr(system_components['llm_provider'], 'request_queue'):
+        request_queue = system_components['llm_provider'].request_queue
         logger.info("Request queue available for Ollama multi-user support")
     
     
@@ -122,7 +122,7 @@ def create_app() -> FastAPI:
                 conv = Conversation(
                     conversation_id=conversation_id,
                     system_prompt=config.get_system_prompt("main_system_prompt"),
-                    llm_bridge=system_components['llm_bridge'],
+                    llm_provider=system_components['llm_provider'],
                     tool_repo=system_components['tool_repo'],
                     tool_relevance_engine=system_components['tool_relevance_engine'],
                     workflow_manager=system_components['workflow_manager'],
@@ -139,7 +139,7 @@ def create_app() -> FastAPI:
         conv = Conversation(
             conversation_id=conv_id,
             system_prompt=config.get_system_prompt("main_system_prompt"),
-            llm_bridge=system_components['llm_bridge'],
+            llm_provider=system_components['llm_provider'],
             tool_repo=system_components['tool_repo'],
             tool_relevance_engine=system_components['tool_relevance_engine'],
             workflow_manager=system_components['workflow_manager'],

@@ -168,7 +168,7 @@ def initialize_system(args) -> Dict[str, Any]:
         os.makedirs(data_dir, exist_ok=True)
 
         # Initialize unified LLM provider
-        llm_bridge = LLMProvider()
+        llm_provider = LLMProvider()
         logger.info(
             f"Initialized LLM provider: type={config.api.provider}, "
             f"endpoint={config.api.api_endpoint}, model={config.api.model}"
@@ -205,7 +205,7 @@ def initialize_system(args) -> Dict[str, Any]:
         workflow_manager = WorkflowManager(
             tool_repo,
             model=shared_model,
-            llm_bridge=llm_bridge,
+            llm_provider=llm_provider,
             working_memory=working_memory
         )
         logger.info("Initialized WorkflowManager with working memory integration")
@@ -266,7 +266,7 @@ def initialize_system(args) -> Dict[str, Any]:
                         )
                     conversation = Conversation.from_dict(
                         conversation_data,
-                        llm_bridge=llm_bridge,
+                        llm_provider=llm_provider,
                         tool_repo=tool_repo,
                         tool_relevance_engine=tool_relevance_engine,
                         workflow_manager=workflow_manager,
@@ -280,7 +280,7 @@ def initialize_system(args) -> Dict[str, Any]:
                     conversation = Conversation(
                         conversation_id=args.conversation,
                         system_prompt=system_prompt,
-                        llm_bridge=llm_bridge,
+                        llm_provider=llm_provider,
                         tool_repo=tool_repo,
                         tool_relevance_engine=tool_relevance_engine,
                         workflow_manager=workflow_manager,
@@ -293,7 +293,7 @@ def initialize_system(args) -> Dict[str, Any]:
             conversation = Conversation(
                 conversation_id=conversation_id,
                 system_prompt=system_prompt,
-                llm_bridge=llm_bridge,
+                llm_provider=llm_provider,
                 tool_repo=tool_repo,
                 tool_relevance_engine=tool_relevance_engine,
                 workflow_manager=workflow_manager,
@@ -314,7 +314,7 @@ def initialize_system(args) -> Dict[str, Any]:
         # Initialize and start the automation systems
         automation_components = automation_controller.initialize_systems(
             tool_repo=tool_repo, 
-            llm_bridge=llm_bridge
+            llm_provider=llm_provider
         )
         automation_controller.start_systems()
         
@@ -342,7 +342,7 @@ def initialize_system(args) -> Dict[str, Any]:
             working_memory, 
             tool_repo,
             automation_engine,
-            llm_bridge
+            llm_provider
         )
         
         # Verify initialization was successful
@@ -356,12 +356,20 @@ def initialize_system(args) -> Dict[str, Any]:
         logger.info("LT_Memory system initialized successfully")
         
         # Initialize ConversationArchiveManager trinket
-        from working_memory import ConversationArchiveManager
+        from working_memory import ConversationArchiveManager, ProactiveMemoryTrinket
         conversation_archive_manager = ConversationArchiveManager(
             working_memory=working_memory,
-            conversation_archive_bridge=lt_memory_components["conversation_archive_bridge"]
+            conversation_timeline_manager=lt_memory_components["conversation_timeline_manager"]
         )
         logger.info("Initialized ConversationArchiveManager trinket")
+        
+        # Initialize ProactiveMemoryTrinket
+        proactive_memory_trinket = ProactiveMemoryTrinket(
+            working_memory=working_memory,
+            memory_manager=lt_memory_components["manager"],
+            conversation=conversation
+        )
+        logger.info("Initialized ProactiveMemoryTrinket")
         
         # Now that we have a conversation, add token tracking to the LLM bridge
         def token_tracking_decorator(func: Callable) -> Callable:
@@ -391,12 +399,12 @@ def initialize_system(args) -> Dict[str, Any]:
             return wrapper
             
         # Patch the LLM bridge's generate_response method
-        original_generate_response = llm_bridge.generate_response #ANNOTATION what is 'original_generate_response? Is this a backwards compatibility thing?'
-        llm_bridge.generate_response = token_tracking_decorator(original_generate_response)
+        original_generate_response = llm_provider.generate_response #ANNOTATION what is 'original_generate_response? Is this a backwards compatibility thing?'
+        llm_provider.generate_response = token_tracking_decorator(original_generate_response)
 
         # Return system components
         return {
-            'llm_bridge': llm_bridge,
+            'llm_provider': llm_provider,
             'tool_repo': tool_repo,
             'conversation': conversation,
             'tool_relevance_engine': tool_relevance_engine,
@@ -546,9 +554,6 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
             # Update dynamic information in working memory before each response
             system['time_manager'].update_datetime_info()
             system['reminder_manager'].update_reminder_info()
-
-            # Update all registered managers (workflow_manager and tool_repo)
-            system['working_memory'].update_all_managers()
 
             # Use error context for response generation
             with error_context(

@@ -1049,30 +1049,30 @@ class WebAccessTool(Tool):
             else:
                 return {"content": content}
     
-    def _get_llm_bridge(self):
+    def _get_llm_provider(self):
         """
         Get or create an LLM bridge instance.
         
         This helper function centralizes LLM bridge acquisition logic.
         
         Returns:
-            LLMBridge instance
+            LLMProvider instance
         """
-        from api.llm_bridge import LLMBridge
+        from api.llm_provider import LLMProvider
         
         # Create or get LLM bridge instance
         try:
-            # Try to import llm_bridge from the system context first
+            # Try to import llm_provider from the system context first
             from main import get_system
             system = get_system()
-            llm_bridge = system.get('llm_bridge')
-            if not llm_bridge:
-                llm_bridge = LLMBridge()
+            llm_provider = system.get('llm_provider')
+            if not llm_provider:
+                llm_provider = LLMProvider()
         except (ImportError, AttributeError):
             # If not available, create a new instance
-            llm_bridge = LLMBridge()
+            llm_provider = LLMProvider()
             
-        return llm_bridge
+        return llm_provider
     
     def _execute_search(self, query, web_search_tool):
         """
@@ -1089,7 +1089,7 @@ class WebAccessTool(Tool):
             ToolError: If the search fails or returns invalid results
         """
         # Get the LLM bridge instance
-        llm_bridge = self._get_llm_bridge()
+        llm_provider = self._get_llm_provider()
         
         # Create a system prompt that instructs Claude to search and return structured results
         system_prompt = """
@@ -1123,7 +1123,7 @@ class WebAccessTool(Tool):
             try:
                 # Call the LLM with the web search tool
                 messages = [{"role": "user", "content": user_message}]
-                response = llm_bridge.generate_response(
+                response = llm_provider.generate_response(
                     messages=messages,
                     system_prompt=system_prompt,
                     tools=[web_search_tool],
@@ -1131,7 +1131,7 @@ class WebAccessTool(Tool):
                 )
                 
                 # Extract the text content
-                result_content = llm_bridge.extract_text_content(response)
+                result_content = llm_provider.extract_text_content(response)
                 
                 # Parse the results using the shared JSON parsing function
                 return self._parse_json_response(
@@ -1286,7 +1286,7 @@ class WebAccessTool(Tool):
         self.logger.debug("Extracting content with LLM")
         
         # Get the LLM bridge instance
-        llm_bridge = self._get_llm_bridge()
+        llm_provider = self._get_llm_provider()
         
         # Construct the prompt
         format_instruction = ""
@@ -1323,14 +1323,14 @@ class WebAccessTool(Tool):
             try:
                 # Call the LLM
                 messages = [{"role": "user", "content": user_message}]
-                response = llm_bridge.generate_response(
+                response = llm_provider.generate_response(
                     messages=messages,
                     system_prompt=system_prompt,
                     temperature=0.1,  # Low temperature for deterministic extraction
                 )
                 
                 # Extract the text content
-                extracted_content = llm_bridge.extract_text_content(response)
+                extracted_content = llm_provider.extract_text_content(response)
                 
                 return extracted_content
                 
