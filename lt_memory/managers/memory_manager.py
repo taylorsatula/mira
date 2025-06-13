@@ -62,9 +62,9 @@ class MemoryManager:
         
         # Initialize vector store
         self.vector_store = PGVectorStore(
-            connection_string=config.memory.database_url,
-            dimension=config.memory.embedding_dim,
-            pool_size=config.memory.db_pool_size
+            connection_string=config.database_url,
+            dimension=config.embedding_dim,
+            pool_size=config.db_pool_size
         )
         
         # Initialize summarization engine
@@ -92,7 +92,7 @@ class MemoryManager:
     def _create_engine(self):
         """Create PostgreSQL engine with connection pooling."""
         # Parse database URL to ensure it's PostgreSQL
-        db_url = self.config.memory.database_url
+        db_url = self.config.database_url
         if not db_url.startswith("postgresql://"):
             raise ValueError("LT_Memory requires PostgreSQL database")
         
@@ -100,8 +100,8 @@ class MemoryManager:
         engine = create_engine(
             db_url,
             poolclass=QueuePool,
-            pool_size=self.config.memory.db_pool_size,
-            max_overflow=self.config.memory.db_pool_max_overflow,
+            pool_size=self.config.db_pool_size,
+            max_overflow=self.config.db_pool_max_overflow,
             pool_pre_ping=True,  # Verify connections before use
             pool_recycle=3600,   # Recycle connections after 1 hour
             pool_timeout=10,     # Max seconds to get connection from pool
@@ -132,7 +132,7 @@ class MemoryManager:
     def _initialize_core_blocks(self):
         """Initialize default core memory blocks if they don't exist."""
         with self.get_session() as session:
-            for label, limit in self.config.memory.core_memory_blocks.items():
+            for label, limit in self.config.core_memory_blocks.items():
                 existing = session.query(MemoryBlock).filter_by(label=label).first()
                 if not existing:
                     # Create with default content based on label
@@ -224,7 +224,7 @@ class MemoryManager:
                 return False
             
             # Check dimensions
-            if embedding.shape != (self.config.memory.embedding_dim,):
+            if embedding.shape != (self.config.embedding_dim,):
                 return False
             
             # Check data type
@@ -456,7 +456,7 @@ class MemoryManager:
         # Check embedding model
         try:
             test_embedding = self.generate_embedding("test")
-            if test_embedding.shape[0] == self.config.memory.embedding_dim:
+            if test_embedding.shape[0] == self.config.embedding_dim:
                 health["components"]["embedding_model"] = "ok"
             else:
                 health["components"]["embedding_model"] = "dimension_mismatch"
@@ -470,7 +470,7 @@ class MemoryManager:
         # Check vector store
         try:
             # Try a dummy search
-            test_vector = np.random.rand(self.config.memory.embedding_dim)
+            test_vector = np.random.rand(self.config.embedding_dim)
             self.vector_store.search(test_vector, k=1)
             health["components"]["vector_store"] = "ok"
         except Exception as e:

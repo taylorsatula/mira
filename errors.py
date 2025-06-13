@@ -116,6 +116,7 @@ class ErrorCode(Enum):
     MEMORY_EMBEDDING_ERROR = 856
     MEMORY_SEARCH_ERROR = 857
     MEMORY_CONSOLIDATION_ERROR = 858
+    MEMORY_BLOCK_ALREADY_EXISTS = 859
 
     # Uncategorized/system errors (9xx)
     UNKNOWN_ERROR = 901
@@ -353,7 +354,11 @@ def error_context(
         error_id = str(uuid.uuid4())
         
         # If it's already an AgentError, log and add to working memory
+        print(f"DEBUG error_context: Exception type: {type(e)}")
+        print(f"DEBUG error_context: Is AgentError: {isinstance(e, AgentError)}")
+        print(f"DEBUG error_context: Is ToolError: {isinstance(e, ToolError)}")
         if isinstance(e, AgentError):
+            print(f"DEBUG error_context: Re-raising AgentError: {e}")
             # Log to appropriate error logger
             if isinstance(e, ToolError):
                 tool_error_logger.error(f"[{error_id}] {component_name} - {e}")

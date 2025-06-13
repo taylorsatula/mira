@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 # Add the parent directory to the path so we can import from the project
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from api.llm_bridge import LLMBridge
+from api.llm_provider import LLMProvider
 from errors import APIError, ErrorCode, error_context
 
 
@@ -51,7 +51,7 @@ class ConversationalExampleGenerator:
     
     def __init__(self):
         """Initialize the generator with LLM bridge."""
-        self.llm = LLMBridge()
+        self.llm = LLMProvider()
         logger.info("Conversational Example Generator initialized")
     
     def analyze_tool(self, tool_path: str) -> ToolAnalysis:

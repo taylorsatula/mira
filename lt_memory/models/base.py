@@ -25,6 +25,7 @@ class MemoryBlock(Base):
     __tablename__ = 'memory_blocks'
     
     id = Column(UUID(as_uuid=True), primary_key=True, server_default=sql_text("gen_random_uuid()"))
+    user_id = Column(String, nullable=False, index=True)  # Multi-user support
     label = Column(String, nullable=False, index=True)
     value = Column(String, nullable=False)
     character_limit = Column(Integer, default=2048)
@@ -34,8 +35,8 @@ class MemoryBlock(Base):
     context = Column(JSONB, default=dict)
     
     __table_args__ = (
-        Index('idx_block_label_version', 'label', 'version'),
-        Index('idx_block_updated', 'updated_at'),
+        Index('idx_block_user_label_version', 'user_id', 'label', 'version'),
+        Index('idx_block_user_updated', 'user_id', 'updated_at'),
     )
 
 
@@ -53,6 +54,7 @@ class BlockHistory(Base):
     __tablename__ = 'block_history'
     
     id = Column(UUID(as_uuid=True), primary_key=True, server_default=sql_text("gen_random_uuid()"))
+    user_id = Column(String, nullable=False, index=True)  # Multi-user support
     block_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     label = Column(String, nullable=False)
     version = Column(Integer, nullable=False)  # Version this diff represents
@@ -62,8 +64,8 @@ class BlockHistory(Base):
     created_at = Column(DateTime(timezone=True), server_default=sql_text("CURRENT_TIMESTAMP"))
     
     __table_args__ = (
-        Index('idx_history_block_version', 'block_id', 'version'),
-        Index('idx_history_block_created', 'block_id', 'created_at'),
+        Index('idx_history_user_block_version', 'user_id', 'block_id', 'version'),
+        Index('idx_history_user_block_created', 'user_id', 'block_id', 'created_at'),
     )
 
 
@@ -77,6 +79,7 @@ class MemoryPassage(Base):
     __tablename__ = 'memory_passages'
     
     id = Column(UUID(as_uuid=True), primary_key=True, server_default=sql_text("gen_random_uuid()"))
+    user_id = Column(String, nullable=False, index=True)  # Multi-user support
     text = Column(String, nullable=False)
     embedding = Column(Vector(1024))  # Dimension matches OpenAI text-embedding-3-small
     source = Column(String, nullable=False)  # conversation, document, automation
@@ -90,12 +93,12 @@ class MemoryPassage(Base):
     context = Column(JSONB, default=dict)
     
     __table_args__ = (
-        # IVFFlat index for similarity search
-        Index('idx_passage_embedding', 'embedding', postgresql_using='ivfflat', postgresql_with={'lists': 100}),
-        Index('idx_passage_importance', 'importance_score'),
-        Index('idx_passage_created', 'created_at'),
-        Index('idx_passage_source', 'source', 'source_id'),
-        Index('idx_passage_expires', 'expires_on'),  # For expiration queries
+        # IVFFlat index for similarity search with user isolation
+        Index('idx_passage_user_embedding', 'user_id', 'embedding', postgresql_using='ivfflat', postgresql_with={'lists': 100}),
+        Index('idx_passage_user_importance', 'user_id', 'importance_score'),
+        Index('idx_passage_user_created', 'user_id', 'created_at'),
+        Index('idx_passage_user_source', 'user_id', 'source', 'source_id'),
+        Index('idx_passage_user_expires', 'user_id', 'expires_on'),  # For expiration queries
     )
 
 
@@ -111,6 +114,7 @@ class ArchivedConversation(Base):
     __tablename__ = 'archived_conversations'
     
     id = Column(UUID(as_uuid=True), primary_key=True, server_default=sql_text("gen_random_uuid()"))
+    user_id = Column(String, nullable=False, index=True)  # Multi-user support
     conversation_date = Column(DateTime(timezone=True), nullable=False, index=True)
     messages = Column(JSONB, nullable=False)  # Full message array
     message_count = Column(Integer, nullable=False)
@@ -121,8 +125,8 @@ class ArchivedConversation(Base):
     conversation_metadata = Column(JSONB, default=dict)  # Additional context
     
     __table_args__ = (
-        Index('idx_archived_conversation_date', 'conversation_date'),
-        Index('idx_archived_conversation_archived_at', 'archived_at'),
+        Index('idx_archived_user_conversation_date', 'user_id', 'conversation_date'),
+        Index('idx_archived_user_archived_at', 'user_id', 'archived_at'),
     )
 
 
@@ -136,9 +140,64 @@ class MemorySnapshot(Base):
     __tablename__ = 'memory_snapshots'
     
     id = Column(UUID(as_uuid=True), primary_key=True, server_default=sql_text("gen_random_uuid()"))
+    user_id = Column(String, nullable=False, index=True)  # Multi-user support
     conversation_id = Column(String, index=True)
     blocks_snapshot = Column(JSONB)  # Core memory state
     passage_count = Column(Integer)
     created_at = Column(DateTime(timezone=True), server_default=sql_text("CURRENT_TIMESTAMP"))
     reason = Column(String)  # checkpoint, error_recovery, consolidation, etc.
     context = Column(JSONB, default=dict)
+    
+    __table_args__ = (
+        Index('idx_snapshot_user_conversation', 'user_id', 'conversation_id'),
+        Index('idx_snapshot_user_created', 'user_id', 'created_at'),
+    )
+
+
+class Customer(Base):
+    """
+    Customer model for storing customer data in PostgreSQL with multi-user support.
+    
+    Maps to the 'customers' table with columns that match Square's customer structure
+    plus additional fields for geocoding and metadata.
+    """
+    __tablename__ = 'customers'
+    
+    # Primary key
+    id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False, index=True)  # Multi-user support
+    
+    # Basic contact info
+    given_name = Column(String)
+    family_name = Column(String)
+    company_name = Column(String)
+    email_address = Column(String)
+    phone_number = Column(String)
+    
+    # Address fields
+    address_line1 = Column(String)
+    address_line2 = Column(String)
+    city = Column(String)
+    state = Column(String)
+    postal_code = Column(String)
+    country = Column(String)
+    
+    # Geocoding data
+    latitude = Column(Float)
+    longitude = Column(Float)
+    geocoded_at = Column(DateTime(timezone=True))
+    
+    # Additional data stored as JSON
+    additional_data = Column(JSONB)
+    
+    # Metadata
+    created_at = Column(DateTime(timezone=True), server_default=sql_text("CURRENT_TIMESTAMP"))
+    updated_at = Column(DateTime(timezone=True), server_default=sql_text("CURRENT_TIMESTAMP"))
+    
+    __table_args__ = (
+        Index('idx_customer_user_email', 'user_id', 'email_address'),
+        Index('idx_customer_user_phone', 'user_id', 'phone_number'),
+        Index('idx_customer_user_name', 'user_id', 'given_name', 'family_name'),
+        Index('idx_customer_user_location', 'user_id', 'latitude', 'longitude'),
+        Index('idx_customer_user_created', 'user_id', 'created_at'),
+    )
