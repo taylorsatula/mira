@@ -161,7 +161,7 @@ Just-in-Time Tool Selection System Implementation Guide
           selected_tools = self.tool_repo.get_all_tool_definitions()
 
       # Generate LLM response with selected tools
-      response = self.llm_bridge.generate_response(
+      response = self.llm_provider.generate_response(
           messages=messages,
           system_prompt=self.system_prompt,
           tools=selected_tools,  # Use selected tools here

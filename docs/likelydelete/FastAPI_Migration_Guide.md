@@ -334,8 +334,8 @@ def create_app() -> FastAPI:
     
     # Get the request queue for Ollama
     request_queue = None
-    if hasattr(system['llm_bridge'], 'request_queue'):
-        request_queue = system['llm_bridge'].request_queue
+    if hasattr(system['llm_provider'], 'request_queue'):
+        request_queue = system['llm_provider'].request_queue
         logger.info("Request queue available for multi-user support")
     
     # User session tracking

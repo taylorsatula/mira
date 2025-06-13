@@ -27,7 +27,7 @@ Extended thinking can be configured globally or per-request:
 
 2. **Per-Request Configuration** (when calling `generate_response`):
    ```python
-   response = llm_bridge.generate_response(
+   response = llm_provider.generate_response(
        messages=messages,
        extended_thinking=True,  # Override global setting
        extended_thinking_budget=8192  # Override global budget
@@ -60,7 +60,7 @@ Extended thinking can be configured globally or per-request:
 ## Example Usage
 
 ```python
-from api.llm_bridge import LLMBridge
+from api.llm_provider import LLMBridge
 
 # Initialize the bridge
 llm = LLMBridge()

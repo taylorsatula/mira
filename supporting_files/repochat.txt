@@ -460,7 +460,7 @@
       
       name = "example_tool"
       description = "An example tool that demonstrates the interface"
-      dependencies = ["llm_bridge"]  # This tool depends on the LLM bridge
+      dependencies = ["llm_provider"]  # This tool depends on the LLM bridge
       usage_examples = [
           {
               "input": {"message": "Hello world"},
@@ -468,15 +468,15 @@
           }
       ]
       
-      def __init__(self, llm_bridge):
+      def __init__(self, llm_provider):
           """
           Initialize the example tool.
           
           Args:
-              llm_bridge: LLM bridge dependency
+              llm_provider: LLM bridge dependency
           """
           super().__init__()
-          self.llm_bridge = llm_bridge
+          self.llm_provider = llm_provider
           
       def run(self, message: str) -> Dict[str, str]:
           """
@@ -613,7 +613,7 @@
   Initializing and Discovering Tools
 
   # Create repository with core dependencies
-  repo = ToolRepository(initial_dependencies={"llm_bridge": llm_bridge})
+  repo = ToolRepository(initial_dependencies={"llm_provider": llm_provider})
 
   # Discover all tools
   discovered_tools = repo.discover_tools()
@@ -641,11 +641,11 @@
   class ExampleTool(Tool):
       name = "example_tool"
       description = "Demonstrates the tool interface"
-      dependencies = ["llm_bridge"]  # Dependencies declared here
+      dependencies = ["llm_provider"]  # Dependencies declared here
 
-      def __init__(self, llm_bridge):
+      def __init__(self, llm_provider):
           super().__init__()
-          self.llm_bridge = llm_bridge
+          self.llm_provider = llm_provider
 
       def run(self, message: str) -> Dict[str, str]:
           self.logger.info(f"Processing: {message}")

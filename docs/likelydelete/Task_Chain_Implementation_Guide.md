@@ -182,9 +182,9 @@ The central component that manages the execution of chains:
 
 ```python
 class ChainExecutor:
-    def __init__(self, tool_repo, llm_bridge):
+    def __init__(self, tool_repo, llm_provider):
         self.tool_repo = tool_repo
-        self.llm_bridge = llm_bridge
+        self.llm_provider = llm_provider
         self.db = Database()
         self.template_engine = TemplateEngine()
     

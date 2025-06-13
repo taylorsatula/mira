@@ -438,15 +438,15 @@ def initialize_system(args):
     
     if provider == "ollama":
         from api.ollama_bridge import OllamaBridge
-        llm_bridge = OllamaBridge(
+        llm_provider = OllamaBridge(
             base_url=config.api.ollama_url,
             model=config.api.ollama_model
         )
         logger.info(f"Initialized Ollama bridge with model {config.api.ollama_model}")
     else:
         # Default to Anthropic
-        from api.llm_bridge import LLMBridge
-        llm_bridge = LLMBridge()
+        from api.llm_provider import LLMBridge
+        llm_provider = LLMBridge()
         logger.info(f"Initialized Anthropic bridge with model {config.api.model}")
     
     # ...continue with existing code...
@@ -494,9 +494,9 @@ def generate_response(self, user_input, ...):
     # Existing code...
     
     # Check if we're using Ollama and add queue status information
-    if hasattr(self.llm_bridge, 'request_queue'):
+    if hasattr(self.llm_provider, 'request_queue'):
         # Get request queue
-        queue = self.llm_bridge.request_queue
+        queue = self.llm_provider.request_queue
         
         # If queue has multiple items, notify the user
         stats = queue.get_queue_stats()
