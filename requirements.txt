@@ -1,26 +1,30 @@
-anthropic>=0.16.0
+# Core API and Bot functionality
 python-dotenv>=1.0.0
-googlemaps>=4.10.0
-imaplib2>=3.6
 requests>=2.28.0
-caldav>=1.3.0
-SQLAlchemy>=2.0.0
-alembic>=1.12.0
-numpy>=1.24.0
 pydantic>=2.0.0
+
+# Web framework and API
 fastapi>=0.95.0
 uvicorn[standard]>=0.21.0
 sse-starlette>=1.6.1
 python-multipart>=0.0.5
 a2wsgi>=1.7.0
-python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
+
+# Database
+SQLAlchemy>=2.0.0
+psycopg2-binary>=2.9.0
 
 # LT_Memory dependencies
-psycopg2-binary>=2.9.0
 pgvector>=0.2.0
 onnxruntime>=1.16.0
 transformers>=4.35.0
-scikit-learn>=1.3.0
-networkx>=3.0
+openai>=1.0.0
+numpy>=1.24.0
 jinja2>=3.1.0
+
+# Tool-specific dependencies
+googlemaps>=4.10.0
+caldav>=1.3.0
+
+# Authentication (secure_auth system)
+email-validator>=2.0.0

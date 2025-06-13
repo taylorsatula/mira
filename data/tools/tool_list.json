@@ -179,25 +179,6 @@
   },
   {
     "dependencies": [],
-    "description": "Base class for all tools",
-    "name": "kasa_tool",
-    "parameters": {
-      "kwargs": {
-        "description": "Parameter: kwargs",
-        "type": "any"
-      },
-      "operation": {
-        "description": "The operation to perform **kwargs: Operation-specific parameters",
-        "type": "str"
-      }
-    },
-    "required_parameters": [
-      "operation",
-      "kwargs"
-    ]
-  },
-  {
-    "dependencies": [],
     "description": "Provides comprehensive location intelligence and geographical services through Maps API integration. Use this tool when the user needs details of a place, geocoding, or relative information compared to another place.\n\n   This tool enables interaction with mapping services for various location-based operations including:\n   \n   1. geocode: Convert natural language locations to precise coordinates.\n      - Requires 'query' parameter with address, landmark, or place name\n      - Returns formatted address, geographic coordinates, and place information\n   \n   2. reverse_geocode: Convert coordinates to address information.\n      - Requires 'lat' and 'lng' parameters as decimal degrees\n      - Returns detailed address components for the specified location\n   \n   3. place_details: Retrieve comprehensive information about specific places.\n      - Requires 'place_id' parameter (unique place identifier)\n      - Returns name, address, phone number, website, opening hours, and other details\n   \n   4. places_nearby: Discover places around a specific location.\n      - Requires 'lat' and 'lng' parameters for center point\n      - Optional parameters: 'radius' (default 1000m), 'type' (e.g., restaurant), 'keyword', 'open_now'\n      - Returns matching places sorted by proximity with ratings and details\n   \n   5. find_place: Locate specific places by name or description.\n      - Requires 'query' parameter with place name\n      - Returns precise match results with location data\n   \n   6. calculate_distance: Determine distance between two geographic points.\n      - Requires 'lat1', 'lng1', 'lat2', 'lng2' parameters\n      - Returns distance in meters, kilometers, and miles\n   \n   Use this tool for any task requiring location resolution, place discovery, geocoding, or geographic calculations.",
     "name": "maps_tool",
     "parameters": {
