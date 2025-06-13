@@ -4,14 +4,17 @@ Manager for archival memory passages with vector search.
 
 import uuid
 import logging
-from typing import Dict, Any, List, Optional
-from datetime import datetime, UTC
+import json
+from typing import Dict, Any, List, Optional, Tuple
+from datetime import datetime, timedelta
+from dateutil import parser as date_parser
 
 from sqlalchemy import text
 import numpy as np
 
 from lt_memory.models.base import MemoryPassage
 from errors import error_context, ErrorCode, ToolError
+from utils.timezone_utils import utc_now, format_utc_iso
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +38,8 @@ class PassageManager:
         self.logger = logging.getLogger(__name__)
     
     def create_passage(self, text: str, source: str, source_id: str, 
-                      importance: float = 0.5, metadata: Optional[Dict] = None) -> str:
+                      importance: float = 0.5, metadata: Optional[Dict] = None,
+                      expires_on: Optional[datetime] = None) -> str:
         """
         Create a new memory passage.
         
@@ -57,13 +61,13 @@ class PassageManager:
             if not text.strip():
                 raise ToolError(
                     "Cannot create passage with empty text",
-                    error_code=ErrorCode.INVALID_INPUT
+                    code=ErrorCode.INVALID_INPUT
                 )
             
             if importance < 0 or importance > 1:
                 raise ToolError(
                     f"Importance must be between 0 and 1, got {importance}",
-                    error_code=ErrorCode.INVALID_INPUT
+                    code=ErrorCode.INVALID_INPUT
                 )
             
             # Generate embedding
@@ -76,7 +80,9 @@ class PassageManager:
                     source=source,
                     source_id=source_id,
                     importance_score=importance,
-                    context=metadata or {}
+                    context=metadata or {},
+                    expires_on=expires_on,
+                    human_verified=metadata.get("human_verified", False) if metadata else False
                 )
                 session.add(passage)
                 session.commit()
@@ -84,8 +90,8 @@ class PassageManager:
                 passage_id = str(passage.id)
                 
             self.logger.info(
-                f"Created passage {passage_id} from {source} "
-                f"(importance: {importance:.2f})"
+                f"Created {'expiring' if expires_on else 'permanent'} passage {passage_id} "
+                f"from {source} (importance: {importance:.2f})"
             )
             return passage_id
     
@@ -107,7 +113,9 @@ class PassageManager:
         
         # Use vector store for search
         search_filters = filters or {}
-        search_filters["min_similarity"] = self.memory_manager.config.memory.similarity_threshold
+        # Only set default threshold if user hasn't provided min_similarity
+        if "min_similarity" not in search_filters:
+            search_filters["min_similarity"] = self.memory_manager.config.memory.similarity_threshold
         
         results = self.memory_manager.vector_store.search(
             query_embedding,
@@ -132,13 +140,63 @@ class PassageManager:
                         "source": passage.source,
                         "source_id": passage.source_id,
                         "importance": passage.importance_score,
-                        "created_at": passage.created_at.isoformat(),
+                        "created_at": format_utc_iso(passage.created_at),
                         "access_count": passage.access_count,
                         "metadata": passage.context
                     })
         
         self.logger.info(
             f"Found {len(passages)} passages for query "
+            f"(threshold: {search_filters['min_similarity']})"
+        )
+        return passages
+    
+    def search_passages_by_embedding(self, query_embedding, limit: int = 10, 
+                                   filters: Optional[Dict] = None) -> List[Dict[str, Any]]:
+        """
+        Search passages using a pre-computed embedding vector.
+        
+        Args:
+            query_embedding: Pre-computed embedding vector
+            limit: Maximum results to return
+            filters: Optional filters (source, min_importance, etc.)
+            
+        Returns:
+            List of passage results with similarity scores
+        """
+        # Use vector store for search
+        search_filters = filters or {}
+        # Only set default threshold if user hasn't provided min_similarity
+        if "min_similarity" not in search_filters:
+            search_filters["min_similarity"] = self.memory_manager.config.memory.similarity_threshold
+        
+        results = self.memory_manager.vector_store.search(
+            query_embedding,
+            k=limit,
+            table="memory_passages",
+            filters=search_filters
+        )
+        
+        # Fetch full passage data
+        passages = []
+        with self.memory_manager.get_session() as session:
+            for result in results:
+                passage = session.get(MemoryPassage, result["id"])
+                if passage:
+                    passages.append({
+                        "id": str(passage.id),
+                        "text": passage.text,
+                        "similarity": result["score"],
+                        "source": passage.source,
+                        "source_id": passage.source_id,
+                        "importance": passage.importance_score,
+                        "created_at": format_utc_iso(passage.created_at),
+                        "access_count": passage.access_count,
+                        "metadata": passage.context
+                    })
+        
+        self.logger.info(
+            f"Found {len(passages)} passages for embedding search "
             f"(threshold: {search_filters['min_similarity']})"
         )
         return passages
@@ -161,7 +219,7 @@ class PassageManager:
             if passage:
                 # Update access tracking
                 passage.access_count += 1
-                passage.last_accessed = datetime.now(UTC)
+                passage.last_accessed = utc_now()
                 session.commit()
                 
                 return {
@@ -170,7 +228,7 @@ class PassageManager:
                     "source": passage.source,
                     "source_id": passage.source_id,
                     "importance": passage.importance_score,
-                    "created_at": passage.created_at.isoformat(),
+                    "created_at": format_utc_iso(passage.created_at),
                     "access_count": passage.access_count,
                     "metadata": passage.context
                 }
@@ -192,7 +250,7 @@ class PassageManager:
         if importance < 0 or importance > 1:
             raise ToolError(
                 f"Importance must be between 0 and 1, got {importance}",
-                error_code=ErrorCode.INVALID_INPUT
+                code=ErrorCode.INVALID_INPUT
             )
         
         with self.memory_manager.get_session() as session:
@@ -216,14 +274,14 @@ class PassageManager:
     def archive_conversation(self, conversation_id: str, 
                            messages: List[Dict]) -> int:
         """
-        Archive a conversation to passages.
+        Archive a conversation by extracting facts as micro-chunks.
         
         Args:
             conversation_id: ID of the conversation
             messages: List of message dictionaries
             
         Returns:
-            Number of passages created
+            Number of facts (passages) created
         """
         if not messages:
             return 0
@@ -234,49 +292,89 @@ class PassageManager:
         chunks = self._chunk_messages(messages)
         
         for i, chunk in enumerate(chunks):
-            # Create summary of chunk
-            summary = self._summarize_chunk(chunk)
+            # Extract facts from this chunk
+            facts = self._extract_facts(chunk)
             
-            # Calculate importance based on content
-            importance = self._calculate_importance(chunk)
+            # Get metadata for this chunk
+            chunk_metadata = {
+                "chunk_index": i,
+                "chunk_type": "micro_chunk",
+                "extraction_version": "1.0",
+                "start_time": chunk[0].get("created_at"),
+                "end_time": chunk[-1].get("created_at"),
+                "source_message_count": len(chunk)
+            }
             
-            # Extract key topics for metadata
-            topics = self._extract_topics(chunk)
-            
-            # Create passage
-            self.create_passage(
-                text=summary,
-                source="conversation",
-                source_id=conversation_id,
-                importance=importance,
-                context={
-                    "chunk_index": i,
-                    "message_count": len(chunk),
-                    "start_time": chunk[0].get("created_at"),
-                    "end_time": chunk[-1].get("created_at"),
-                    "topics": topics,
-                    "participants": list(set(msg.get("role", "unknown") for msg in chunk))
-                }
-            )
-            archived_count += 1
+            # Check for duplicates and create passages for each fact
+            for fact in facts:
+                # Check for duplicates before creating
+                duplicate_id, should_update = self._check_duplicate_fact(
+                    fact["text"], 
+                    fact.get("expires_on")
+                )
+                
+                if duplicate_id and should_update:
+                    # For temporal updates, we need to replace the fact content entirely
+                    # Delete the old fact and create the new one
+                    self.delete_passage(duplicate_id)
+                    
+                    # Create new passage with updated fact content
+                    metadata = chunk_metadata.copy()
+                    metadata.update({
+                        "human_verified": False,
+                        "confidence": 0.9,
+                        "replaces": duplicate_id  # Track what this replaced
+                    })
+                    
+                    self.create_passage(
+                        text=fact["text"],
+                        source="conversation",
+                        source_id=conversation_id,
+                        importance=fact["importance"],
+                        metadata=metadata,
+                        expires_on=fact.get("expires_on")  # New fact has its own expiration
+                    )
+                    archived_count += 1
+                    self.logger.info(f"Replaced temporal fact: {duplicate_id} with new content")
+                elif not duplicate_id:
+                    # Create new passage for this fact
+                    metadata = chunk_metadata.copy()
+                    metadata.update({
+                        "human_verified": False,
+                        "confidence": 0.9  # Default high confidence for LLM extraction
+                    })
+                    
+                    self.create_passage(
+                        text=fact["text"],
+                        source="conversation",
+                        source_id=conversation_id,
+                        importance=fact["importance"],
+                        metadata=metadata,
+                        expires_on=fact.get("expires_on")
+                    )
+                    archived_count += 1
         
         self.logger.info(
-            f"Archived {archived_count} passages from conversation {conversation_id} "
+            f"Archived {archived_count} facts from conversation {conversation_id} "
             f"({len(messages)} messages)"
         )
         return archived_count
     
     def _chunk_messages(self, messages: List[Dict], 
-                       chunk_size: int = 10) -> List[List[Dict]]:
+                       max_chunk_size: int = 50) -> List[List[Dict]]:
         """
-        Chunk messages into logical groups.
+        Chunk messages using topic boundaries marked by MIRA.
+        
+        Creates a new chunk whenever:
+        - Assistant message contains topic_changed=true in metadata
+        - Or we hit the maximum chunk size as fallback
         
         Args:
             messages: List of messages
-            chunk_size: Target chunk size
+            max_chunk_size: Maximum chunk size as fallback (default: 50)
             
         Returns:
-            List of message chunks
+            List of message chunks grouped by topic boundaries
         """
         chunks = []
         current_chunk = []
@@ -284,34 +382,88 @@ class PassageManager:
         for msg in messages:
             current_chunk.append(msg)
             
-            # Start new chunk on natural boundaries
-            if (len(current_chunk) >= chunk_size or
-                msg.get("role") == "user" and len(current_chunk) > chunk_size // 2):
+            # Check if this assistant message marked a topic change
+            if (msg.get("role") == "assistant" and 
+                msg.get("metadata", {}).get("topic_changed", False)):
+                
+                # End current chunk and start new one at topic boundary
+                if current_chunk:
+                    chunks.append(current_chunk)
+                    current_chunk = []
+            
+            # Fallback: Don't let chunks get too huge
+            elif len(current_chunk) >= max_chunk_size:
                 chunks.append(current_chunk)
                 current_chunk = []
         
+        # Add remaining messages
         if current_chunk:
             chunks.append(current_chunk)
         
         return chunks
     
-    def _summarize_chunk(self, messages: List[Dict]) -> str:
+    def _extract_facts(self, messages: List[Dict]) -> List[Dict[str, Any]]:
         """
-        Create a summary of a message chunk.
+        Extract discrete facts from user messages in a chunk.
         
-        For now, uses simple concatenation. In production,
-        this would use LLM-based summarization.
+        Each fact is a micro-chunk of information about the user
+        that can be individually stored and searched.
         
         Args:
-            messages: List of messages to summarize
+            messages: List of messages to extract facts from
             
         Returns:
-            Summary text
+            List of fact dictionaries with text, expires_on, and importance
         """
-        summary_parts = []
+        # Filter to only user messages
+        user_messages = [msg for msg in messages if msg.get("role") == "user"]
         
-        for msg in messages:
-            role = msg.get("role", "unknown")
+        if not user_messages:
+            return []
+        
+        with error_context("passage_manager", "_extract_facts", ToolError, ErrorCode.MEMORY_ERROR):
+            # Load fact extraction prompt
+            prompt_path = self.memory_manager.config.app_root / "config" / "prompts" / "fact_extraction" / "extract_facts.txt"
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                system_prompt = f.read().strip()
+            
+            # Format user messages for fact extraction
+            user_content = self._format_user_messages_for_extraction(user_messages)
+            
+            # Call LLM for fact extraction
+            response = self.memory_manager.llm_provider.generate_response(
+                messages=[{"role": "user", "content": user_content}],
+                system_prompt=system_prompt,
+                max_tokens=2000,
+                temperature=0.1  # Low temperature for consistent extraction
+            )
+            
+            # Parse JSON response
+            response_text = response["content"][0]["text"].strip()
+            facts = json.loads(response_text)
+            
+            # Validate and normalize facts
+            validated_facts = []
+            for fact in facts:
+                if self._validate_fact(fact):
+                    # Parse expires_on if it's a string
+                    if fact.get("expires_on") and isinstance(fact["expires_on"], str):
+                        try:
+                            fact["expires_on"] = date_parser.parse(fact["expires_on"])
+                        except:
+                            fact["expires_on"] = None
+                    validated_facts.append(fact)
+            
+            self.logger.info(
+                f"Extracted {len(validated_facts)} facts from {len(user_messages)} user messages"
+            )
+            return validated_facts
+    
+    def _format_user_messages_for_extraction(self, user_messages: List[Dict]) -> str:
+        """Format user messages for fact extraction."""
+        formatted_lines = []
+        
+        for msg in user_messages:
             content = msg.get("content", "")
             
             # Handle different content types
@@ -320,13 +472,34 @@ class PassageManager:
             elif not isinstance(content, str):
                 content = str(content)
             
-            # Truncate long messages
-            if len(content) > 500:
-                content = content[:497] + "..."
-            
-            summary_parts.append(f"{role}: {content}")
+            # Skip empty messages
+            if content.strip():
+                formatted_lines.append(content)
         
-        return "\n".join(summary_parts)
+        return "\n\n".join(formatted_lines)
+    
+    def _validate_fact(self, fact: Dict) -> bool:
+        """Validate a fact dictionary has required fields."""
+        required_fields = ["text", "importance"]
+        
+        # Check required fields
+        for field in required_fields:
+            if field not in fact:
+                return False
+        
+        # Validate text is non-empty
+        if not fact["text"].strip():
+            return False
+        
+        # Validate importance is between 0 and 1
+        try:
+            importance = float(fact["importance"])
+            if importance < 0 or importance > 1:
+                return False
+        except (ValueError, TypeError):
+            return False
+        
+        return True
     
     def _calculate_importance(self, messages: List[Dict]) -> float:
         """
@@ -364,44 +537,253 @@ class PassageManager:
         
         return min(1.0, base_score + keyword_bonus + length_bonus + user_bonus)
     
-    def _extract_topics(self, messages: List[Dict]) -> List[str]:
+    def _check_duplicate_fact(self, fact_text: str, 
+                             expires_on: Optional[datetime]) -> Tuple[Optional[str], bool]:
         """
-        Extract key topics from messages.
-        
-        Simple keyword extraction for now. In production,
-        would use NLP techniques or LLM.
+        Check if a fact is a duplicate using vector similarity and LLM reasoning.
         
         Args:
-            messages: List of messages
+            fact_text: The fact text to check
+            expires_on: Expiration date of the new fact
             
         Returns:
-            List of topic keywords
+            Tuple of (duplicate_passage_id, should_update_expiration)
         """
-        import re
-        from collections import Counter
-        
-        # Combine all content
-        all_content = " ".join(
-            str(msg.get("content", "")) for msg in messages
+        # Search for similar facts
+        results = self.search_passages(
+            query=fact_text,
+            limit=5,
+            filters={"min_similarity": 0.7}  # Lower threshold to catch more candidates
         )
         
-        # Extract words (simple tokenization)
-        words = re.findall(r'\b[a-zA-Z]{4,}\b', all_content.lower())
+        if not results:
+            return None, False
         
-        # Filter common words
-        common_words = {
-            "that", "this", "with", "from", "have", "been",
-            "will", "would", "could", "should", "about", "there",
-            "their", "what", "when", "where", "which", "while"
-        }
+        # Use LLM to analyze if these are truly duplicates or updates
+        duplicate_prompt = f"""Analyze if these facts are duplicates, updates, or distinct facts.
+
+New fact: "{fact_text}"
+New expiration: {format_utc_iso(expires_on) if expires_on else 'permanent'}
+
+Existing similar facts:
+"""
         
-        filtered_words = [w for w in words if w not in common_words]
+        for i, result in enumerate(results[:3]):
+            existing_expires = result.get("metadata", {}).get("expires_on")
+            duplicate_prompt += f"\n{i+1}. \"{result['text']}\" (expires: {existing_expires or 'permanent'}, similarity: {result['score']:.2f})"
         
-        # Get most common words as topics
-        word_counts = Counter(filtered_words)
-        topics = [word for word, _ in word_counts.most_common(5)]
+        duplicate_prompt += """\n\nRespond with JSON:
+{
+  "is_duplicate": true/false,
+  "duplicate_of_index": 1/2/3 or null,
+  "is_temporal_update": true/false,
+  "reasoning": "brief explanation"
+}"""
         
-        return topics
+        try:
+            response = self.memory_manager.llm_provider.generate_response(
+                messages=[{"role": "user", "content": duplicate_prompt}],
+                system_prompt="You are analyzing facts for deduplication. Be precise in identifying true duplicates vs related but distinct facts.",
+                max_tokens=200,
+                temperature=0.1
+            )
+            
+            analysis = json.loads(response["content"][0]["text"].strip())
+            
+            if analysis["is_duplicate"] and analysis["duplicate_of_index"]:
+                duplicate_idx = analysis["duplicate_of_index"] - 1
+                if 0 <= duplicate_idx < len(results):
+                    duplicate_id = results[duplicate_idx]["id"]
+                    
+                    # If it's a temporal update, we need to replace the fact
+                    should_update = analysis.get("is_temporal_update", False)
+                    
+                    self.logger.info(
+                        f"Duplicate analysis: {analysis['reasoning']}"
+                    )
+                    
+                    return duplicate_id, should_update
+            
+        except Exception as e:
+            self.logger.warning(f"LLM duplicate analysis failed: {e}")
+            # Fall back to simple similarity check
+            if results[0]["score"] >= self.memory_manager.config.memory.fact_similarity_threshold:
+                return results[0]["id"], False
+        
+        return None, False
+    
+    def _update_fact_expiration(self, passage_id: str, 
+                               new_expires_on: Optional[datetime]) -> bool:
+        """
+        Update the expiration date of a fact using LLM reasoning.
+        
+        NOTE: This is for updating expiration only, not fact content.
+        For temporal updates that change the fact itself, the old fact
+        should be deleted and replaced with a new one.
+        
+        Args:
+            passage_id: ID of the passage to update
+            new_expires_on: New expiration date
+            
+        Returns:
+            True if updated successfully
+        """
+        with self.memory_manager.get_session() as session:
+            passage = session.query(MemoryPassage).filter_by(
+                id=passage_id
+            ).first()
+            
+            if not passage:
+                return False
+            
+            old_expires = passage.expires_on
+            
+            # Use LLM to determine if the expiration update makes sense
+            update_prompt = f"""Should we update the expiration date of this fact?
+
+Fact: "{passage.text}"
+Current expiration: {format_utc_iso(old_expires) if old_expires else 'permanent'}
+Proposed new expiration: {format_utc_iso(new_expires_on) if new_expires_on else 'permanent'}
+Fact importance: {passage.importance_score}
+Human verified: {passage.human_verified}
+
+Consider:
+- Is the new expiration reasonable for this type of fact?
+- Should permanent facts remain permanent?
+- Does the update make logical sense?
+
+Respond with JSON:
+{{
+  "should_update": true/false,
+  "recommended_expiration": "ISO date or null",
+  "reasoning": "brief explanation"
+}}"""
+            
+            try:
+                response = self.memory_manager.llm_provider.generate_response(
+                    messages=[{"role": "user", "content": update_prompt}],
+                    system_prompt="You are managing fact expiration dates. Be thoughtful about which facts should expire and when.",
+                    max_tokens=200,
+                    temperature=0.1
+                )
+                
+                decision = json.loads(response["content"][0]["text"].strip())
+                
+                if decision["should_update"]:
+                    # Use recommended expiration if provided
+                    if decision.get("recommended_expiration"):
+                        try:
+                            final_expires = date_parser.parse(decision["recommended_expiration"])
+                        except:
+                            final_expires = new_expires_on
+                    else:
+                        final_expires = new_expires_on
+                    
+                    passage.expires_on = final_expires
+                    session.commit()
+                    
+                    self.logger.info(
+                        f"Updated passage {passage_id} expiration: "
+                        f"{format_utc_iso(old_expires) if old_expires else 'None'} -> "
+                        f"{format_utc_iso(final_expires) if final_expires else 'None'} "
+                        f"(Reason: {decision['reasoning']})"
+                    )
+                    return True
+                else:
+                    self.logger.info(
+                        f"Skipped expiration update for {passage_id}: {decision['reasoning']}"
+                    )
+                    return False
+                    
+            except Exception as e:
+                self.logger.warning(f"LLM expiration analysis failed: {e}")
+                # Fall back to simple update
+                passage.expires_on = new_expires_on
+                session.commit()
+                return True
+        
+        return False
+    
+    def expire_old_memories(self) -> int:
+        """
+        Remove facts that have passed their expiration date.
+        
+        Returns:
+            Number of expired facts removed
+        """
+        if not self.memory_manager.config.memory.auto_expire_enabled:
+            return 0
+        
+        expired_count = 0
+        current_time = utc_now()
+        
+        with self.memory_manager.get_session() as session:
+            # Find expired passages
+            expired_passages = session.query(MemoryPassage).filter(
+                MemoryPassage.expires_on != None,
+                MemoryPassage.expires_on < current_time
+            ).all()
+            
+            for passage in expired_passages:
+                self.logger.info(
+                    f"Expiring fact: {passage.text[:50]}... "
+                    f"(expired: {format_utc_iso(passage.expires_on)})"
+                )
+                session.delete(passage)
+                expired_count += 1
+            
+            session.commit()
+        
+        if expired_count > 0:
+            self.logger.info(f"Expired {expired_count} old facts")
+        
+        return expired_count
+    
+    def update_passage_expiration(self, passage_id: str, 
+                                 new_expires_on: Optional[datetime]) -> bool:
+        """
+        Public method to update passage expiration.
+        
+        Args:
+            passage_id: Passage ID to update
+            new_expires_on: New expiration date (None for permanent)
+            
+        Returns:
+            True if updated successfully
+        """
+        return self._update_fact_expiration(passage_id, new_expires_on)
+    
+    def get_expiring_memories(self, days_ahead: int = 7) -> List[Dict[str, Any]]:
+        """
+        Get facts that will expire soon.
+        
+        Args:
+            days_ahead: Number of days to look ahead
+            
+        Returns:
+            List of soon-to-expire facts
+        """
+        cutoff = utc_now() + timedelta(days=days_ahead)
+        
+        with self.memory_manager.get_session() as session:
+            expiring = session.query(MemoryPassage).filter(
+                MemoryPassage.expires_on != None,
+                MemoryPassage.expires_on <= cutoff,
+                MemoryPassage.expires_on > utc_now()
+            ).order_by(
+                MemoryPassage.expires_on
+            ).all()
+            
+            return [
+                {
+                    "id": str(p.id),
+                    "text": p.text,
+                    "expires_on": format_utc_iso(p.expires_on),
+                    "importance": p.importance_score,
+                    "human_verified": p.human_verified
+                }
+                for p in expiring
+            ]
     
     def delete_passage(self, passage_id: str) -> bool:
         """
@@ -439,8 +821,7 @@ class PassageManager:
         Returns:
             List of recent passages
         """
-        from datetime import timedelta
-        cutoff = datetime.now(UTC) - timedelta(hours=hours)
+        cutoff = utc_now() - timedelta(hours=hours)
         
         with self.memory_manager.get_session() as session:
             passages = session.query(MemoryPassage).filter(
@@ -455,7 +836,7 @@ class PassageManager:
                     "text": p.text[:200] + "..." if len(p.text) > 200 else p.text,
                     "source": p.source,
                     "importance": p.importance_score,
-                    "created_at": p.created_at.isoformat()
+                    "created_at": format_utc_iso(p.created_at)
                 }
                 for p in passages
             ]

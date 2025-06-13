@@ -5,8 +5,7 @@ from lt_memory.models.base import (
     MemoryBlock,
     BlockHistory,
     MemoryPassage,
-    MemoryEntity,
-    MemoryRelation,
+    ArchivedConversation,
     MemorySnapshot
 )
 
@@ -15,7 +14,6 @@ __all__ = [
     "MemoryBlock",
     "BlockHistory",
     "MemoryPassage",
-    "MemoryEntity",
-    "MemoryRelation",
+    "ArchivedConversation",
     "MemorySnapshot"
 ]

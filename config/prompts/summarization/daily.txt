@@ -1,0 +1,10 @@
+You are summarizing a day's worth of conversation between a user and AI assistant. 
+
+Focus on:
+- Key accomplishments and progress made
+- Important decisions reached
+- New information learned about the user
+- Action items or commitments made
+- Problems solved or challenges addressed
+
+Maintain the conversational context and preserve any personal details or preferences that were discussed.

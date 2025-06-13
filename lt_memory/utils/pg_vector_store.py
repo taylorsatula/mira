@@ -1,14 +1,18 @@
 """
 PostgreSQL-native vector store using pgvector extension.
 
-Provides efficient similarity search with native PostgreSQL operators.
+Installation:
+    pip install pgvector psycopg2-binary numpy
 """
 
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
-from sqlalchemy import text
-from sqlalchemy.engine import Engine
+import psycopg2
+from psycopg2.extras import RealDictCursor, Json
+from psycopg2.pool import SimpleConnectionPool
+from pgvector.psycopg2 import register_vector
 import logging
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -17,46 +21,82 @@ class PGVectorStore:
     """
     PostgreSQL-native vector store using pgvector.
     
-    Leverages pgvector's native operators for efficient similarity search
-    with IVFFlat indexing support.
+    Features:
+    - Native pgvector support for similarity search
+    - Connection pooling for better performance
+    - Automatic index optimization
+    - Context manager support
     """
     
-    def __init__(self, engine: Engine, dimension: int = 384):
+    def __init__(self, 
+                 connection_string: str, 
+                 dimension: int = 1024,
+                 pool_size: int = 5):
         """
-        Initialize vector store.
+        Initialize vector store with connection pooling.
         
         Args:
-            engine: SQLAlchemy engine connected to PostgreSQL
+            connection_string: PostgreSQL connection string
             dimension: Vector dimension size
+            pool_size: Number of connections in the pool
         """
-        self.engine = engine
+        self.connection_string = connection_string
         self.dimension = dimension
+        
+        # Create connection pool
+        self._pool = SimpleConnectionPool(
+            1, pool_size,
+            connection_string,
+            cursor_factory=RealDictCursor
+        )
+        
+        # Register vector type for all connections
+        self._init_connections()
         
         # Verify pgvector extension
         self._verify_pgvector()
     
+    def _init_connections(self):
+        """Initialize all connections in the pool with vector type."""
+        # Get all connections and register vector type
+        for i in range(self._pool.minconn):
+            conn = self._pool.getconn()
+            register_vector(conn)
+            self._pool.putconn(conn)
+    
+    @contextmanager
+    def _get_connection(self):
+        """Get a connection from the pool."""
+        conn = self._pool.getconn()
+        try:
+            yield conn
+        finally:
+            self._pool.putconn(conn)
+    
     def _verify_pgvector(self) -> None:
         """Verify pgvector extension is installed."""
-        with self.engine.connect() as conn:
-            result = conn.execute(
-                text("SELECT * FROM pg_extension WHERE extname = 'vector'")
-            ).fetchone()
-            
-            if not result:
-                raise RuntimeError(
-                    "pgvector extension not found. Please install with: CREATE EXTENSION vector;"
-                )
-            
-            logger.info("pgvector extension verified")
+        with self._get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM pg_extension WHERE extname = 'vector'")
+                result = cur.fetchone()
+                
+                if not result:
+                    raise RuntimeError(
+                        "pgvector extension not found. Please install with: CREATE EXTENSION vector;"
+                    )
+                
+                logger.info("pgvector extension verified")
     
-    def search(self, query_embedding: np.ndarray, k: int = 10, 
+    def search(self, 
+               query_embedding: np.ndarray, 
+               k: int = 10, 
                table: str = "memory_passages",
                filters: Optional[Dict[str, Any]] = None) -> List[Tuple[str, float]]:
         """
         Search for similar vectors using pgvector.
         
         Args:
-            query_embedding: Query vector
+            query_embedding: Query vector (numpy array)
             k: Number of results to return
             table: Table name to search
             filters: Optional filters to apply
@@ -67,66 +107,78 @@ class PGVectorStore:
         if query_embedding.shape[0] != self.dimension:
             raise ValueError(f"Query dimension {query_embedding.shape[0]} != {self.dimension}")
         
-        # Base query using cosine similarity
-        query = f"""
-        SELECT id, 
-               1 - (embedding <=> %s::vector) as similarity,
-               importance_score
-        FROM {table}
-        WHERE embedding IS NOT NULL
-        """
+        # Ensure float32 for consistency
+        if query_embedding.dtype != np.float32:
+            query_embedding = query_embedding.astype(np.float32)
         
-        params = [query_embedding.tolist()]
+        # Build query with filters
+        query_parts = [f"""
+            SELECT id,
+                   1 - (embedding <=> %s) as similarity,
+                   importance_score
+            FROM {table}
+            WHERE embedding IS NOT NULL
+        """]
         
-        # Apply filters
+        params = [query_embedding]
+        
+        # Add filter conditions
         if filters:
             if "source" in filters:
-                query += " AND source = %s"
+                query_parts.append("AND source = %s")
                 params.append(filters["source"])
             
             if "min_importance" in filters:
-                query += " AND importance_score >= %s"
+                query_parts.append("AND importance_score >= %s")
                 params.append(filters["min_importance"])
             
             if "created_after" in filters:
-                query += " AND created_at >= %s"
+                query_parts.append("AND created_at >= %s")
                 params.append(filters["created_after"])
             
             if "min_similarity" in filters:
-                query += " AND 1 - (embedding <=> %s::vector) >= %s"
-                params.extend([query_embedding.tolist(), filters["min_similarity"]])
+                query_parts.append("AND 1 - (embedding <=> %s) >= %s")
+                params.extend([query_embedding, filters["min_similarity"]])
         
-        # Order by similarity and limit
-        query += " ORDER BY embedding <=> %s::vector LIMIT %s"
-        params.extend([query_embedding.tolist(), k])
+        # Complete query
+        query_parts.extend([
+            f"ORDER BY embedding <=> %s",
+            "LIMIT %s"
+        ])
+        params.extend([query_embedding, k])
+        
+        complete_sql = "\n".join(query_parts)
         
         # Execute query
-        with self.engine.connect() as conn:
-            result = conn.execute(text(query), params)
-            
-            # Update access count for retrieved passages
-            passage_ids = []
-            results = []
-            
-            for row in result:
-                passage_ids.append(str(row.id))
-                results.append((str(row.id), float(row.similarity)))
-            
-            # Batch update access counts
-            if passage_ids:
-                update_query = f"""
-                UPDATE {table} 
-                SET access_count = access_count + 1,
-                    last_accessed = CURRENT_TIMESTAMP
-                WHERE id = ANY(%s::uuid[])
-                """
-                conn.execute(text(update_query), [passage_ids])
-                conn.commit()
+        with self._get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(complete_sql, params)
+                rows = cur.fetchall()
+                
+                # Collect results and passage IDs
+                passage_ids = []
+                results = []
+                
+                for row in rows:
+                    passage_ids.append(str(row['id']))
+                    results.append((str(row['id']), float(row['similarity'])))
+                
+                # Update access counts if we have results
+                if passage_ids:
+                    update_sql = f"""
+                    UPDATE {table} 
+                    SET access_count = access_count + 1,
+                        last_accessed = CURRENT_TIMESTAMP
+                    WHERE id = ANY(%s::uuid[])
+                    """
+                    cur.execute(update_sql, (passage_ids,))
+                    conn.commit()
         
         logger.debug(f"Vector search returned {len(results)} results")
         return results
     
-    def optimize_index(self, table: str = "memory_passages", 
+    def optimize_index(self, 
+                      table: str = "memory_passages", 
                       lists: Optional[int] = None) -> None:
         """
         Optimize IVFFlat index for better performance.
@@ -135,37 +187,36 @@ class PGVectorStore:
             table: Table name with vector column
             lists: Number of lists for IVFFlat index (auto-calculated if None)
         """
-        with self.engine.connect() as conn:
-            # Get row count to determine optimal lists
-            if lists is None:
-                result = conn.execute(text(f"SELECT COUNT(*) FROM {table}")).fetchone()
-                row_count = result[0] if result else 0
+        with self._get_connection() as conn:
+            with conn.cursor() as cur:
+                # Get row count if lists not specified
+                if lists is None:
+                    cur.execute(f"SELECT COUNT(*) FROM {table}")
+                    row_count = cur.fetchone()['count'] or 0
+                    
+                    # PostgreSQL recommendation: lists = rows/1000
+                    lists = max(1, min(1000, row_count // 1000))
+                    
+                    logger.info(f"Auto-calculated lists={lists} for {row_count} rows")
                 
-                # PostgreSQL recommendation: lists = rows/1000
-                # Minimum 1, maximum 1000
-                lists = max(1, min(1000, row_count // 1000))
+                # Set maintenance work memory
+                cur.execute("SET maintenance_work_mem = '512MB'")
                 
-                logger.info(f"Auto-calculated lists={lists} for {row_count} rows")
-            
-            # Set maintenance work memory for index creation
-            conn.execute(text("SET maintenance_work_mem = '512MB'"))
-            
-            # Drop existing index
-            conn.execute(text(f"DROP INDEX IF EXISTS idx_{table}_embedding"))
-            
-            # Create optimized index
-            create_index = f"""
-            CREATE INDEX idx_{table}_embedding 
-            ON {table} 
-            USING ivfflat (embedding vector_cosine_ops) 
-            WITH (lists = %s)
-            """
-            conn.execute(text(create_index), [lists])
-            conn.commit()
-            
-            logger.info(f"Optimized vector index on {table} with lists={lists}")
+                # Recreate index
+                cur.execute(f"DROP INDEX IF EXISTS idx_{table}_embedding")
+                cur.execute(f"""
+                    CREATE INDEX idx_{table}_embedding 
+                    ON {table} 
+                    USING ivfflat (embedding vector_cosine_ops) 
+                    WITH (lists = %s)
+                """, (lists,))
+                
+                conn.commit()
+                
+                logger.info(f"Optimized vector index on {table} with lists={lists}")
     
-    def analyze_performance(self, query_embedding: np.ndarray, 
+    def analyze_performance(self, 
+                           query_embedding: np.ndarray, 
                            table: str = "memory_passages") -> Dict[str, Any]:
         """
         Analyze query performance for troubleshooting.
@@ -177,54 +228,129 @@ class PGVectorStore:
         Returns:
             Performance metrics and query plan
         """
-        with self.engine.connect() as conn:
-            # Get query plan
-            explain_query = f"""
-            EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
-            SELECT id, embedding <=> %s::vector as distance
-            FROM {table}
-            ORDER BY embedding <=> %s::vector
-            LIMIT 10
-            """
+        if query_embedding.dtype != np.float32:
+            query_embedding = query_embedding.astype(np.float32)
             
-            result = conn.execute(
-                text(explain_query), 
-                [query_embedding.tolist(), query_embedding.tolist()]
-            ).fetchone()
+        with self._get_connection() as conn:
+            with conn.cursor() as cur:
+                # Get query plan
+                explain_sql = f"""
+                EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+                SELECT id, embedding <=> %s as distance
+                FROM {table}
+                ORDER BY embedding <=> %s
+                LIMIT 10
+                """
+                
+                cur.execute(explain_sql, (query_embedding, query_embedding))
+                result = cur.fetchone()
+                plan = result['QUERY PLAN'][0] if result else {}
+                
+                # Get index statistics
+                cur.execute("""
+                    SELECT 
+                        schemaname,
+                        relname as tablename,
+                        indexrelname as indexname,
+                        idx_scan,
+                        idx_tup_read,
+                        idx_tup_fetch
+                    FROM pg_stat_user_indexes
+                    WHERE relname = %s
+                """, (table,))
+                stats = cur.fetchall()
+                
+                # Get table size information
+                cur.execute("""
+                    SELECT 
+                        pg_size_pretty(pg_total_relation_size(%s::regclass)) as total_size,
+                        pg_size_pretty(pg_relation_size(%s::regclass)) as table_size,
+                        pg_size_pretty(pg_indexes_size(%s::regclass)) as index_size
+                """, (table, table, table))
+                size_result = cur.fetchone()
+                
+                return {
+                    "query_plan": plan,
+                    "index_stats": list(stats),
+                    "table_size": dict(size_result) if size_result else {},
+                    "execution_time_ms": plan.get("Execution Time", 0) if plan else 0
+                }
+    
+    def close(self):
+        """Close all connections in the pool."""
+        if hasattr(self, '_pool') and self._pool:
+            try:
+                self._pool.closeall()
+            except:
+                pass  # Pool might already be closed
+            finally:
+                self._pool = None
+    
+    def __enter__(self):
+        """Context manager support."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Clean up on context exit."""
+        self.close()
+    
+    def __del__(self):
+        """Clean up connections on deletion."""
+        self.close()
+
+
+# Utility functions for common operations
+def create_vector_table(connection_string: str, 
+                       table_name: str = "memory_passages",
+                       dimension: int = 1024):
+    """
+    Create a vector table with all necessary columns and indexes.
+    
+    This is a utility to help set up new tables.
+    """
+    conn = psycopg2.connect(connection_string)
+    register_vector(conn)
+    
+    try:
+        with conn.cursor() as cur:
+            # Create extension
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
             
-            plan = result[0][0] if result else {}
+            # Create table
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table_name} (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    content TEXT,
+                    embedding vector({dimension}),
+                    source TEXT,
+                    importance_score FLOAT DEFAULT 0.5,
+                    metadata JSONB DEFAULT '{{}}',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    last_accessed TIMESTAMPTZ,
+                    access_count INTEGER DEFAULT 0
+                )
+            """)
             
-            # Get index statistics
-            stats_query = f"""
-            SELECT 
-                schemaname,
-                tablename,
-                indexname,
-                idx_scan,
-                idx_tup_read,
-                idx_tup_fetch
-            FROM pg_stat_user_indexes
-            WHERE tablename = %s
-            """
+            # Create indexes
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{table_name}_embedding 
+                ON {table_name} USING ivfflat (embedding vector_cosine_ops)
+                WITH (lists = 100)
+            """)
             
-            stats = conn.execute(text(stats_query), [table]).fetchall()
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{table_name}_metadata 
+                ON {table_name} USING gin (metadata)
+            """)
             
-            # Get table size
-            size_query = f"""
-            SELECT 
-                pg_size_pretty(pg_total_relation_size(%s::regclass)) as total_size,
-                pg_size_pretty(pg_relation_size(%s::regclass)) as table_size,
-                pg_size_pretty(pg_indexes_size(%s::regclass)) as index_size
-            """
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{table_name}_created 
+                ON {table_name} (created_at DESC)
+            """)
             
-            size_result = conn.execute(
-                text(size_query), 
-                [table, table, table]
-            ).fetchone()
+            conn.commit()
+            logger.info(f"Created vector table: {table_name}")
             
-            return {
-                "query_plan": plan,
-                "index_stats": [dict(row) for row in stats],
-                "table_size": dict(size_result) if size_result else {},
-                "execution_time_ms": plan.get("Execution Time", 0) if plan else 0
-            }
+    finally:
+        conn.close()

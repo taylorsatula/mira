@@ -36,7 +36,6 @@ Operations:
 - memory_insert: Insert content at specific line
 - memory_rethink: Completely rewrite a memory block
 - search_archival: Search through archived memories
-- get_entity_info: Get information about a known entity
 - process_recent_conversations: Process recent conversations into memory
 - consolidate_memories: Trigger memory consolidation
 - get_memory_stats: Get memory system statistics
@@ -44,7 +43,7 @@ Operations:
 Examples:
 - Append to persona: {"operation": "core_memory_append", "label": "persona", "content": "I enjoy helping with coding."}
 - Search memories: {"operation": "search_archival", "query": "user preferences", "limit": 5}
-- Get entity info: {"operation": "get_entity_info", "entity_name": "John Smith"}"""
+"""
     
     def run(self, operation: str, **params) -> Dict[str, Any]:
         """
@@ -79,9 +78,6 @@ Examples:
             elif operation == "search_archival":
                 return self._search_archival(**params)
             
-            # Entity operations
-            elif operation == "get_entity_info":
-                return self._get_entity_info(**params)
             
             # Batch processing operations
             elif operation == "process_recent_conversations":
@@ -190,70 +186,24 @@ Examples:
             "results": results
         }
     
-    def _get_entity_info(self, entity_name: str, 
-                        include_graph: bool = True) -> Dict[str, Any]:
-        """Get entity information and relationships."""
-        # First try exact match
-        entity = self.memory_manager.entity_manager.get_entity(entity_name)
-        
-        if not entity:
-            # Try searching for partial matches
-            matches = self.memory_manager.entity_manager.search_entities(
-                query=entity_name,
-                limit=5
-            )
-            
-            if matches:
-                # Return search results
-                return {
-                    "success": False,
-                    "message": f"Entity '{entity_name}' not found. Similar entities:",
-                    "suggestions": matches
-                }
-            else:
-                return {
-                    "success": False,
-                    "message": f"Entity '{entity_name}' not found"
-                }
-        
-        result = {
-            "success": True,
-            "entity": entity
-        }
-        
-        if include_graph:
-            graph = self.memory_manager.entity_manager.get_entity_graph(
-                entity_name=entity_name,
-                depth=2
-            )
-            if graph:
-                result["graph"] = graph
-        
-        return result
     
     def _process_recent_conversations(self, hours: Optional[int] = None) -> Dict[str, Any]:
-        """Process recent conversations into memory."""
-        if hours is None:
-            hours = self.memory_manager.config.memory.batch_process_hours
-        
-        results = self.memory_manager.batch_processor.process_recent_conversations(
-            hours=hours
-        )
-        
+        """Process recent conversations into memory via conversation archive."""
+        # This operation is now handled automatically by the conversation archive system
+        # when conversations are archived daily
         return {
             "success": True,
-            "message": f"Processed conversations from last {hours} hours",
-            "results": results
+            "message": "Conversation processing is handled automatically by the archive system",
+            "note": "Use conversation archive operations for manual processing"
         }
     
     def _process_all_pending(self) -> Dict[str, Any]:
         """Process all pending conversations."""
-        results = self.memory_manager.batch_processor.process_all_pending()
-        
+        # This operation is now handled automatically by the conversation archive system
         return {
             "success": True,
-            "message": "Processed all pending conversations",
-            "results": results
+            "message": "All conversation processing is handled automatically by the archive system",
+            "note": "Conversations are processed when archived daily"
         }
     
     def _consolidate_memories(self) -> Dict[str, Any]:
@@ -280,7 +230,7 @@ Examples:
         """Get comprehensive memory statistics."""
         stats = self.memory_manager.get_memory_stats()
         health = self.memory_manager.health_check()
-        processing_status = self.memory_manager.batch_processor.get_processing_status()
+        processing_status = {"status": "handled_by_conversation_archive"}
         
         return {
             "success": True,
@@ -345,7 +295,6 @@ Examples:
                             "memory_insert",
                             "memory_rethink",
                             "search_archival",
-                            "get_entity_info",
                             "process_recent_conversations",
                             "process_all_pending",
                             "consolidate_memories",
@@ -378,10 +327,6 @@ Examples:
                         "type": "string",
                         "description": "Search query"
                     },
-                    "entity_name": {
-                        "type": "string",
-                        "description": "Entity name to look up"
-                    },
                     "limit": {
                         "type": "integer",
                         "description": "Maximum results to return"
@@ -404,9 +349,5 @@ Examples:
                     "query": "coding preferences",
                     "limit": 5
                 },
-                {
-                    "operation": "get_entity_info",
-                    "entity_name": "Python"
-                }
             ]
         }

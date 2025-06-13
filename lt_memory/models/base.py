@@ -5,8 +5,8 @@ All models use UUID primary keys and JSONB for metadata storage.
 Timestamps are timezone-aware and default to UTC.
 """
 
-from datetime import datetime, UTC
-from sqlalchemy import Column, String, Integer, Float, DateTime, Index
+from datetime import datetime
+from sqlalchemy import Column, String, Integer, Float, DateTime, Index, Boolean
 from sqlalchemy import text as sql_text  # Rename to avoid shadowing by column names
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base
@@ -41,23 +41,28 @@ class MemoryBlock(Base):
 
 class BlockHistory(Base):
     """
-    History tracking for memory blocks.
+    History tracking for memory blocks using differential versioning.
     
-    Maintains a complete audit trail of all changes to memory blocks,
-    enabling recovery and analysis of memory evolution.
+    Stores only the changes (diffs) rather than full content copies,
+    enabling efficient storage while maintaining complete audit trail.
+    
+    Storage format:
+    - Version 1: Full content stored in diff_data['content']
+    - Later versions: Only diffs stored in diff_data['operations']
     """
     __tablename__ = 'block_history'
     
     id = Column(UUID(as_uuid=True), primary_key=True, server_default=sql_text("gen_random_uuid()"))
     block_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     label = Column(String, nullable=False)
-    old_value = Column(String)
-    new_value = Column(String)
-    operation = Column(String)  # append, replace, insert, rethink
+    version = Column(Integer, nullable=False)  # Version this diff represents
+    diff_data = Column(JSONB, nullable=False)  # Stores diff operations or base content
+    operation = Column(String)  # append, replace, insert, rethink, base
     actor = Column(String)  # system, user, automation
     created_at = Column(DateTime(timezone=True), server_default=sql_text("CURRENT_TIMESTAMP"))
     
     __table_args__ = (
+        Index('idx_history_block_version', 'block_id', 'version'),
         Index('idx_history_block_created', 'block_id', 'created_at'),
     )
 
@@ -73,13 +78,15 @@ class MemoryPassage(Base):
     
     id = Column(UUID(as_uuid=True), primary_key=True, server_default=sql_text("gen_random_uuid()"))
     text = Column(String, nullable=False)
-    embedding = Column(Vector(384))  # Dimension matches all-MiniLM-L6-v2
+    embedding = Column(Vector(1024))  # Dimension matches OpenAI text-embedding-3-small
     source = Column(String, nullable=False)  # conversation, document, automation
     source_id = Column(String, index=True)
     importance_score = Column(Float, default=0.5)
     access_count = Column(Integer, default=0)
     last_accessed = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=sql_text("CURRENT_TIMESTAMP"))
+    expires_on = Column(DateTime(timezone=True), nullable=True)  # NULL means permanent fact
+    human_verified = Column(Boolean, default=False)
     context = Column(JSONB, default=dict)
     
     __table_args__ = (
@@ -88,53 +95,34 @@ class MemoryPassage(Base):
         Index('idx_passage_importance', 'importance_score'),
         Index('idx_passage_created', 'created_at'),
         Index('idx_passage_source', 'source', 'source_id'),
+        Index('idx_passage_expires', 'expires_on'),  # For expiration queries
     )
 
 
-class MemoryEntity(Base):
-    """
-    Knowledge graph entities.
-    
-    Represents identified entities (people, places, concepts) extracted
-    from conversations and documents.
-    """
-    __tablename__ = 'memory_entities'
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, server_default=sql_text("gen_random_uuid()"))
-    name = Column(String, nullable=False, index=True)
-    entity_type = Column(String)  # person, place, organization, concept, etc.
-    attributes = Column(JSONB, default=dict)
-    importance_score = Column(Float, default=0.5)
-    first_seen = Column(DateTime(timezone=True), server_default=sql_text("CURRENT_TIMESTAMP"))
-    last_seen = Column(DateTime(timezone=True), server_default=sql_text("CURRENT_TIMESTAMP"))
-    mention_count = Column(Integer, default=1)
-    
-    __table_args__ = (
-        Index('idx_entity_type_importance', 'entity_type', 'importance_score'),
-        Index('idx_entity_last_seen', 'last_seen'),
-    )
 
 
-class MemoryRelation(Base):
+class ArchivedConversation(Base):
     """
-    Relationships between entities.
+    Archived conversation data with temporal indexing.
     
-    Forms the edges of the knowledge graph, connecting entities
-    with typed relationships.
+    Stores complete conversation history by date for retrieval
+    and progressive summarization.
     """
-    __tablename__ = 'memory_relations'
+    __tablename__ = 'archived_conversations'
     
     id = Column(UUID(as_uuid=True), primary_key=True, server_default=sql_text("gen_random_uuid()"))
-    subject_id = Column(UUID(as_uuid=True), nullable=False, index=True)
-    predicate = Column(String, nullable=False)  # knows, works_at, located_in, etc.
-    object_id = Column(UUID(as_uuid=True), nullable=False, index=True)
-    confidence = Column(Float, default=1.0)
-    evidence_ids = Column(JSONB, default=list)  # passage IDs supporting this relation
-    created_at = Column(DateTime(timezone=True), server_default=sql_text("CURRENT_TIMESTAMP"))
+    conversation_date = Column(DateTime(timezone=True), nullable=False, index=True)
+    messages = Column(JSONB, nullable=False)  # Full message array
+    message_count = Column(Integer, nullable=False)
+    summary = Column(String, nullable=False)  # Pre-generated daily summary
+    weekly_summary = Column(String, nullable=True)  # Rolling 7-day summary (created nightly)
+    monthly_summary = Column(String, nullable=True)  # Monthly summary (created on 1st of month)
+    archived_at = Column(DateTime(timezone=True), server_default=sql_text("CURRENT_TIMESTAMP"))
+    conversation_metadata = Column(JSONB, default=dict)  # Additional context
     
     __table_args__ = (
-        Index('idx_relation_subject_predicate', 'subject_id', 'predicate'),
-        Index('idx_relation_object', 'object_id'),
+        Index('idx_archived_conversation_date', 'conversation_date'),
+        Index('idx_archived_conversation_archived_at', 'archived_at'),
     )
 
 
@@ -150,7 +138,6 @@ class MemorySnapshot(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, server_default=sql_text("gen_random_uuid()"))
     conversation_id = Column(String, index=True)
     blocks_snapshot = Column(JSONB)  # Core memory state
-    entity_count = Column(Integer)
     passage_count = Column(Integer)
     created_at = Column(DateTime(timezone=True), server_default=sql_text("CURRENT_TIMESTAMP"))
     reason = Column(String)  # checkpoint, error_recovery, consolidation, etc.

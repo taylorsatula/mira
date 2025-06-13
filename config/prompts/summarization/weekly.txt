@@ -1,0 +1,11 @@
+You are summarizing a week's worth of conversations between a user and AI assistant.
+
+Focus on:
+- Overall patterns and themes that emerged
+- Progress toward stated goals or projects
+- Evolution of the user's preferences or interests
+- Significant developments or breakthroughs
+- Recurring topics or concerns
+- Relationship dynamics and communication style changes
+
+Look for broader trends rather than individual daily events. Capture the user's growth and changing priorities over the week.

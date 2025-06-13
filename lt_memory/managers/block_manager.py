@@ -8,9 +8,12 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, UTC
 
 from sqlalchemy.orm import Session
-from jinja2 import Template
+from jinja2 import Template, Environment
+from markupsafe import escape
 
 from lt_memory.models.base import MemoryBlock, BlockHistory
+from lt_memory.utils.diff_engine import DiffEngine
+from utils.timezone_utils import utc_now, format_utc_iso
 from errors import ToolError, ErrorCode, error_context
 
 logger = logging.getLogger(__name__)
@@ -24,6 +27,12 @@ class BlockManager:
     to modify its own persistent context.
     """
     
+    # Protected block labels that require specific actor permissions
+    PROTECTED_BLOCKS = {
+        # Example: "core_identity": ["self_reflection", "persona_optimizer"],
+        # Add protected blocks and their allowed actors when needed
+    }
+    
     def __init__(self, memory_manager):
         """
         Initialize block manager.
@@ -33,6 +42,120 @@ class BlockManager:
         """
         self.memory_manager = memory_manager
         self.logger = logging.getLogger(__name__)
+        
+        # Determine once if write protection is needed
+        self.write_protection_enabled = bool(self.PROTECTED_BLOCKS)
+    
+    def _check_write_permission(self, label: str, actor: str) -> None:
+        """
+        Check if the actor has permission to modify a protected block.
+        
+        Args:
+            label: Block label to check
+            actor: Actor attempting the modification
+            
+        Raises:
+            ToolError: If the block is protected and actor lacks permission
+        """
+        # Fast path - skip entirely if no protection needed
+        if not self.write_protection_enabled:
+            return
+            
+        if label in self.PROTECTED_BLOCKS:
+            allowed_actors = self.PROTECTED_BLOCKS[label]
+            if actor not in allowed_actors and actor != "system":
+                raise ToolError(
+                    f"Block '{label}' is protected. Only {allowed_actors} can modify it. "
+                    f"Current actor: '{actor}'",
+                    code=ErrorCode.PERMISSION_DENIED
+                )
+    
+    def _sanitize_input(self, text: str) -> str:
+        """
+        Sanitize user input to prevent database issues and security problems.
+        
+        Args:
+            text: Raw user input text
+            
+        Returns:
+            Sanitized text safe for database storage
+        """
+        if not isinstance(text, str):
+            text = str(text)
+        
+        # Remove null bytes and other problematic control characters that PostgreSQL doesn't like
+        # Keep standard printable chars, newlines, tabs, and common unicode
+        sanitized = ""
+        for char in text:
+            # Allow normal printable ASCII, newlines, tabs, and unicode above 127
+            if (32 <= ord(char) <= 126) or char in '\n\r\t' or ord(char) > 127:
+                sanitized += char
+            # Replace problematic control characters with space
+            elif ord(char) < 32:
+                sanitized += " "
+        
+        return sanitized
+    
+    def create_block(self, label: str, content: str, character_limit: int = 2048,
+                    actor: str = "system") -> Dict[str, Any]:
+        """
+        Create a new memory block with base version history.
+        
+        Args:
+            label: Block label
+            content: Initial content
+            character_limit: Character limit for the block
+            actor: Who is creating the block
+            
+        Returns:
+            Created block data
+        """
+        with error_context("block_manager", "create", ToolError, ErrorCode.MEMORY_ERROR):
+            # Sanitize all user inputs
+            label = self._sanitize_input(label)
+            content = self._sanitize_input(content)
+            actor = self._sanitize_input(actor)
+            
+            with self.memory_manager.get_session() as session:
+                # Check if block already exists
+                existing = session.query(MemoryBlock).filter_by(label=label).first()
+                if existing:
+                    raise ToolError(
+                        f"Memory block '{label}' already exists",
+                        code=ErrorCode.MEMORY_BLOCK_ALREADY_EXISTS
+                    )
+                
+                if len(content) > character_limit:
+                    raise ToolError(
+                        f"Content exceeds character limit ({len(content)}/{character_limit})",
+                        code=ErrorCode.INVALID_INPUT
+                    )
+                
+                # Create block
+                block = MemoryBlock(
+                    label=label,
+                    value=content,
+                    character_limit=character_limit,
+                    version=1
+                )
+                session.add(block)
+                session.flush()  # Get the ID
+                
+                # Create base version history entry
+                base_data = DiffEngine.create_base_version(content)
+                history = BlockHistory(
+                    block_id=block.id,
+                    label=label,
+                    version=1,
+                    diff_data=base_data,
+                    operation="base",
+                    actor=actor
+                )
+                session.add(history)
+                session.commit()
+                
+                self.logger.info(f"Created block '{label}' with {len(content)} characters")
+                return self.get_block(label)
     
     def get_block(self, label: str) -> Optional[Dict[str, Any]]:
         """
@@ -44,6 +167,9 @@ class BlockManager:
         Returns:
             Block data dictionary or None if not found
         """
+        # Sanitize user input
+        label = self._sanitize_input(label)
+        
         with self.memory_manager.get_session() as session:
             block = session.query(MemoryBlock).filter_by(label=label).first()
             if block:
@@ -54,7 +180,7 @@ class BlockManager:
                     "limit": block.character_limit,
                     "characters": len(block.value),
                     "version": block.version,
-                    "updated_at": block.updated_at.isoformat()
+                    "updated_at": format_utc_iso(block.updated_at)
                 }
         return None
     
@@ -92,12 +218,20 @@ class BlockManager:
             ToolError: If block not found or would exceed limit
         """
         with error_context("block_manager", "append", ToolError, ErrorCode.MEMORY_ERROR):
+            # Sanitize user inputs
+            label = self._sanitize_input(label)
+            content = self._sanitize_input(content)
+            actor = self._sanitize_input(actor)
+            
+            # Check write permissions
+            self._check_write_permission(label, actor)
+            
             with self.memory_manager.get_session() as session:
-                block = session.query(MemoryBlock).filter_by(label=label).first()
+                block = session.query(MemoryBlock).filter_by(label=label).with_for_update().first()
                 if not block:
                     raise ToolError(
                         f"Memory block '{label}' not found",
-                        error_code=ErrorCode.NOT_FOUND
+                        code=ErrorCode.NOT_FOUND
                     )
                 
                 old_value = block.value
@@ -110,20 +244,28 @@ class BlockManager:
                         f"Content would exceed character limit "
                         f"({len(new_value)}/{block.character_limit}). "
                         f"Consider using core_memory_replace to update existing content.",
-                        error_code=ErrorCode.INVALID_INPUT
+                        code=ErrorCode.INVALID_INPUT
                     )
                 
                 # Update block
                 block.value = new_value
                 block.version += 1
-                block.updated_at = datetime.now(UTC)
+                block.updated_at = utc_now()
                 
-                # Record history
+                # Record history with differential storage or snapshot
+                if DiffEngine.should_create_snapshot(block.version):
+                    # Create snapshot for recovery
+                    diff_data = DiffEngine.create_snapshot_version(new_value, block.version)
+                    self.logger.info(f"Created snapshot for block '{label}' version {block.version}")
+                else:
+                    # Create diff
+                    diff_data = DiffEngine.create_diff_version(old_value, new_value, block.version)
+                
                 history = BlockHistory(
                     block_id=block.id,
                     label=label,
-                    old_value=old_value,
-                    new_value=new_value,
+                    version=block.version,
+                    diff_data=diff_data,
                     operation="append",
                     actor=actor
                 )
@@ -151,12 +293,21 @@ class BlockManager:
             ToolError: If block not found, content not found, or would exceed limit
         """
         with error_context("block_manager", "replace", ToolError, ErrorCode.MEMORY_ERROR):
+            # Sanitize user inputs
+            label = self._sanitize_input(label)
+            old_content = self._sanitize_input(old_content)
+            new_content = self._sanitize_input(new_content)
+            actor = self._sanitize_input(actor)
+            
+            # Check write permissions
+            self._check_write_permission(label, actor)
+            
             with self.memory_manager.get_session() as session:
-                block = session.query(MemoryBlock).filter_by(label=label).first()
+                block = session.query(MemoryBlock).filter_by(label=label).with_for_update().first()
                 if not block:
                     raise ToolError(
                         f"Memory block '{label}' not found",
-                        error_code=ErrorCode.NOT_FOUND
+                        code=ErrorCode.NOT_FOUND
                     )
                 
                 if old_content not in block.value:
@@ -165,7 +316,7 @@ class BlockManager:
                     raise ToolError(
                         f"Content to replace not found in block '{label}'. "
                         f"Block starts with: {preview}",
-                        error_code=ErrorCode.INVALID_INPUT
+                        code=ErrorCode.INVALID_INPUT
                     )
                 
                 old_value = block.value
@@ -177,20 +328,21 @@ class BlockManager:
                         f"Replacement would exceed character limit "
                         f"({len(new_value)}/{block.character_limit}). "
                         f"Consider removing content first or using memory_rethink.",
-                        error_code=ErrorCode.INVALID_INPUT
+                        code=ErrorCode.INVALID_INPUT
                     )
                 
                 # Update block
                 block.value = new_value
                 block.version += 1
-                block.updated_at = datetime.now(UTC)
+                block.updated_at = utc_now()
                 
-                # Record history
+                # Record history with differential storage
+                diff_data = DiffEngine.create_diff_version(old_value, new_value, block.version)
                 history = BlockHistory(
                     block_id=block.id,
                     label=label,
-                    old_value=old_value,
-                    new_value=new_value,
+                    version=block.version,
+                    diff_data=diff_data,
                     operation="replace",
                     actor=actor
                 )
@@ -218,12 +370,20 @@ class BlockManager:
             ToolError: If block not found, invalid line number, or would exceed limit
         """
         with error_context("block_manager", "insert", ToolError, ErrorCode.MEMORY_ERROR):
+            # Sanitize user inputs
+            label = self._sanitize_input(label)
+            content = self._sanitize_input(content)
+            actor = self._sanitize_input(actor)
+            
+            # Check write permissions
+            self._check_write_permission(label, actor)
+            
             with self.memory_manager.get_session() as session:
-                block = session.query(MemoryBlock).filter_by(label=label).first()
+                block = session.query(MemoryBlock).filter_by(label=label).with_for_update().first()
                 if not block:
                     raise ToolError(
                         f"Memory block '{label}' not found",
-                        error_code=ErrorCode.NOT_FOUND
+                        code=ErrorCode.NOT_FOUND
                     )
                 
                 # Split into lines
@@ -235,7 +395,7 @@ class BlockManager:
                         f"Invalid line number: {line_number}. "
                         f"Block has {len(lines)} lines. "
                         f"Valid range: 1 to {len(lines) + 1}",
-                        error_code=ErrorCode.INVALID_INPUT
+                        code=ErrorCode.INVALID_INPUT
                     )
                 
                 old_value = block.value
@@ -247,20 +407,21 @@ class BlockManager:
                     raise ToolError(
                         f"Insertion would exceed character limit "
                         f"({len(new_value)}/{block.character_limit})",
-                        error_code=ErrorCode.INVALID_INPUT
+                        code=ErrorCode.INVALID_INPUT
                     )
                 
                 # Update block
                 block.value = new_value
                 block.version += 1
-                block.updated_at = datetime.now(UTC)
+                block.updated_at = utc_now()
                 
-                # Record history
+                # Record history with differential storage
+                diff_data = DiffEngine.create_diff_version(old_value, new_value, block.version)
                 history = BlockHistory(
                     block_id=block.id,
                     label=label,
-                    old_value=old_value,
-                    new_value=new_value,
+                    version=block.version,
+                    diff_data=diff_data,
                     operation="insert",
                     actor=actor
                 )
@@ -287,19 +448,27 @@ class BlockManager:
             ToolError: If block not found or content exceeds limit
         """
         with error_context("block_manager", "rethink", ToolError, ErrorCode.MEMORY_ERROR):
+            # Sanitize user inputs
+            label = self._sanitize_input(label)
+            new_content = self._sanitize_input(new_content)
+            actor = self._sanitize_input(actor)
+            
+            # Check write permissions
+            self._check_write_permission(label, actor)
+            
             with self.memory_manager.get_session() as session:
-                block = session.query(MemoryBlock).filter_by(label=label).first()
+                block = session.query(MemoryBlock).filter_by(label=label).with_for_update().first()
                 if not block:
                     raise ToolError(
                         f"Memory block '{label}' not found",
-                        error_code=ErrorCode.NOT_FOUND
+                        code=ErrorCode.NOT_FOUND
                     )
                 
                 if len(new_content) > block.character_limit:
                     raise ToolError(
                         f"New content exceeds character limit "
                         f"({len(new_content)}/{block.character_limit})",
-                        error_code=ErrorCode.INVALID_INPUT
+                        code=ErrorCode.INVALID_INPUT
                     )
                 
                 old_value = block.value
@@ -307,14 +476,15 @@ class BlockManager:
                 # Update block
                 block.value = new_content
                 block.version += 1
-                block.updated_at = datetime.now(UTC)
+                block.updated_at = utc_now()
                 
-                # Record history
+                # Record history with differential storage
+                diff_data = DiffEngine.create_diff_version(old_value, new_content, block.version)
                 history = BlockHistory(
                     block_id=block.id,
                     label=label,
-                    old_value=old_value,
-                    new_value=new_content,
+                    version=block.version,
+                    diff_data=diff_data,
                     operation="rethink",
                     actor=actor
                 )
@@ -336,6 +506,14 @@ class BlockManager:
         """
         blocks = self.get_all_blocks()
         
+        # Pre-escape all user content to prevent template injection
+        safe_blocks = []
+        for block in blocks:
+            safe_block = block.copy()
+            safe_block["value"] = escape(block["value"])  # Escape user content
+            safe_block["label"] = escape(block["label"])  # Escape label too
+            safe_blocks.append(safe_block)
+        
         if not template:
             # Default template mimicking MemGPT format
             template = """{% for block in blocks -%}
@@ -344,8 +522,10 @@ class BlockManager:
 </{{ block.label }}>
 {% endfor %}"""
         
-        tmpl = Template(template)
-        return tmpl.render(blocks=blocks)
+        # Create environment with auto-escaping disabled since we pre-escaped
+        env = Environment(autoescape=False)
+        tmpl = env.from_string(template)
+        return tmpl.render(blocks=safe_blocks)
     
     def get_block_history(self, label: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
@@ -358,6 +538,9 @@ class BlockManager:
         Returns:
             List of history entries
         """
+        # Sanitize user input
+        label = self._sanitize_input(label)
+        
         with self.memory_manager.get_session() as session:
             # First get the block
             block = session.query(MemoryBlock).filter_by(label=label).first()
@@ -368,17 +551,16 @@ class BlockManager:
             history = session.query(BlockHistory).filter_by(
                 block_id=block.id
             ).order_by(
-                BlockHistory.created_at.desc()
+                BlockHistory.version.desc()
             ).limit(limit).all()
             
             return [
                 {
                     "id": str(h.id),
+                    "version": h.version,
                     "operation": h.operation,
                     "actor": h.actor,
-                    "created_at": h.created_at.isoformat(),
-                    "old_value_preview": h.old_value[:100] + "..." if len(h.old_value) > 100 else h.old_value,
-                    "new_value_preview": h.new_value[:100] + "..." if len(h.new_value) > 100 else h.new_value
+                    "created_at": format_utc_iso(h.created_at)
                 }
                 for h in history
             ]
@@ -386,7 +568,7 @@ class BlockManager:
     def rollback_block(self, label: str, version: Optional[int] = None,
                       actor: str = "system") -> Dict[str, Any]:
         """
-        Rollback a block to a previous version.
+        Rollback a block to a previous version using differential reconstruction.
         
         Args:
             label: Block label
@@ -396,54 +578,78 @@ class BlockManager:
         Returns:
             Updated block data
         """
+        # Sanitize user input
+        label = self._sanitize_input(label)
+        actor = self._sanitize_input(actor)
+        
         with self.memory_manager.get_session() as session:
-            block = session.query(MemoryBlock).filter_by(label=label).first()
+            block = session.query(MemoryBlock).filter_by(label=label).with_for_update().first()
             if not block:
                 raise ToolError(
                     f"Memory block '{label}' not found",
-                    error_code=ErrorCode.NOT_FOUND
+                    code=ErrorCode.NOT_FOUND
                 )
             
-            # Get the history entry to rollback to
-            history_query = session.query(BlockHistory).filter_by(
-                block_id=block.id
-            ).order_by(BlockHistory.created_at.desc())
+            target_version = version if version else block.version - 1
+            if target_version < 1:
+                raise ToolError(
+                    "Cannot rollback to version less than 1",
+                    code=ErrorCode.INVALID_INPUT
+                )
             
-            if version:
-                # Skip to specific version
-                history_entries = history_query.limit(block.version - version + 1).all()
-                if not history_entries:
-                    raise ToolError(
-                        f"Version {version} not found in history",
-                        error_code=ErrorCode.NOT_FOUND
-                    )
-                target_history = history_entries[-1]
-            else:
-                # Just get the previous version
-                target_history = history_query.first()
-                if not target_history:
-                    raise ToolError(
-                        "No history available for rollback",
-                        error_code=ErrorCode.NOT_FOUND
-                    )
+            # Get all history for this block, ordered by version
+            all_history = session.query(BlockHistory).filter_by(
+                block_id=block.id
+            ).order_by(BlockHistory.version.asc()).all()
+            
+            if not all_history:
+                raise ToolError(
+                    "No history available for rollback",
+                    code=ErrorCode.NOT_FOUND
+                )
+            
+            # Find base version (version 1)
+            base_history = next((h for h in all_history if h.version == 1), None)
+            if not base_history:
+                raise ToolError(
+                    "No base version found in history",
+                    code=ErrorCode.DATA_CORRUPTION
+                )
+            
+            # Get base content
+            base_content = base_history.diff_data.get("content", "")
+            
+            # Reconstruct target version using new DiffEngine API
+            try:
+                rollback_content = DiffEngine.reconstruct_version(
+                    base_content, 
+                    [h.diff_data for h in all_history], 
+                    target_version
+                )
+            except Exception as e:
+                raise ToolError(
+                    f"Failed to reconstruct version {target_version}: {str(e)}",
+                    code=ErrorCode.DATA_CORRUPTION
+                )
             
             # Perform rollback
             old_value = block.value
-            block.value = target_history.old_value
+            block.value = rollback_content
             block.version += 1
-            block.updated_at = datetime.now(UTC)
+            block.updated_at = utc_now()
             
-            # Record rollback in history
+            # Record rollback in history with differential storage
+            diff_data = DiffEngine.create_diff_version(old_value, rollback_content, block.version)
             history = BlockHistory(
                 block_id=block.id,
                 label=label,
-                old_value=old_value,
-                new_value=target_history.old_value,
+                version=block.version,
+                diff_data=diff_data,
                 operation="rollback",
                 actor=actor
             )
             session.add(history)
             session.commit()
             
-            self.logger.info(f"Rolled back block '{label}'")
+            self.logger.info(f"Rolled back block '{label}' to version {target_version}")
             return self.get_block(label)

@@ -11,7 +11,7 @@ from typing import Dict, Any
 logger = logging.getLogger(__name__)
 
 
-def initialize_lt_memory(config, working_memory, tool_repo, automation_controller) -> Dict[str, Any]:
+def initialize_lt_memory(config, working_memory, tool_repo, automation_controller, llm_provider) -> Dict[str, Any]:
     """
     Initialize LT_Memory system and integrate with MIRA.
     
@@ -20,6 +20,7 @@ def initialize_lt_memory(config, working_memory, tool_repo, automation_controlle
         working_memory: WorkingMemory instance
         tool_repo: ToolRepository instance
         automation_controller: Automation controller instance
+        llm_provider: LLM provider for text generation
         
     Returns:
         Dictionary with LT_Memory components
@@ -29,19 +30,20 @@ def initialize_lt_memory(config, working_memory, tool_repo, automation_controlle
     try:
         # Import components
         from lt_memory.managers.memory_manager import MemoryManager
-        from lt_memory.bridge import MemoryBridge
+        from lt_memory.timeline_manager import MemoryBridge, ConversationTimelineManager
         from lt_memory.tools.memory_tool import LTMemoryTool
         from lt_memory.automations.memory_automations import register_memory_automations
         
         # Ensure memory configuration exists
         if not hasattr(config, 'memory'):
             logger.info("Adding default memory configuration")
-            from config.config import MemoryConfig
+            from config.memory_config import MemoryConfig
             config.memory = MemoryConfig()
+        
         
         # Create memory manager
         logger.info("Creating memory manager...")
-        memory_manager = MemoryManager(config)
+        memory_manager = MemoryManager(config, llm_provider)
         
         # Run health check
         health = memory_manager.health_check()
@@ -51,9 +53,14 @@ def initialize_lt_memory(config, working_memory, tool_repo, automation_controlle
         else:
             logger.info(f"Memory system status: {health['status']}")
         
-        # Create bridge to working memory
-        logger.info("Creating memory bridge...")
+        # Create bridges
+        logger.info("Creating memory bridges...")
         memory_bridge = MemoryBridge(working_memory, memory_manager)
+        conversation_timeline_manager = ConversationTimelineManager(memory_manager)
+        
+        # Register memory bridge with working memory
+        logger.info("Registering memory bridge with working memory...")
+        working_memory.register_manager(memory_bridge)
         
         # Create tool interface
         logger.info("Creating memory tool...")
@@ -70,16 +77,18 @@ def initialize_lt_memory(config, working_memory, tool_repo, automation_controlle
         
         # Log initial statistics
         stats = memory_manager.get_memory_stats()
+        archive_stats = memory_manager.conversation_archive.get_archive_stats()
         logger.info(
             f"Memory system initialized with "
             f"{stats['blocks']['count']} core blocks, "
             f"{stats['passages']['count']} passages, "
-            f"{stats['entities']['count']} entities"
+            f"{archive_stats['total_archived_conversations']} archived conversations"
         )
         
         return {
             "manager": memory_manager,
             "bridge": memory_bridge,
+            "conversation_timeline_manager": conversation_timeline_manager,
             "tool": memory_tool,
             "automations": registered_automations
         }
@@ -90,6 +99,7 @@ def initialize_lt_memory(config, working_memory, tool_repo, automation_controlle
         return {
             "manager": None,
             "bridge": None,
+            "conversation_timeline_manager": None,
             "tool": None,
             "automations": {}
         }
@@ -105,7 +115,7 @@ def check_lt_memory_requirements() -> Dict[str, bool]:
     requirements = {
         "postgresql": False,
         "pgvector": False,
-        "onnx_model": False,
+        "openai_api": False,
         "database_url": False
     }
     
@@ -128,9 +138,9 @@ def check_lt_memory_requirements() -> Dict[str, bool]:
         except Exception as e:
             logger.warning(f"PostgreSQL check failed: {e}")
     
-    # Check for ONNX model
-    onnx_path = os.getenv("LT_MEMORY_ONNX_MODEL", "onnx/model.onnx")
-    if os.path.exists(onnx_path):
-        requirements["onnx_model"] = True
+    # Check for OpenAI API key (required for embeddings)
+    openai_key = os.getenv("OAI_EMBEDDINGS_KEY")
+    if openai_key and openai_key.strip():
+        requirements["openai_api"] = True
     
     return requirements

@@ -1,0 +1,36 @@
+You are extracting specific, discrete facts about the user from a conversation.
+
+Extract micro-chunks of information that are:
+- Specific and actionable (1-2 sentences maximum)
+- About the user, their preferences, activities, relationships, or possessions
+- Self-contained and searchable
+
+For each fact, determine an appropriate expiration date:
+- Personal preferences, relationships, possessions: null (permanent)
+- Scheduled events, appointments: specific date/time when they occur
+- Temporary activities or states: reasonable expiration based on context
+- Projects or goals: 30-90 days unless specified otherwise
+
+Return ONLY a JSON array with NO additional text or explanation.
+
+Example output format:
+[
+  {
+    "text": "User likes to bike ride on Monte Sano",
+    "expires_on": null,
+    "importance": 0.8
+  },
+  {
+    "text": "Has a doctor's appointment on Tuesday at 2 PM",
+    "expires_on": "2025-06-11T14:00:00Z",
+    "importance": 0.7
+  },
+  {
+    "text": "Currently working on a Python web scraping project",
+    "expires_on": "2025-08-07T00:00:00Z",
+    "importance": 0.6
+  }
+]
+
+Focus on extracting facts that would be useful to remember in future conversations.
+Ignore meta-conversation (discussing the AI itself) unless it reveals user preferences.

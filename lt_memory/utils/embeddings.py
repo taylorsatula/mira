@@ -78,30 +78,31 @@ class EmbeddingCache:
                 self.stats["hits"] += 1
                 self.stats["memory_hits"] += 1
                 return self.memory_cache[cache_key].copy()
-        
-        # Check disk cache
-        cache_path = self._get_cache_path(cache_key)
-        if cache_path.exists():
-            try:
-                embedding = np.load(cache_path)
-                
-                # Add to memory cache
-                with self.lock:
+            
+            # Check disk cache while holding lock to prevent race conditions
+            cache_path = self._get_cache_path(cache_key)
+            if cache_path.exists():
+                try:
+                    embedding = np.load(cache_path)
+                    
+                    # Add to memory cache
                     self._add_to_memory_cache(cache_key, embedding)
                     self.stats["hits"] += 1
                     self.stats["disk_hits"] += 1
-                
-                return embedding
-                
-            except Exception as e:
-                logger.warning(f"Failed to load cached embedding: {e}")
-                # Remove corrupted cache file
-                cache_path.unlink(missing_ok=True)
-        
-        with self.lock:
+                    
+                    return embedding.copy()
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to load cached embedding: {e}")
+                    # Remove corrupted cache file
+                    try:
+                        cache_path.unlink(missing_ok=True)
+                    except:
+                        pass  # Ignore cleanup errors
+            
+            # Not found in memory or disk cache
             self.stats["misses"] += 1
-        
-        return None
+            return None
     
     def set(self, text: str, embedding: np.ndarray) -> None:
         """

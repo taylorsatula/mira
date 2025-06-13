@@ -9,23 +9,6 @@ logger = logging.getLogger(__name__)
 # Memory automation definitions
 MEMORY_AUTOMATIONS = [
     {
-        "name": "Hourly Conversation Processing",
-        "description": "Process recent conversations into memory every hour",
-        "type": "simple_task",
-        "execution_mode": "direct",
-        "frequency": "hourly",
-        "enabled": True,
-        "tool_name": "lt_memory",
-        "tool_params": {
-            "operation": "process_recent_conversations",
-            "hours": 1
-        },
-        "metadata": {
-            "category": "memory_processing",
-            "priority": "high"
-        }
-    },
-    {
         "name": "Daily Memory Consolidation",
         "description": "Consolidate and optimize memories every night",
         "type": "sequence",
@@ -33,14 +16,6 @@ MEMORY_AUTOMATIONS = [
         "scheduled_time": "02:00",
         "enabled": True,
         "steps": [
-            {
-                "name": "Process all pending conversations",
-                "execution_mode": "direct",
-                "tool_name": "lt_memory",
-                "tool_params": {
-                    "operation": "process_all_pending"
-                }
-            },
             {
                 "name": "Run memory consolidation",
                 "execution_mode": "direct",
@@ -76,10 +51,9 @@ MEMORY_AUTOMATIONS = [
 1. Search archival memory for patterns in user behavior and preferences
 2. Identify any new insights about the user that should be remembered
 3. Update the 'human' core memory block with significant new information
-4. Look for entities that have become important this week
-5. Check if any old memories can be safely forgotten
+4. Check if any old memories can be safely forgotten
 
-Use the lt_memory tool to search memories, update core memory, and get entity information.
+Use the lt_memory tool to search memories and update core memory.
 Focus on actionable insights that will improve future interactions.""",
         "available_tools": ["lt_memory"],
         "metadata": {
@@ -115,27 +89,33 @@ Focus on actionable insights that will improve future interactions.""",
         }
     },
     {
-        "name": "Entity Relationship Discovery",
-        "description": "Discover new relationships between entities",
-        "type": "simple_task",
-        "execution_mode": "orchestrated",
-        "frequency": "daily",
-        "scheduled_time": "04:00",
-        "enabled": False,  # Disabled by default for performance
-        "task_description": """Analyze recently discovered entities and:
-
-1. Search for entities that frequently appear together
-2. Identify potential relationships between entities
-3. Look for entity disambiguation opportunities (same entity with different names)
-4. Update entity importance based on recent activity
-
-Focus on high-value relationships that provide context for understanding user's world.""",
-        "available_tools": ["lt_memory"],
+        "name": "Weekly Summary Generation",
+        "description": "Generate weekly summaries for conversation archive",
+        "type": "function_call",
+        "frequency": "weekly",
+        "scheduled_time": "sunday 23:30",
+        "enabled": True,
+        "function": "lt_memory.conversation_archive.generate_weekly_summary",
+        "function_params": {},
         "metadata": {
-            "category": "memory_enrichment",
-            "priority": "low"
+            "category": "progressive_summarization",
+            "priority": "medium"
         }
-    }
+    },
+    {
+        "name": "Monthly Summary Generation",
+        "description": "Generate monthly summaries for conversation archive",
+        "type": "function_call",
+        "frequency": "monthly",
+        "scheduled_time": "1 23:45",
+        "enabled": True,
+        "function": "lt_memory.conversation_archive.generate_monthly_summary",
+        "function_params": {},
+        "metadata": {
+            "category": "progressive_summarization",
+            "priority": "medium"
+        }
+    },
 ]
 
 
