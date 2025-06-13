@@ -27,8 +27,8 @@ const elements = {
     responseContent: document.getElementById('response-content'),
     
     // Input
-    inputSection: document.querySelector('.input-section'),
-    inputContainer: document.querySelector('.input-container'),
+    inputSection: document.querySelector('.message-interface'),
+    inputContainer: document.querySelector('.message-composer'),
     messageInput: document.getElementById('message-input'),
     ghostText: document.getElementById('ghost-text'),
     sendButton: document.getElementById('send-button'),
@@ -37,7 +37,7 @@ const elements = {
     workflowPopover: document.getElementById('workflow-popover'),
     workflowSteps: document.getElementById('workflow-steps'),
     queueIndicator: document.getElementById('queue-indicator'),
-    queueCount: document.querySelector('.queue-count'),
+    queueCount: document.querySelector('.retry-count'),
     queuePopover: document.getElementById('queue-popover'),
     queueMessages: document.getElementById('queue-messages'),
     
@@ -56,6 +56,7 @@ function applyTheme(newTheme) {
 
 // Event handlers
 function toggleHistory() {
+    hapticFeedback(100);
     historyOpen = !historyOpen;
     elements.historyDrawer.classList.toggle('open');
     elements.historyToggle.querySelector('img').src = historyOpen ? 'images/icons/read-less.png' : 'images/icons/read-more.png';
@@ -66,6 +67,7 @@ function toggleTheme() {
 }
 
 function toggleCalendar() {
+    hapticFeedback(100);
     const isActive = elements.calendarPopup.classList.contains('active');
     if (!isActive) renderCalendar();
     elements.calendarPopup.classList.toggle('active');
@@ -83,6 +85,7 @@ function isMobile() {
 }
 
 function toggleWorkflowPopover() {
+    hapticFeedback(100);
     const isActive = elements.workflowPopover.classList.contains('active');
     
     if (!isActive && isMobile()) {
@@ -103,6 +106,7 @@ function toggleWorkflowPopover() {
 }
 
 function toggleQueuePopover() {
+    hapticFeedback(100);
     const isActive = elements.queuePopover.classList.contains('active');
     
     if (!isActive) {
@@ -124,6 +128,7 @@ function toggleQueuePopover() {
 }
 
 function openSettings() {
+    hapticFeedback(100);
     elements.settingsModal.classList.remove('hidden');
 }
 
@@ -343,6 +348,8 @@ async function sendMessage(messageText) {
     const message = messageText || elements.messageInput.value.trim();
     if (!message) return;
     
+    hapticFeedback(100);
+    
     // Clear input if message came from text box
     if (!messageText) {
         elements.messageInput.value = '';
@@ -350,6 +357,11 @@ async function sendMessage(messageText) {
     
     elements.sendButton.disabled = true;
     elements.inputContainer.classList.add('firing');
+    
+    // Activate badges when message is sent
+    if (typeof activateBadges === 'function') {
+        activateBadges();
+    }
     
     // If response is active, time the wooshOut to when projectile "hits" 
     if (responseActive) {
@@ -457,6 +469,13 @@ function resetTouch() {
     touchStartY = 0;
     touchStartTime = 0;
     isSwiping = false;
+}
+
+// Haptic feedback utility
+function hapticFeedback(pattern = 100) {
+    if ('vibrate' in navigator) {
+        navigator.vibrate(pattern);
+    }
 }
 
 // Simple Message Queue using localStorage
@@ -573,8 +592,8 @@ function initializeMira() {
     });
     
     // Tab delegation
-    document.querySelector('.tabs').addEventListener('click', (e) => {
-        if (e.target.classList.contains('tab-button')) {
+    document.querySelector('.history-tabs').addEventListener('click', (e) => {
+        if (e.target.classList.contains('history-tab')) {
             switchTab(e.target.dataset.scope);
         }
     });
@@ -627,9 +646,11 @@ function initializeMira() {
     document.querySelectorAll('.popover-close').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
-            const popover = btn.closest('.popover');
-            popover.classList.remove('active');
-            popover.classList.remove('mobile-fullscreen');
+            const popover = btn.closest('.workflow-popover, .retry-popover');
+            if (popover) {
+                popover.classList.remove('active');
+                popover.classList.remove('mobile-fullscreen');
+            }
         });
     });
     

@@ -182,7 +182,10 @@ function prepareAscii() {
         const span = document.createElement('span');
         span.className = 'ascii-char';
         
-        if (Math.random() < 0.2) {
+        // Always place characters at first and last positions
+        if (i === 0 || i === lineLength - 1) {
+            span.textContent = asciiChars[Math.floor(Math.random() * asciiChars.length)];
+        } else if (Math.random() < 0.2) {
             span.textContent = asciiChars[Math.floor(Math.random() * asciiChars.length)];
         } else {
             span.textContent = '\u00A0';
@@ -228,24 +231,33 @@ function despawnAscii(chars) {
     }
 }
 
-// Status badge glow effect
-function addGlow(badge) {
-    const bg = getComputedStyle(badge).backgroundColor;
-    const rgb = bg.match(/\d+/g);
-    if (rgb) {
-        // Start with no glow
-        badge.style.boxShadow = `0 0 0px 0px rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0)`;
-        badge.style.transition = 'box-shadow 0.3s ease-out';
+// Badge activation system
+function activateBadges() {
+    const toolBadge = elements.toolBadge;
+    const workflowBadge = elements.workflowBadge;
+    
+    console.log('Activating badges...', { toolBadge, workflowBadge });
+    
+    if (toolBadge) {
+        // Add active class
+        toolBadge.classList.add('active');
+        console.log('Tool badge classes after adding active:', toolBadge.className);
+        console.log('Tool badge computed box-shadow:', getComputedStyle(toolBadge).boxShadow);
         
-        // Animate to full glow
+        // Remove active class after flicker animation completes
         setTimeout(() => {
-            badge.style.boxShadow = `0 0 9px 2px rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.4)`;
-        }, 10);
+            toolBadge.classList.remove('active');
+            console.log('Removed active from tool badge');
+        }, 3000);
+    }
+    
+    if (workflowBadge) {
+        // Add active class
+        workflowBadge.classList.add('active');
+        console.log('Workflow badge classes after adding active:', workflowBadge.className);
         
-        // Fade out
-        setTimeout(() => {
-            badge.style.transition = 'box-shadow 0.6s ease-out';
-            badge.style.boxShadow = '';
-        }, 300);
+        // Keep active class (workflow badge stays lit)
+        // Note: No timeout to remove 'active' class for workflow badge
     }
 }
+

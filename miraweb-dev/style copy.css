@@ -149,12 +149,8 @@ body                     { background: var(--bg); color: var(--text); font-famil
 /* JavaScript compatibility - original 'active' class */
 /* I kept this here ^^^ because I'm letting sleeping dogs lie. It works fine now and I don't want to adjust it lol */
 .status-badge.active,
-.badge.active,
-.tool-indicator.active,
-.workflow-indicator.active { opacity: 1 !important; animation: none !important; }
+.badge.active            { opacity: 1 !important; animation: none !important; }
 .status-badge:not(.active):not(.badge-active) { animation: fade-complex 3s ease forwards; }
-.tool-indicator:not(.active),
-.workflow-indicator:not(.active) { animation: fade-complex 3s ease forwards; }
 
 /* ========================================
    COMPONENT SYSTEM
@@ -344,12 +340,11 @@ main                     { position: fixed; top: 10vh; bottom: 140px; left: 0; r
 .workflow-step.completed::before { content: '✓ '; color: var(--accent-green); font-weight: bold; }
 .workflow-step.active    { color: var(--text); border-left-color: var(--accent-magenta); background: var(--surface); font-weight: 500; }
 .workflow-step.pending   { opacity: 0.5; }
-.tool-container, .workflow-container, .queue-container { position: relative; }
-.workflow-popover, .retry-popover { position: absolute; bottom: calc(100% + var(--icon-size)); left: 50%; transform: translateX(-50%); background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: var(--input-padding); min-width: 250px; opacity: 0; pointer-events: none; transition: all var(--transition); backdrop-filter: blur(10px); z-index: 50; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); }
-.retry-popover { min-width: 300px; max-width: 400px; }
+.workflow-popover, .retry-popover { position: absolute; bottom: calc(100% + 12px); right: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: var(--input-padding); min-width: 250px; opacity: 0; pointer-events: none; transition: all var(--transition); backdrop-filter: blur(10px); z-index: 50; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); }
 .workflow-popover.active, .retry-popover.active { opacity: 1; pointer-events: auto; }
 .workflow-popover::after, .retry-popover::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 8px solid transparent; border-top-color: var(--bg); }
 .workflow-popover::before, .retry-popover::before { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 9px solid transparent; border-top-color: var(--border); z-index: -1; }
+.retry-popover           { min-width: 300px; max-width: 400px; }
 .retry-header            { font-size: 14px; font-weight: 500; margin-bottom: 12px; color: var(--text-secondary); }
 .queue-header            { font-size: 14px; font-weight: 500; margin-bottom: 12px; color: var(--text-secondary); }
 .queue-message           { background: var(--surface); border: 1px solid var(--border-weak); border-radius: var(--border-radius); padding: 12px; margin-bottom: 8px; transition: all var(--transition); }
@@ -363,11 +358,11 @@ main                     { position: fixed; top: 10vh; bottom: 140px; left: 0; r
 .queue-count             { min-width: 1ch; text-align: center; }
 
 /* Mobile Fullscreen Popover */
-.mobile-fullscreen       { position: fixed !important; inset: 0 !important; width: 100vw !important; height: 100vh !important; transform: none !important; margin: 0 !important; background: var(--bg); border: none; border-radius: 0; padding: calc(60px + var(--safe-area-top)) var(--icon-size) calc(var(--icon-size) + var(--safe-area-bottom)); overflow-y: auto; z-index: 200; min-width: 100vw !important; max-width: 100vw !important; }
+.mobile-fullscreen       { position: fixed !important; inset: 0 !important; width: 100vw !important; height: 100vh !important; transform: none !important; margin: 0 !important; background: var(--bg); border: none; border-radius: 0; padding: calc(60px + var(--safe-area-top)) var(--icon-size) calc(var(--icon-size) + var(--safe-area-bottom)); overflow-y: auto; z-index: 200; }
 .mobile-fullscreen::after, .mobile-fullscreen::before { display: none; }
-.popover-close           { display: none; position: absolute; top: var(--input-padding); right: var(--input-padding); width: 32px; height: 32px; background: transparent; border: 1px solid var(--border); border-radius: 50%; cursor: pointer; align-items: center; justify-content: center; font-size: var(--icon-size); color: var(--text-secondary); transition: all var(--transition); z-index: 201; }
+.popover-close           { display: none; position: absolute; top: var(--input-padding); right: var(--input-padding); width: 32px; height: 32px; background: transparent; border: 1px solid var(--border); border-radius: 50%; cursor: pointer; align-items: center; justify-content: center; font-size: var(--icon-size); color: var(--text-secondary); transition: all var(--transition); }
 .popover-close:hover     { background: var(--surface-hover); border-color: var(--text-faint); }
-.mobile-fullscreen .popover-close { display: flex; top: calc(var(--safe-area-top) + 70px); }
+.mobile-fullscreen .popover-close { display: flex; }
 
 /* ========================================
    MOBILE RESPONSIVE

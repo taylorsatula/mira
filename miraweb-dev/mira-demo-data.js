@@ -116,7 +116,6 @@ function simulateDemoActivity() {
             img.src = tool.icon;
         }
         elements.toolBadge.classList.add('active');
-        addGlow(elements.toolBadge);
         
         setTimeout(() => {
             elements.toolBadge.classList.remove('active');
@@ -131,7 +130,6 @@ function simulateDemoActivity() {
     setTimeout(() => {
         if (elements.workflowBadge) {
             elements.workflowBadge.classList.add('active');
-            addGlow(elements.workflowBadge);
         }
         
         // Populate workflow steps

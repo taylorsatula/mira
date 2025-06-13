@@ -60,14 +60,14 @@
     </div>
 
     <!-- History Sidebar -->
-    <aside id="history-drawer" class="history-sidebar">
+    <aside id="history-drawer">
         <header class="history-header">
-            <input type="text" class="history-search" id="history-search" placeholder="Search conversations..." autocomplete="off">
+            <input type="text" class="input history-search" id="history-search" placeholder="Search conversations..." autocomplete="off">
             
-            <nav class="history-tabs">
-                <button class="history-tab active" data-scope="today">Today</button>
-                <button class="history-tab" data-scope="recent">Recent</button>
-                <button class="history-tab" data-scope="all">All</button>
+            <nav class="tabs">
+                <button class="tab-button active" data-scope="today">Today</button>
+                <button class="tab-button" data-scope="recent">Recent</button>
+                <button class="tab-button" data-scope="all">All</button>
             </nav>
             
             <div class="date-picker-wrapper">
@@ -95,7 +95,7 @@
             <img src="images/icons/read-more.png" alt="Toggle menu" width="24" height="24">
         </button>
 
-        <div class="menu-actions">
+        <div class="menu-icons">
             <button class="btn btn-md" id="theme-toggle" aria-label="Toggle theme">
                 <img src="images/icons/night-mode.png" alt="Dark mode" width="20" height="20" class="theme-icon-light">
                 <img src="images/icons/day-mode.png" alt="Light mode" width="20" height="20" class="theme-icon-dark">
@@ -117,19 +117,19 @@
         </div>
     </main>
 
-    <!-- Message Interface -->
-    <section class="message-interface">
-        <div class="message-status">
+    <!-- Input Section -->
+    <section class="input-section">
+        <div class="status-badges">
             <div class="tool-container">
-                <button class="tool-indicator" id="tool-badge">
+                <div class="badge badge-tool status-badge" id="tool-badge">
                     <img src="images/icons/toolicons/default.png" height="16" width="16">
-                </button>
+                </div>
             </div>
             <div class="workflow-container">
-                <button class="workflow-indicator" id="workflow-badge">
+                <div class="badge badge-workflow status-badge" id="workflow-badge">
                     <img src="images/icons/checklist.png" height="16" width="16">
-                </button>
-                <div class="workflow-popover" id="workflow-popover">
+                </div>
+                <div class="popover workflow-popover" id="workflow-popover">
                     <button class="popover-close" aria-label="Close">×</button>
                     <div id="workflow-steps">
                         <!-- Workflow steps will be populated here -->
@@ -137,13 +137,13 @@
                 </div>
             </div>
             <div class="queue-container">
-                <button class="retry-indicator hidden" id="queue-indicator">
-                    <span class="retry-count">0</span>
-                    <img src="images/icons/cloud-error.png" width="16" height="16" alt="Connection error">
-                </button>
-                <div class="retry-popover" id="queue-popover">
+                <div class="badge badge-queue queue-indicator hidden" id="queue-indicator">
+                    <span class="queue-count">0</span>
+                    <img src="images/icons/cloud-error.png" width="16" height="16" alt="Cloud error">
+                </div>
+                <div class="popover queue-popover" id="queue-popover">
                     <button class="popover-close" aria-label="Close">×</button>
-                    <div class="retry-header">Queued Messages</div>
+                    <div class="queue-header">Queued Messages</div>
                     <div id="queue-messages">
                         <!-- Queued messages will be populated here -->
                     </div>
@@ -151,9 +151,9 @@
             </div>
         </div>
         
-        <div class="message-composer">
+        <div class="input-container">
             <div class="input-wrapper">
-                <input type="text" class="message-input" id="message-input" placeholder="Message MIRA..." autocomplete="off">
+                <input type="text" class="input input-pill" id="message-input" placeholder="Message MIRA..." autocomplete="off">
                 <button class="btn btn-lg btn-send send-button" id="send-button" aria-label="Send message">
                     <img src="images/icons/send.png" alt="Send" width="20" height="20">
                 </button>

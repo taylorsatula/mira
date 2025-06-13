@@ -1,18 +1,4 @@
 <!DOCTYPE html>
-
-
-
-
-
-
-<!-- HELLO BRIAN -->
-<!-- I've been trying to reach you about your car's extended warranty -->
-
-
-
-
-
-
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -47,7 +33,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h2>Settings</h2>
-                <button class="btn btn-sm modal-close" aria-label="Close settings">
+                <button class="btn modal-close" aria-label="Close settings">
                     <svg viewBox="0 0 24 24" width="20" height="20">
                         <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
                     </svg>
@@ -60,14 +46,14 @@
     </div>
 
     <!-- History Sidebar -->
-    <aside id="history-drawer" class="history-sidebar">
+    <aside id="history-drawer">
         <header class="history-header">
             <input type="text" class="history-search" id="history-search" placeholder="Search conversations..." autocomplete="off">
             
-            <nav class="history-tabs">
-                <button class="history-tab active" data-scope="today">Today</button>
-                <button class="history-tab" data-scope="recent">Recent</button>
-                <button class="history-tab" data-scope="all">All</button>
+            <nav class="tabs">
+                <button class="tab-button active" data-scope="today">Today</button>
+                <button class="tab-button" data-scope="recent">Recent</button>
+                <button class="tab-button" data-scope="all">All</button>
             </nav>
             
             <div class="date-picker-wrapper">
@@ -84,23 +70,23 @@
             </div>
         </header>
         
-        <div class="history-content scrollbar" id="history-content">
+        <div class="history-content custom-scrollbar" id="history-content">
             <!-- Conversation history will be populated here -->
         </div>
     </aside>
 
     <!-- Navigation Menu -->
-    <nav class="menu-wrapper" id="nav-wrapper">
-        <button class="btn btn-md" id="history-toggle" aria-label="Toggle history">
+    <nav class="menu-wrapper">
+        <button class="btn" id="history-toggle" aria-label="Toggle history">
             <img src="images/icons/read-more.png" alt="Toggle menu" width="24" height="24">
         </button>
 
-        <div class="menu-actions">
-            <button class="btn btn-md" id="theme-toggle" aria-label="Toggle theme">
+        <div class="menu-icons">
+            <button class="btn" id="theme-toggle" aria-label="Toggle theme">
                 <img src="images/icons/night-mode.png" alt="Dark mode" width="20" height="20" class="theme-icon-light">
                 <img src="images/icons/day-mode.png" alt="Light mode" width="20" height="20" class="theme-icon-dark">
             </button>
-            <button class="btn btn-md" id="settings-button" aria-label="Settings">
+            <button class="btn" id="settings-button" aria-label="Settings">
                 <img src="images/icons/settings.png" alt="Settings" width="20" height="20">
             </button>
         </div>
@@ -110,26 +96,26 @@
     <main>
         <div class="response-container" id="response-container">
             <div class="response-box" id="response-box">
-                <div class="response-content scrollbar" id="response-content">
+                <div class="response-content custom-scrollbar" id="response-content">
                     <!-- MIRA's response will appear here -->
                 </div>
             </div>
         </div>
     </main>
 
-    <!-- Message Interface -->
-    <section class="message-interface">
-        <div class="message-status">
+    <!-- Input Section -->
+    <section class="input-section">
+        <div class="status-badges">
             <div class="tool-container">
-                <button class="tool-indicator" id="tool-badge">
+                <div class="status-badge tool" id="tool-badge">
                     <img src="images/icons/toolicons/default.png" height="16" width="16">
-                </button>
+                </div>
             </div>
             <div class="workflow-container">
-                <button class="workflow-indicator" id="workflow-badge">
+                <div class="status-badge workflow" id="workflow-badge">
                     <img src="images/icons/checklist.png" height="16" width="16">
-                </button>
-                <div class="workflow-popover" id="workflow-popover">
+                </div>
+                <div class="popover workflow-popover" id="workflow-popover">
                     <button class="popover-close" aria-label="Close">×</button>
                     <div id="workflow-steps">
                         <!-- Workflow steps will be populated here -->
@@ -137,13 +123,13 @@
                 </div>
             </div>
             <div class="queue-container">
-                <button class="retry-indicator hidden" id="queue-indicator">
-                    <span class="retry-count">0</span>
-                    <img src="images/icons/cloud-error.png" width="16" height="16" alt="Connection error">
-                </button>
-                <div class="retry-popover" id="queue-popover">
+                <div class="queue-indicator hidden" id="queue-indicator">
+                    <span class="queue-count">0</span>
+                    <img src="images/icons/cloud-error.png" width="16" height="16" alt="Cloud error">
+                </div>
+                <div class="popover queue-popover" id="queue-popover">
                     <button class="popover-close" aria-label="Close">×</button>
-                    <div class="retry-header">Queued Messages</div>
+                    <div class="queue-header">Queued Messages</div>
                     <div id="queue-messages">
                         <!-- Queued messages will be populated here -->
                     </div>
@@ -151,14 +137,14 @@
             </div>
         </div>
         
-        <div class="message-composer">
-            <div class="input-wrapper">
-                <input type="text" class="message-input" id="message-input" placeholder="Message MIRA..." autocomplete="off">
-                <button class="btn btn-lg btn-send send-button" id="send-button" aria-label="Send message">
-                    <img src="images/icons/send.png" alt="Send" width="20" height="20">
-                </button>
-            </div>
+        <div class="input-container">
+            <input type="text" class="input-pill" id="message-input" placeholder="Message MIRA..." autocomplete="off">
             <div class="ghost-text" id="ghost-text"></div>
+            <button class="send-button" id="send-button" aria-label="Send message">
+                <svg viewBox="0 0 24 24">
+                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                </svg>
+            </button>
         </div>
     </section>
 
