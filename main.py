@@ -186,25 +186,29 @@ def initialize_system(args) -> Dict[str, Any]:
         # Import necessary modules
         from tool_relevance_engine import ToolRelevanceEngine
         from tools.workflows.workflow_manager import WorkflowManager
-        from utils.onnx_embeddings import ONNXEmbeddingModel
+        from api.embeddings_provider import EmbeddingsProvider
         
-        # Load ONNX model once to share between components
-        logger.info("Loading shared ONNX embedding model")
-        shared_model = ONNXEmbeddingModel(thread_limit=config.tool_relevance.thread_limit)
-        logger.info("Shared ONNX embedding model loaded successfully")
+        # Create shared embeddings provider for tool classification
+        # Use local BGE for tool classification (fast, efficient)
+        logger.info("Initializing shared embeddings provider for tool classification")
+        shared_embeddings = EmbeddingsProvider(
+            provider_type="local",
+            enable_reranker=False  # No reranker needed for tool classification
+        )
+        logger.info("Shared embeddings provider initialized successfully")
         
-        # Initialize the ToolRelevanceEngine with shared model
-        tool_relevance_engine = ToolRelevanceEngine(tool_repo, shared_model)
+        # Initialize the ToolRelevanceEngine with shared embeddings
+        tool_relevance_engine = ToolRelevanceEngine(tool_repo, shared_embeddings)
         logger.info("Initialized ToolRelevanceEngine for dynamic tool management")
         
         # Initialize working memory system first
         working_memory = WorkingMemory()
         logger.info("Initialized WorkingMemory for centralized system prompt content")
 
-        # Initialize the WorkflowManager with shared model, LLM bridge, and working memory
+        # Initialize the WorkflowManager with shared embeddings, LLM bridge, and working memory
         workflow_manager = WorkflowManager(
             tool_repo,
-            model=shared_model,
+            model=shared_embeddings,
             llm_provider=llm_provider,
             working_memory=working_memory
         )

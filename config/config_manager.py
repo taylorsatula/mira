@@ -21,6 +21,7 @@ from config.config import (
     ConversationConfig,
     ToolConfig,
     SystemConfig,
+    EmbeddingsConfig,
     # Tool-specific configs are now defined in their respective tool files
     DatabaseConfig,
     ToolRelevanceConfig,
@@ -52,6 +53,7 @@ class AppConfig(BaseModel):
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     tools: ToolConfig = Field(default_factory=ToolConfig)
     system: SystemConfig = Field(default_factory=SystemConfig)
+    embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)
     # Tool-specific configs moved to their respective tool files
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     tool_relevance: ToolRelevanceConfig = Field(default_factory=ToolRelevanceConfig)
@@ -334,6 +336,33 @@ class AppConfig(BaseModel):
                 ErrorCode.MISSING_ENV_VAR
             )
         return password
+    
+    @property
+    def embeddings_api_key(self) -> str:
+        """
+        Get the embeddings API key from environment variable.
+        
+        For local providers, returns empty string.
+        For remote providers, looks for OAI_EMBEDDINGS_KEY environment variable.
+        
+        Returns:
+            API key string (empty for local providers)
+            
+        Raises:
+            ConfigError: If the API key is not set for remote providers
+        """
+        # Local providers don't need API keys
+        if self.embeddings.provider == "local":
+            return ""
+            
+        # Remote providers need OAI_EMBEDDINGS_KEY
+        api_key = os.getenv("OAI_EMBEDDINGS_KEY")
+        if not api_key:
+            raise ConfigError(
+                "OpenAI embeddings API key not found. Set OAI_EMBEDDINGS_KEY environment variable.",
+                ErrorCode.MISSING_ENV_VAR
+            )
+        return api_key
     
     def as_dict(self) -> Dict[str, Any]:
         """

@@ -196,6 +196,49 @@ class ToolConfig(BaseModel):
 # Email configuration should be moved to tools/email_tool.py
 
 
+class EmbeddingsConfig(BaseModel):
+    """Embeddings provider configuration settings."""
+    
+    provider: str = Field(
+        default="local",
+        description="Embeddings provider: 'local' for BGE models or 'remote' for OpenAI"
+    )
+    
+    # Local provider settings
+    local_model: str = Field(
+        default="BAAI/bge-large-en-v1.5",
+        description="Local BGE model name"
+    )
+    device: str = Field(
+        default="cpu",
+        description="Device for local models: 'cpu' or 'cuda'"
+    )
+    
+    # Remote provider settings
+    remote_model: str = Field(
+        default="text-embedding-3-small",
+        description="Remote embedding model name"
+    )
+    api_endpoint: str = Field(
+        default="https://api.openai.com/v1/embeddings",
+        description="Remote embeddings API endpoint"
+    )
+    
+    # Common settings
+    batch_size: int = Field(
+        default=32,
+        description="Batch size for embedding generation"
+    )
+    max_retries: int = Field(
+        default=3,
+        description="Maximum retries for API calls"
+    )
+    timeout: int = Field(
+        default=30,
+        description="Timeout for embedding operations"
+    )
+
+
 class DatabaseConfig(BaseModel):
     """Database configuration settings."""
     

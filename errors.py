@@ -118,6 +118,11 @@ class ErrorCode(Enum):
     MEMORY_CONSOLIDATION_ERROR = 858
     MEMORY_BLOCK_ALREADY_EXISTS = 859
 
+    # Embedding/Search errors (86x)
+    EMBEDDING_ERROR = 861
+    RERANKING_ERROR = 862
+    SEARCH_ERROR = 863
+    
     # Uncategorized/system errors (9xx)
     UNKNOWN_ERROR = 901
     NOT_IMPLEMENTED = 902
@@ -125,6 +130,9 @@ class ErrorCode(Enum):
     SYSTEM_OVERLOAD = 904
     MAINTENANCE_MODE = 905
     INITIALIZATION_FAILED = 906
+    DEPENDENCY_ERROR = 907
+    INITIALIZATION_ERROR = 908
+    CONFIGURATION_ERROR = 909
 
 
 class AgentError(Exception):

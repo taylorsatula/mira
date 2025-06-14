@@ -96,14 +96,16 @@ class PassageManager:
             return passage_id
     
     def search_passages(self, query: str, limit: int = 10, 
-                       filters: Optional[Dict] = None) -> List[Dict[str, Any]]:
+                       filters: Optional[Dict] = None,
+                       use_reranker: bool = True) -> List[Dict[str, Any]]:
         """
-        Search passages using vector similarity.
+        Search passages using vector similarity with optional reranking.
         
         Args:
             query: Search query text
             limit: Maximum results to return
             filters: Optional filters (source, min_importance, etc.)
+            use_reranker: Whether to use BGE reranker for better relevance
             
         Returns:
             List of passage results with similarity scores
@@ -126,6 +128,7 @@ class PassageManager:
         
         # Fetch full passage data
         passages = []
+        passage_texts = []  # For reranking
         with self.memory_manager.get_session() as session:
             for passage_id, score in results:
                 passage = session.query(MemoryPassage).filter_by(
@@ -133,7 +136,7 @@ class PassageManager:
                 ).first()
                 
                 if passage:
-                    passages.append({
+                    passage_data = {
                         "id": str(passage.id),
                         "text": passage.text,
                         "score": float(score),
@@ -143,11 +146,38 @@ class PassageManager:
                         "created_at": format_utc_iso(passage.created_at),
                         "access_count": passage.access_count,
                         "metadata": passage.context
-                    })
+                    }
+                    passages.append(passage_data)
+                    passage_texts.append(passage.text)
+        
+        # Apply reranking if enabled and available
+        if use_reranker and passages and hasattr(self.memory_manager.embedding_model, 'rerank'):
+            try:
+                # Rerank the passages
+                reranked_results = self.memory_manager.embedding_model.rerank(
+                    query=query,
+                    passages=passage_texts,
+                    top_k=None  # Rerank all results, don't limit
+                )
+                
+                # Reorder passages based on reranking
+                reranked_passages = []
+                for idx, rerank_score, _ in reranked_results:
+                    passage = passages[idx].copy()
+                    passage["rerank_score"] = rerank_score
+                    # Keep original embedding score for reference
+                    passage["embedding_score"] = passage["score"]
+                    passage["score"] = rerank_score  # Use rerank score as primary
+                    reranked_passages.append(passage)
+                
+                passages = reranked_passages
+                self.logger.info(f"Reranked {len(passages)} passages")
+            except Exception as e:
+                self.logger.warning(f"Reranking failed, using embedding scores: {e}")
         
         self.logger.info(
             f"Found {len(passages)} passages for query "
-            f"(threshold: {search_filters['min_similarity']})"
+            f"(threshold: {search_filters['min_similarity']}, reranked: {use_reranker})"
         )
         return passages
     

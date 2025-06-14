@@ -54,6 +54,27 @@ The script will:
 
 Manual installation instructions are available in `docs/MANUAL_SETUP.md`.
 
+### Embedding Models Configuration
+
+MIRA supports flexible embedding model providers for both tool classification and memory operations:
+
+#### Local BGE Models (Default)
+MIRA uses BAAI BGE (Bidirectional Generative Embeddings) models for efficient local inference:
+- **BGE-large-en-v1.5**: 1024-dimensional embeddings with INT8 quantization for CPU efficiency
+- **BGE-reranker-base**: FP16 precision reranker for improved memory search relevance
+
+These models run entirely on your local machine with ONNX Runtime optimization.
+
+#### Remote OpenAI Embeddings
+For cloud-based embeddings, configure the provider in your environment:
+```bash
+# Set embeddings provider to remote
+export EMBEDDINGS_PROVIDER=remote
+export OAI_EMBEDDINGS_KEY=your-openai-api-key
+```
+
+The system will automatically download and cache BGE models on first use (~1.2GB for base model, ~500MB for reranker).
+
 ## Usage
 
 Start MIRA in interactive mode:
@@ -286,4 +307,13 @@ export AGENT_LOG_LEVEL=DEBUG
 
 ## License
 
-[Your License Here]
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+### Third-Party Licenses
+
+#### BAAI BGE Models
+The BGE (BAAI General Embedding) models are licensed under the MIT License:
+- BGE-large-en-v1.5: https://huggingface.co/BAAI/bge-large-en-v1.5
+- BGE-reranker-base: https://huggingface.co/BAAI/bge-reranker-base
+
+These models are developed by the Beijing Academy of Artificial Intelligence (BAAI) and are freely available for both commercial and non-commercial use under the MIT License.

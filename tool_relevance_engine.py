@@ -91,6 +91,102 @@ class ToolRelevanceEngine:
         # Load the tool examples and prepare classifier
         self._load_tool_examples()
         
+        # Precomputed tool embeddings for matrix operations
+        self.tool_embeddings_matrix = None
+        self.tool_names_order = []
+        
+    def precompute_tool_embeddings_matrix(self):
+        """
+        Precompute tool embeddings matrix for efficient matrix operations.
+        
+        This creates a matrix where each row is a tool's positive centroid embedding,
+        allowing for fast batch similarity calculations.
+        """
+        if not self.classifier.classifiers:
+            self.logger.warning("No classifiers available for precomputing embeddings matrix")
+            return
+            
+        import numpy as np
+        
+        tool_embeddings = []
+        tool_names = []
+        
+        for tool_name, classifier_data in self.classifier.classifiers.items():
+            positive_centroid = classifier_data["positive_centroid"]
+            tool_embeddings.append(positive_centroid)
+            tool_names.append(tool_name)
+        
+        # Create matrix (tools x embedding_dim)
+        self.tool_embeddings_matrix = np.array(tool_embeddings)
+        self.tool_names_order = tool_names
+        
+        self.logger.info(f"Precomputed embeddings matrix for {len(tool_names)} tools")
+    
+    def classify_with_matrix_operations(self, message: str) -> List[Tuple[str, float]]:
+        """
+        Classify a message using efficient matrix operations.
+        
+        This method uses precomputed tool embeddings matrix for fast batch similarity
+        calculations instead of individual dot products.
+        
+        Args:
+            message: User message to classify
+            
+        Returns:
+            List of (tool_name, confidence_score) tuples
+        """
+        if self.tool_embeddings_matrix is None:
+            # Fall back to regular classification
+            return self.classifier.classify_message_with_scores(message)
+            
+        import numpy as np
+        
+        try:
+            # Compute message embedding
+            message_embedding = self.classifier._compute_embedding(message)
+            if message_embedding is None:
+                self.logger.error("Failed to compute message embedding")
+                return []
+            
+            # Normalize message embedding
+            message_embedding = np.array(message_embedding)
+            message_norm = np.linalg.norm(message_embedding)
+            if message_norm > 0:
+                message_embedding = message_embedding / message_norm
+            
+            # Batch similarity calculation using matrix multiplication
+            # Shape: (n_tools,) = (n_tools, embedding_dim) @ (embedding_dim,)
+            similarities = self.tool_embeddings_matrix @ message_embedding
+            
+            # Get thresholds for all tools
+            thresholds = np.array([
+                self.classifier.classifiers[tool_name]["threshold"]
+                for tool_name in self.tool_names_order
+            ])
+            
+            # Calculate distances and confidence scores
+            distances = 1.0 - similarities
+            
+            # Vectorized confidence calculation
+            tool_scores = []
+            for i, (tool_name, distance, threshold) in enumerate(
+                zip(self.tool_names_order, distances, thresholds)
+            ):
+                if distance <= threshold:
+                    # Same confidence calculation as before
+                    confidence = 1.0 - (distance / (threshold * 2))
+                    confidence = max(0.5, min(1.0, confidence))
+                    tool_scores.append((tool_name, confidence))
+            
+            # Sort by confidence score
+            tool_scores.sort(key=lambda x: x[1], reverse=True)
+            return tool_scores
+            
+        except Exception as e:
+            self.logger.error(f"Error in matrix classification: {e}")
+            # Fall back to regular classification
+            return self.classifier.classify_message_with_scores(message)
+        
     def _load_tool_examples(self) -> None:
         """
         Load tool examples from classifier_examples.json or autogen_classifier_examples.json files 
@@ -280,6 +376,8 @@ class ToolRelevanceEngine:
             # Train classifier if we have examples
             if all_examples:
                 self.classifier.train_classifier(all_examples, force_retrain=needs_retrain)
+                # Precompute tool embeddings matrix after training
+                self.precompute_tool_embeddings_matrix()
             else:
                 self.logger.warning("No tool examples found for training classifier")
         
@@ -464,8 +562,8 @@ class ToolRelevanceEngine:
                 truncated_contextual = contextual_message[:75] + "..." if len(contextual_message) > 75 else contextual_message
                 self.logger.info(f"Using contextual message: {truncated_contextual}")
             
-            # Use the classifier as before to determine relevant tools
-            relevant_tools = self.classifier.classify_message_with_scores(contextual_message)
+            # Use matrix operations for efficient classification
+            relevant_tools = self.classify_with_matrix_operations(contextual_message)
             
             if not relevant_tools:
                 self.logger.info("No relevant tools identified for this message")

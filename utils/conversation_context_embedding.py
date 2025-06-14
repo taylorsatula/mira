@@ -2,10 +2,10 @@
 Standalone conversation context embedding utility for TOOL CLASSIFICATION ONLY.
 
 Provides shared functionality for building conversation context strings
-and caching embeddings for use by the tool relevance engine. Uses ONNX 
-embeddings (384-dim) for fast, local processing.
+and caching embeddings for use by the tool relevance engine. Uses BGE 
+embeddings (1024-dim) via the unified embeddings provider.
 
-NOTE: Memory operations use their own OpenAI embeddings (1024-dim) for higher quality.
+NOTE: Memory operations use the same embeddings provider with optional reranking.
 Each system applies its own context building and weighting logic.
 """
 
@@ -14,7 +14,7 @@ import hashlib
 from typing import List, Optional, Any, Dict
 from collections import deque
 
-from utils.onnx_embeddings import ONNXEmbeddingModel
+from api.embeddings_provider import EmbeddingsProvider
 
 logger = logging.getLogger(__name__)
 
@@ -24,18 +24,19 @@ class ConversationContextEmbedding:
     Standalone utility for caching conversation context embeddings for TOOL CLASSIFICATION.
     
     This class provides embedding generation and caching for arbitrary
-    context strings using ONNX embeddings (384-dim) for fast, local processing.
+    context strings using BGE embeddings (1024-dim) via the unified provider.
     Used exclusively by the tool relevance engine.
     
-    NOTE: Memory operations use separate OpenAI embeddings for higher quality.
+    NOTE: Memory operations use the same embeddings provider with optional reranking.
     """
     
-    def __init__(self, cache_size: int = 100):
+    def __init__(self, cache_size: int = 100, embeddings_provider: Optional[EmbeddingsProvider] = None):
         """
         Initialize conversation context embedding utility.
         
         Args:
             cache_size: Maximum number of context embeddings to cache
+            embeddings_provider: Optional embeddings provider instance (creates one if not provided)
         """
         self.cache_size = cache_size
         self.logger = logging.getLogger(__name__)
@@ -46,8 +47,15 @@ class ConversationContextEmbedding:
         # Embedding cache for context strings
         self.context_cache: Dict[str, Any] = {}
         
-        # ONNX embeddings instance
-        self.embeddings = ONNXEmbeddingModel()
+        # Embeddings provider instance
+        if embeddings_provider is not None:
+            self.embeddings = embeddings_provider
+        else:
+            # Create a local BGE provider for tool classification
+            self.embeddings = EmbeddingsProvider(
+                provider_type="local",
+                enable_reranker=False  # No reranker needed for tool classification
+            )
         
     def add_message(self, role: str, content: str) -> None:
         """

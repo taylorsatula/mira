@@ -55,9 +55,10 @@ class MemoryManager:
         # Create all tables
         Base.metadata.create_all(self.engine)
         
-        # Initialize embedding model (no caching - contexts are always unique)
-        self.embedding_model = OpenAIEmbeddingModel(
-            model="text-embedding-3-small"  # High-quality, case-sensitive embeddings
+        # Initialize embedding model using the unified provider
+        from api.embeddings_provider import EmbeddingsProvider
+        self.embedding_model = EmbeddingsProvider(
+            enable_reranker=True  # Enable reranker for memory search
         )
         
         # Initialize vector store
