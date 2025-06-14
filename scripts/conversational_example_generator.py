@@ -7,6 +7,14 @@ Takes any Python tool file as input and produces realistic human queries that wo
 
 Usage:
     python conversational_example_generator.py <tool_file_path> [--count 50] [--output output.json]
+    
+    btw, If you're running MIRA offline on an airgapped system you're welcome to use a large model like Hermes3:405b
+    or something to generate the examples (don't forget to turn off extended thinking) BUT this script is 
+    hardcoded for a reason. Opus 4 makes CRAZY HIGH-QUALITY training data. Please consider creating the classifier examples
+    on a computer connected to the internet and moving them over on a jumpdrive or something.       
+    
+    Opus 4 coupled to Sonnet capture nuance I haven't been able to find anywhere else bar none. 
+    Hell, they're better than me handwriting them. What a time to be alive lol.
 """
 
 import json
@@ -17,11 +25,110 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# ============================================================================
+# STANDALONE MODE ADDON - For use outside MIRA directory
+# ============================================================================
+# Uncomment the section below and comment out the MIRA imports to run this
+# script independently without any MIRA dependencies.
+#
+# REQUIREMENTS: pip install requests
+# SETUP: Set ANTHROPIC_API_KEY environment variable
+#
+# INSTRUCTIONS TO ENABLE STANDALONE MODE:
+# 1. Uncomment everything between "START STANDALONE MODE" and "END STANDALONE MODE" below
+# 2. Comment out everything between "START MIRA INTEGRATED MODE" and "END MIRA INTEGRATED MODE"
+# 3. You're done! Script will use direct Anthropic API calls
+#
+# START STANDALONE MODE - UNCOMMENT BLOCK BELOW TO USE
+"""
+import requests
+from typing import Dict, Any, List, Optional
+from contextlib import contextmanager
+
+class StandaloneLLMProvider:
+    '''Minimal LLM provider for standalone operation without MIRA dependencies'''
+    def __init__(self, provider_type=None, api_endpoint=None, model=None, 
+                 temperature=0.7, max_tokens=4000, api_key=None, **kwargs):
+        self.model = model
+        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        
+        if not self.api_key:
+            raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
+    
+    def generate_response(self, messages, extra_body=None, **kwargs):
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens
+        }
+        
+        # Add extended thinking and other Anthropic-specific features
+        if extra_body:
+            payload.update(extra_body)
+        
+        try:
+            response = requests.post(
+                "https://api.anthropic.com/v1/chat/completions", 
+                headers=headers, 
+                json=payload, 
+                timeout=120
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            raise StandaloneError(f"API request failed: {e}")
+    
+    def extract_text_content(self, response):
+        try:
+            return response["choices"][0]["message"]["content"]
+        except (KeyError, IndexError) as e:
+            raise StandaloneError(f"Failed to extract content from response: {e}")
+
+class StandaloneError(Exception):
+    '''Simple error class for standalone mode'''
+    pass
+
+class StandaloneErrorCode:
+    API_RESPONSE_ERROR = "API_RESPONSE_ERROR"
+
+@contextmanager
+def standalone_error_context(component_name=None, operation=None, error_class=None, 
+                           error_code=None, logger=None):
+    '''Simple error context manager for standalone mode'''
+    try:
+        yield
+    except Exception as e:
+        if logger:
+            logger.error(f"Error in {operation}: {e}")
+        raise StandaloneError(f"Error in {operation}: {e}")
+
+# Override the imports for standalone mode
+LLMProvider = StandaloneLLMProvider
+APIError = StandaloneError
+ErrorCode = StandaloneErrorCode()
+error_context = standalone_error_context
+"""
+# END STANDALONE MODE
+
+# ============================================================================
+# START MIRA INTEGRATED MODE - Comment out this entire section for standalone
+# ============================================================================
+
 # Add the parent directory to the path so we can import from the project
 sys.path.append(str(Path(__file__).parent.parent))
 
 from api.llm_provider import LLMProvider
 from errors import APIError, ErrorCode, error_context
+
+# END MIRA INTEGRATED MODE
 
 
 # Configure logging
