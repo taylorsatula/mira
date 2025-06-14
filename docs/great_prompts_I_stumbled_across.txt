@@ -1,0 +1,12 @@
+
+
+
+===========================================
+
+I need you to create a comprehensive natural language prompt that I can give to another AI system to accomplish a specific technical task. The prompt should be written in clear, conversational language that provides complete context and actionable instructions.
+Please structure the prompt to include: the current state and what needs to change, the specific technical requirements and constraints, the desired end result and user experience, any important implementation details or gotchas, and what success looks like. Make sure the prompt is detailed enough that the receiving AI system can understand both the technical specifics and the broader context of why this change is being made.
+Write it as if you're explaining the task to a knowledgeable colleague who needs to understand not just what to do, but why it matters and how it fits into the bigger picture. Include enough technical detail to be actionable while keeping the language natural and easy to follow.
+The task I need a prompt for is: [describe your specific task here]
+
+===========================================
+
