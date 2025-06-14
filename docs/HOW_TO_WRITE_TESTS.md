@@ -63,7 +63,7 @@
 # Test 1: Write and reflect
 def test_response_structure_is_consistent(self, real_provider):
     """REAL BUG THIS CATCHES: If _standardize_response() fails to convert
-    the Ollama response format correctly, breaking downstream code."""
+    the local model response format correctly, breaking downstream code."""
     # Use REAL LLM call, test OUR standardization
     
 # Reflection: "Am I testing my code or the LLM?" → Testing my code ✓

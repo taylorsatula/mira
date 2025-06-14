@@ -15,19 +15,19 @@ class ApiConfig(BaseModel):
 
     # Provider configuration
     provider: str = Field(
-        default="remote",
-        description="LLM provider type: 'local' for local servers or 'remote' for cloud APIs"
+        default="local",
+        description="LLM provider type: 'local' for local servers (Ollama) or 'remote' for cloud APIs"
     )
     
     # API endpoint configuration
     api_endpoint: str = Field(
-        default="https://api-inference.huggingface.co/models/NousResearch/Hermes-3-Llama-3.1-8B/v1/chat/completions",
+        default="http://localhost:11434/v1/chat/completions",
         description="Full API endpoint URL including the path (e.g., 'https://api-inference.huggingface.co/models/MODEL_NAME/v1/chat/completions' for Hugging Face)"
     )
     
     # Model configuration
     model: str = Field(
-        default="NousResearch/Hermes-3-Llama-3.1-8B",
+        default="Hermes3:8b",
         description="Model to use for API requests (e.g., 'gpt-4', 'NousResearch/Hermes-3-Llama-3.1-8B')"
     )
 

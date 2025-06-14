@@ -188,7 +188,7 @@ def create_app() -> FastAPI:
             
             # If using Ollama, include queue stats
             queue_stats = {}
-            if provider.lower() == 'ollama' and request_queue:
+            if provider.lower() == 'local' and request_queue:
                 try:
                     queue_stats = request_queue.get_queue_stats()
                 except Exception as e:

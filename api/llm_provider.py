@@ -2,7 +2,7 @@
 Unified LLM provider for OpenAI-compatible APIs.
 
 This module provides a single interface for interacting with any OpenAI-compatible
-LLM API, whether local (like Ollama) or remote (like OpenAI, Anthropic via proxy, etc).
+LLM API, whether local (like Ollama) or remote (like OpenAI, Anthropic via proxy, Lamda Labs, etc).
 """
 import json
 import logging

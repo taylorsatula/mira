@@ -111,12 +111,6 @@ class AppConfig(BaseModel):
                     )
                 raise
         
-        # Load from environment variables
-        env_config = cls._load_from_env()
-        for section, settings in env_config.items():
-            if section not in config_data:
-                config_data[section] = {}
-            config_data[section].update(settings)
         
         # Create the config instance (uses default values for missing fields)
         try:
