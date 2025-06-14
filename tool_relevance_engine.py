@@ -225,7 +225,7 @@ class ToolRelevanceEngine:
                 examples_file = os.path.join(tool_dir, "classifier_examples.json")
                 autogen_examples_file = os.path.join(tool_dir, "autogen_classifier_examples.json")
                 
-                # First case: classifier_examples.json exists - use it
+                # First case: classifier_examples.json exists - use it, but warn
                 if os.path.exists(examples_file):
                     try:
                         # Get file hash
@@ -236,7 +236,11 @@ class ToolRelevanceEngine:
                         with open(examples_file, 'r') as f:
                             examples = json.load(f)
                         
-                        self.logger.info(f"Loaded {len(examples)} examples for {tool_name}")
+                        self.logger.warning(
+                            f"Using custom examples for {tool_name}. "
+                            "Custom examples may not be as comprehensive as auto-generated ones."
+                        )
+                        self.logger.info(f"Loaded {len(examples)} custom examples for {tool_name}")
                         
                         # Store examples
                         self.tool_examples[tool_name] = {
@@ -247,7 +251,7 @@ class ToolRelevanceEngine:
                     except Exception as e:
                         self.logger.error(f"Error loading examples from {examples_file}: {e}")
                 
-                # Second case: autogen_classifier_examples.json exists - use it, but warn
+                # Second case: autogen_classifier_examples.json exists - use it
                 elif os.path.exists(autogen_examples_file):
                     try:
                         # Get file hash
@@ -260,10 +264,6 @@ class ToolRelevanceEngine:
                         with open(autogen_examples_file, 'r') as f:
                             examples = json.load(f)
                         
-                        self.logger.warning(
-                            f"Using auto-generated examples for {tool_name}. "
-                            "For better results, consider creating a custom classifier_examples.json file."
-                        )
                         self.logger.info(f"Loaded {len(examples)} auto-generated examples for {tool_name}")
                         
                         # Store examples
@@ -394,13 +394,9 @@ class ToolRelevanceEngine:
         self.logger.info(f"Generating synthetic examples for {len(tool_names)} tools")
         
         try:
-            # Defer importing SyntheticDataGenerator until needed
+            # Defer importing ConversationalExampleGenerator until needed
             # to save startup time when generation isn't necessary
-            from tools.standalone_scripts.synthetic_data_generator import SyntheticDataGenerator
-            
-            # Use the shared embedding model
-            embedding_model = self.classifier.model
-            self.logger.info("Using shared embedding model for synthetic data generation")
+            from scripts.conversational_example_generator import ConversationalExampleGenerator
             
             # Get the tools directory from the config
             # Default to 'tools' if not explicitly defined
@@ -408,70 +404,36 @@ class ToolRelevanceEngine:
             if hasattr(config, 'paths') and hasattr(config.paths, 'tools_dir'):
                 tools_dir = config.paths.tools_dir
             
-            # Initialize generator with config settings
-            try:
-                # Get API key from config if available
-                api_key = None
-                if hasattr(config, 'api_key'):
-                    api_key = config.api_key
+            # Initialize generator
+            generator = ConversationalExampleGenerator()
+            
+            for tool_name in tool_names:
+                try:
+                    # Determine the tool file path
+                    tool_file_path = os.path.join(tools_dir, f"{tool_name}.py")
                     
-                # Get models from config if available
-                analysis_model = None
-                generation_model = None
-                
-                if hasattr(config, 'tools'):
-                    if hasattr(config.tools, 'synthetic_data_analysis_model'):
-                        analysis_model = config.tools.synthetic_data_analysis_model
-                    if hasattr(config.tools, 'synthetic_data_generation_model'):
-                        generation_model = config.tools.synthetic_data_generation_model
-                
-                # Create generator instance
-                generator = SyntheticDataGenerator( #ANNOTATION these values should be in the ToolRelevanceEngine config
-                    api_key=api_key,
-                    analysis_model=analysis_model,  # Sonnet for code analysis
-                    generation_model=generation_model,  # Haiku for example generation
-                    examples_per_temp=0,  # Zero indicates value will be determined by the algorithm at runtime
-                    temperatures=[0.2, 0.8],  # More effective temperature range
-                    similarity_threshold=0.97,  # More aggressive deduplication
-                    skip_llm_review=False,  # LLM review is required for quality control
-                    embedding_model=embedding_model  # Pass the shared embedding model if available
-                )
-                
-                for tool_name in tool_names:
-                    try:
-                        # Determine the tool file path
-                        tool_file_path = os.path.join(tools_dir, f"{tool_name}.py")
-                        
-                        # Check if the tool file exists
-                        if not os.path.exists(tool_file_path):
-                            self.logger.warning(f"Tool file {tool_file_path} not found, skipping example generation")
-                            continue
-                        
-                        # Determine output path
-                        tool_data_dir = os.path.join(self.tools_data_dir, tool_name)
-                        os.makedirs(tool_data_dir, exist_ok=True)
-                        output_path = os.path.join(tool_data_dir, "autogen_classifier_examples.json")
-                        
-                        self.logger.info(f"Generating examples for {tool_name}, output to {output_path}")
-                        
-                        # Generate examples (with analysis saved automatically)
-                        examples = generator.generate_for_tool(
-                            tool_path=tool_file_path,
-                            save_output=True  # Save both the analysis and examples
-                        )
-                        
-                        # If output path is different from the default, save to that path as well
-                        default_path = os.path.join(generator.config.data_dir, "tools", tool_name, "autogen_classifier_examples.json")
-                        if default_path != output_path:
-                            with open(output_path, 'w') as f:
-                                json.dump(examples, f, indent=2)
-                        
-                        self.logger.info(f"Generated {len(examples)} examples for {tool_name}")
-                    except Exception as tool_err:
-                        self.logger.error(f"Error processing tool {tool_name} for example generation: {tool_err}")
-                
-            except Exception as gen_err:
-                self.logger.error(f"Error initializing generator: {gen_err}")
+                    # Check if the tool file exists
+                    if not os.path.exists(tool_file_path):
+                        self.logger.warning(f"Tool file {tool_file_path} not found, skipping example generation")
+                        continue
+                    
+                    # Determine output path
+                    tool_data_dir = os.path.join(self.tools_data_dir, tool_name)
+                    os.makedirs(tool_data_dir, exist_ok=True)
+                    output_path = os.path.join(tool_data_dir, "autogen_classifier_examples.json")
+                    
+                    self.logger.info(f"Generating examples for {tool_name}, output to {output_path}")
+                    
+                    # Generate examples using the new generator
+                    examples = generator.generate(
+                        tool_path=tool_file_path,
+                        count=50,  # Default number of examples
+                        output_path=output_path
+                    )
+                    
+                    self.logger.info(f"Generated {len(examples)} examples for {tool_name}")
+                except Exception as tool_err:
+                    self.logger.error(f"Error processing tool {tool_name} for example generation: {tool_err}")
         
         except Exception as e:
             self.logger.error(f"Error generating synthetic examples: {e}")

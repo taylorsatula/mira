@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Add the parent directory to the path so we can import from the project
-sys.path.append(str(Path(__file__).parent.parent.parent))
+sys.path.append(str(Path(__file__).parent.parent))
 
 from api.llm_provider import LLMProvider
 from errors import APIError, ErrorCode, error_context
@@ -50,9 +50,26 @@ class ConversationalExampleGenerator:
     """
     
     def __init__(self):
-        """Initialize the generator with LLM bridge."""
-        self.llm = LLMProvider()
-        logger.info("Conversational Example Generator initialized")
+        """Initialize the generator with LLM providers."""
+        # Use Sonnet for analysis tasks (efficient code comprehension)
+        self.analysis_llm = LLMProvider(
+            provider_type="remote",
+            api_endpoint="https://api.anthropic.com/v1/chat/completions",
+            model="claude-sonnet-4-20250514",
+            api_key=os.getenv("ANTHROPIC_API_KEY")
+        )
+        
+        # Use Opus for generation tasks (superior creative reasoning for natural conversations)
+        self.generation_llm = LLMProvider(
+            provider_type="remote",
+            api_endpoint="https://api.anthropic.com/v1/chat/completions",
+            model="claude-opus-4-20250514",
+            temperature=1.0,  # Required for extended thinking
+            max_tokens=8000,  # Higher limit for generating many examples
+            api_key=os.getenv("ANTHROPIC_API_KEY")
+        )
+        
+        logger.info("Conversational Example Generator initialized with Sonnet for analysis and Opus for generation")
     
     def analyze_tool(self, tool_path: str) -> ToolAnalysis:
         """
@@ -74,7 +91,7 @@ class ConversationalExampleGenerator:
         analysis_prompt = """
         Analyze this Python tool source code and extract key information about its functionality.
         
-        IMPORTANT: Respond with ONLY valid JSON. Do not include any text before or after the JSON.
+        CRITICAL: You must respond with ONLY a valid JSON object. No markdown, no code blocks, no explanations, no additional text whatsoever. Just the raw JSON.
         
         Required JSON structure:
         {
@@ -92,7 +109,7 @@ class ConversationalExampleGenerator:
         3. Natural language patterns people would use
         4. Different types of users (busy professionals, casual users, etc.)
         
-        Return ONLY the JSON object, no additional text.
+        Your response must start with { and end with }. No other text allowed.
         
         Tool source code:
         """
@@ -109,8 +126,8 @@ class ConversationalExampleGenerator:
                 error_code=ErrorCode.API_RESPONSE_ERROR,
                 logger=logger
             ):
-                response = self.llm.generate_response(messages)
-                response_text = self.llm.extract_text_content(response)
+                response = self.analysis_llm.generate_response(messages)
+                response_text = self.analysis_llm.extract_text_content(response)
                 
                 logger.debug(f"LLM response text: {response_text[:500]}...")
                 
@@ -193,7 +210,7 @@ class ConversationalExampleGenerator:
         - Different user contexts (work, personal, family)
         - Mixed specificity (vague requests vs specific needs)
 
-        IMPORTANT: Respond with ONLY valid JSON. Do not include any text before or after the JSON array.
+        CRITICAL: You must respond with ONLY a valid JSON array. No markdown, no code blocks, no explanations, no additional text whatsoever. Just the raw JSON array.
 
         Required format - JSON array only:
         [
@@ -201,7 +218,7 @@ class ConversationalExampleGenerator:
             {{"tool_name": "{tool_analysis.tool_name}", "query": "I need to check if my doctor replied about the test results"}}
         ]
 
-        Generate exactly {count} examples with natural variety. Return ONLY the JSON array.
+        Generate exactly {count} examples with natural variety. Your response must start with [ and end with ]. No other text allowed.
         """
         
         messages = [
@@ -216,8 +233,11 @@ class ConversationalExampleGenerator:
                 error_code=ErrorCode.API_RESPONSE_ERROR,
                 logger=logger
             ):
-                response = self.llm.generate_response(messages, max_tokens=8000)
-                response_text = self.llm.extract_text_content(response)
+                response = self.generation_llm.generate_response(
+                    messages,
+                    extra_body={"thinking": {"type": "enabled", "budget_tokens": 2500}}
+                )
+                response_text = self.generation_llm.extract_text_content(response)
                 
                 # Parse the JSON response
                 examples = json.loads(response_text)
@@ -310,8 +330,8 @@ class ConversationalExampleGenerator:
         ]
         
         try:
-            response = self.llm.generate_response(messages)
-            response_text = self.llm.extract_text_content(response)
+            response = self.analysis_llm.generate_response(messages)
+            response_text = self.analysis_llm.extract_text_content(response)
             
             # Parse the validation results
             good_indices = json.loads(response_text)

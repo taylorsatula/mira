@@ -94,6 +94,7 @@ class LLMProvider:
         stream: bool = False,
         callback: Optional[Callable] = None,
         dynamic_content: Optional[str] = None,
+        extra_body: Optional[Dict[str, Any]] = None, # extra_body is used when connecting to Anthropic API and using extended thinking
         **kwargs  # Ignore provider-specific parameters
     ) -> Dict[str, Any]:
         """
@@ -117,7 +118,7 @@ class LLMProvider:
         """
         # Build request body
         request_body = self._build_request_body(
-            messages, system_prompt, temperature, max_tokens, tools, dynamic_content
+            messages, system_prompt, temperature, max_tokens, tools, dynamic_content, extra_body
         )
         
         # Make the request with thread safety
@@ -141,7 +142,8 @@ class LLMProvider:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
-        dynamic_content: Optional[str] = None
+        dynamic_content: Optional[str] = None,
+        extra_body: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Build the OpenAI-format request body."""
         # Format messages
@@ -174,6 +176,10 @@ class LLMProvider:
         # Add tools if provided
         if tools:
             request_body["tools"] = tools
+        
+        # Add extra_body parameters if provided
+        if extra_body:
+            request_body.update(extra_body)
             
         return request_body
     
