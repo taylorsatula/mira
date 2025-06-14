@@ -65,6 +65,29 @@ MIRA uses BAAI BGE (Bidirectional Generative Embeddings) models for efficient lo
 
 These models run entirely on your local machine with ONNX Runtime optimization.
 
+#### Unified Embeddings Architecture
+MIRA implements a novel unified embeddings approach that optimizes both performance and relevance:
+
+**Shared Infrastructure with Specialized Usage:**
+- Both tool relevance and memory search use the same `EmbeddingsProvider` infrastructure
+- Tool relevance embeds the current user message for immediate tool classification
+- Memory search embeds weighted conversation context from recent messages for historical relevance
+- Each system optimizes what text it embeds for its specific use case
+
+**Differentiated Processing for Optimal Results:**
+- Tool relevance uses efficient matrix operations to compare against all tool embeddings and returns a top set
+- Memory search applies the same embedding model but includes an additional reranking step to ensure only truly relevant memories are surfaced
+- This dual approach balances speed for tool selection with precision for memory retrieval
+
+**Advantages over Traditional Approaches:**
+- **Performance**: Eliminates redundant embedding infrastructure and model loading
+- **Consistency**: Ensures consistent embedding quality across all system components  
+- **Efficiency**: Shared caching and optimization reduces computational overhead
+- **Contextual Precision**: Tool relevance focuses on immediate needs while memory search considers conversational flow
+- **Scalability**: Single embedding provider scales to support additional AI subsystems
+
+This architecture enables MIRA to make intelligent decisions about both tool activation and memory retrieval while maintaining optimal performance through shared resources.
+
 #### Remote OpenAI Embeddings
 For cloud-based embeddings, configure the provider in your environment:
 ```bash
