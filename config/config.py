@@ -5,6 +5,7 @@ These are the core schema models used throughout the application to
 ensure type safety and validation of configuration values.
 """
 
+import os
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 from config.memory_config import MemoryConfig
@@ -14,20 +15,20 @@ class ApiConfig(BaseModel):
 
     # Provider configuration
     provider: str = Field(
-        default="local",
+        default="remote",
         description="LLM provider type: 'local' for local servers or 'remote' for cloud APIs"
     )
     
     # API endpoint configuration
     api_endpoint: str = Field(
-        default="http://localhost:11434/v1/chat/completions",
-        description="Full API endpoint URL including the path (e.g., 'http://localhost:11434/v1/chat/completions' for local Ollama)"
+        default="https://api-inference.huggingface.co/models/NousResearch/Hermes-3-Llama-3.1-8B/v1/chat/completions",
+        description="Full API endpoint URL including the path (e.g., 'https://api-inference.huggingface.co/models/MODEL_NAME/v1/chat/completions' for Hugging Face)"
     )
     
     # Model configuration
     model: str = Field(
-        default="hermes3:8b",
-        description="Model to use for API requests (e.g., 'gpt-4', 'llama2', 'mixtral')"
+        default="NousResearch/Hermes-3-Llama-3.1-8B",
+        description="Model to use for API requests (e.g., 'gpt-4', 'NousResearch/Hermes-3-Llama-3.1-8B')"
     )
 
     # Common settings for all providers
@@ -199,8 +200,11 @@ class DatabaseConfig(BaseModel):
     """Database configuration settings."""
     
     uri: str = Field(
-        default="sqlite:///data/app.db",
-        description="Database connection URI"
+        default_factory=lambda: os.getenv(
+            "DATABASE_URL",
+            "postgresql://mira:secure_password@localhost/mira_tools"
+        ),
+        description="Database connection URI (PostgreSQL)"
     )
     echo: bool = Field(
         default=False,

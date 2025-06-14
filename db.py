@@ -2,8 +2,7 @@
 Database module for tool data storage.
 
 This module provides a unified interface for database operations using SQLAlchemy ORM.
-It focuses on storing tool-specific data in SQLite while maintaining compatibility
-with the existing JSON-based storage for conversations and messages.
+It focuses on storing tool-specific data in PostgreSQL with multi-user support.
 """
 
 import json
@@ -13,9 +12,10 @@ from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, TypeVar, Union, Generic
 
-from sqlalchemy import create_engine, Column, String, Float, DateTime, JSON, inspect
+from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, Index, Boolean
+from sqlalchemy import text as sql_text  # Rename to avoid shadowing by column names
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Session, sessionmaker, declarative_base
-from sqlalchemy.sql import text
 
 from errors import ToolError, ErrorCode, error_context
 from config import config
@@ -41,6 +41,7 @@ class Customer(Base):
 
     # Primary key
     id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False, index=True)  # Multi-user support
     
     # Basic contact info
     given_name = Column(String)
@@ -60,14 +61,22 @@ class Customer(Base):
     # Geocoding data
     latitude = Column(Float)
     longitude = Column(Float)
-    geocoded_at = Column(DateTime)
+    geocoded_at = Column(DateTime(timezone=True))
     
     # Additional data stored as JSON
-    additional_data = Column(JSON)
+    additional_data = Column(JSONB)
     
     # Metadata
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
-    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+    created_at = Column(DateTime(timezone=True), server_default=sql_text("CURRENT_TIMESTAMP"))
+    updated_at = Column(DateTime(timezone=True), server_default=sql_text("CURRENT_TIMESTAMP"))
+    
+    __table_args__ = (
+        Index('idx_customer_user_email', 'user_id', 'email_address'),
+        Index('idx_customer_user_phone', 'user_id', 'phone_number'),
+        Index('idx_customer_user_name', 'user_id', 'given_name', 'family_name'),
+        Index('idx_customer_user_location', 'user_id', 'latitude', 'longitude'),
+        Index('idx_customer_user_created', 'user_id', 'created_at'),
+    )
     
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -128,17 +137,18 @@ class Customer(Base):
         return data
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Customer':
+    def from_dict(cls, data: Dict[str, Any], user_id: str) -> 'Customer':
         """
         Create a Customer instance from a dictionary.
         
         Args:
             data: Dictionary representation of a customer
+            user_id: User ID for multi-user support
             
         Returns:
             Customer instance
         """
-        customer = cls(id=data["id"])
+        customer = cls(id=data["id"], user_id=user_id)
         
         # Basic attributes
         customer.given_name = data.get("given_name")
@@ -239,12 +249,9 @@ class Database:
         # Get database URI from config
         db_uri = config.database.uri
         
-        # Ensure data directory exists
-        db_path = db_uri.replace('sqlite:///', '')
-        if db_path.startswith('/'):
-            # Absolute path
-            db_dir = os.path.dirname(db_path)
-            os.makedirs(db_dir, exist_ok=True)
+        # Validate PostgreSQL URI
+        if not db_uri.startswith("postgresql://"):
+            raise ValueError("Tool database requires PostgreSQL URI")
         
         # Create engine with echo for debugging if enabled
         self._engine = create_engine(
@@ -387,7 +394,7 @@ class Database:
                 session.commit()
                 return True
     
-    def execute(self, statement: Union[str, text], params: Optional[Dict[str, Any]] = None) -> Any:
+    def execute(self, statement: Union[str, sql_text], params: Optional[Dict[str, Any]] = None) -> Any:
         """
         Execute a raw SQL statement.
         
@@ -410,14 +417,14 @@ class Database:
         ):
             with self.get_session() as session:
                 if isinstance(statement, str):
-                    statement = text(statement)
+                    statement = sql_text(statement)
                     
                 result = session.execute(statement, params or {})
                 session.commit()
                 return result
 
 
-def migrate_customers_from_json() -> Dict[str, Any]:
+def migrate_customers_from_json(user_id: str = "default") -> Dict[str, Any]:
     """
     Migrate customer data from JSON to the database.
     
@@ -483,7 +490,7 @@ def migrate_customers_from_json() -> Dict[str, Any]:
                         customer_data["id"] = customer_id
                         
                     # Create customer model from data
-                    customer = Customer.from_dict(customer_data)
+                    customer = Customer.from_dict(customer_data, user_id)
                     
                     # Check if customer already exists
                     existing = db.get(Customer, customer_id)

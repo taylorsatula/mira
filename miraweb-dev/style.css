@@ -232,6 +232,16 @@ body                     { background: var(--bg); color: var(--text); font-famil
 .modal-close             { width: 32px; height: 32px; padding: 0; }
 .modal-body              { padding: var(--icon-size); overflow-y: auto; max-height: calc(80vh - 73px); }
 
+/* Settings Modal */
+.setting-group           { margin-bottom: 16px; }
+.setting-group label     { display: block; font-weight: 500; margin-bottom: 6px; }
+.setting-input           { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--border-radius); background: var(--surface); color: var(--text); font-size: 14px; }
+.setting-description     { display: block; font-size: 12px; color: rgba(var(--text-rgb), 0.7); margin-top: 4px; }
+.connection-status       { margin-left: 8px; font-size: 14px; }
+.connection-status.testing { color: var(--accent-yellow); }
+.connection-status.connected { color: var(--accent-green); }
+.connection-status.error { color: var(--accent-magenta); }
+
 /* App Menu */
 .nav-shifted { /* class for when sidebar is open */ }
 .nav-shifted .history-toggle { left: 420px; }

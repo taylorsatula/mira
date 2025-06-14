@@ -237,11 +237,11 @@ class Conversation:
     
     def get_formatted_messages(self) -> List[Dict[str, Any]]:
         """
-        Get the formatted messages for Anthropic API consumption.
+        Get the formatted messages for OpenAI-compatible API consumption.
         
         Returns:
             List of message dictionaries with 'role' and 'content'
-            following Anthropic's API format requirements.
+            following OpenAI chat completions format requirements.
         """
         # Format messages for the API
         formatted_messages = []
@@ -445,7 +445,16 @@ class Conversation:
                 if self.tool_repo:
                     # Get the current available tools that are enabled
                     selected_tools = self.tool_repo.get_all_tool_definitions()
-                    self.logger.info(f"Using {len(selected_tools)} tools for this interaction: {', '.join([t.get('name', 'unknown') for t in selected_tools])}")
+                    # Extract tool names from OpenAI schema format
+                    tool_names = []
+                    for t in selected_tools:
+                        if isinstance(t, dict) and 'function' in t and 'name' in t['function']:
+                            tool_names.append(t['function']['name'])
+                        elif isinstance(t, dict) and 'name' in t:
+                            tool_names.append(t['name'])
+                        else:
+                            tool_names.append('unknown')
+                    self.logger.info(f"Using {len(selected_tools)} tools for this interaction: {', '.join(tool_names)}")
                 else:
                     selected_tools = None
                 
@@ -646,6 +655,12 @@ class Conversation:
                 
                 # If no tool calls, add the response to conversation and break the loop
                 if not tool_calls:
+                    # Check for empty or whitespace-only responses and use fallback immediately
+                    if not assistant_response or assistant_response.strip() == "":
+                        self.logger.warning("Empty assistant response detected, using fallback")
+                        assistant_response = "I apologize, but I'm having trouble generating a response right now. Could you please try rephrasing your request?"
+                        final_response = assistant_response
+                    
                     # Extract topic change tag from the response and notify all systems
                     topic_changed = self.extract_topic_changed_tag(assistant_response)
                     self.set_topic_changed(topic_changed)

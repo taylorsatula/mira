@@ -1,6 +1,6 @@
 """
 FastAPI application for MIRA AI agent system.
-Provides REST API endpoints for chat interactions with Anthropic and Ollama support.
+Provides REST API endpoints for chat interactions with any OpenAI-compatible LLM provider.
 """
 import json
 import logging
@@ -184,7 +184,7 @@ def create_app() -> FastAPI:
     async def get_api_status(current_user: User = Depends(get_current_user)):
         """Return status information about the API - requires authentication."""
         try:
-            provider = getattr(config.api, 'provider', 'anthropic')
+            provider = getattr(config.api, 'provider', 'remote')
             
             # If using Ollama, include queue stats
             queue_stats = {}
@@ -235,7 +235,7 @@ def create_app() -> FastAPI:
                 )
                 response = result['response']
             else:
-                # Direct processing for Anthropic
+                # Direct processing for remote providers
                 response = conversation.generate_response(request.message)
             
             # Save conversation
@@ -310,7 +310,7 @@ def create_app() -> FastAPI:
                                 }
                                 return
                     else:
-                        # Direct streaming for Anthropic
+                        # Direct streaming for remote providers
                         tokens = []
                         
                         def stream_callback(token):
@@ -364,7 +364,7 @@ def create_app() -> FastAPI:
         if not request_queue:
             raise HTTPException(
                 status_code=400,
-                detail="Queue management not available (Anthropic mode)"
+                detail="Queue management not available (remote provider mode)"
             )
         
         try:

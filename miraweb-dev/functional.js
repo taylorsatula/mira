@@ -165,12 +165,8 @@ function handleClickOutside(e) {
 
 // Conversation management
 function renderConversations() {
-    // Use demo data if available, otherwise show empty state
-    if (typeof renderDemoConversations === 'function') {
-        renderDemoConversations();
-    } else {
-        elements.historyContent.innerHTML = '<div class="empty-state">No conversations found</div>';
-    }
+    // TODO: Implement conversation history loading from API
+    elements.historyContent.innerHTML = '<div class="empty-state">No conversations found</div>';
 }
 
 function switchTab(scope) {
@@ -377,29 +373,18 @@ async function sendMessage(messageText) {
     elements.sendButton.disabled = false;
     elements.inputContainer.classList.remove('firing');
     
-    // Let the app implementation handle the actual sending
+    // Let the API client handle the actual sending
     if (typeof handleSendMessage === 'function') {
         handleSendMessage(message);
     } else {
-        // Default behavior for no backend
-        if (responseActive) {
-            setTimeout(() => {
-                elements.responseContainer.classList.remove('active');
-                elements.responseBox.classList.remove('exiting');
-                responseActive = false;
-                showLoadingScreen(() => showResponse());
-            }, 100);
-        } else {
-            showLoadingScreen(() => showResponse());
-        }
+        console.error('handleSendMessage function not available - API client not loaded');
+        showResponse('Error: API client not loaded. Please refresh the page.');
     }
 }
 
-function showResponse() {
-    // Use demo response if available, otherwise show default message
-    const response = typeof getDemoResponse === 'function' 
-        ? getDemoResponse() 
-        : "Hello! I'm MIRA, your AI assistant.";
+function showResponse(message = null) {
+    // Use provided message or default
+    const response = message || "Hello! I'm MIRA, your AI assistant.";
     
     // Remove active class to hide container
     elements.responseContainer.classList.remove('active');
@@ -558,6 +543,11 @@ function initializeMira() {
     applyTheme(theme);
     renderConversations();
     
+    // Load API settings if available
+    if (typeof loadSettings === 'function') {
+        loadSettings();
+    }
+    
     // Event delegation
     document.addEventListener('click', handleClickOutside);
     
@@ -628,9 +618,26 @@ function initializeMira() {
     // Modal event listeners
     elements.settingsModal.addEventListener('click', (e) => {
         if (e.target === elements.settingsModal || e.target.closest('.modal-close')) {
+            saveSettings();
             closeSettings();
         }
     });
+    
+    // Settings event listeners
+    const testConnectionBtn = document.getElementById('test-connection');
+    if (testConnectionBtn) {
+        testConnectionBtn.addEventListener('click', testConnection);
+    }
+    
+    const apiEndpointInput = document.getElementById('api-endpoint');
+    if (apiEndpointInput) {
+        apiEndpointInput.addEventListener('change', saveSettings);
+    }
+    
+    const streamingCheckbox = document.getElementById('streaming-enabled');
+    if (streamingCheckbox) {
+        streamingCheckbox.addEventListener('change', saveSettings);
+    }
     
     // Queue action delegation
     elements.queueMessages.addEventListener('click', async (e) => {

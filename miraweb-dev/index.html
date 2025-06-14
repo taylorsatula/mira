@@ -54,7 +54,23 @@
                 </button>
             </div>
             <div class="modal-body">
-                <p>Settings options will go here</p>
+                <div class="setting-group">
+                    <label for="api-endpoint">API Endpoint:</label>
+                    <input type="text" id="api-endpoint" value="http://localhost:8000/api" class="setting-input">
+                    <small class="setting-description">MIRA backend API endpoint</small>
+                </div>
+                
+                <div class="setting-group">
+                    <label for="streaming-enabled">
+                        <input type="checkbox" id="streaming-enabled"> Enable streaming responses
+                    </label>
+                    <small class="setting-description">Get real-time response as it's generated</small>
+                </div>
+                
+                <div class="setting-group">
+                    <button class="btn btn-sm" id="test-connection">Test Connection</button>
+                    <span id="connection-status" class="connection-status"></span>
+                </div>
             </div>
         </div>
     </div>
@@ -165,8 +181,6 @@
     <!-- Core JavaScript -->
     <script src="functional.js"></script>
     <script src="aesthetic.js"></script>
-    
-    <!-- Demo data (optional) -->
-    <script src="mira-demo-data.js"></script>
+    <script src="api-client.js"></script>
 </body>
 </html>

@@ -230,7 +230,7 @@ This tool maintains a SQLite database for customer data with support for importi
 
                 # Create or update customer in database
                 try:
-                    customer = Customer.from_dict(customer_data)
+                    customer = Customer.from_dict(customer_data, "default")
                     
                     if customer_id in existing_ids:
                         # Update existing customer

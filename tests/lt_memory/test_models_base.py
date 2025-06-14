@@ -57,6 +57,7 @@ class TestMemoryBlock:
         """
         # Create a memory block with all core fields
         block = MemoryBlock(
+            user_id="test_user",
             label="user_preferences",
             value="User prefers concise responses and technical details",
             character_limit=1024,
@@ -100,6 +101,7 @@ class TestMemoryPassage:
         embedding_vector = np.random.rand(1024).astype(np.float32)
         
         passage = MemoryPassage(
+            user_id="test_user",
             text="User mentioned they work in software engineering at a startup",
             embedding=embedding_vector,
             source="conversation",
@@ -152,6 +154,7 @@ class TestBlockHistory:
         
         # Version 1: Base content (full content stored)
         version_1 = BlockHistory(
+            user_id="test_user",
             block_id=block_id,
             label="user_preferences",
             version=1,
@@ -162,6 +165,7 @@ class TestBlockHistory:
         
         # Version 2: Update (diff stored)
         version_2 = BlockHistory(
+            user_id="test_user",
             block_id=block_id,
             label="user_preferences", 
             version=2,
@@ -402,6 +406,7 @@ class TestEdgeCases:
         
         # Create ArchivedConversation with massive JSONB data
         archived_conversation = ArchivedConversation(
+            user_id="test_user",
             conversation_date=datetime.now(),
             messages=massive_conversation,  # ~2MB of message data
             message_count=2000,

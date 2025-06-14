@@ -34,16 +34,14 @@ def initialize_lt_memory(config, working_memory, tool_repo, automation_controlle
         from lt_memory.tools.memory_tool import LTMemoryTool
         from lt_memory.automations.memory_automations import register_memory_automations
         
-        # Ensure memory configuration exists
-        if not hasattr(config, 'memory'):
-            logger.info("Adding default memory configuration")
-            from config.memory_config import MemoryConfig
-            config.memory = MemoryConfig()
-        
+        # Create memory configuration
+        logger.info("Creating memory configuration...")
+        from config.memory_config import MemoryConfig
+        memory_config = MemoryConfig()
         
         # Create memory manager
         logger.info("Creating memory manager...")
-        memory_manager = MemoryManager(config, llm_provider)
+        memory_manager = MemoryManager(memory_config, llm_provider)
         
         # Run health check
         health = memory_manager.health_check()

@@ -340,11 +340,24 @@ class LLMProvider:
             choice = response_data["choices"][0]
             message = choice.get("message", {})
             
-            # Add text content
-            if "content" in message and message["content"]:
+            # Log raw message for debugging empty responses
+            if "content" not in message or not message.get("content"):
+                self.logger.warning(f"Empty or missing content in API response. Raw message: {json.dumps(message, indent=2)}")
+                self.logger.debug(f"Full response: {json.dumps(response_data, indent=2)}")
+            
+            # Add text content - handle None/empty content gracefully
+            content_text = message.get("content", "")
+            # Only add text content if it exists and isn't empty, or if there are no tool calls
+            if content_text:
                 standardized["content"].append({
                     "type": "text",
-                    "text": message["content"]
+                    "text": content_text
+                })
+            elif "tool_calls" not in message:
+                # No content and no tool calls - add empty text as fallback
+                standardized["content"].append({
+                    "type": "text", 
+                    "text": ""
                 })
             
             # Add tool calls if present
