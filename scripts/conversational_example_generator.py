@@ -1,550 +1,790 @@
 #!/usr/bin/env python3
 """
-Conversational Example Generator
+Capability-Based Conversational Example Generator
 
-A script that automatically generates natural conversation examples for AI tool classification training.
-Takes any Python tool file as input and produces realistic human queries that would trigger the tool.
+Generates natural conversation examples for AI tool classification training.
+Optimized for BGE embeddings with 512 token limit through focused, concise examples.
+
+This generator:
+1. Analyzes tools to extract distinct capabilities (turn on, turn off, dim, etc.)
+2. Generates focused examples per capability in separate API calls
+3. Validates examples with diagnostic feedback
+4. Regenerates failed clusters with specific guidance
+5. Biases toward short, typed examples for maximum semantic density
 
 Usage:
-    python conversational_example_generator.py <tool_file_path> [--count 50] [--output output.json]
-    
-    btw, If you're running MIRA offline on an airgapped system you're welcome to use a large model like Hermes3:405b
-    or something to generate the examples (don't forget to turn off extended thinking) BUT this script is 
-    hardcoded for a reason. Opus 4 makes CRAZY HIGH-QUALITY training data. Please consider creating the classifier examples
-    on a computer connected to the internet and moving them over on a jumpdrive or something.       
-    
-    Opus 4 coupled to Sonnet capture nuance I haven't been able to find anywhere else bar none. 
-    Hell, they're better than me handwriting them. What a time to be alive lol.
+    python new_gen.py <tool_file_path> [--examples-per-capability 15] [--output output.json]
 """
 
 import json
 import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# ============================================================================
-# STANDALONE MODE ADDON - For use outside MIRA directory
-# ============================================================================
-# Uncomment the section below and comment out the MIRA imports to run this
-# script independently without any MIRA dependencies.
-#
-# REQUIREMENTS: pip install requests
-# SETUP: Set ANTHROPIC_API_KEY environment variable
-#
-# INSTRUCTIONS TO ENABLE STANDALONE MODE:
-# 1. Uncomment everything between "START STANDALONE MODE" and "END STANDALONE MODE" below
-# 2. Comment out everything between "START MIRA INTEGRATED MODE" and "END MIRA INTEGRATED MODE"
-# 3. You're done! Script will use direct Anthropic API calls
-#
-# START STANDALONE MODE - UNCOMMENT BLOCK BELOW TO USE
-"""
-import requests
-from typing import Dict, Any, List, Optional
-from contextlib import contextmanager
-
-class StandaloneLLMProvider:
-    '''Minimal LLM provider for standalone operation without MIRA dependencies'''
-    def __init__(self, provider_type=None, api_endpoint=None, model=None, 
-                 temperature=0.7, max_tokens=4000, api_key=None, **kwargs):
-        self.model = model
-        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        
-        if not self.api_key:
-            raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
-    
-    def generate_response(self, messages, extra_body=None, **kwargs):
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens
-        }
-        
-        # Add extended thinking and other Anthropic-specific features
-        if extra_body:
-            payload.update(extra_body)
-        
-        try:
-            response = requests.post(
-                "https://api.anthropic.com/v1/chat/completions", 
-                headers=headers, 
-                json=payload, 
-                timeout=120
-            )
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            raise StandaloneError(f"API request failed: {e}")
-    
-    def extract_text_content(self, response):
-        try:
-            return response["choices"][0]["message"]["content"]
-        except (KeyError, IndexError) as e:
-            raise StandaloneError(f"Failed to extract content from response: {e}")
-
-class StandaloneError(Exception):
-    '''Simple error class for standalone mode'''
-    pass
-
-class StandaloneErrorCode:
-    API_RESPONSE_ERROR = "API_RESPONSE_ERROR"
-
-@contextmanager
-def standalone_error_context(component_name=None, operation=None, error_class=None, 
-                           error_code=None, logger=None):
-    '''Simple error context manager for standalone mode'''
-    try:
-        yield
-    except Exception as e:
-        if logger:
-            logger.error(f"Error in {operation}: {e}")
-        raise StandaloneError(f"Error in {operation}: {e}")
-
-# Override the imports for standalone mode
-LLMProvider = StandaloneLLMProvider
-APIError = StandaloneError
-ErrorCode = StandaloneErrorCode()
-error_context = standalone_error_context
-"""
-# END STANDALONE MODE
-
-# ============================================================================
-# START MIRA INTEGRATED MODE - Comment out this entire section for standalone
-# ============================================================================
-
-# Add the parent directory to the path so we can import from the project
+# Add parent directory to path for MIRA imports
 sys.path.append(str(Path(__file__).parent.parent))
 
 from api.llm_provider import LLMProvider
 from errors import APIError, ErrorCode, error_context
 
-# END MIRA INTEGRATED MODE
-
-
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 
 @dataclass
+class ToolCapability:
+    """A specific capability/function of a tool."""
+    name: str
+    action_verb: str
+    description: str
+    example_targets: List[str]
+
+
+@dataclass
 class ToolAnalysis:
-    """Complete analysis of a tool's functionality."""
+    """Complete analysis of a tool's functionality broken down by capabilities."""
     tool_name: str
     primary_purpose: str
-    capabilities: List[str]
+    capabilities: List[ToolCapability]
     target_users: List[str]
     common_scenarios: List[str]
-    usage_patterns: List[str]
 
 
-class ConversationalExampleGenerator:
+class CapabilityExampleGenerator:
     """
-    Generates natural conversational examples for AI tool classification training.
+    Generates focused conversational examples for tool classification.
     
-    This class analyzes Python tool files using LLM intelligence and creates realistic 
-    human queries that would trigger the tool, focusing on natural speech patterns 
-    and diverse user contexts.
+    Each capability is processed independently to create high-quality,
+    token-efficient training data optimized for BGE embeddings.
     """
     
     def __init__(self):
-        """Initialize the generator with LLM providers."""
-        # Use Sonnet for analysis tasks (efficient code comprehension)
-        self.analysis_llm = LLMProvider(
+        """Initialize with separate LLMs for analysis and generation."""
+        # Sonnet for fast, accurate code analysis
+        self.analyzer = LLMProvider(
             provider_type="remote",
             api_endpoint="https://api.anthropic.com/v1/chat/completions",
             model="claude-sonnet-4-20250514",
-            api_key=os.getenv("ANTHROPIC_API_KEY")
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            timeout=300
         )
         
-        # Use Opus for generation tasks (superior creative reasoning for natural conversations)
-        self.generation_llm = LLMProvider(
+        # Opus for superior creative generation with extended thinking
+        self.generator = LLMProvider(
             provider_type="remote",
             api_endpoint="https://api.anthropic.com/v1/chat/completions",
             model="claude-opus-4-20250514",
-            temperature=1.0,  # Required for extended thinking
-            max_tokens=8000,  # Higher limit for generating many examples
-            api_key=os.getenv("ANTHROPIC_API_KEY")
+            temperature=1.0,
+            max_tokens=8000,
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            timeout=300
         )
         
-        logger.info("Conversational Example Generator initialized with Sonnet for analysis and Opus for generation")
+        logger.info("Initialized with Sonnet analyzer and Opus generator")
     
     def analyze_tool(self, tool_path: str) -> ToolAnalysis:
         """
-        Extract and analyze a tool's functionality using LLM intelligence.
+        Analyze a tool file to extract capabilities and metadata.
         
         Args:
             tool_path: Path to the Python tool file
             
         Returns:
-            ToolAnalysis object containing comprehensive tool information
+            ToolAnalysis with broken-down capabilities
+            
+        Raises:
+            APIError: If analysis fails
         """
         logger.info(f"Analyzing tool: {tool_path}")
         
-        # Read the tool source code
         with open(tool_path, 'r', encoding='utf-8') as f:
             source_code = f.read()
         
-        # Use LLM to analyze the tool intelligently
-        analysis_prompt = """
-        Analyze this Python tool source code and extract key information about its functionality.
+        prompt = """
+        Analyze this Python tool and break it down into specific capabilities/functions that users would invoke.
         
-        CRITICAL: You must respond with ONLY a valid JSON object. No markdown, no code blocks, no explanations, no additional text whatsoever. Just the raw JSON.
+        CRITICAL: Respond with ONLY valid JSON. No markdown, no explanations.
         
         Required JSON structure:
         {
             "tool_name": "exact name of the tool from the code",
             "primary_purpose": "concise description of what this tool does",
-            "capabilities": ["list", "of", "specific", "operations", "or", "functions"],
+            "capabilities": [
+                {
+                    "name": "descriptive name of this capability",
+                    "action_verb": "primary action verb (turn on, send, check, etc.)",
+                    "description": "what this specific capability does",
+                    "example_targets": ["specific", "things", "this", "acts", "on"]
+                }
+            ],
             "target_users": ["types", "of", "people", "who", "would", "use", "this"],
-            "common_scenarios": ["situations", "when", "people", "would", "need", "this", "tool"],
-            "usage_patterns": ["natural", "ways", "people", "might", "ask", "for", "help"]
+            "common_scenarios": ["situations", "when", "people", "would", "need", "this", "tool"]
         }
         
         Focus on:
-        1. The human value proposition - what problems does this solve?
-        2. Real-world use cases rather than technical details
-        3. Natural language patterns people would use
-        4. Different types of users (busy professionals, casual users, etc.)
-        
-        Your response must start with { and end with }. No other text allowed.
+        1. Break tool into distinct user-facing capabilities
+        2. Each capability should have a clear action verb and targets
+        3. Think about what users actually DO with this tool
         
         Tool source code:
         """
         
-        messages = [
-            {"role": "user", "content": f"{analysis_prompt}\n\n```python\n{source_code}\n```"}
-        ]
+        messages = [{"role": "user", "content": f"{prompt}\n\n```python\n{source_code}\n```"}]
         
         try:
             with error_context(
-                component_name="conversational_generator",
+                component_name="capability_generator",
                 operation="tool_analysis",
                 error_class=APIError,
                 error_code=ErrorCode.API_RESPONSE_ERROR,
                 logger=logger
             ):
-                response = self.analysis_llm.generate_response(messages)
-                response_text = self.analysis_llm.extract_text_content(response)
+                response = self.analyzer.generate_response(messages)
+                response_text = self.analyzer.extract_text_content(response)
                 
-                logger.debug(f"LLM response text: {response_text[:500]}...")
+                logger.debug(f"Response text length: {len(response_text)}")
+                logger.debug(f"Response preview: {response_text[:500] if response_text else 'EMPTY'}")
                 
-                # Parse the JSON response
-                analysis_data = json.loads(response_text)
+                if not response_text.strip():
+                    raise APIError("LLM returned empty response")
+                
+                # Strip markdown code blocks if present
+                cleaned_text = response_text.strip()
+                if cleaned_text.startswith("```json"):
+                    cleaned_text = cleaned_text[7:]  # Remove ```json
+                if cleaned_text.startswith("```"):
+                    cleaned_text = cleaned_text[3:]  # Remove ```
+                if cleaned_text.endswith("```"):
+                    cleaned_text = cleaned_text[:-3]  # Remove trailing ```
+                cleaned_text = cleaned_text.strip()
+                
+                data = json.loads(cleaned_text)
+                
+                # Convert to dataclass objects
+                capabilities = [
+                    ToolCapability(
+                        name=cap["name"],
+                        action_verb=cap["action_verb"],
+                        description=cap["description"],
+                        example_targets=cap["example_targets"]
+                    )
+                    for cap in data.get("capabilities", [])
+                ]
                 
                 return ToolAnalysis(
-                    tool_name=analysis_data.get("tool_name", Path(tool_path).stem),
-                    primary_purpose=analysis_data.get("primary_purpose", ""),
-                    capabilities=analysis_data.get("capabilities", []),
-                    target_users=analysis_data.get("target_users", []),
-                    common_scenarios=analysis_data.get("common_scenarios", []),
-                    usage_patterns=analysis_data.get("usage_patterns", [])
+                    tool_name=data["tool_name"],
+                    primary_purpose=data["primary_purpose"],
+                    capabilities=capabilities,
+                    target_users=data.get("target_users", []),
+                    common_scenarios=data.get("common_scenarios", [])
                 )
                 
         except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to parse LLM analysis, using fallback: {e}")
-            return self._fallback_analysis(tool_path, source_code)
+            logger.error(f"Failed to parse analysis: {e}")
+            raise APIError(f"Tool analysis failed: {e}") from e
     
-    def _fallback_analysis(self, tool_path: str, source_code: str) -> ToolAnalysis:
-        """Fallback analysis if LLM parsing fails."""
-        tool_name = Path(tool_path).stem
-        
-        # Basic pattern matching as fallback
-        if "email" in source_code.lower():
-            return ToolAnalysis(
-                tool_name=tool_name,
-                primary_purpose="Email management and communication",
-                capabilities=["read emails", "send emails", "organize messages"],
-                target_users=["business professionals", "personal users"],
-                common_scenarios=["managing inbox", "sending messages"],
-                usage_patterns=["check my emails", "send a message"]
-            )
-        else:
-            return ToolAnalysis(
-                tool_name=tool_name,
-                primary_purpose="General purpose tool",
-                capabilities=["tool operations"],
-                target_users=["general users"],
-                common_scenarios=["general use"],
-                usage_patterns=["help me with"]
-            )
-    
-    def generate_scenarios(self, tool_analysis: ToolAnalysis, count: int = 50) -> List[Dict[str, str]]:
+    def generate_capability_examples(
+        self, 
+        tool_name: str, 
+        capability: ToolCapability, 
+        count: int = 15,
+        previous_feedback: str = ""
+    ) -> List[Dict[str, str]]:
         """
-        Generate diverse conversation scenarios using LLM intelligence.
+        Generate examples for a single capability with optional feedback.
         
         Args:
-            tool_analysis: Analysis of the tool's functionality
+            tool_name: Name of the tool
+            capability: The capability to generate examples for
             count: Number of examples to generate
+            previous_feedback: Optional feedback from failed validation
             
         Returns:
-            List of conversation scenarios
+            List of example dictionaries with tool_name and query
         """
-        logger.info(f"Generating {count} conversation scenarios")
+        logger.info(f"Generating {count} examples for: {capability.name}")
         
-        scenario_prompt = f"""
-        Generate {count} natural, conversational examples of how real people would ask for help with this tool.
-
-        Tool Information:
-        - Name: {tool_analysis.tool_name}
-        - Purpose: {tool_analysis.primary_purpose}
-        - Capabilities: {', '.join(tool_analysis.capabilities)}
-        - Target Users: {', '.join(tool_analysis.target_users)}
-        - Common Scenarios: {', '.join(tool_analysis.common_scenarios)}
-
-        Requirements for the examples:
-        1. Sound like REAL human speech - natural, conversational, sometimes vague
-        2. Include diverse user types: busy professionals, casual users, seniors, parents, tech-savvy people
-        3. Vary formality: "Can you please..." vs "I need..." vs "Show me..."
-        4. Include emotional context: urgency, frustration, curiosity, etc.
-        5. Use personal details: "my inbox", "from my doctor", "about the meeting"
-        6. Avoid technical jargon - speak like normal people, not programmers
-        7. Include typos and informal language occasionally
-        8. Vary length from short commands to longer explanations
-
-        Examples should cover different aspects:
-        - Different capabilities of the tool
-        - Various urgency levels (urgent, casual, exploratory)
-        - Different user contexts (work, personal, family)
-        - Mixed specificity (vague requests vs specific needs)
-
-        CRITICAL: You must respond with ONLY a valid JSON array. No markdown, no code blocks, no explanations, no additional text whatsoever. Just the raw JSON array.
-
-        Required format - JSON array only:
+        feedback_section = ""
+        if previous_feedback:
+            feedback_section = f"""
+        
+        GUIDANCE FOR IMPROVEMENT:
+        {previous_feedback}
+        
+        Apply this guidance while maintaining natural language variety.
+        """
+        
+        prompt = f"""
+        Generate {count} natural conversational examples for ONE SPECIFIC capability.
+        
+        CAPABILITY DETAILS:
+        - Name: {capability.name}
+        - Action: {capability.action_verb}
+        - Description: {capability.description}
+        - Valid Targets: {', '.join(capability.example_targets)}
+        - Tool: {tool_name}{feedback_section}
+        
+        CRITICAL REQUIREMENTS:
+        1. DOMAIN-SPECIFIC: Every example must clearly indicate this tool's domain, not generic device management
+        2. SPECIFIC ACTIONS: Use concrete action verbs, avoid vague words like "control" or "manage"
+        3. ACTIONABLE: Must be complete commands, not observations
+        4. BIAS TOWARD SHORT EXAMPLES (5-10 words ideal)
+        
+        DOMAIN SPECIFICITY EXAMPLES:
+        BAD (too generic): "find all devices", "get device status", "control outlet"
+        GOOD (domain-specific): "find all smart devices", "get smart plug status", "turn on outlet"
+        
+        ACTION VERB SPECIFICITY:
+        - Instead of "control" → use "turn on/off", "switch", "toggle"
+        - Instead of "manage" → use "operate", "adjust", "set"
+        - Instead of "handle" → use specific action for this capability
+        
+        DISTRIBUTION (roughly even):
+        - CONCISE (3-5 words): "turn on smart lights"
+        - SHORT TYPED (5-10 words): "please turn on the smart bulbs"  
+        - NATURAL (10-20 words): "heading to bed, could you turn on the smart lights?"
+        
+        VARIETY:
+        - Casual: "hey turn off smart lights"
+        - Urgent: "quick! smart lights off"
+        - Polite: "could you please turn off the smart lamp"
+        - Uncertain: "I think the smart lights are on?"
+        - Shorthand: "smart lights off"
+        - Voice-to-text: "turn off smart living room light bulb"
+        
+        Every example should pass this test: "Could this apply to any device management tool?" 
+        If YES, make it more domain-specific.
+        
+        Return ONLY a JSON array:
         [
-            {{"tool_name": "{tool_analysis.tool_name}", "query": "Show me my recent emails"}},
-            {{"tool_name": "{tool_analysis.tool_name}", "query": "I need to check if my doctor replied about the test results"}}
+            {{"tool_name": "{tool_name}", "query": "domain-specific example"}},
+            {{"tool_name": "{tool_name}", "query": "another specific example"}}
         ]
-
-        Generate exactly {count} examples with natural variety. Your response must start with [ and end with ]. No other text allowed.
         """
         
-        messages = [
-            {"role": "user", "content": scenario_prompt}
-        ]
+        messages = [{"role": "user", "content": prompt}]
         
         try:
             with error_context(
-                component_name="conversational_generator",
-                operation="scenario_generation",
+                component_name="capability_generator",
+                operation="example_generation",
                 error_class=APIError,
                 error_code=ErrorCode.API_RESPONSE_ERROR,
                 logger=logger
             ):
-                response = self.generation_llm.generate_response(
+                response = self.generator.generate_response(
                     messages,
-                    extra_body={"thinking": {"type": "enabled", "budget_tokens": 2500}}
+                    extra_body={"thinking": {"type": "enabled", "budget_tokens": 1500}}
                 )
-                response_text = self.generation_llm.extract_text_content(response)
+                response_text = self.generator.extract_text_content(response)
                 
-                # Parse the JSON response
-                examples = json.loads(response_text)
+                # Strip markdown code blocks if present
+                cleaned_text = response_text.strip()
+                if cleaned_text.startswith("```json"):
+                    cleaned_text = cleaned_text[7:]
+                if cleaned_text.startswith("```"):
+                    cleaned_text = cleaned_text[3:]
+                if cleaned_text.endswith("```"):
+                    cleaned_text = cleaned_text[:-3]
+                cleaned_text = cleaned_text.strip()
                 
-                # Validate the structure
-                if isinstance(examples, list):
-                    validated_examples = []
-                    for example in examples:
-                        if isinstance(example, dict) and "tool_name" in example and "query" in example:
-                            validated_examples.append(example)
-                    
-                    logger.info(f"Generated {len(validated_examples)} valid examples")
-                    return validated_examples
-                else:
-                    logger.warning("LLM returned non-list response, using fallback")
-                    return self._generate_fallback_examples(tool_analysis, count)
-                    
+                examples = json.loads(cleaned_text)
+                
+                if not isinstance(examples, list):
+                    raise APIError("Generator returned non-list response")
+                
+                # Validate structure
+                valid_examples = [
+                    ex for ex in examples 
+                    if isinstance(ex, dict) and "tool_name" in ex and "query" in ex
+                ]
+                
+                logger.info(f"Generated {len(valid_examples)} valid examples")
+                return valid_examples
+                
         except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to parse LLM scenarios: {e}")
-            return self._generate_fallback_examples(tool_analysis, count)
+            logger.error(f"Failed to parse examples: {e}")
+            raise APIError(f"Example generation failed: {e}") from e
     
-    def _generate_fallback_examples(self, tool_analysis: ToolAnalysis, count: int) -> List[Dict[str, str]]:
-        """Generate fallback examples if LLM generation fails."""
-        logger.info("Using fallback example generation")
-        
-        base_patterns = [
-            f"Show me {tool_analysis.primary_purpose.lower()}",
-            f"I need help with {tool_analysis.tool_name.replace('_', ' ')}",
-            f"Can you {tool_analysis.capabilities[0] if tool_analysis.capabilities else 'help me'}?",
-            f"Help me {tool_analysis.primary_purpose.lower()}",
-            f"I want to {tool_analysis.capabilities[0] if tool_analysis.capabilities else 'use this tool'}"
-        ]
-        
-        examples = []
-        for i in range(min(count, len(base_patterns) * 10)):
-            pattern = base_patterns[i % len(base_patterns)]
-            examples.append({
-                "tool_name": tool_analysis.tool_name,
-                "query": pattern
-            })
-        
-        return examples[:count]
-    
-    def validate_quality(self, examples: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    def validate_examples(
+        self, 
+        examples: List[Dict[str, str]], 
+        capability: ToolCapability
+    ) -> Dict[str, Any]:
         """
-        Validate and filter examples for quality and authenticity using LLM.
+        Validate examples and provide diagnostic feedback.
         
         Args:
             examples: List of generated examples
+            capability: The capability being validated
             
         Returns:
-            Filtered list of high-quality examples
+            Dict with passed (bool), feedback (str), and other diagnostics
         """
         if not examples:
-            return examples
+            return {"passed": True, "feedback": "", "examples": examples}
         
-        logger.info(f"Validating quality of {len(examples)} examples")
+        logger.info(f"Validating {len(examples)} examples for: {capability.name}")
         
-        # Sample examples for validation (don't validate all if there are many)
-        sample_size = min(20, len(examples))
-        sample_examples = examples[:sample_size]
+        prompt = f"""
+        Validate these examples for a specific capability with contextual understanding.
         
-        validation_prompt = f"""
-        Review these conversational examples and identify which ones sound like natural human speech vs robotic/technical language.
-
-        Examples to review:
-        {json.dumps([ex['query'] for ex in sample_examples], indent=2)}
-
-        Criteria for GOOD examples:
-        - Sound like real people talking (casual, natural, sometimes vague)
-        - Use personal context ("my emails", "from my boss")
-        - Vary in formality and urgency
-        - Include emotional undertones
-        - Avoid technical jargon
-
-        Criteria for BAD examples:
-        - Sound robotic or formal
-        - Use technical terms like "execute", "invoke", "parameter"
-        - Too generic or repetitive
-        - Overly polite or formal
-
-        IMPORTANT: Respond with ONLY valid JSON. Do not include any text before or after the JSON array.
-
-        Return a JSON array with indices of the GOOD examples (0-based indexing):
-        [0, 2, 5, 7, ...]
+        CAPABILITY CONTEXT:
+        - Name: {capability.name}
+        - Core Action: {capability.action_verb}
+        - Description: {capability.description}
+        - Valid Targets: {', '.join(capability.example_targets)}
+        
+        EXAMPLES TO VALIDATE:
+        {json.dumps([ex['query'] for ex in examples], indent=2)}
+        
+        VALIDATION APPROACH:
+        Judge if each example would reasonably accomplish this capability's purpose.
+        Be generous with natural language - humans express actions in many ways.
+        
+        ACCEPT examples that:
+        1. Express the capability's intent (even with different verbs)
+        2. Reference relevant targets (flexible: "lights"="smart bulbs", "device"=any target)
+        3. Are actionable commands/requests (not just observations)
+        4. Use natural human language
+        5. Are DOMAIN-SPECIFIC (not generic device management)
+        
+        EXAMPLES OF FLEXIBLE ACCEPTANCE:
+        - For "turn" capability: "switch off", "power down", "shut off"
+        - For "set" capability: "change", "make", "adjust", "put"
+        - For "check" capability: "see", "monitor", "get", "show"
+        - For brightness: "dim", "brighten", "set brightness"
+        - For discovery: "find", "locate", "scan"
+        
+        REJECT examples that are too generic:
+        - "find all devices" (could be any device tool)
+        - "get device status" (too generic)
+        - "control outlet" (vague action verb)
+        
+        Focus on INTENT, ACTIONABILITY, and DOMAIN SPECIFICITY.
+        
+        Return ONLY JSON:
+        {{
+            "passed": true/false,
+            "issues_found": ["only fundamental problems"],
+            "feedback": "guidance on missing elements, not word substitutions",
+            "good_count": number_of_acceptable_examples,
+            "total_count": {len(examples)}
+        }}
+        
+        Set passed=false ONLY if >10% have fundamental issues (no clear action, no target, not actionable).
         """
         
-        messages = [
-            {"role": "user", "content": validation_prompt}
-        ]
+        messages = [{"role": "user", "content": prompt}]
         
         try:
-            response = self.analysis_llm.generate_response(messages)
-            response_text = self.analysis_llm.extract_text_content(response)
+            response = self.analyzer.generate_response(messages)
+            response_text = self.analyzer.extract_text_content(response)
             
-            # Parse the validation results
-            good_indices = json.loads(response_text)
+            # Strip markdown code blocks if present
+            cleaned_text = response_text.strip()
+            if cleaned_text.startswith("```json"):
+                cleaned_text = cleaned_text[7:]
+            if cleaned_text.startswith("```"):
+                cleaned_text = cleaned_text[3:]
+            if cleaned_text.endswith("```"):
+                cleaned_text = cleaned_text[:-3]
+            cleaned_text = cleaned_text.strip()
             
-            if isinstance(good_indices, list):
-                # Apply validation results to full list
-                validation_ratio = len(good_indices) / len(sample_examples)
-                logger.info(f"Validation ratio: {validation_ratio:.2f}")
-                
-                # If validation ratio is reasonable, apply pattern to all examples
-                if validation_ratio > 0.3:  # At least 30% should be good
-                    # For now, return all examples but log the quality
-                    logger.info(f"Quality validation complete, keeping all {len(examples)} examples")
-                    return examples
-                else:
-                    logger.warning("Low validation ratio, keeping examples anyway")
-                    return examples
+            result = json.loads(cleaned_text)
+            result["examples"] = examples
+            
+            if result["passed"]:
+                logger.info(f"✓ Validation passed: {result['good_count']}/{result['total_count']} good")
             else:
-                logger.warning("Invalid validation response, keeping all examples")
-                return examples
-                
+                logger.warning(f"✗ Validation failed: {result['feedback']}")
+            
+            return result
+            
         except (json.JSONDecodeError, Exception) as e:
-            logger.warning(f"Validation failed: {e}, keeping all examples")
-            return examples
+            logger.error(f"Validation error: {e}")
+            return {
+                "passed": False, 
+                "feedback": f"Validation error: {e}",
+                "examples": examples
+            }
     
-    def generate(self, tool_path: str, count: int = 50, output_path: Optional[str] = None) -> List[Dict[str, str]]:
+    def generate_with_validation(
+        self,
+        tool_name: str,
+        capability: ToolCapability,
+        count: int = 15
+    ) -> List[Dict[str, str]]:
         """
-        Main generation method that orchestrates the entire process.
+        Generate examples with validation and smart fallback.
         
         Args:
-            tool_path: Path to the Python tool file
+            tool_name: Name of the tool
+            capability: The capability to generate for
             count: Number of examples to generate
-            output_path: Optional path for JSON output file
             
         Returns:
-            List of generated examples
+            List of validated examples (best available)
         """
-        logger.info(f"Starting generation for {tool_path}")
+        # First attempt
+        examples_v1 = self.generate_capability_examples(tool_name, capability, count)
+        validation_v1 = self.validate_examples(examples_v1, capability)
         
-        # Step 1: Analyze the tool using LLM
-        tool_analysis = self.analyze_tool(tool_path)
-        logger.info(f"Analyzed tool: {tool_analysis.tool_name}")
-        logger.info(f"Purpose: {tool_analysis.primary_purpose}")
-        logger.info(f"Capabilities: {len(tool_analysis.capabilities)} found")
+        if validation_v1["passed"]:
+            return examples_v1
         
-        # Step 2: Generate scenarios using LLM
-        examples = self.generate_scenarios(tool_analysis, count)
-        logger.info(f"Generated {len(examples)} examples")
+        # Second attempt with improved feedback
+        logger.info(f"Regenerating {capability.name} with guidance")
         
-        # Step 3: Validate quality using LLM
-        validated_examples = self.validate_quality(examples)
-        logger.info(f"Validated {len(validated_examples)} high-quality examples")
+        # Create principle-based feedback instead of prescriptive
+        guided_feedback = self._create_guided_feedback(validation_v1["feedback"], capability)
         
-        # Step 4: Save to file if requested
+        examples_v2 = self.generate_capability_examples(
+            tool_name, capability, count, guided_feedback
+        )
+        
+        validation_v2 = self.validate_examples(examples_v2, capability)
+        
+        if validation_v2["passed"]:
+            logger.info(f"✓ Improved examples passed validation")
+            return examples_v2
+        
+        # Both failed - pick the better set
+        score_v1 = validation_v1["good_count"]
+        score_v2 = validation_v2["good_count"]
+        
+        if score_v2 >= score_v1:
+            logger.warning(f"⚠ Using improved attempt for {capability.name} ({score_v2}/{count} good)")
+            return examples_v2
+        else:
+            logger.warning(f"⚠ Using original attempt for {capability.name} ({score_v1}/{count} good)")
+            return examples_v1
+    
+    def _create_guided_feedback(self, raw_feedback: str, capability: ToolCapability) -> str:
+        """
+        Convert prescriptive feedback to principle-based guidance.
+        
+        Args:
+            raw_feedback: Original validation feedback
+            capability: The capability being improved
+            
+        Returns:
+            Improved guidance that preserves natural variety
+        """
+        # Focus on principles rather than specific word replacements
+        guidance = f"""
+        Based on validation feedback, improve examples while maintaining natural language variety:
+        
+        PRESERVE:
+        - Natural synonyms and varied phrasing
+        - Different length categories (concise, short, conversational)
+        - Casual/formal tone variety
+        
+        ENSURE EACH EXAMPLE:
+        - Expresses the INTENT of "{capability.action_verb}" (natural language welcome)
+        - References relevant TARGETS from: {', '.join(capability.example_targets)}
+        - Is completely ACTIONABLE (not just observations or questions)
+        - Uses natural human language
+        - Is DOMAIN-SPECIFIC (clearly indicates this tool's domain)
+        - Uses SPECIFIC action verbs (avoid "control", "manage", "handle")
+        
+        Original feedback context: {raw_feedback}
+        
+        Focus on fundamental completeness rather than specific word choices.
+        """
+        
+        return guidance.strip()
+    
+    def process_capability_parallel(
+        self,
+        tool_name: str,
+        capability: ToolCapability,
+        examples_per_capability: int
+    ) -> List[Dict[str, str]]:
+        """
+        Process a single capability with generation, validation, and regeneration.
+        
+        Args:
+            tool_name: Name of the tool
+            capability: The capability to process
+            examples_per_capability: Number of examples to generate
+            
+        Returns:
+            List of validated examples for this capability
+        """
+        logger.info(f"Processing: {capability.name}")
+        
+        try:
+            examples = self.generate_with_validation(
+                tool_name,
+                capability,
+                examples_per_capability
+            )
+            logger.info(f"✓ Completed {capability.name}: {len(examples)} examples")
+            return examples
+            
+        except APIError as e:
+            logger.error(f"Failed to process {capability.name}: {e}")
+            return []
+    
+    def _generate_sequential(
+        self,
+        analysis: ToolAnalysis,
+        examples_per_capability: int
+    ) -> List[Dict[str, str]]:
+        """
+        Sequential fallback processing for capabilities.
+        
+        Args:
+            analysis: Tool analysis with capabilities
+            examples_per_capability: Number of examples per capability
+            
+        Returns:
+            All generated examples
+        """
+        all_examples = []
+        
+        for capability in analysis.capabilities:
+            try:
+                examples = self.process_capability_parallel(
+                    analysis.tool_name,
+                    capability,
+                    examples_per_capability
+                )
+                all_examples.extend(examples)
+                
+            except APIError as e:
+                logger.error(f"Failed to process {capability.name}: {e}")
+                continue
+        
+        return all_examples
+    
+    def _generate_sequential_grouped(
+        self,
+        analysis: ToolAnalysis,
+        examples_per_capability: int
+    ) -> Dict[str, List[Dict[str, str]]]:
+        """
+        Sequential fallback processing for capabilities with grouped output.
+        
+        Args:
+            analysis: Tool analysis with capabilities
+            examples_per_capability: Number of examples per capability
+            
+        Returns:
+            Dict mapping capability names to their examples
+        """
+        capability_examples = {}
+        
+        for capability in analysis.capabilities:
+            try:
+                examples = self.process_capability_parallel(
+                    analysis.tool_name,
+                    capability,
+                    examples_per_capability
+                )
+                capability_examples[capability.name] = examples
+                
+            except APIError as e:
+                logger.error(f"Failed to process {capability.name}: {e}")
+                capability_examples[capability.name] = []
+        
+        return capability_examples
+    
+    def _save_separated_outputs(
+        self, 
+        output_dir_path: str, 
+        capability_examples: Dict[str, List[Dict[str, str]]],
+        tool_name: str
+    ) -> None:
+        """
+        Save examples separated by capability into individual files.
+        
+        Args:
+            output_dir_path: Directory path to save capability files
+            capability_examples: Dict mapping capability names to examples
+            tool_name: Name of the tool for file naming
+        """
+        from pathlib import Path
+        
+        # Create the output directory
+        output_dir = Path(output_dir_path)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        saved_files = []
+        
+        for capability_name, examples in capability_examples.items():
+            if not examples:
+                logger.warning(f"No examples for capability: {capability_name}")
+                continue
+                
+            # Create safe filename from capability name
+            safe_capability = "".join(c if c.isalnum() or c in '-_' else '_' for c in capability_name.lower())
+            capability_file = output_dir / f"{tool_name}_{safe_capability}.json"
+            
+            with open(capability_file, 'w', encoding='utf-8') as f:
+                json.dump(examples, f, indent=2, ensure_ascii=False)
+            
+            saved_files.append(str(capability_file))
+            logger.info(f"Saved {len(examples)} examples for '{capability_name}' to: {capability_file}")
+        
+        # Also save a summary file
+        summary_file = output_dir / f"{tool_name}_summary.json"
+        summary = {
+            "tool_name": tool_name,
+            "total_examples": sum(len(examples) for examples in capability_examples.values()),
+            "capabilities": {
+                name: len(examples) 
+                for name, examples in capability_examples.items()
+            },
+            "files": saved_files
+        }
+        
+        with open(summary_file, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"Saved summary to: {summary_file}")
+        logger.info(f"Created {len(saved_files)} capability-specific files in: {output_dir}")
+    
+    def generate_all(
+        self,
+        tool_path: str,
+        examples_per_capability: int = 15,
+        output_path: Optional[str] = None,
+        max_workers: Optional[int] = None
+    ) -> Dict[str, List[Dict[str, str]]]:
+        """
+        Main orchestration method with parallel processing and sequential fallback.
+        
+        Args:
+            tool_path: Path to tool file
+            examples_per_capability: Examples to generate per capability
+            output_path: Optional output file path
+            max_workers: Maximum number of parallel workers (defaults to number of capabilities)
+            
+        Returns:
+            Dict with capability names as keys and their examples as values
+        """
+        # Analyze tool
+        analysis = self.analyze_tool(tool_path)
+        logger.info(f"Tool: {analysis.tool_name}")
+        logger.info(f"Purpose: {analysis.primary_purpose}")
+        logger.info(f"Capabilities: {len(analysis.capabilities)}")
+        
+        # Calculate optimal worker count
+        num_capabilities = len(analysis.capabilities)
+        if max_workers is None:
+            # Default to number of capabilities, with reasonable bounds
+            optimal_workers = min(num_capabilities, 12)  # Cap at 12 to avoid overwhelming APIs
+        else:
+            # Use provided max_workers but don't exceed capability count
+            optimal_workers = min(max_workers, num_capabilities)
+        
+        # Try parallel processing first
+        capability_examples = {}
+        try:
+            logger.info(f"Attempting parallel processing with {optimal_workers} workers for {num_capabilities} capabilities")
+            
+            with ThreadPoolExecutor(max_workers=optimal_workers) as executor:
+                # Submit all capability processing tasks
+                future_to_capability = {
+                    executor.submit(
+                        self.process_capability_parallel,
+                        analysis.tool_name,
+                        capability,
+                        examples_per_capability
+                    ): capability
+                    for capability in analysis.capabilities
+                }
+                
+                # Collect results as they complete
+                for future in as_completed(future_to_capability):
+                    capability = future_to_capability[future]
+                    try:
+                        examples = future.result()
+                        capability_examples[capability.name] = examples
+                    except Exception as e:
+                        logger.error(f"Exception processing {capability.name}: {e}")
+                        capability_examples[capability.name] = []
+            
+            logger.info("✓ Parallel processing completed successfully")
+            
+        except Exception as e:
+            logger.warning(f"Parallel processing failed ({e}), falling back to sequential")
+            capability_examples = self._generate_sequential_grouped(analysis, examples_per_capability)
+        
+        total_examples = sum(len(examples) for examples in capability_examples.values())
+        logger.info(f"\nTotal: {total_examples} examples generated across {len(capability_examples)} capabilities")
+        
+        # Save if requested
         if output_path:
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(validated_examples, f, indent=2, ensure_ascii=False)
-            logger.info(f"Saved examples to {output_path}")
+            self._save_separated_outputs(output_path, capability_examples, analysis.tool_name)
         
-        return validated_examples
+        return capability_examples
 
 
 def main():
-    """Command-line interface for the generator."""
+    """Command-line interface."""
     import argparse
     
     parser = argparse.ArgumentParser(
-        description="Generate conversational examples for AI tool classification",
+        description="Generate capability-based conversational examples",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python conversational_example_generator.py tools/email_tool.py
-  python conversational_example_generator.py tools/calendar_tool.py --count 100 --output examples.json
+  python new_gen.py tools/kasa_tool.py
+  python new_gen.py tools/email_tool.py --examples-per-capability 15
+  python new_gen.py tools/calendar.py --output calendar_examples.json
         """
     )
     
-    parser.add_argument("tool_path", help="Path to the Python tool file")
-    parser.add_argument("--count", type=int, default=50, help="Number of examples to generate")
-    parser.add_argument("--output", help="Output JSON file path")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    parser.add_argument("tool_path", help="Path to Python tool file")
+    parser.add_argument(
+        "--examples-per-capability", 
+        type=int, 
+        default=15,
+        help="Examples to generate per capability (default: 15)"
+    )
+    parser.add_argument("--output", help="Output directory path for capability-separated files")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     
     args = parser.parse_args()
     
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # Validate input file
     if not os.path.exists(args.tool_path):
         logger.error(f"Tool file not found: {args.tool_path}")
         sys.exit(1)
     
     try:
-        # Generate examples
-        generator = ConversationalExampleGenerator()
-        examples = generator.generate(args.tool_path, args.count, args.output)
+        generator = CapabilityExampleGenerator()
+        capability_examples = generator.generate_all(
+            args.tool_path,
+            args.examples_per_capability,
+            args.output
+        )
         
-        # Display results
-        print(f"\nGenerated {len(examples)} conversational examples for {args.tool_path}")
-        print("\nSample examples:")
-        for i, example in enumerate(examples[:5], 1):
-            print(f"{i}. {example['query']}")
+        # Show sample results
+        total_examples = sum(len(examples) for examples in capability_examples.values())
+        print(f"\n✓ Generated {total_examples} examples across {len(capability_examples)} capabilities")
         
-        if len(examples) > 5:
-            print(f"... and {len(examples) - 5} more")
-        
-        print(f"\nTool: {examples[0]['tool_name'] if examples else 'Unknown'}")
+        print("\nSamples by capability:")
+        for capability_name, examples in capability_examples.items():
+            if examples:
+                print(f"\n{capability_name} ({len(examples)} examples):")
+                for i, ex in enumerate(examples[:2], 1):
+                    print(f"  {i}. {ex['query']}")
+                if len(examples) > 2:
+                    print(f"  ... and {len(examples) - 2} more")
         
     except Exception as e:
         logger.error(f"Generation failed: {e}")
