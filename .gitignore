@@ -55,3 +55,11 @@ persistent/notifications/*
 
 # Private/sensitive components (kept in separate nested repo)
 taylor-local-config/
+
+# Legacy/deprecated directories
+api/
+miraweb-dev/
+secure_auth/
+passenger_wsgi.py
+wsgi.py
+punchlist
