@@ -330,7 +330,7 @@ export AGENT_LOG_LEVEL=DEBUG
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the BSL License - see the LICENSE file for details.
 
 ### Third-Party Licenses
 
