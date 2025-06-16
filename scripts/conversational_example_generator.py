@@ -2,18 +2,72 @@
 """
 Capability-Based Conversational Example Generator
 
-Generates natural conversation examples for AI tool classification training.
-Optimized for BGE embeddings with 512 token limit through focused, concise examples.
+HOW IT WORKS:
+This script generates high-quality training examples for AI tool classification using a sophisticated
+capability-based approach designed for BGE embeddings with 512 token limits.
 
-This generator:
-1. Analyzes tools to extract distinct capabilities (turn on, turn off, dim, etc.)
-2. Generates focused examples per capability in separate API calls
-3. Validates examples with diagnostic feedback
-4. Regenerates failed clusters with specific guidance
-5. Biases toward short, typed examples for maximum semantic density
+ARCHITECTURAL OVERVIEW:
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│  Tool Analysis  │ -> │ Capability Gen  │ -> │ Validation &    │ -> │ Output Files    │
+│  (Sonnet-4)     │    │ (Opus-4 + BGE)  │    │ Retry Logic     │    │ (JSON by cap)   │
+└─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
+
+DETAILED WORKFLOW:
+
+1. TOOL ANALYSIS PHASE:
+   - Uses Claude Sonnet-4 to analyze Python tool files
+   - Extracts distinct capabilities (e.g., "turn on", "turn off", "dim brightness")
+   - Identifies target objects each capability acts on
+   - Creates structured ToolAnalysis with capabilities broken down by action verbs
+
+2. PARALLEL CAPABILITY PROCESSING:
+   - Each capability processed independently with ThreadPoolExecutor
+   - Uses Claude Opus-4 with extended thinking for creative generation
+   - Generates 15 examples per capability by default
+   - Focuses on domain-specific, actionable commands
+
+3. MULTI-LAYER VALIDATION SYSTEM:
+   a) Token Length Validation:
+      - Uses BGE tokenizer to ensure ≤512 tokens per example
+      - Restarts entire generation if violations found
+   
+   b) Semantic Diversity Analysis:
+      - Uses BGE embeddings to calculate cosine similarity
+      - Measures diversity score (1 - mean_similarity)
+      - Flags high-similarity pairs (>0.7 similarity)
+   
+   c) Quality Validation via LLM:
+      - Claude Sonnet-4 validates actionability and domain-specificity
+      - Checks for generic vs specific language
+      - Ensures examples clearly invoke the target capability
+
+4. ADAPTIVE RETRY LOGIC:
+   - Up to 3 attempts per capability with progressive feedback
+   - Attempt 1: Initial generation
+   - Attempt 2: Guided feedback from validation failures
+   - Attempt 3: Enhanced feedback combining all previous attempts
+   - Selects best attempt based on combined quality+diversity score
+
+5. OUTPUT GENERATION:
+   - Saves examples grouped by capability in separate JSON files
+   - Creates summary file with statistics and file manifest
+   - Provides detailed logging of validation metrics
+
+KEY FEATURES:
+- Dual LLM strategy: Sonnet for analysis, Opus for generation
+- Token-aware generation preventing BGE embedding truncation
+- Comprehensive validation ensuring training data quality
+- Parallel processing for efficiency with sequential fallback
+- Detailed logging and metrics for monitoring generation quality
+
+OPTIMIZATION FOR BGE EMBEDDINGS:
+- Biases toward concise examples (5-10 words ideal)
+- Validates token counts using actual BGE tokenizer
+- Ensures semantic diversity to prevent embedding collapse
+- Domain-specific language to improve classification accuracy
 
 Usage:
-    python new_gen.py <tool_file_path> [--examples-per-capability 15] [--output output.json]
+    python conversational_example_generator.py <tool_file_path> [--examples-per-capability 15] [--output output_dir]
 """
 
 import json
@@ -24,6 +78,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from sklearn.metrics.pairwise import cosine_similarity
+from sentence_transformers import SentenceTransformer
+from transformers import AutoTokenizer
 
 # Add parent directory to path for MIRA imports
 sys.path.append(str(Path(__file__).parent.parent))
@@ -88,7 +146,83 @@ class CapabilityExampleGenerator:
             timeout=300
         )
         
-        logger.info("Initialized with Sonnet analyzer and Opus generator")
+        # BGE tokenizer and model for token length validation and diversity analysis
+        self.tokenizer = AutoTokenizer.from_pretrained('BAAI/bge-base-en-v1.5')
+        self.embedding_model = SentenceTransformer('BAAI/bge-base-en-v1.5')
+        
+        logger.info("Initialized with Sonnet analyzer, Opus generator, BGE tokenizer, and embedding model")
+    
+    def _clean_json_response(self, response_text: str) -> str:
+        """Clean LLM response by removing markdown code blocks.
+        
+        Args:
+            response_text: Raw response text from LLM
+            
+        Returns:
+            Cleaned text ready for JSON parsing
+        """
+        cleaned_text = response_text.strip()
+        if cleaned_text.startswith("```json"):
+            cleaned_text = cleaned_text[7:]  # Remove ```json
+        if cleaned_text.startswith("```"):
+            cleaned_text = cleaned_text[3:]  # Remove ```
+        if cleaned_text.endswith("```"):
+            cleaned_text = cleaned_text[:-3]  # Remove trailing ```
+        return cleaned_text.strip()
+    
+    def _parse_llm_json_response(self, response_text: str, context: str = "LLM response") -> Dict[str, Any]:
+        """Parse and validate JSON from LLM response with comprehensive error handling.
+        
+        Args:
+            response_text: Raw response text from LLM
+            context: Context description for error messages
+            
+        Returns:
+            Parsed JSON data
+            
+        Raises:
+            APIError: If response is empty or JSON parsing fails
+        """
+        if not response_text.strip():
+            raise APIError(f"{context}: LLM returned empty response")
+        
+        try:
+            cleaned_text = self._clean_json_response(response_text)
+            return json.loads(cleaned_text)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse {context}: {e}")
+            logger.debug(f"Raw response: {response_text[:500]}...")
+            raise APIError(f"{context} parsing failed: {e}") from e
+    
+    def _generate_and_parse_response(self, messages: List[Dict], llm_provider, context: str, extra_body: Optional[Dict] = None) -> Dict[str, Any]:
+        """Generate LLM response and parse JSON with unified error handling.
+        
+        Args:
+            messages: Messages for LLM
+            llm_provider: LLM provider instance (analyzer or generator)
+            context: Context description for errors
+            extra_body: Optional extra parameters for generation
+            
+        Returns:
+            Parsed JSON response
+            
+        Raises:
+            APIError: If generation or parsing fails
+        """
+        try:
+            if extra_body:
+                response = llm_provider.generate_response(messages, extra_body=extra_body)
+            else:
+                response = llm_provider.generate_response(messages)
+            
+            response_text = llm_provider.extract_text_content(response)
+            return self._parse_llm_json_response(response_text, context)
+            
+        except APIError:
+            raise  # Re-raise APIErrors as-is
+        except Exception as e:
+            logger.error(f"{context} generation failed: {e}")
+            raise APIError(f"{context} failed: {e}") from e
     
     def analyze_tool(self, tool_path: str) -> ToolAnalysis:
         """
@@ -147,26 +281,7 @@ class CapabilityExampleGenerator:
                 error_code=ErrorCode.API_RESPONSE_ERROR,
                 logger=logger
             ):
-                response = self.analyzer.generate_response(messages)
-                response_text = self.analyzer.extract_text_content(response)
-                
-                logger.debug(f"Response text length: {len(response_text)}")
-                logger.debug(f"Response preview: {response_text[:500] if response_text else 'EMPTY'}")
-                
-                if not response_text.strip():
-                    raise APIError("LLM returned empty response")
-                
-                # Strip markdown code blocks if present
-                cleaned_text = response_text.strip()
-                if cleaned_text.startswith("```json"):
-                    cleaned_text = cleaned_text[7:]  # Remove ```json
-                if cleaned_text.startswith("```"):
-                    cleaned_text = cleaned_text[3:]  # Remove ```
-                if cleaned_text.endswith("```"):
-                    cleaned_text = cleaned_text[:-3]  # Remove trailing ```
-                cleaned_text = cleaned_text.strip()
-                
-                data = json.loads(cleaned_text)
+                data = self._generate_and_parse_response(messages, self.analyzer, "tool analysis")
                 
                 # Convert to dataclass objects
                 capabilities = [
@@ -187,8 +302,8 @@ class CapabilityExampleGenerator:
                     common_scenarios=data.get("common_scenarios", [])
                 )
                 
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.error(f"Failed to parse analysis: {e}")
+        except (KeyError) as e:
+            logger.error(f"Missing required fields in analysis: {e}")
             raise APIError(f"Tool analysis failed: {e}") from e
     
     def generate_capability_examples(
@@ -280,23 +395,12 @@ class CapabilityExampleGenerator:
                 error_code=ErrorCode.API_RESPONSE_ERROR,
                 logger=logger
             ):
-                response = self.generator.generate_response(
-                    messages,
+                examples = self._generate_and_parse_response(
+                    messages, 
+                    self.generator, 
+                    "example generation",
                     extra_body={"thinking": {"type": "enabled", "budget_tokens": 1500}}
                 )
-                response_text = self.generator.extract_text_content(response)
-                
-                # Strip markdown code blocks if present
-                cleaned_text = response_text.strip()
-                if cleaned_text.startswith("```json"):
-                    cleaned_text = cleaned_text[7:]
-                if cleaned_text.startswith("```"):
-                    cleaned_text = cleaned_text[3:]
-                if cleaned_text.endswith("```"):
-                    cleaned_text = cleaned_text[:-3]
-                cleaned_text = cleaned_text.strip()
-                
-                examples = json.loads(cleaned_text)
                 
                 if not isinstance(examples, list):
                     raise APIError("Generator returned non-list response")
@@ -310,30 +414,180 @@ class CapabilityExampleGenerator:
                 logger.info(f"Generated {len(valid_examples)} valid examples")
                 return valid_examples
                 
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.error(f"Failed to parse examples: {e}")
-            raise APIError(f"Example generation failed: {e}") from e
+        except APIError:
+            raise  # Re-raise APIErrors from _generate_and_parse_response
     
-    def validate_examples(
+    def validate_examples_comprehensive(
         self, 
         examples: List[Dict[str, str]], 
         capability: ToolCapability
     ) -> Dict[str, Any]:
         """
-        Validate examples and provide diagnostic feedback.
+        Comprehensive validation including quality, diversity, and token length.
         
         Args:
             examples: List of generated examples
             capability: The capability being validated
             
         Returns:
-            Dict with passed (bool), feedback (str), and other diagnostics
+            Dict with validation results including all metrics
         """
         if not examples:
-            return {"passed": True, "feedback": "", "examples": examples}
+            return {
+                "passed": True, 
+                "feedback": "", 
+                "examples": examples,
+                "diversity": {"assessment": "no_data"},
+                "tokens": {"passed": True}
+            }
         
         logger.info(f"Validating {len(examples)} examples for: {capability.name}")
         
+        # 1. Token length validation
+        token_result = self._validate_token_length(examples)
+        
+        # 2. Diversity analysis
+        diversity_result = self._analyze_diversity(examples)
+        logger.info(f"Diversity assessment: {diversity_result['assessment']} (score: {diversity_result['diversity_score']:.3f})")
+        
+        # 3. Quality validation via LLM
+        quality_result = self._validate_quality(examples, capability)
+        
+        # 4. Combine results
+        diversity_fails = (
+            diversity_result['assessment'] in ['low', 'error'] or 
+            diversity_result['high_similarity_pairs'] > len(examples) * 0.2
+        )
+        
+        overall_passed = (
+            token_result["passed"] and 
+            quality_result["passed"] and 
+            not diversity_fails
+        )
+        
+        # Combine feedback
+        feedback_parts = []
+        if not quality_result["passed"]:
+            feedback_parts.append(quality_result["feedback"])
+        if diversity_fails:
+            feedback_parts.append(self._create_diversity_feedback(diversity_result, capability))
+        if not token_result["passed"]:
+            feedback_parts.append(f"Token length violations: {token_result['violation_count']} examples exceed 512 tokens")
+        
+        result = {
+            "passed": overall_passed,
+            "feedback": "\n\n".join(feedback_parts),
+            "examples": examples,
+            "diversity": diversity_result,
+            "tokens": token_result,
+            "quality": quality_result
+        }
+        
+        if result["passed"]:
+            logger.info(f"✓ Comprehensive validation passed: {quality_result.get('good_count', 0)}/{len(examples)} good, diversity: {diversity_result['assessment']}")
+        else:
+            logger.warning(f"✗ Comprehensive validation failed: {result['feedback'][:100]}...")
+        
+        return result
+    
+    def _analyze_diversity(self, examples: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Analyze semantic diversity using BGE embeddings."""
+        if len(examples) < 2:
+            return {
+                "diversity_score": 1.0,
+                "mean_similarity": 0.0,
+                "assessment": "insufficient_data",
+                "high_similarity_pairs": 0,
+                "details": "Less than 2 examples - diversity analysis skipped"
+            }
+        
+        queries = [ex['query'] for ex in examples]
+        
+        try:
+            embeddings = self.embedding_model.encode(queries)
+            similarities = cosine_similarity(embeddings)
+            
+            # Get upper triangle similarities
+            n = len(queries)
+            similarities_list = [
+                similarities[i][j] for i in range(n) for j in range(i+1, n)
+            ]
+            
+            mean_similarity = sum(similarities_list) / len(similarities_list)
+            diversity_score = 1 - mean_similarity
+            high_sim_pairs = sum(1 for s in similarities_list if s > 0.7)
+            
+            # Assessment thresholds
+            if diversity_score > 0.7:
+                assessment = "excellent"
+            elif diversity_score > 0.6:
+                assessment = "good"
+            elif diversity_score > 0.5:
+                assessment = "moderate"
+            else:
+                assessment = "low"
+            
+            return {
+                "diversity_score": diversity_score,
+                "mean_similarity": mean_similarity,
+                "assessment": assessment,
+                "high_similarity_pairs": high_sim_pairs,
+                "min_similarity": min(similarities_list),
+                "max_similarity": max(similarities_list),
+                "total_pairs": len(similarities_list),
+                "details": f"Diversity: {diversity_score:.3f}, High similarity pairs (>0.7): {high_sim_pairs}"
+            }
+            
+        except Exception as e:
+            logger.error(f"Diversity analysis failed: {e}")
+            return {
+                "diversity_score": 0.5,
+                "mean_similarity": 0.5,
+                "assessment": "error",
+                "high_similarity_pairs": 0,
+                "details": f"Analysis failed: {e}"
+            }
+    
+    def _validate_token_length(self, examples: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Validate token lengths for BGE embeddings."""
+        token_violations = []
+        max_tokens = 0
+        total_tokens = 0
+        
+        for i, example in enumerate(examples):
+            query = example.get('query', '')
+            tokens = self.tokenizer.encode(query, add_special_tokens=True)
+            token_count = len(tokens)
+            total_tokens += token_count
+            max_tokens = max(max_tokens, token_count)
+            
+            if token_count > 512:
+                token_violations.append({
+                    "index": i,
+                    "query": query,
+                    "token_count": token_count,
+                    "excess": token_count - 512
+                })
+        
+        avg_tokens = total_tokens / len(examples) if examples else 0
+        passed = len(token_violations) == 0
+        
+        if passed:
+            logger.info(f"✓ Token validation passed: max {max_tokens} tokens, avg {avg_tokens:.1f}")
+        else:
+            logger.warning(f"✗ Token validation failed: {len(token_violations)} examples exceed 512 tokens")
+        
+        return {
+            "passed": passed,
+            "violations": token_violations,
+            "violation_count": len(token_violations),
+            "max_tokens": max_tokens,
+            "avg_tokens": avg_tokens,
+            "total_examples": len(examples)
+        }
+    
+    def _validate_quality(self, examples: List[Dict[str, str]], capability: ToolCapability) -> Dict[str, Any]:
+        """Validate example quality via LLM."""
         prompt = f"""
         Validate these examples for a specific capability with contextual understanding.
         
@@ -383,104 +637,162 @@ class CapabilityExampleGenerator:
         Set passed=false ONLY if >10% have fundamental issues (no clear action, no target, not actionable).
         """
         
-        messages = [{"role": "user", "content": prompt}]
-        
         try:
-            response = self.analyzer.generate_response(messages)
-            response_text = self.analyzer.extract_text_content(response)
+            return self._generate_and_parse_response(
+                [{"role": "user", "content": prompt}], 
+                self.analyzer, 
+                "quality validation"
+            )
             
-            # Strip markdown code blocks if present
-            cleaned_text = response_text.strip()
-            if cleaned_text.startswith("```json"):
-                cleaned_text = cleaned_text[7:]
-            if cleaned_text.startswith("```"):
-                cleaned_text = cleaned_text[3:]
-            if cleaned_text.endswith("```"):
-                cleaned_text = cleaned_text[:-3]
-            cleaned_text = cleaned_text.strip()
-            
-            result = json.loads(cleaned_text)
-            result["examples"] = examples
-            
-            if result["passed"]:
-                logger.info(f"✓ Validation passed: {result['good_count']}/{result['total_count']} good")
-            else:
-                logger.warning(f"✗ Validation failed: {result['feedback']}")
-            
-            return result
-            
-        except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"Validation error: {e}")
+        except Exception as e:
+            logger.error(f"Quality validation error: {e}")
             return {
                 "passed": False, 
-                "feedback": f"Validation error: {e}",
-                "examples": examples
+                "feedback": f"Quality validation error: {e}",
+                "good_count": 0,
+                "total_count": len(examples)
             }
     
     def generate_with_validation(
         self,
         tool_name: str,
         capability: ToolCapability,
-        count: int = 15
+        count: int = 15,
+        max_retries: int = 2
     ) -> List[Dict[str, str]]:
         """
-        Generate examples with validation and smart fallback.
+        Generate examples with validation and up to 3 attempts for quality/diversity.
+        Restarts entire process if token length validation fails.
         
         Args:
             tool_name: Name of the tool
             capability: The capability to generate for
             count: Number of examples to generate
+            max_retries: Maximum number of complete restarts for token violations
             
         Returns:
-            List of validated examples (best available)
+            List of validated examples (best available from up to 3 attempts)
         """
-        # First attempt
-        examples_v1 = self.generate_capability_examples(tool_name, capability, count)
-        validation_v1 = self.validate_examples(examples_v1, capability)
+        for retry in range(max_retries + 1):
+            if retry > 0:
+                logger.info(f"🔄 Retry {retry}/{max_retries} for {capability.name} due to token violations")
+            
+            attempts = []
+            
+            # Attempt 1: Initial generation
+            logger.info(f"Attempt 1/3 for {capability.name}")
+            examples_v1 = self.generate_capability_examples(tool_name, capability, count)
+            
+            # Comprehensive validation
+            validation_v1 = self.validate_examples_comprehensive(examples_v1, capability)
+            
+            # Check token length first - restart if violations found
+            token_info = validation_v1.get('tokens', {})
+            if not token_info.get('passed', True):
+                logger.warning(f"Token violations detected, restarting generation (retry {retry + 1}/{max_retries + 1})")
+                if retry == max_retries:
+                    logger.error(f"Max retries reached for {capability.name}, proceeding with token violations")
+                else:
+                    continue  # Restart the entire process
+            attempts.append((examples_v1, validation_v1, "initial"))
+            
+            if validation_v1["passed"]:
+                logger.info(f"✓ Attempt 1 passed validation")
+                return examples_v1
+            
+            # Attempts 2-3: With progressively enhanced feedback
+            for attempt_num in range(2, 4):
+                logger.info(f"Attempt {attempt_num}/3 for {capability.name} with enhanced guidance")
+                
+                # Get all previous validations for feedback creation
+                previous_validations = [validation for _, validation, _ in attempts]
+                feedback = self._create_feedback_for_attempt(attempt_num, previous_validations, capability)
+                
+                examples = self.generate_capability_examples(tool_name, capability, count, feedback)
+                
+                # Comprehensive validation
+                validation = self.validate_examples_comprehensive(examples, capability)
+                
+                # Check token length - restart if violations found
+                token_info = validation.get('tokens', {})
+                if not token_info.get('passed', True):
+                    logger.warning(f"Token violations in attempt {attempt_num}, restarting generation")
+                    if retry == max_retries:
+                        logger.error(f"Max retries reached for {capability.name}, proceeding with token violations")
+                        attempts.append((examples, validation, f"attempt_{attempt_num}"))
+                        break
+                    else:
+                        break  # Break inner loop to restart outer loop
+                attempts.append((examples, validation, f"attempt_{attempt_num}"))
+                
+                if validation["passed"]:
+                    logger.info(f"✓ Attempt {attempt_num} passed validation")
+                    return examples
+            
+            # If we got here without token violations, we can proceed to final selection
+            token_info = validation.get('tokens', {})
+            if token_info.get('passed', True):
+                break
         
-        if validation_v1["passed"]:
-            return examples_v1
+        # All attempts completed (or max retries reached) - pick the best one
+        best_attempt = self._select_best_attempt(attempts, capability, count)
+        examples, validation, attempt_type = best_attempt
         
-        # Second attempt with improved feedback
-        logger.info(f"Regenerating {capability.name} with guidance")
+        logger.warning(f"⚠ Using best attempt ({attempt_type}) for {capability.name}")
+        quality_info = validation.get('quality', validation)  # Fallback for older format
+        logger.warning(f"  Quality: {quality_info.get('good_count', 0)}/{count} good")
+        if 'diversity' in validation:
+            logger.warning(f"  Diversity: {validation['diversity']['assessment']} (score: {validation['diversity']['diversity_score']:.3f})")
         
-        # Create principle-based feedback instead of prescriptive
-        guided_feedback = self._create_guided_feedback(validation_v1["feedback"], capability)
+        # Final token check for logging
+        token_info = validation.get('tokens', {})
+        if not token_info.get('passed', True):
+            logger.warning(f"  Token violations: {token_info.get('violation_count', 0)} examples exceed 512 tokens")
         
-        examples_v2 = self.generate_capability_examples(
-            tool_name, capability, count, guided_feedback
-        )
+        return examples
+    
+    def _get_core_requirements(self, capability: ToolCapability) -> str:
+        """Get core requirements shared across all feedback types."""
+        return f"""
+        CORE REQUIREMENTS for "{capability.action_verb}" on {', '.join(capability.example_targets)}:
+        • ACTIONABILITY: Every example must be a clear, executable command
+        • DOMAIN SPECIFICITY: Clearly indicate this tool's domain, not generic actions
+        • TARGET RELEVANCE: Reference appropriate targets from the capability list
+        • NATURAL VARIETY: Use different sentence patterns, not just word swaps
+        • SPECIFIC VERBS: Avoid "control", "manage", "handle" - use specific actions
+        """.strip()
+    
+    def _get_diversity_strategies(self) -> str:
+        """Get strategies for improving semantic diversity."""
+        return """
+        DIVERSITY STRATEGIES:
+        • VARY FORMALITY LEVELS: Mix casual, formal, urgent tones
+        • CHANGE SENTENCE STRUCTURES: Commands, questions, requests, statements
+        • USE DIFFERENT CONTEXTS: Different situations, environments, users
+        • VARY TARGET SPECIFICITY: Generic vs specific vs detailed references
+        • ADD CONTEXT CLUES: Time, location, reason, condition
+        • MIX INTERACTION STYLES: Voice commands, typed requests, incomplete phrases
+        • INCLUDE EDGE CASES: Multiple targets, conditional requests, partial specifications
+        """.strip()
+    
+    def _create_diversity_feedback(self, diversity_result: Dict[str, Any], capability: ToolCapability) -> str:
+        """Create actionable feedback for improving diversity."""
+        return f"""
+        DIVERSITY ISSUE DETECTED:
+        - Current diversity score: {diversity_result['diversity_score']:.3f} ({diversity_result['assessment']})
+        - High similarity pairs: {diversity_result['high_similarity_pairs']} (threshold: >20% of examples)
         
-        validation_v2 = self.validate_examples(examples_v2, capability)
+        {self._get_core_requirements(capability)}
         
-        if validation_v2["passed"]:
-            logger.info(f"✓ Improved examples passed validation")
-            return examples_v2
+        {self._get_diversity_strategies()}
         
-        # Both failed - pick the better set
-        score_v1 = validation_v1["good_count"]
-        score_v2 = validation_v2["good_count"]
-        
-        if score_v2 >= score_v1:
-            logger.warning(f"⚠ Using improved attempt for {capability.name} ({score_v2}/{count} good)")
-            return examples_v2
-        else:
-            logger.warning(f"⚠ Using original attempt for {capability.name} ({score_v1}/{count} good)")
-            return examples_v1
+        Generate examples that would NOT be semantically similar to each other in BGE embeddings.
+        Focus on creating distinct semantic patterns rather than just word variations.
+        """.strip()
     
     def _create_guided_feedback(self, raw_feedback: str, capability: ToolCapability) -> str:
-        """
-        Convert prescriptive feedback to principle-based guidance.
-        
-        Args:
-            raw_feedback: Original validation feedback
-            capability: The capability being improved
-            
-        Returns:
-            Improved guidance that preserves natural variety
-        """
-        # Focus on principles rather than specific word replacements
-        guidance = f"""
+        """Convert prescriptive feedback to principle-based guidance."""
+        return f"""
         Based on validation feedback, improve examples while maintaining natural language variety:
         
         PRESERVE:
@@ -488,20 +800,105 @@ class CapabilityExampleGenerator:
         - Different length categories (concise, short, conversational)
         - Casual/formal tone variety
         
-        ENSURE EACH EXAMPLE:
-        - Expresses the INTENT of "{capability.action_verb}" (natural language welcome)
-        - References relevant TARGETS from: {', '.join(capability.example_targets)}
-        - Is completely ACTIONABLE (not just observations or questions)
-        - Uses natural human language
-        - Is DOMAIN-SPECIFIC (clearly indicates this tool's domain)
-        - Uses SPECIFIC action verbs (avoid "control", "manage", "handle")
+        {self._get_core_requirements(capability)}
         
         Original feedback context: {raw_feedback}
         
         Focus on fundamental completeness rather than specific word choices.
-        """
+        """.strip()
+    
+    def _create_enhanced_final_feedback(
+        self, 
+        previous_validations: List[Dict[str, Any]], 
+        capability: ToolCapability
+    ) -> str:
+        """Create enhanced feedback for final attempt combining all previous results."""
+        all_issues = []
+        diversity_scores = []
         
-        return guidance.strip()
+        for i, validation in enumerate(previous_validations, 1):
+            # Extract quality issues
+            quality_info = validation.get("quality", validation)  # Fallback for older format
+            issues = quality_info.get("issues_found", [])
+            if issues:
+                all_issues.extend([f"Attempt {i}: {issue}" for issue in issues])
+            
+            # Extract diversity scores
+            diversity_info = validation.get("diversity", {})
+            if diversity_info:
+                diversity_scores.append(f"Attempt {i}: {diversity_info.get('assessment', 'unknown')} (score: {diversity_info.get('diversity_score', 0):.3f})")
+        
+        return f"""
+        FINAL ATTEMPT GUIDANCE:
+        After {len(previous_validations)} attempts, focus on these specific improvements:
+        
+        QUALITY ISSUES IDENTIFIED:
+        {chr(10).join(all_issues) if all_issues else "- None specifically identified"}
+        
+        DIVERSITY ANALYSIS:
+        {chr(10).join(diversity_scores) if diversity_scores else "- No diversity data available"}
+        
+        {self._get_core_requirements(capability)}
+        
+        {self._get_diversity_strategies()}
+        
+        This is the final attempt - prioritize creating semantically distinct examples.
+        """.strip()
+    
+    def _create_feedback_for_attempt(
+        self, 
+        attempt_num: int,
+        previous_validations: List[Dict[str, Any]], 
+        capability: ToolCapability
+    ) -> str:
+        """Create feedback for the current attempt based on previous validation results."""
+        if attempt_num == 2:
+            # Second attempt: use guided feedback from first attempt
+            first_feedback = previous_validations[0].get("feedback", "")
+            return self._create_guided_feedback(first_feedback, capability)
+        elif attempt_num == 3:
+            # Third attempt: enhanced feedback combining all previous attempts
+            return self._create_enhanced_final_feedback(previous_validations, capability)
+        return ""
+    
+    def _select_best_attempt(
+        self, 
+        attempts: List[tuple], 
+        capability: ToolCapability, 
+        count: int
+    ) -> tuple:
+        """
+        Select the best attempt based on combined quality and diversity scores.
+        
+        Args:
+            attempts: List of (examples, validation, attempt_type) tuples
+            capability: The capability being evaluated
+            count: Target number of examples
+            
+        Returns:
+            Best (examples, validation, attempt_type) tuple
+        """
+        best_score = -1
+        best_attempt = attempts[0]  # Fallback to first attempt
+        
+        for examples, validation, attempt_type in attempts:
+            # Calculate combined score (quality + diversity)
+            quality_info = validation.get("quality", {})
+            quality_score = quality_info.get("good_count", 0) / count
+            
+            diversity_info = validation.get("diversity", {})
+            diversity_score = diversity_info.get("diversity_score", 0.5)  # Neutral if missing
+            
+            # Weight quality slightly higher than diversity (60/40 split)
+            combined_score = (quality_score * 0.6) + (diversity_score * 0.4)
+            
+            logger.info(f"  {attempt_type}: quality={quality_score:.3f}, diversity={diversity_score:.3f}, combined={combined_score:.3f}")
+            
+            if combined_score > best_score:
+                best_score = combined_score
+                best_attempt = (examples, validation, attempt_type)
+        
+        return best_attempt
     
     def process_capability_parallel(
         self,
