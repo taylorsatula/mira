@@ -52,3 +52,6 @@ persistent/notifications/*
 *.bak
 *.old
 *.backup
+
+# Private/sensitive components (kept in separate nested repo)
+taylor-local-config/
