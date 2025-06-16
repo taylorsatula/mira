@@ -214,8 +214,16 @@ class LLMProvider:
             return self._standardize_response(response_data)
             
         except requests.exceptions.Timeout:
+            # Log the timeout with context about the request
+            self.logger.warning(
+                f"Request timed out after {self.timeout} seconds. "
+                f"Model: {self.model}, Endpoint: {self.api_endpoint}. "
+                f"Consider increasing timeout or using streaming for long responses."
+            )
             raise APIError(
-                f"Request timed out after {self.timeout} seconds",
+                f"Request timed out after {self.timeout} seconds. "
+                f"Try increasing timeout parameter or use streaming=True for long responses. "
+                f"Current model: {self.model}",
                 ErrorCode.API_TIMEOUT_ERROR
             )
         except requests.exceptions.HTTPError as e:
@@ -279,8 +287,15 @@ class LLMProvider:
             return self._create_response_object(full_content)
             
         except requests.exceptions.Timeout:
+            self.logger.warning(
+                f"Streaming request timed out after {self.timeout} seconds. "
+                f"Model: {self.model}, Endpoint: {self.api_endpoint}. "
+                f"Consider increasing timeout for streaming requests."
+            )
             raise APIError(
-                f"Streaming request timed out after {self.timeout} seconds",
+                f"Streaming request timed out after {self.timeout} seconds. "
+                f"Try increasing timeout parameter for streaming requests. "
+                f"Current model: {self.model}",
                 ErrorCode.API_TIMEOUT_ERROR
             )
         except requests.exceptions.HTTPError as e:
