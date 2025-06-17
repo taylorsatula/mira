@@ -2,6 +2,10 @@
 
 MIRA is an AI agent system that provides natural conversation capabilities with persistent memory, intelligent tool usage, and workflow automation. It combines the conversational abilities of modern language models with practical tools and a sophisticated memory system to create a genuinely useful AI assistant.
 
+I originally started writing what would become MIRA because I wanted to create a bot that could generate recipes tailored to my personal tastes by following a decision tree. A thousand scope creeps later and now it proactively remembers that next week is your mom's birthday and asks if you'd like it to arrange a flower deliver delivered to her work address lol.
+
+I am distributing MIRA 100% unequivocally free for personal and research use. Download it, modify it, heck,, if you're feeling kind please contribute to the source. But please don't use it in commmercial applications without getting a license from me (I'll probably give you one for free for an interesting usecase) or waiting for the license to decay into Apache 2.0. Thanks! I hope you find value in this project. 
+
 ## Table of Contents
 
 - [Features](#features)
