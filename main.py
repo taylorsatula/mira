@@ -551,6 +551,37 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
                     print("Error saving tool feedback.")
                 
                 continue
+                
+            elif user_input.lower() == '/memory':
+                # Display current working memory contents
+                working_memory = system['working_memory']
+                memory_items = working_memory._memory_items
+                
+                if not memory_items:
+                    print("Working memory is empty.")
+                else:
+                    print("=== Current Working Memory ===")
+                    
+                    # Group items by category for better organization
+                    categories = {}
+                    for item_id, item in memory_items.items():
+                        category = item['category']
+                        if category not in categories:
+                            categories[category] = []
+                        categories[category].append({
+                            'id': item_id,
+                            'content': item['content']
+                        })
+                    
+                    # Display each category
+                    for category, items in categories.items():
+                        print(f"\n--- {category.upper()} ---")
+                        for item in items:
+                            print(f"[{item['id'][:8]}] {item['content']}")
+                    
+                    print(f"\nTotal items: {len(memory_items)}")
+                
+                continue
 
             # Generate response
             print("\nAssistant: ", end="", flush=True)
