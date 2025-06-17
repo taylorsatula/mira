@@ -27,6 +27,7 @@ from config.config import (
     ToolRelevanceConfig,
     OnloadCheckerConfig,
     MemoryConfig,
+    ProactiveMemoryConfig,
 )
 from errors import ConfigError, ErrorCode
 
@@ -59,6 +60,7 @@ class AppConfig(BaseModel):
     tool_relevance: ToolRelevanceConfig = Field(default_factory=ToolRelevanceConfig)
     onload_checker: OnloadCheckerConfig = Field(default_factory=OnloadCheckerConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    proactive_memory: ProactiveMemoryConfig = Field(default_factory=ProactiveMemoryConfig)
     
     # Cache for system prompts (non-model field)
     prompt_cache: Dict[str, str] = Field(default_factory=dict, exclude=True)

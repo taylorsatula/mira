@@ -9,6 +9,13 @@ import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
+# Import config directly for proactive memory settings
+try:
+    from config import config
+    pm_config = config.proactive_memory
+except:
+    # Fallback if config isn't available
+    pm_config = None
 
 logger = logging.getLogger(__name__)
 
@@ -16,13 +23,22 @@ logger = logging.getLogger(__name__)
 async def get_relevant_memories_async(
     messages: List[Any],
     memory_manager,
-    max_memories: int = 3,
-    similarity_threshold: float = 0.6,
-    min_importance: float = 0.3,
-    context_window: int = 6
+    max_memories: int = None,
+    similarity_threshold: float = None,
+    min_importance: float = None,
+    context_window: int = None,
+    use_reranker: bool = None,
+    initial_candidates: int = None,
+    rerank_candidates: int = None
 ) -> List[Dict[str, Any]]:
     """
     Find memories relevant to recent conversation context asynchronously.
+    
+    Multi-stage filtering process:
+    1. Retrieve initial_candidates (25) memories by embedding similarity
+    2. Take top rerank_candidates (15) for reranking
+    3. Rerank those candidates with cross-encoder model
+    4. Select up to max_memories (5) that meet importance threshold
     
     Args:
         messages: List of conversation messages
@@ -31,10 +47,32 @@ async def get_relevant_memories_async(
         similarity_threshold: Minimum similarity score for relevance
         min_importance: Minimum importance score for inclusion
         context_window: Number of recent messages to consider
+        use_reranker: Whether to use reranking if available
+        initial_candidates: Number of memories to retrieve initially
+        rerank_candidates: Number of top-ranked memories to rerank
         
     Returns:
         List of relevant memory passages
     """
+    # Use config values if available, otherwise use hardcoded defaults
+    if pm_config:
+        max_memories = max_memories if max_memories is not None else pm_config.max_memories
+        similarity_threshold = similarity_threshold if similarity_threshold is not None else pm_config.similarity_threshold
+        min_importance = min_importance if min_importance is not None else pm_config.min_importance
+        context_window = context_window if context_window is not None else pm_config.context_window
+        use_reranker = use_reranker if use_reranker is not None else pm_config.use_reranker
+        initial_candidates = initial_candidates if initial_candidates is not None else pm_config.initial_candidates
+        rerank_candidates = rerank_candidates if rerank_candidates is not None else pm_config.rerank_candidates
+    else:
+        # Hardcoded defaults if config not available
+        max_memories = max_memories if max_memories is not None else 5
+        similarity_threshold = similarity_threshold if similarity_threshold is not None else 0.6
+        min_importance = min_importance if min_importance is not None else 0.3
+        context_window = context_window if context_window is not None else 6
+        use_reranker = use_reranker if use_reranker is not None else True
+        initial_candidates = initial_candidates if initial_candidates is not None else 25
+        rerank_candidates = rerank_candidates if rerank_candidates is not None else 15
+    
     if not messages:
         return []
     
@@ -55,17 +93,49 @@ async def get_relevant_memories_async(
         # Search for similar memories
         results = memory_manager.passage_manager.search_passages_by_embedding(
             query_embedding=context_embedding,
-            limit=max_memories * 2,  # Get extra to filter by importance
+            limit=max_memories * 4,  # Get extra for importance filtering and reranking
             filters={"min_similarity": similarity_threshold}
         )
         
-        # Filter by importance and limit
-        filtered_results = []
+        # First filter by importance score (fast operation)
+        importance_filtered = []
         for result in results:
             if result.get("importance", 0) >= min_importance:
-                filtered_results.append(result)
-                if len(filtered_results) >= max_memories:
-                    break
+                importance_filtered.append(result)
+        
+        logger.debug(f"Filtered from {len(results)} to {len(importance_filtered)} memories by importance score")
+        
+        # Apply reranking if enabled and available (on the smaller filtered set)
+        if use_reranker and importance_filtered and hasattr(memory_manager.embedding_model, 'rerank'):
+            try:
+                # Extract passage texts for reranking
+                passage_texts = [result.get("text", "") for result in importance_filtered]
+                
+                # Rerank the filtered passages
+                reranked_results = memory_manager.embedding_model.rerank(
+                    query=context_string,
+                    passages=passage_texts,
+                    top_k=max_memories  # Only need top k results
+                )
+                
+                # Build final results from reranked passages
+                filtered_results = []
+                for idx, rerank_score, _ in reranked_results:
+                    passage = importance_filtered[idx].copy()
+                    passage["rerank_score"] = rerank_score
+                    passage["embedding_score"] = passage.get("similarity", 0)
+                    # Use rerank score as primary similarity measure
+                    passage["similarity"] = rerank_score
+                    filtered_results.append(passage)
+                
+                logger.debug(f"Reranked {len(importance_filtered)} memories, selected top {len(filtered_results)}")
+            except Exception as e:
+                logger.warning(f"Reranking failed, using embedding scores: {e}")
+                # Fall back to importance-filtered results with original scores
+                filtered_results = importance_filtered[:max_memories]
+        else:
+            # No reranking available or disabled, just limit the importance-filtered results
+            filtered_results = importance_filtered[:max_memories]
         
         return filtered_results
         
@@ -77,13 +147,22 @@ async def get_relevant_memories_async(
 def get_relevant_memories(
     messages: List[Any],
     memory_manager,
-    max_memories: int = 3,
-    similarity_threshold: float = 0.6,
-    min_importance: float = 0.3,
-    context_window: int = 6
+    max_memories: int = None,
+    similarity_threshold: float = None,
+    min_importance: float = None,
+    context_window: int = None,
+    use_reranker: bool = None,
+    initial_candidates: int = None,
+    rerank_candidates: int = None
 ) -> List[Dict[str, Any]]:
     """
     Find memories relevant to recent conversation context with recency weighting.
+    
+    Multi-stage filtering process:
+    1. Retrieve initial_candidates (25) memories by embedding similarity
+    2. Take top rerank_candidates (15) for reranking
+    3. Rerank those candidates with cross-encoder model
+    4. Select up to max_memories (5) that meet importance threshold
     
     Args:
         messages: List of conversation messages
@@ -92,10 +171,32 @@ def get_relevant_memories(
         similarity_threshold: Minimum similarity score for relevance
         min_importance: Minimum importance score for inclusion
         context_window: Number of recent messages to consider
+        use_reranker: Whether to use reranking if available
+        initial_candidates: Number of memories to retrieve initially
+        rerank_candidates: Number of top-ranked memories to rerank
         
     Returns:
         List of relevant memory passages
     """
+    # Use config values if available, otherwise use hardcoded defaults
+    if pm_config:
+        max_memories = max_memories if max_memories is not None else pm_config.max_memories
+        similarity_threshold = similarity_threshold if similarity_threshold is not None else pm_config.similarity_threshold
+        min_importance = min_importance if min_importance is not None else pm_config.min_importance
+        context_window = context_window if context_window is not None else pm_config.context_window
+        use_reranker = use_reranker if use_reranker is not None else pm_config.use_reranker
+        initial_candidates = initial_candidates if initial_candidates is not None else pm_config.initial_candidates
+        rerank_candidates = rerank_candidates if rerank_candidates is not None else pm_config.rerank_candidates
+    else:
+        # Hardcoded defaults if config not available
+        max_memories = max_memories if max_memories is not None else 5
+        similarity_threshold = similarity_threshold if similarity_threshold is not None else 0.6
+        min_importance = min_importance if min_importance is not None else 0.3
+        context_window = context_window if context_window is not None else 6
+        use_reranker = use_reranker if use_reranker is not None else True
+        initial_candidates = initial_candidates if initial_candidates is not None else 25
+        rerank_candidates = rerank_candidates if rerank_candidates is not None else 15
+    
     if not messages:
         return []
     
@@ -116,17 +217,49 @@ def get_relevant_memories(
         # Search for similar memories
         results = memory_manager.passage_manager.search_passages_by_embedding(
             query_embedding=context_embedding,
-            limit=max_memories * 2,  # Get extra to filter by importance
+            limit=max_memories * 4,  # Get extra for importance filtering and reranking
             filters={"min_similarity": similarity_threshold}
         )
         
-        # Filter by importance and limit
-        filtered_results = []
+        # First filter by importance score (fast operation)
+        importance_filtered = []
         for result in results:
             if result.get("importance", 0) >= min_importance:
-                filtered_results.append(result)
-                if len(filtered_results) >= max_memories:
-                    break
+                importance_filtered.append(result)
+        
+        logger.debug(f"Filtered from {len(results)} to {len(importance_filtered)} memories by importance score")
+        
+        # Apply reranking if enabled and available (on the smaller filtered set)
+        if use_reranker and importance_filtered and hasattr(memory_manager.embedding_model, 'rerank'):
+            try:
+                # Extract passage texts for reranking
+                passage_texts = [result.get("text", "") for result in importance_filtered]
+                
+                # Rerank the filtered passages
+                reranked_results = memory_manager.embedding_model.rerank(
+                    query=context_string,
+                    passages=passage_texts,
+                    top_k=max_memories  # Only need top k results
+                )
+                
+                # Build final results from reranked passages
+                filtered_results = []
+                for idx, rerank_score, _ in reranked_results:
+                    passage = importance_filtered[idx].copy()
+                    passage["rerank_score"] = rerank_score
+                    passage["embedding_score"] = passage.get("similarity", 0)
+                    # Use rerank score as primary similarity measure
+                    passage["similarity"] = rerank_score
+                    filtered_results.append(passage)
+                
+                logger.debug(f"Reranked {len(importance_filtered)} memories, selected top {len(filtered_results)}")
+            except Exception as e:
+                logger.warning(f"Reranking failed, using embedding scores: {e}")
+                # Fall back to importance-filtered results with original scores
+                filtered_results = importance_filtered[:max_memories]
+        else:
+            # No reranking available or disabled, just limit the importance-filtered results
+            filtered_results = importance_filtered[:max_memories]
         
         return filtered_results
         

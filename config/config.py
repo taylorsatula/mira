@@ -349,6 +349,39 @@ class OnloadCheckerConfig(BaseModel):
     )
 
 
+class ProactiveMemoryConfig(BaseModel):
+    """Configuration for proactive memory surfacing in working memory."""
+    
+    max_memories: int = Field(
+        default=5,
+        description="Maximum number of memories to surface in context"
+    )
+    similarity_threshold: float = Field(
+        default=0.6,
+        description="Minimum similarity score for memory relevance (0.0-1.0)"
+    )
+    min_importance: float = Field(
+        default=0.3,
+        description="Minimum importance score for memory inclusion (0.0-1.0)"
+    )
+    context_window: int = Field(
+        default=6,
+        description="Number of recent messages to consider for context"
+    )
+    initial_candidates: int = Field(
+        default=25,
+        description="Number of memories to retrieve initially by embedding similarity"
+    )
+    rerank_candidates: int = Field(
+        default=15,
+        description="Number of top-ranked memories to rerank with cross-encoder"
+    )
+    use_reranker: bool = Field(
+        default=True,
+        description="Whether to use reranking if available"
+    )
+
+
 class SystemConfig(BaseModel):
     """System-level configuration settings."""
     
