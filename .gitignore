@@ -57,9 +57,12 @@ persistent/notifications/*
 taylor-local-config/
 
 # Legacy/deprecated directories
-api/
+
 miraweb-dev/
 secure_auth/
 passenger_wsgi.py
 wsgi.py
 punchlist
+.github/
+blog/
+data/embeddings_cache/
