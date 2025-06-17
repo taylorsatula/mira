@@ -26,7 +26,7 @@ from unittest.mock import patch, mock_open
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Import the system under test
-from lt_memory.utils.embeddings import EmbeddingCache
+from api.embeddings_provider import EmbeddingCache
 
 
 # =============================================================================
