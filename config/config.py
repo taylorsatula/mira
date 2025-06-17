@@ -196,6 +196,44 @@ class ToolConfig(BaseModel):
 # Email configuration should be moved to tools/email_tool.py
 
 
+class EmbeddingsLocalConfig(BaseModel):
+    """Local embeddings provider settings."""
+    
+    model_name: str = Field(
+        default="BAAI/bge-large-en-v1.5",
+        description="Local BGE model name"
+    )
+    use_int8: bool = Field(
+        default=True,
+        description="Use INT8 quantization for local models"
+    )
+    cache_dir: Optional[str] = Field(
+        default=None,
+        description="Cache directory for model files"
+    )
+    thread_limit: int = Field(
+        default=4,
+        description="Thread limit for local inference"
+    )
+    reranker_use_fp16: bool = Field(
+        default=True,
+        description="Use FP16 precision for reranker"
+    )
+
+
+class EmbeddingsRemoteConfig(BaseModel):
+    """Remote embeddings provider settings."""
+    
+    model: str = Field(
+        default="text-embedding-3-small",
+        description="Remote embedding model name"
+    )
+    api_endpoint: str = Field(
+        default="https://api.openai.com/v1/embeddings",
+        description="Remote embeddings API endpoint"
+    )
+
+
 class EmbeddingsConfig(BaseModel):
     """Embeddings provider configuration settings."""
     
@@ -204,30 +242,24 @@ class EmbeddingsConfig(BaseModel):
         description="Embeddings provider: 'local' for BGE models or 'remote' for OpenAI"
     )
     
-    # Local provider settings
-    local_model: str = Field(
-        default="BAAI/bge-large-en-v1.5",
-        description="Local BGE model name"
+    # Provider-specific settings
+    local: EmbeddingsLocalConfig = Field(
+        default_factory=EmbeddingsLocalConfig,
+        description="Local provider configuration"
     )
-    device: str = Field(
-        default="cpu",
-        description="Device for local models: 'cpu' or 'cuda'"
-    )
-    
-    # Remote provider settings
-    remote_model: str = Field(
-        default="text-embedding-3-small",
-        description="Remote embedding model name"
-    )
-    api_endpoint: str = Field(
-        default="https://api.openai.com/v1/embeddings",
-        description="Remote embeddings API endpoint"
+    remote: EmbeddingsRemoteConfig = Field(
+        default_factory=EmbeddingsRemoteConfig,
+        description="Remote provider configuration"
     )
     
     # Common settings
     batch_size: int = Field(
         default=32,
         description="Batch size for embedding generation"
+    )
+    cache_enabled: bool = Field(
+        default=True,
+        description="Enable embedding caching"
     )
     max_retries: int = Field(
         default=3,

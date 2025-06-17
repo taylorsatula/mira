@@ -15,7 +15,6 @@ import numpy as np
 from lt_memory.models.base import (
     Base, MemoryBlock, BlockHistory, MemoryPassage, MemorySnapshot, ArchivedConversation
 )
-from utils.openai_embeddings import OpenAIEmbeddingModel
 from lt_memory.utils.pg_vector_store import PGVectorStore
 from lt_memory.utils.summarization import SummarizationEngine
 from errors import error_context, ErrorCode, ToolError

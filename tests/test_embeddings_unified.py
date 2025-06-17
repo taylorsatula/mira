@@ -54,7 +54,7 @@ class TestEmbeddingsProvider:
         tool classification and memory search.
         """
         assert local_provider.provider_type == "local"
-        assert local_provider._local_model is not None
+        assert local_provider._impl is not None
         assert local_provider._reranker is not None
         assert local_provider.get_embedding_dimension() == 1024
     

@@ -122,6 +122,8 @@ class ErrorCode(Enum):
     EMBEDDING_ERROR = 861
     RERANKING_ERROR = 862
     SEARCH_ERROR = 863
+    EMBEDDING_GENERATION_ERROR = 864
+    EMBEDDING_COMPATIBILITY_ERROR = 865
     
     # Uncategorized/system errors (9xx)
     UNKNOWN_ERROR = 901
@@ -133,6 +135,8 @@ class ErrorCode(Enum):
     DEPENDENCY_ERROR = 907
     INITIALIZATION_ERROR = 908
     CONFIGURATION_ERROR = 909
+    FEATURE_NOT_AVAILABLE = 910
+    OPERATION_FAILED = 911
 
 
 class AgentError(Exception):

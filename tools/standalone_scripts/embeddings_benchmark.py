@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 
 from tool_relevance_engine import ToolRelevanceEngine, MultiLabelClassifier
 from tools.repo import ToolRepository
+from api.embeddings_provider import EmbeddingsProvider
 from config import config
 
 
@@ -46,8 +47,14 @@ class EmbeddingsBenchmarkTool:
         self.tool_repo = ToolRepository()
         self.tool_repo.discover_tools()
         
+        # Initialize embeddings provider for tool classification
+        self.embeddings_provider = EmbeddingsProvider(
+            provider_type="local",
+            enable_reranker=False
+        )
+        
         # Initialize engine - it will use existing cache if available
-        self.engine = ToolRelevanceEngine(self.tool_repo)
+        self.engine = ToolRelevanceEngine(self.tool_repo, self.embeddings_provider)
         
         # Initialize test history
         self.test_history: List[Dict[str, Any]] = []
