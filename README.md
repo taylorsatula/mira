@@ -1,10 +1,12 @@
 # MIRA: Just Talk Normal
 
-MIRA is an AI agent system that provides natural conversation capabilities with persistent memory, intelligent tool usage, and workflow automation. It combines the conversational abilities of modern language models with practical tools and a sophisticated memory system to create a genuinely useful AI assistant.
+MIRA is an AI agent system that provides natural conversation capabilities with persistent memory, intelligent tool usage, and workflow automation. It combines the conversational abilities of modern language models with practical tools and a sophisticated memory system to create a genuinely useful long-running AI assistant. My vision for this project is to create a little brain-in-a-box. I will not stop till my vision is realized.
 
-I originally started writing what would become MIRA because I wanted to create a bot that could generate recipes tailored to my personal tastes by following a decision tree. A thousand scope creeps later and now it proactively remembers that next week is your mom's birthday and asks if you'd like it to arrange a flower deliver delivered to her work address lol.
+I originally started writing what would become MIRA because I wanted to create a bot that could generate recipes tailored to my personal tastes by following a decision tree. A thousand scope creeps later and now it proactively remembers that next week is your mom's birthday and asks if you'd like it to arrange a gardenia delivery to her work address because that is what you got her last year lol.
 
-I am distributing MIRA 100% unequivocally free for personal and research use. Download it, modify it, heck,, if you're feeling kind please contribute to the source. But please don't use it in commmercial applications without getting a license from me (I'll probably give you one for free for an interesting usecase) or waiting for the license to decay into Apache 2.0. Thanks! I hope you find value in this project. 
+**I am distributing MIRA 100% unequivocally free for personal and research use.** Download it, modify it, heck,, if you're feeling kind please contribute to the source. But **please don't use it in commmercial applications without getting a license** from me (I'll probably give you one for free for an interesting usecase tbh) or wait for the license to decay into Apache 2.0. 
+
+Thanks! I hope you find value in this project. 
 
 ## Table of Contents
 
@@ -21,12 +23,12 @@ I am distributing MIRA 100% unequivocally free for personal and research use. Do
 
 ## Features
 
-- **Natural Conversation**: Talk to MIRA like you would a human assistant - no special commands or syntax required
-- **Continuous Memory**: Maintains one long continuous conversation with daily summarization and context management
-- **Intelligent Tool Usage**: Automatically selects and uses appropriate tools based on conversation context
+- **Natural Conversation**: Talk to MIRA like you would a human  - no special commands or syntax required
+- **Continuous Memory**: Maintains one long continuous conversation with daily summarization and context management (this is a huge issue in many long-running AI agents and I think I mitigated it. TL;DR Each day is a standalone event judged against larger trends. No one day has excessive weight and I've integrated decay at multiple strategic points.)
+- **Intelligent Tool Usage**: Automatically selects and uses appropriate tools based on conversation context. This just-in-time approach to adding tool definitions to the context window in conjunction with dynamically updating workflows that only show the current step allows MIRA to reliably execute multi-step tool calls on pittifly low parameter LLMs. This was designed so that MIRA can run totally offline on edge devices. Heck, my testbed for this ability is an old Android phone.
 - **Workflow Automation**: Handles multi-step tasks with context-aware workflows
-- **Provider Flexibility**: Works with OpenAI, Anthropic (via proxy), or local models through Ollama
-- **Extensible Tool System**: Easy to add new capabilities through the modular tool framework
+- **Provider Flexibility**: Works with Anthropic (via proxy), Hugging Face, Lambda, any provider that follow the OAI API format, or local models through Ollama. llm_provider.py is provider agnostic. 
+- **Extensible Tool System**: Easy to add new capabilities through the modular tool framework (more details below. MIRA includes resources to semi-reliably zero-shot new tool creation)
 
 ## Architecture
 
@@ -68,6 +70,8 @@ MIRA uses BAAI BGE (Bidirectional Generative Embeddings) models for efficient lo
 - **BGE-reranker-base**: FP16 precision reranker for improved memory search relevance
 
 These models run entirely on your local machine with ONNX Runtime optimization.
+embeddings_provider.py goes hand-in-hand with llm_provider.py wherein you can use any embeddings provider you want including Vertex and OpenAI.
+My theory was that though using BGM with Reranker produces awesome results not every computer can handle these tasks so MIRA can seamlessly offload heavy lifting to a remote server.
 
 #### Unified Embeddings Architecture
 MIRA implements a novel unified embeddings approach that optimizes both performance and relevance:
@@ -86,7 +90,7 @@ MIRA implements a novel unified embeddings approach that optimizes both performa
 **Advantages over Traditional Approaches:**
 - **Performance**: Eliminates redundant embedding infrastructure and model loading
 - **Consistency**: Ensures consistent embedding quality across all system components  
-- **Efficiency**: Shared caching and optimization reduces computational overhead
+- **Efficiency**: Shared LRU and disk caching & optimization reduces computational overhead
 - **Contextual Precision**: Tool relevance focuses on immediate needs while memory search considers conversational flow
 - **Scalability**: Single embedding provider scales to support additional AI subsystems
 
@@ -99,7 +103,7 @@ For cloud-based embeddings, configure the provider in your environment:
 export EMBEDDINGS_PROVIDER=remote
 export OAI_EMBEDDINGS_KEY=your-openai-api-key
 ```
-
+If you choose to use local embeddings (preferred):
 The system will automatically download and cache BGE models on first use (~1.2GB for base model, ~500MB for reranker).
 
 ## Usage
@@ -136,6 +140,7 @@ Working memory serves as the dynamic context system that's active throughout eve
   - `SystemStatusManager`: Reports system health and notices
   - `ProactiveMemoryTrinket`: Intelligently surfaces relevant long-term memories
   - `ConversationArchiveManager`: Injects relevant historical conversations
+  - `OtherOnes`: Trinkets follow a factory pattern so new ones can be added quickly and reliably
 
 **How It Works:**
 1. Before generating each response, all registered managers update their content
@@ -151,9 +156,10 @@ Long-term memory provides persistent knowledge storage with sophisticated retrie
 
 **Memory Blocks (Core Memory)**
 - Always-visible context that MIRA can self-edit
-- Three categories: `persona` (MIRA's personality), `human` (user information), `system` (operational context)
+- Three categories: `persona` (MIRA's personality/directive), `human` (user information), `system` (operational context)
 - Version tracking with differential storage for change history
 - Character limits ensure focused, relevant content (2048 for persona/human, 1024 for system)
+- There is also a blind core memory called `scratchpad` that allows MIRA to log notes "It is Friday and the user asked me to provide them a report again again this week. Consider proactively providing that in their morning report on Fridays". MIRA can write to this block but cannot read it. Allowing MIRA to read the block would pollute the context. The contents of `scratchpad` are reviwed nightly during the consolidation routine and cleared for the next day.
 
 **Memory Passages (Archival Memory)**
 - Searchable long-term memories with vector embeddings
@@ -162,12 +168,14 @@ Long-term memory provides persistent knowledge storage with sophisticated retrie
 - Access tracking to identify frequently used information
 - Optional expiration dates for temporal facts
 - Human verification flags for trusted information
+- Time and Retrieval Delay for eventually pruning memories that have faded into obscurity
 
 **Archived Conversations**
 - Complete conversation history organized by date
 - Pre-generated summaries at multiple time scales (daily, weekly, monthly)
 - Efficient temporal indexing for quick retrieval
 - Integration with working memory for contextual access
+- Uses will be able to inject whole snippets into conversation eventually when I get around to coding this but it is low prioriry right now
 
 **Memory Snapshots**
 - Point-in-time captures of entire memory state
@@ -175,7 +183,7 @@ Long-term memory provides persistent knowledge storage with sophisticated retrie
 - Enables rollback to previous memory states if needed
 
 **Semantic Search Capabilities:**
-- Uses OpenAI's text-embedding-3-small model (1024 dimensions)
+- Uses OpenAI's text-embedding-3-small model (1024 dimensions) or BGM-base (1024 dimensions)
 - pgvector's IVFFlat indexing for efficient similarity search
 - Configurable similarity thresholds (default 0.6 for proactive surfacing)
 - Multiple filter options (source, date range, importance level)
@@ -201,14 +209,14 @@ MIRA uses a sophisticated relevance engine that analyzes conversation context to
 - **Embedding-Based Classification**: Uses semantic similarity to match user messages with tool capabilities
 - **Context Persistence**: Keeps relevant tools enabled for several message exchanges after initial activation
 - **Topic Change Detection**: Automatically adjusts tool availability when conversation topics shift
-- **Training Data**: Uses both manual examples and automatically generated synthetic examples for each tool
+- **Training Data**: System automatically creates high-quality synthetic examples for each tool that are verified for diversity and token length before finalization (no human in-the-loop)
 
 **Automatic Training**
 When a new tool is added:
 1. MIRA examines the tool's description and parameters
 2. Generates synthetic conversation examples that would require the tool
 3. Trains its relevance classifier to recognize similar patterns
-4. The tool becomes available for automatic activation in future conversations
+4. The tool becomes available for automatic activation after application is reloaded
 
 ### Developer-Friendly Tool Creation
 
@@ -230,15 +238,15 @@ class MyTool(Tool):
 **Natural Language Development Workflow**
 1. Load MIRA's codebase into an AI assistant like Claude Code
 2. Examine existing tools in the `tools/` directory for patterns
-3. Reference the included guide for best practices
+3. '@' Reference the included guide for best practices
 4. Describe the desired functionality in natural language
 5. The AI assistant generates a complete tool implementation following MIRA's patterns
-6. Drop the completed tool file into the `tools/` directory
+6. Drop the completed tool file into the `tools/` directory if Claude doesn't put it there automatically
 7. MIRA automatically discovers, loads, and trains itself to use the new tool
 
 **Automatic Integration**
 - **Discovery**: Tools are automatically discovered and loaded from the `tools/` directory
-- **Configuration**: Tools can register their own configuration schemas
+- **Configuration**: Tools can register their own configuration schemas and system allows for dependency injection
 - **Error Handling**: Consistent error handling with recovery guidance
 - **Documentation**: Self-documenting through description and parameter schemas
 - **Testing**: Standard testing patterns ensure reliability
@@ -254,6 +262,8 @@ The AI assistant would then:
 4. Provide the tool ready to drop into the `tools/` directory
 
 This approach makes MIRA highly extensible while maintaining code quality and consistency across all tools.
+
+A note from the developer: This rocks. It is amazing. You can imagine a tool and for like 40 cents in API calls later your new tool works with MIRA. I was going to give MIRA the ability to build its own tools with headless Claude Code and maybe that'll be a thing in the future but for now I made it dead simple to add tools relevant to *your needs*.
 
 ## Available Tools
 
