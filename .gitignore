@@ -1,35 +1,17 @@
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
+.mypy/
+.pytests/
 env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
-
 # Virtual Environment
 venv/
 ENV/
 env/
 
+# Github
+.github/
+
 # IDE files
-.idea/
-.vscode/
-*.swp
-*.swo
 .DS_Store
 
 # Project specific
@@ -46,23 +28,11 @@ persistent/tasks/running/*
 persistent/tasks/completed/*
 persistent/tasks/failed/*
 persistent/notifications/*
+data/embeddings_cache/
+
 
 # Backup/deprecated files
 *.dep
 *.bak
 *.old
 *.backup
-
-# Private/sensitive components (kept in separate nested repo)
-taylor-local-config/
-
-# Legacy/deprecated directories
-
-miraweb-dev/
-secure_auth/
-passenger_wsgi.py
-wsgi.py
-punchlist
-.github/
-blog/
-data/embeddings_cache/
