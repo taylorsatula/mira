@@ -1,0 +1,134 @@
+{
+  "id": "delete_automation",
+  "name": "Delete Automation",
+  "description": "Guide for deleting an existing automation",
+  "version": "1.0",
+  "trigger_examples": [
+    "I want to delete an automation",
+    "Help me remove a scheduled task",
+    "Delete one of my automations",
+    "Remove an automated task",
+    "Stop an automation from running"
+  ],
+  "steps": {
+    "step1": {
+      "id": "step1",
+      "name": "Select automation to delete",
+      "description": "Choose which automation you want to delete",
+      "tools": ["automation_tool"],
+      "guidance": "Help the user select which automation they want to delete.",
+      "prerequisites": [],
+      "action": {
+        "type": "api_call",
+        "operation": "get_automations",
+        "parameters": {
+          "limit": 50
+        },
+        "output": "all_automations"
+      },
+      "display": {
+        "type": "automations_list",
+        "data": "${all_automations.automations}"
+      },
+      "inputs": [
+        {
+          "name": "automation_id",
+          "description": "Which automation would you like to delete? Select ID or enter ID directly",
+          "type": "select",
+          "options_from": "all_automations.automations",
+          "option_label": "name",
+          "option_value": "id",
+          "allow_custom": true,
+          "required": true
+        }
+      ],
+      "next": "step2"
+    },
+    "step2": {
+      "id": "step2",
+      "name": "Confirm automation details",
+      "description": "Confirm the details of the automation you want to delete",
+      "tools": ["automation_tool"],
+      "guidance": "Show the details of the selected automation and ask for confirmation before deletion.",
+      "prerequisites": ["step1"],
+      "action": {
+        "type": "api_call",
+        "operation": "get_automation",
+        "parameters": {
+          "automation_id": "${automation_id}"
+        },
+        "output": "automation_details"
+      },
+      "display": {
+        "type": "automation_details",
+        "data": "${automation_details.automation}"
+      },
+      "inputs": [
+        {
+          "name": "confirm_deletion",
+          "description": "Are you sure you want to delete this automation?",
+          "type": "boolean",
+          "required": true
+        }
+      ],
+      "next": {
+        "conditions": [
+          {
+            "condition": "confirm_deletion === true",
+            "next": "step3"
+          },
+          {
+            "default": "cancel"
+          }
+        ]
+      }
+    },
+    "step3": {
+      "id": "step3",
+      "name": "Delete automation",
+      "description": "Delete the selected automation",
+      "tools": ["automation_tool"],
+      "guidance": "Process the deletion of the confirmed automation.",
+      "prerequisites": ["step2"],
+      "action": {
+        "type": "api_call",
+        "operation": "delete_automation",
+        "parameters": {
+          "automation_id": "${automation_id}",
+          "confirm": true
+        }
+      },
+      "next": "step4"
+    },
+    "step4": {
+      "id": "step4",
+      "name": "Deletion successful",
+      "description": "The automation has been successfully deleted",
+      "tools": ["automation_tool"],
+      "guidance": "Confirm to the user that the deletion was successful.",
+      "prerequisites": ["step3"],
+      "display": {
+        "type": "message",
+        "content": "Automation '${automation_details.automation.name}' has been successfully deleted."
+      },
+      "next": null
+    },
+    "cancel": {
+      "id": "cancel",
+      "name": "Deletion cancelled",
+      "description": "The deletion has been cancelled",
+      "tools": ["automation_tool"],
+      "guidance": "Inform the user that the deletion was cancelled.",
+      "prerequisites": ["step2"],
+      "display": {
+        "type": "message",
+        "content": "Deletion of automation '${automation_details.automation.name}' has been cancelled."
+      },
+      "next": null
+    }
+  },
+  "completion_requirements": {
+    "required_steps": ["step3", "step4"],
+    "required_data": []
+  }
+}

@@ -483,7 +483,6 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
     print("Type '/exit' to end the session")
     print("Type '/save' to save the conversation")
     print("Type '/clear' to clear the conversation history")
-    print("Type '/reload_user' to reload user information")
     print("Type '/tokens' to show token usage counts")
     print("Type '/toolfeedback [feedback]' to save feedback about tool activation")
     print("-" * 50)
@@ -522,10 +521,6 @@ def interactive_mode(system: Dict[str, Any], stream_mode: bool = False) -> None:
                 print("Conversation history cleared.")
                 continue
                 
-            elif user_input.lower() == '/reload_user':
-                system['user_info_manager'].load_user_information()
-                print("User information reloaded.")
-                continue
                 
             elif user_input.lower() == '/tokens':
                 tokens_in = getattr(conversation, 'tokens_in', 0)
