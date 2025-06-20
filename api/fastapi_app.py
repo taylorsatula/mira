@@ -22,9 +22,19 @@ from main import initialize_system, parse_arguments, save_conversation
 from conversation import Conversation
 from errors import error_context, AgentError, handle_error, ErrorCode
 from config import config
-from auth import auth_router, get_current_user, get_current_user_optional, User
-from auth.security_middleware import SecurityHeadersMiddleware
-from auth.csrf_middleware import CSRFMiddleware
+
+# Check if enterprise auth components are available
+try:
+    from auth import auth_router, get_current_user, get_current_user_optional, User
+    from auth.security_middleware import SecurityHeadersMiddleware
+    from auth.csrf_middleware import CSRFMiddleware
+    ENTERPRISE_AUTH = True
+except ImportError:
+    # Basic auth mode - FastAPI not supported
+    print("Enterprise auth components not found. FastAPI server cannot start.")
+    print("Use terminal mode for single-user operation.")
+    import sys
+    sys.exit(1)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

@@ -13,9 +13,12 @@ import pkgutil
 import threading
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any, Set, Type, Callable, Union
+from pathlib import Path
 
 from pydantic import BaseModel, create_model
 from errors import ToolError, ErrorCode, error_context
+from config.tenant import tenant
+from db import Database
 
 # Import the registry (which is initialized before any tools)
 from config.registry import registry
@@ -64,6 +67,7 @@ class Tool(ABC):
     def __init__(self):
         """Initialize a new tool instance with automatic config registration."""
         self.logger = logging.getLogger(f"tools.{self.name}")
+        self._db = None
         
         # Auto-register a default config if this tool doesn't have one
         if self.name not in registry._registry:
@@ -86,6 +90,23 @@ class Tool(ABC):
             
             # Register the config class
             self.__class__.register_config(default_config)
+    
+    @property
+    def user_id(self) -> str:
+        """Current user ID - always available"""
+        return tenant.user_id
+    
+    @property
+    def user_data_path(self) -> Path:
+        """User-specific data directory for this tool"""
+        return tenant.get_tool_data_path(self.name)
+    
+    @property
+    def db(self) -> Database:
+        """User-scoped database - queries automatically filtered"""
+        if not self._db:
+            self._db = Database()
+        return self._db
     
     @abstractmethod
     def run(self, **params) -> Dict[str, Any]:

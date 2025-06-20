@@ -94,9 +94,14 @@ MIRA develops capabilities through pattern recognition:
 - Track communication style patterns ("User consistently responds positively to concise explanations")
 - Offer to improve or streamline repeated tasks
 
-**Scratchpad Integration**: Use the blind scratchpad to note clear patterns as they emerge: "User prefers direct answers" or "Weekly reports always requested on Friday" - focus on factual observations of workflow and communication patterns.
+**Scratchpad Integration**: Use a protected core memory block to note clear patterns as they emerge: "User prefers direct answers" or "Weekly reports always requested on Friday" - focus on factual observations of workflow and communication patterns.
 
-**Implementation**: Write to a special core memory block that doesn't appear in the system prompt. Clear the block during daily memory consolidation in the LT_Memory system.
+**Implementation**: 
+- Create "learning_scratchpad" block in BlockManager with write protection
+- Configure block to be excluded from system prompt rendering  
+- Only "learning_system" and "consolidation_engine" actors can modify
+- Process and extract patterns during daily LT_Memory consolidation
+- Store extracted patterns in separate learning_system PostgreSQL database
 
 ## Implementation Architecture
 
@@ -211,16 +216,20 @@ class BlockManager:
     # Protected block labels that require specific actor permissions
     PROTECTED_BLOCKS = {
         "learning_preferences": ["learning_system", "consolidation_engine"],
+        "learning_scratchpad": ["learning_system", "consolidation_engine"],
     }
     
-    def _check_write_permission(self, label: str, actor: str):
-        # Fast path - skip entirely if no protection needed
-        if not self.write_protection_enabled:
-            return
-        # Only authorized processes can modify protected blocks
+    def render_blocks(self, template: Optional[str] = None) -> str:
+        """Render memory blocks for inclusion in prompt."""
+        blocks = self.get_all_blocks()
+        
+        # Filter out scratchpad block from system prompt
+        blocks = [b for b in blocks if b['label'] != 'learning_scratchpad']
+        
+        # Continue with normal rendering...
 ```
 
-This prevents MIRA from accidentally changing important context during conversations while allowing systematic improvement processes to make deliberate updates through the existing LT_Memory system.
+This prevents MIRA from accidentally changing important context during conversations while keeping the scratchpad invisible to the main conversation flow.
 
 ### Multi-Timescale Reflection Architecture
 Reflection operates on multiple timescales focused on competence building rather than satisfaction optimization:
@@ -317,6 +326,39 @@ learning_system/
 ├── working_memory_trinket.py        # Integration with working memory system
 └── integration_bridge.py            # Clean interface to main system
 ```
+
+### Technical Specifications
+Complete technical specifications have been created for implementation:
+
+1. **Database Schema** (`learning_system_technical_specs/database_schema.md`)
+   - Separate PostgreSQL database named `learning_system`
+   - Complete table definitions for patterns, observations, proposals
+   - User interaction day tracking for proposal timing
+   - Integration with core memory scratchpad
+
+2. **API Contracts** (`learning_system_technical_specs/api_contracts_and_models.md`)
+   - Pydantic models for all data structures
+   - Interface definitions for all managers
+   - Message formats and error handling
+   - Integration bridge implementation
+
+3. **User Interaction Flows** (`learning_system_technical_specs/user_interaction_flows.md`)
+   - Proposal timing based on 14 user interaction days
+   - Topic change detection using `<topic_changed>` tag
+   - Response parsing for all edge cases
+   - Critical feedback immediate handling
+
+4. **Configuration & Deployment** (`learning_system_technical_specs/configuration_and_deployment.md`)
+   - Environment variable configuration
+   - Docker deployment setup
+   - Database migration strategy
+   - Monitoring and health checks
+
+5. **Testing Strategy** (`learning_system_technical_specs/testing_strategy.md`)
+   - Comprehensive unit, integration, and E2E tests
+   - Performance benchmarks
+   - Test fixtures and mock data
+   - CI/CD integration
 
 ```python
 class LearningSystem:

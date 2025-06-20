@@ -25,7 +25,6 @@ from tools.repo import ToolRepository
 from tools.tool_feedback import save_tool_feedback
 from conversation import Conversation
 from onload_checker import OnLoadChecker, add_stimuli_to_conversation
-from utils import automation_controller
 from working_memory import WorkingMemory, TimeManager, SystemStatusManager, ReminderManager
 from lt_memory.integration import initialize_lt_memory, check_lt_memory_requirements
 
@@ -146,6 +145,11 @@ def initialize_system(args) -> Dict[str, Any]:
     # Initialize logger
     logger = logging.getLogger("main")
     logger.info("Initializing AI agent system")
+    
+    # Initialize terminal context if using basic auth
+    import auth
+    if hasattr(auth, 'init_terminal_context'):
+        auth.init_terminal_context()
 
     # Use centralized error context for system initialization
     with error_context(
@@ -315,18 +319,8 @@ def initialize_system(args) -> Dict[str, Any]:
             logger.info(f"Found {len(onload_stimuli)} notification(s) from on-load checks")
             add_stimuli_to_conversation(onload_stimuli, conversation)
         
-        # Initialize and start the automation systems
-        automation_components = automation_controller.initialize_systems(
-            tool_repo=tool_repo, 
-            llm_provider=llm_provider
-        )
-        automation_controller.start_systems()
-        
-        # Get the automation engine from components
-        automation_engine = automation_components.get('scheduler')
         
         logger.info(f"System initialized with conversation ID: {conversation.conversation_id}")
-        logger.info("Automation systems initialized and started")
         
         # Initialize LT_Memory - REQUIRED for operation
         logger.info("Checking LT_Memory requirements...")
@@ -345,7 +339,6 @@ def initialize_system(args) -> Dict[str, Any]:
             config, 
             working_memory, 
             tool_repo,
-            automation_engine,
             llm_provider
         )
         
@@ -358,6 +351,18 @@ def initialize_system(args) -> Dict[str, Any]:
         
         lt_memory = lt_memory_components
         logger.info("LT_Memory system initialized successfully")
+        
+        # Initialize memory consolidation service
+        from memory_consolidation_service import MemoryConsolidationService
+        memory_consolidation_service = MemoryConsolidationService(
+            working_memory=working_memory,
+            memory_manager=lt_memory_components["manager"],
+            llm_provider=llm_provider
+        )
+        
+        # Start the service (integration with auth system will be handled by auth lifecycle)
+        memory_consolidation_service.start()
+        logger.info("Memory consolidation service started")
         
         # Initialize ConversationArchiveManager trinket
         from working_memory import ConversationArchiveManager, ProactiveMemoryTrinket
@@ -420,7 +425,8 @@ def initialize_system(args) -> Dict[str, Any]:
             'system_status_manager': system_status_manager,
             'reminder_manager': reminder_manager,
             'conversation_archive_manager': conversation_archive_manager,
-            'lt_memory': lt_memory
+            'lt_memory': lt_memory,
+            'memory_consolidation_service': memory_consolidation_service
         }
 
 

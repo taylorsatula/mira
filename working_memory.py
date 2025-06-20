@@ -18,124 +18,70 @@ from utils.timezone_utils import (
     utc_now, ensure_utc, convert_from_utc, format_datetime,
     get_default_timezone
 )
+from auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
 
 class WorkingMemory:
-    """
-    Centralized manager for dynamic system prompt content.
-
-    This class provides a standard interface for adding, removing, and retrieving
-    content that should be included in the system prompt during conversations.
-
-    Components register their content with the working memory with a specific
-    category for organization. Each content item is assigned a unique ID that
-    can be used to update or remove it later.
-
-    Managers (like WorkflowManager and ToolRepository) can be registered directly
-    and are responsible for managing their own content in working memory.
-    """
-
+    """Working memory with automatic user partitioning"""
+    
     def __init__(self):
-        """Initialize a new working memory instance."""
-        # Main storage for memory items
-        self._memory_items: Dict[str, Dict[str, Any]] = {}
-        # Store registered managers
+        # User memories stored by user_id
+        self._user_memories: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._managers: List[Any] = []
+    
+    def _get_user_memory(self) -> Dict[str, Dict[str, Any]]:
+        """Get memory for current user"""
+        user_id = get_current_user_id()
+        if user_id not in self._user_memories:
+            self._user_memories[user_id] = {}
+        return self._user_memories[user_id]
 
     def add(self, content: str, category: str) -> str:
-        """
-        Add content to working memory.
-
-        Args:
-            content: The content to add
-            category: Category for organization
-
-        Returns:
-            item_id: Unique ID for the added item
-
-        Raises:
-            ValueError: If content or category is empty
-        """
+        """Add content to current user's memory"""
         if not content or not category:
-            logger.error("Attempted to add empty content or category")
             raise ValueError("Content and category cannot be empty")
-
+        
         item_id = str(uuid.uuid4())
-        self._memory_items[item_id] = {
+        user_memory = self._get_user_memory()
+        user_memory[item_id] = {
             "content": content,
             "category": category,
-            "metadata": {}  # Reserved for future use
+            "metadata": {}
         }
-        logger.debug(f"Added item {item_id} to working memory (category: {category})")
         return item_id
 
     def remove(self, item_id: str) -> bool:
-        """
-        Remove content by ID.
-
-        Args:
-            item_id: The ID of item to remove
-
-        Returns:
-            bool: True if item was removed, False if not found
-        """
-        if item_id in self._memory_items:
-            category = self._memory_items[item_id]["category"]
-            del self._memory_items[item_id]
-            logger.debug(f"Removed item {item_id} from working memory (category: {category})")
+        """Remove item from current user's memory"""
+        user_memory = self._get_user_memory()
+        if item_id in user_memory:
+            del user_memory[item_id]
             return True
-
-        logger.warning(f"Attempted to remove non-existent item: {item_id}")
         return False
 
     def remove_by_category(self, category: str) -> int:
-        """
-        Remove all items of a specific category.
-
-        Args:
-            category: Category to remove
-
-        Returns:
-            int: Number of items removed
-        """
-        ids = [id for id, item in self._memory_items.items()
+        """Remove all items of a specific category for current user"""
+        user_memory = self._get_user_memory()
+        ids = [id for id, item in user_memory.items()
                if item["category"] == category]
 
         for id in ids:
-            del self._memory_items[id]
+            del user_memory[id]
 
-        if ids:
-            logger.debug(f"Removed {len(ids)} items with category '{category}'")
         return len(ids)
 
     def get_prompt_content(self) -> str:
-        """
-        Generate formatted content for the system prompt.
-
-        Returns:
-            str: Concatenated content items
-        """
-        if not self._memory_items:
-            logger.warning("Getting prompt content from empty working memory")
+        """Get prompt content for current user"""
+        user_memory = self._get_user_memory()
+        if not user_memory:
             return ""
-
-        content = "\n\n".join(item["content"] for item in self._memory_items.values())
-        logger.debug(f"Generated prompt content with {len(self._memory_items)} items")
-        return content
+        return "\n\n".join(item["content"] for item in user_memory.values())
 
     def get_items_by_category(self, category: str) -> List[Dict[str, Any]]:
-        """
-        Get all items of a specific category.
-
-        Args:
-            category: Category to retrieve
-
-        Returns:
-            List of memory items with specified category
-        """
-        return [item.copy() for item_id, item in self._memory_items.items()
+        """Get all items of a specific category for current user"""
+        user_memory = self._get_user_memory()
+        return [item.copy() for item_id, item in user_memory.items()
                 if item["category"] == category]
 
     def register_manager(self, manager: Any) -> None:
@@ -192,14 +138,14 @@ class WorkingMemory:
             except Exception as e:
                 logger.error(f"Error cleaning up {manager.__class__.__name__}: {e}")
         
-        # Clear all memory items
-        item_count = len(self._memory_items)
-        self._memory_items.clear()
+        # Clear all user memory items
+        total_items = sum(len(user_mem) for user_mem in self._user_memories.values())
+        self._user_memories.clear()
         
         # Clear managers list
         self._managers.clear()
         
-        logger.info(f"Working memory cleanup complete: cleared {item_count} items and {manager_count} managers")
+        logger.info(f"Working memory cleanup complete: cleared {total_items} items and {manager_count} managers")
 
 
 # =====================================================================

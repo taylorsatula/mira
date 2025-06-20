@@ -1,0 +1,19 @@
+# Core dependencies
+fastapi>=0.100.0
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+python-jose[cryptography]>=3.3.0
+email-validator>=2.0.0
+
+# Email
+aiosmtplib>=2.0.0
+
+# WebAuthn/TouchID
+webauthn>=1.11.0
+
+# For FastAPI
+uvicorn[standard]>=0.23.0
+python-multipart>=0.0.6
+
+# Redis for distributed rate limiting and refresh tokens
+redis[hiredis]>=5.0.0

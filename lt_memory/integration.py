@@ -11,7 +11,7 @@ from typing import Dict, Any
 logger = logging.getLogger(__name__)
 
 
-def initialize_lt_memory(config, working_memory, tool_repo, automation_controller, llm_provider) -> Dict[str, Any]:
+def initialize_lt_memory(config, working_memory, tool_repo, llm_provider) -> Dict[str, Any]:
     """
     Initialize LT_Memory system and integrate with MIRA.
     
@@ -19,7 +19,6 @@ def initialize_lt_memory(config, working_memory, tool_repo, automation_controlle
         config: Application configuration
         working_memory: WorkingMemory instance
         tool_repo: ToolRepository instance
-        automation_controller: Automation controller instance
         llm_provider: LLM provider for text generation
         
     Returns:
@@ -32,7 +31,6 @@ def initialize_lt_memory(config, working_memory, tool_repo, automation_controlle
         from lt_memory.managers.memory_manager import MemoryManager
         from lt_memory.timeline_manager import MemoryBridge, ConversationTimelineManager
         from lt_memory.tools.memory_tool import LTMemoryTool
-        from lt_memory.automations.memory_automations import register_memory_automations
         
         # Create memory configuration
         logger.info("Creating memory configuration...")
@@ -68,10 +66,6 @@ def initialize_lt_memory(config, working_memory, tool_repo, automation_controlle
         logger.info("Registering memory tool...")
         tool_repo.register_tool(memory_tool)
         
-        # Register automations
-        logger.info("Registering memory automations...")
-        registered_automations = register_memory_automations(automation_controller)
-        logger.info(f"Registered {len(registered_automations)} memory automations")
         
         # Log initial statistics
         stats = memory_manager.get_memory_stats()
@@ -88,7 +82,6 @@ def initialize_lt_memory(config, working_memory, tool_repo, automation_controlle
             "bridge": memory_bridge,
             "conversation_timeline_manager": conversation_timeline_manager,
             "tool": memory_tool,
-            "automations": registered_automations
         }
         
     except Exception as e:
@@ -99,7 +92,6 @@ def initialize_lt_memory(config, working_memory, tool_repo, automation_controlle
             "bridge": None,
             "conversation_timeline_manager": None,
             "tool": None,
-            "automations": {}
         }
 
 
