@@ -1,3 +1,8 @@
+# ~ I CANNOT STRESS TO YOU ENOUGH DEAR READER: ~
+## THIS CODEBASE IS IN CONSTANT FLUX RIGHT NOW AND FILES SOMETIMES DEADEND OR IT JUST WON'T LOAD OR I'LL DELETE CORE INFRASTRUCTURE SO I CAN REBUILD IT IN A FUTURE COMMIT. I'M IN MY FAST AND LOOSE ERA. CHECK OUT THE CODE.. ITS PRETTY NEAT. BUT DON'T JUDGE ME ON THE CONTENT CONTAINED WITHIN RIGHT NOW. THIS IS MY METHOD AND IT WORKS EVEN THOUGH ITS VERY WUSHI DRUNKEN FIST STYLE.
+
+# =======================
+
 # MIRA: Just Talk Normal
 
 MIRA is an AI agent system that provides natural conversation capabilities with persistent memory, intelligent tool usage, and workflow automation. It combines the conversational abilities of modern language models with practical tools and a sophisticated memory system to create a genuinely useful long-running AI assistant. My vision for this project is to create a little brain-in-a-box. I will not stop till my vision is realized.
