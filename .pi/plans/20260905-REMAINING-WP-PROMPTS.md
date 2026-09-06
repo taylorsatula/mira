@@ -307,6 +307,287 @@ The first is a breaking change — use `!` and a BREAKING CHANGE paragraph.
 
 ---
 
+## WP2-C — D10: remove the Anthropic Batch API and Files API upload transport
+
+Chartered 2026-09-06. Plan §12 treats WP2 as one atomic unit that *includes* D10's deletions; the WP2-A/WP2-B
+split allocated the chokepoint and the leaf call sites but left D10 — roughly 1,900 lines of Batch removal
+plus 500 of Files removal across 21 files — owned by nobody. Eleven of those files are claimed by no package
+at all.
+
+**Sequencing is the point of this package.** The Batch half must land **before WP2-B**, because WP2-B's
+headline gate (`git grep -E 'internal_llm|conversation_llm' -- '*.py'` → 0 tree-wide) is unreachable while
+`lt_memory/llm_routing.py` still holds two `internal_llm` references that no other package owns. The Files
+half must land **before WP4 and WP5**, because it deletes lines in `cns/api/websocket_chat.py` and
+`cns/services/segment_collapse_handler.py` that those packages otherwise inherit as dead code.
+
+```
+cd /Users/taylut/Programming/GitHub/mira-OSS
+git worktree add .worktrees/wp2c -b 2.0/wp2c 2.0/integration
+```
+
+Branch only after WP2-A and its follow-up fixes have merged into `2.0/integration`.
+
+```
+You are executing work package WP2-C of the mira-OSS 2.0 backport: decision D10, removing the Anthropic
+Batch API transport and the Anthropic Files API **upload** transport. Plan §8.4 is the specification.
+
+[AUTHORITY BLOCK]
+
+## Working location
+
+    /Users/taylut/Programming/GitHub/mira-OSS/.worktrees/wp2c
+
+Branch 2.0/wp2c. The crm_mira remote is fetched; its refs resolve here as crm_mira/crm_mira.
+
+## Read first
+
+Plan §8.4 (D10 execution), §8.3 (deletions to decline — read this as carefully as §8.4, because the two
+lists look alike and one of them is a trap), §0.1 (2.0 posture: no migration, fresh install only),
+§0.2 (crm's names and contracts are proposals, not authority), and §6.5.2 (why
+`segment_collapse_handler.py` cannot be taken wholesale).
+
+## The single most important fact: this is close to a mechanical replay
+
+Verified by blob diff: **the mira-OSS tree is byte-identical to crm_mira's pre-deletion state** for 13 of
+the 16 Batch files and 4 of the 7 Files files. So `git show <sha>` against the upstream deletion commits
+gives you patches that apply to your tree unchanged. Use them. The three upstream commits are:
+
+    5c50dfc   Batch extraction removal      16 files, +153/-1413   (NOT named in plan §8.4)
+    0134d3d   Files Manager removal          7 files,  +82/-695    (NOT named in plan §8.4)
+    58c261b   sidebar batch-mode removal     9 files,  +49/-242    (named in §8.4)
+
+Files that are NOT byte-identical and therefore need hand-editing rather than patching:
+`lt_memory/models.py` (17-line drift), `agents/base.py` (84), `cns/services/segment_collapse_handler.py`
+(53+), `utils/userdata_manager.py` (4, from WP1 item 8).
+
+Pre-verify every patch with `git show <sha> -- <path> | git apply --check` before applying. Where a patch
+does not apply and the reason is not one listed here, stop that item and report it rather than improvising.
+
+## COMMIT 1 — the Batch API half
+
+Delete whole files: `lt_memory/processing/batch_coordinator.py` (317 L),
+`lt_memory/batch_result_handlers.py` (142 L), `agents/batch.py` (139 L), `lt_memory/llm_routing.py` (8 L,
+the whole file is the one `uses_anthropic_batch_dialect` helper).
+
+Edit, per `5c50dfc` / `58c261b`:
+
+  lt_memory/processing/execution_strategy.py   521 L -> crm's 205 L post-image. Byte-identical pre-image,
+                                               so crm's post-image transfers directly. The retained core is
+                                               store_and_tend_extraction, _persist_llm_entities and
+                                               _build_candidate_hints. **DirectExecutionStrategy is the
+                                               post-deletion shape** and is what
+                                               tests/test_direct_extraction.py imports; crm's 205-L file
+                                               defines it with exactly the constructor and call shape that
+                                               test asserts. Do not invent it.
+  lt_memory/processing/orchestrator.py         -47 L; touchpoints :23,:52,:58,:64,:153-160,:209-214
+  lt_memory/factory.py                         -60 L; :7,:21-23,:29,:69-78,:134-139,:148,:156,:190-197
+  utils/lt_memory_jobs.py                      -69 L (the batch poll + cleanup jobs)
+  lt_memory/db_access.py                       -238 L, the batch block at :1409-1647. This queries
+                                               `extraction_batches`, a table WP-S's greenfield schema does
+                                               not create — so this code is ALREADY runtime-dead against a
+                                               fresh install. Deleting it is a correctness fix, not only a
+                                               scope reduction.
+  lt_memory/models.py                          ExtractionBatch (:392-420), BatchStatus (:23-25),
+                                               ChunkMetadata (:128-133). Hand-edit; 17-line drift.
+  lt_memory/processing/__init__.py             -17 L
+  lt_memory/processing/extraction_engine.py    the `for_batch` parameter at :90,:103,:125
+  agents/sidebar.py                            :90,:95,:237-254 (the dual pools)
+  agents/base.py                               ~-15 L. Hand-edit; 84-line drift. Do NOT touch the
+                                               internal_llm_key / overwatch_llm_key / sentry_llm_key fields
+                                               — those are WP2-B's renames, not D10's.
+  agents/implementations/whilethecatsaway_agent.py  use_batch=True at :30-31, batch_timeout_seconds
+  config/config.py                             batch_poll_minutes (:103), batch_cleanup_use_days (:119),
+                                               max_concurrent_batch_agents (:185). Also the :107
+                                               job_timeout_seconds description that names batch polling.
+  utils/sidebar_jobs.py                        **exactly one line, :29** — the
+                                               `max_concurrent_batch_agents=sidebar_config.…` argument.
+                                               See the adjudication note below.
+  cns/api/actions.py                           **:2216 only** — `collapse_segment(event, force_immediate=True)`.
+                                               This is an OSS-only call site; crm HEAD's actions.py has no
+                                               `force_immediate`. Do not touch anything else in this file;
+                                               the picker retirement at :2053-2180 is WP2-B's.
+
+Four sites plan §8.4 does NOT name, all mandatory:
+
+  clients/llm_provider.py            `build_batch_params` at :54-90. Its only callers are
+                                     execution_strategy.py:25,:332, which you are rewriting.
+  utils/power_on_self_test.py        **:902, :905 and :972** — two required-scheduler-job lists naming
+                                     `lt_memory_extraction_batch_polling` and `lt_memory_batch_cleanup`.
+                                     :911 raises `RuntimeError(f"Required scheduler jobs not registered:
+                                     {missing}")`. If you delete the jobs without editing these lists,
+                                     **the power-on self-test fails at every startup.** This is the
+                                     hardest dangling reference in the package. Do NOT touch the RLS
+                                     expected_tables list (WP-S) or `_check_llm_configuration` /
+                                     `_check_llm_provider_reachability` (WP2-A).
+  cns/services/segment_collapse_handler.py   the `force_immediate` parameter, its docstring and its
+                                     propagation at :164,:174,:314,:487,:504,:529,:535. This file is
+                                     touched by BOTH commits — `force_immediate` is Batch (this commit),
+                                     `_cleanup_segment_files` is Files (commit 2). The hand-edit
+                                     boundary and the retain-list are given under commit 2; read that
+                                     before editing this file at all.
+  AGENTS.md contract lines           Skip. WP6 owns the documentation sweep (plan D-15).
+
+### Adjudication: the §8.1 vs §8.4 `sidebar_jobs.py` contradiction is resolved
+
+Plan §8.1 says "`utils/sidebar_jobs.py` — LEAVE THIS FILE UNTOUCHED", while §8.4 lists
+`SidebarDispatcher(max_concurrent_batch_agents=…)` as a Batch API deletion. Traced end to end: §8.1's
+instruction is aimed at the WP1-era sidebar-trigger port, and its own parenthetical — "also omit per D10's
+scope; crm removed it as part of batch-mode deletion" — assigns that one line to D10. crm performed exactly
+that deletion in `58c261b` (`utils/sidebar_jobs.py | 1 -`). **You own the one-line removal at :29 and
+nothing else in that file.** If it is left behind, the attribute read on a pydantic model raises
+`AttributeError` at scheduler registration — a boot-time crash, but only when
+`sidebar_dispatcher.enabled` is true (there is an early return at :18-20).
+
+### Two things that look like work and are not
+
+- **`forage_agent` has no `use_batch` in mira-OSS.** §8.4's "batch mode in … forage_agent" is a crm-side
+  artifact. Its only D10-relevant content is `internal_llm_key="forage"` at :21, which is WP2-B's rename.
+  Do not edit this file.
+- **`config.batching.batch_max_age_hours`, consumed at `utils/lt_memory_jobs.py:143`, does not exist.**
+  `LTMemoryFactory` has no `.config` and there is no `BatchingConfig` anywhere, so the batch cleanup job
+  is already AttributeError-dead. Its hunk deletes itself; there is no replacement to author.
+- **`ScheduledTaskMonitor.wrap_scheduled_job` is NOT removed tree-wide by D10.** §8.4's parenthetical
+  describes crm's hunk only. `segment_timeout_service.py:338` still uses it and `health.py:141` reads job
+  stats. Remove it only from `utils/lt_memory_jobs.py`; leave the class alone.
+
+## COMMIT 2 — the Files API upload half
+
+Delete `clients/files_manager.py` (195 L, byte-identical to `0134d3d^`; verified to have no non-Anthropic
+consumer — `create_files_manager()` hard-builds `AnthropicDialect`).
+
+Edit, per `0134d3d`:
+
+  utils/document_processing.py       remove the `container_upload` / `document` content types (:59-70) and
+                                     the upload branch (:104-129), ~-70/+60. crm replaces this with local
+                                     text extraction — `pypdf.PdfReader` to plain text for PDF, and
+                                     equivalent local reading for CSV/XLSX/JSON. Port that replacement.
+  utils/userdata_manager.py          the `files_api_uploads` SQLite table at :457-472 plus its init call
+                                     at :131. Hand-edit; 4-line drift from WP1 item 8. Greenfield posture
+                                     means no data migration — the table simply stops existing.
+  cns/api/chat.py                    `file_ref` block construction :236-261, manager creation :195,:364.
+                                     Note :271-292 is the D5 cost wiring WP2-A already re-attached —
+                                     do not disturb it.
+  cns/api/websocket_chat.py          `file_ref` blocks :593-605, ~-60 L. **WP4 owns this file's protocol
+                                     rewrite and has not run yet.** Touch only the document-upload block;
+                                     leave frame emission and auth alone.
+  cns/services/segment_collapse_handler.py   `_cleanup_segment_files` def :830-855 and its call :318.
+                                     **WP5 owns this file and has not run yet.** Per §6.5.2 the 216-line
+                                     crm delta here is WP5 commit `6c055c2` piggybacking D10 deletions —
+                                     take ONLY the two D10 items. Retain `_init_feedback_loop`,
+                                     `_process_feedback_loop` and `_invalidate_lora_trinket_cache`
+                                     (plan §12's WP5 gate requires all three, D1 retains the user model),
+                                     and do not touch the `prefs.conversation_llm == 'demo'` branch at
+                                     :516-520, which is WP2-B's.
+  clients/llm_provider.py            `create_files_manager` :427-442 (sole callers are chat/ws/collapse).
+  cns/services/orchestrator.py       the `container_id` **read** side at :1033-1045 only. See the
+                                     decision below — do not take crm's full container hunk.
+  requirements.txt                   **add `pypdf>=5.0.0`.** Verified absent from mira-OSS and nothing
+                                     imports it yet; crm HEAD has it. Plan §6.3.6's dependency table
+                                     already anticipates it as required by D10.
+
+### DECISION (already made — do not relitigate): OSS keeps Anthropic code execution
+
+The Files API has an upload side and a download side. **Only the upload side is removed.** mira-OSS's
+anthropic routes are live (the `batch` route is `claude-sonnet-4-6`, `assessment` is `claude-opus-4-6`)
+and the code-execution artifact pipeline is a retained OSS feature. Therefore KEEP, and report as
+intentionally kept:
+
+  cns/core/message.py:41-70                  FileRefBlock, DocumentBlock
+  clients/llm/dialects/openai_chat_base.py:542   defensive file_ref handling
+  clients/llm_provider.py:529-533                same
+  clients/llm/dialects/anthropic.py:579-581      file_ref -> container_upload translation
+  clients/llm/dialects/anthropic.py:706-730      _file_artifact_events (the DOWNLOAD side)
+  clients/llm/dialects/anthropic.py:59-61        FILES_API_BETA_FLAG
+  clients/llm/types.py                           the container fields
+  cns/services/orchestrator.py                   the container_id WRITE side (:169,:616,:908-912)
+
+crm removed the container_id read side only and kept the write side at HEAD. Its motivation was that all
+its routes were openai; OSS's are not, so porting crm's full container hunk would be inheriting a CRM
+artifact. Remove the read side, keep the write side, and say so in the commit body.
+
+### TRAP — do not port this hunk, plan §8.4 misattributes it
+
+§8.4 lists "`utils/logging_config.py` Anthropic SDK instrumentation (−99 L)" under the Files API. **That
+attribution is wrong and acting on it would break shipped work.** Verified: the 99-line removal happened in
+crm commit `ff12722`, which is the billing/prepaid-account commit, not `0134d3d`; `0134d3d` does not touch
+the file at all. Furthermore `instrument_anthropic_client` still exists at crm HEAD
+(`logging_config.py:163`), is still called by `clients/llm/dialects/anthropic.py:129-131`, and mira-OSS's
+WP1-landed `utils/llm_tap.py:156` documents that it is attached via that function. Removing it would break
+WP1's observability.
+
+**Do not touch `utils/logging_config.py`.** The `setup_anthropic_sdk_logging` call at `main.py:15-17` is a
+separate billing-provenance question belonging to §8.2/D-14 triage, and `main.py` is WP3-B's file anyway.
+Report this exclusion in your commit body so the plan can be corrected.
+
+## Also resolve: plan deferred item D-10 (the orphaned `anthropic_batch_key`)
+
+D10 removes the Batch API but `anthropic_batch_key` stays live — it is the credential for the `batch`
+*route*, which survives as an ordinary synchronous anthropic call. Verified live at schema:70,
+`postgresql.sh:177,180`, `init-mira.sh:71,228`, `.env.example:20`, `finalize.sh:173,301`, and the
+greenfield test's allowlist at :321. **Decision: keep it, do not rename.** Renaming would touch WP-S's
+live-validated schema, its test, and four deploy scripts for no functional gain; the name usefully
+isolates batch-route rate limits from the `anthropic_key` used by `assessment`.
+
+Record the decision by adding a SQL `COMMENT ON` for the column or an adjacent `--` comment in
+`deploy/mira_service_schema.sql` stating that the key names the batch route's credential and that the
+Anthropic Batch API transport was removed in 2.0. **Your edit must not alter schema structure** — no
+tables, columns, constraints, policies or grants. `tests/test_greenfield_schema.py` currently passes 32/32
+and must still pass; it is sensitive to the table set and to the seed.
+
+## Do NOT touch
+
+  - tests/ (WP0/O-22 own recovery and the harness; per the Test scope convention you author no tests)
+  - auth/ (WP3)
+  - main.py (WP3-B)
+  - cns/api/actions.py except :2216; cns/services/orchestrator.py except the container_id read side
+  - utils/logging_config.py (see the trap above)
+  - utils/user_context.py, clients/llm/resolver.py, clients/llm/types.py, clients/llm/lifecycle.py,
+    config/config.py's model-routing sections, utils/power_on_self_test.py's LLM checks (WP2-A, landed)
+  - The ~22 leaf internal_llm= call sites, agents/base.py's *_llm_key fields, the model picker,
+    phoneafriend_tool (WP2-B)
+  - deploy/ except the schema comment described above (WP-S landed; R-3 audited)
+
+The tree does not import cleanly end-to-end before your change (WP2-B's leaf call sites still pass
+internal_llm=) and will not after it either. That is expected. Do not migrate leaf call sites to make the
+tree consistent — WP2-B follows and doing its work here makes both packages unreviewable.
+
+## Verification
+
+1. `python3 -m py_compile` every changed .py file.
+2. `git grep -n 'uses_anthropic_batch_dialect\|batch_coordinator\|BatchCoordinator\|ExtractionBatch\|extraction_batches\|post_processing_batches\|build_batch_params\|files_manager\|create_files_manager\|files_api_uploads' -- '*.py'` -> 0.
+3. `git grep -n 'max_concurrent_batch_agents\|batch_poll_minutes\|batch_cleanup_use_days'` -> 0.
+4. `git grep -n 'lt_memory_extraction_batch_polling\|lt_memory_batch_cleanup' -- utils/power_on_self_test.py` -> 0.
+5. `git grep -n 'force_immediate'` -> 0.
+6. **The KEEP list must still be present** — this is the check that catches over-deletion:
+   `git grep -c 'FileRefBlock\|DocumentBlock' -- cns/core/message.py` non-zero;
+   `git grep -n '_file_artifact_events\|FILES_API_BETA_FLAG\|instrument_anthropic_client' -- clients/llm/ utils/logging_config.py` all present.
+7. `git grep -n 'pypdf' -- requirements.txt utils/document_processing.py` -> present in both.
+8. Import smoke, no infrastructure: `python3 -c "import lt_memory.processing.execution_strategy, lt_memory.factory, utils.document_processing, clients.llm_provider"`. `lt_memory.processing.execution_strategy` must expose `DirectExecutionStrategy`.
+9. `python3 -m pytest tests/test_direct_extraction.py -q -p no:cacheprovider --tb=short` — it currently
+   collection-errors with `ImportError: cannot import name 'DirectExecutionStrategy'`. It should now
+   collect. Report per-test results; the `model_config="batch"` assertions may still fail until WP2-B
+   lands the leaf migration, and if so say that rather than editing the test.
+10. `python3 -m pytest tests/test_greenfield_schema.py -q -p no:cacheprovider --tb=no` -> must still be
+    32 passed.
+11. Differential totals before and after, per the conventions block. Baseline on 2.0/integration is
+    `121 failed, 195 passed, 396 skipped, 18 errors`; re-measure on your own branch before starting.
+    Expect the collection error for test_direct_extraction.py to disappear. Any OTHER test changing state
+    is a regression — investigate and report it.
+
+## Commits
+
+Two, as scoped above: (1) the Batch API half, (2) the Files API upload half plus pypdf. Both are breaking
+changes to internal contracts — use `!` and a BREAKING CHANGE paragraph. Cite `5c50dfc`, `0134d3d` and
+`58c261b`. State the capability loss explicitly in commit 1's body: plan §8.4 records the Anthropic Batch
+API's 50% discount on heavy async extraction as the largest capability regression in the backport, taken
+deliberately. State the logging_config.py exclusion and the anthropic-code-execution retention in commit 2's.
+
+[COMMIT CONVENTION]
+[REPORT FORMAT]
+```
+
+---
+
 ## WP2-B — model_configs: leaf call sites and consumers
 
 Create after WP2-A merges:

@@ -222,7 +222,26 @@ Vault-independent modules. Use these every package; they catch merge damage chea
 
 ## 5. What remains
 
-Dependency chain: **WP2-A → WP2-B → WP3-A → WP3-B → WP4 → WP5 → WP6.** WP7 is descoped.
+Dependency chain, revised 2026-09-06 after wave 1 reported: **WP2-A ✅ → WP2-C → WP2-B → {WP3-B ∥ WP5}
+→ WP4 → WP6.** WP7 is descoped.
+
+The revision is structural, not cosmetic. Plan §12 treats WP2 as *one atomic unit that includes D10's
+deletions*; the WP2-A/WP2-B split allocated the chokepoint and the leaf call sites but left D10 —
+~1,900 lines of Batch removal plus ~500 of Files removal across 21 files — owned by nobody, **11 of
+which no package claims at all**. That gap is now WP2-C, and it sequences *between* WP2-A and WP2-B
+because WP2-B's headline gate (zero `internal_llm` refs tree-wide) is unreachable while
+`lt_memory/llm_routing.py` still holds two refs that nothing else owns.
+
+WP3-B and WP5 are parallel in wave 4 — verified disjoint owned sets. WP4 follows WP3-B because both own
+`cns/api/websocket_chat.py`. WP3-B is prioritised ahead of WP4 deliberately: WP3-A's merge leaves
+`auth/api.py:41-45` constructing a 3-arg `APITokenContext` against a type whose `subject_kind` is now
+required, which raises `ValidationError` at **request time** — so `single` mode cannot serve any
+authenticated request until WP3-B lands the §6.3.4 union branch. Permitted breakage, but it is the
+highest-risk open item and should not sit.
+
+| Package | Scope | Gate | Prompt |
+|---|---|---|---|
+| **WP2-C** | D10: delete the Anthropic Batch API transport and the Files API **upload** transport. 11 orphan files plus six deltas §8.4 never named. Upstream `5c50dfc`, `0134d3d`, `58c261b`. | `uses_anthropic_batch_dialect`/`batch_coordinator`/`extraction_batches`/`files_manager`/`force_immediate` → 0; the KEEP list still present; `test_direct_extraction.py` collects; `test_greenfield_schema.py` still 32 passed | complete, written 2026-09-06 |
 
 WP3-A is disjoint from WP2 (new `auth/*.py` files only) and *could* be parallelised with WP2-A; it was
 not launched because the user asked for drafted prompts rather than more work in flight.
@@ -264,6 +283,10 @@ Recorded here because they were made under time pressure and are not yet folded 
 | E-7 | **All five routes are critical at startup** (user-confirmed). `ROUTE_FALLBACKS` is deleted outright with **no replacement criticality set**, and any provider probe failure parks boot. | crm's `ROUTE_FALLBACKS` was overloaded: it encoded a local-llama-server vs cloud split that WP-S's all-cloud OSS seeding makes vacuous, *and* `_check_llm_provider_reachability` used `c in ROUTE_FALLBACKS` purely as a criticality classifier. With every route critical there is nothing to classify. Accepted consequence: an install missing any one vendor's credentials cannot boot. No soft-failure escape hatch. The raised message must name each failed route, vendor and model so an operator can act on it. Resolves O-3 and O-11-adjacent concerns. |
 | E-8 | **`MailSender` is an abstract interface with a stdlib `smtplib` default backend** (user-confirmed), sitting beside WP3-A's `AccountProvisioner`. | Matches the brief's "pluggable SMTP sender" wording and the provisioner pattern. Keeps OSS vendor-neutral (plan §0.1): no new dependency, works against any relay the operator already has. An HTTP backend (Resend/SES/Postmark) can be registered by an operator but is not shipped. To be written into WP3-B's brief. |
 | E-9 | **No test support outside the migration scope** (user directive). Agents must not author tests, fixtures, conftest helpers or coverage; tests the migration invalidates are **deleted**, not replaced. | This codebase chooses fail-fast over extensive performative tests. Encoded once in the prompts file's shared conventions so every dispatch inherits it. Consequence: **O-19 (re-baselining the ~98 pre-existing 1.x failures) is dropped from the inline work list** as test work outside the migration. |
+| E-10 | **WP2-C chartered for D10** (Batch API + Files API upload), sequencing between WP2-A and WP2-B. | See §5. Plan §12 specified WP2 as one atomic unit including D10; the A/B split orphaned it. Eleven files were claimed by no package. |
+| E-11 | **mira-OSS keeps Anthropic code execution. Only the Files API *upload* side is removed.** `FileRefBlock`/`DocumentBlock`, the `file_ref` defensive handling, `anthropic.py`'s `file_ref→container_upload` translation, `_file_artifact_events` (the download side), `FILES_API_BETA_FLAG` and the `container_id` **write** side all stay. | OSS's anthropic routes are live (`batch` = claude-sonnet-4-6, `assessment` = claude-opus-4-6) and code execution is a retained feature. crm removed the read side only because *all* its routes were openai — porting crm's full container hunk would inherit a CRM artifact, contrary to §0.2. |
+| E-12 | **`anthropic_batch_key` is kept and documented as reserved**, not renamed (closes deferred item D-10). | D10 removes the Batch API but the key stays live as the `batch` *route's* credential. Renaming would touch WP-S's live-validated schema, its greenfield test and four deploy scripts for no functional gain; the name usefully isolates batch-route rate limits from `assessment`'s `anthropic_key`. |
+| E-13 | **`utils/logging_config.py` is excluded from D10.** Plan §8.4's "Anthropic SDK instrumentation (−99 L)" under the Files API is a **misattribution**. | Verified: the 99-line removal is crm's `ff12722`, the billing/prepaid commit; `0134d3d` does not touch the file. `instrument_anthropic_client` is still defined at crm HEAD, still called by `clients/llm/dialects/anthropic.py:129-131`, and mira-OSS's WP1-landed `utils/llm_tap.py:156` documents that it is attached via that function. Porting §8.4's hunk would have broken shipped WP1 observability. Belongs to §8.2/D-14 triage instead. |
 
 ---
 
@@ -272,7 +295,74 @@ Recorded here because they were made under time pressure and are not yet folded 
 Plan §10 carries O-1…O-24. Current disposition:
 
 **Closed:** O-1 (crm's soft-delete columns adopted, `users_trash` dropped), O-2 (see E-2), O-9 (crm's
-`base.py` taken), O-12 (void — no migrations), O-22 (harness landed).
+`base.py` taken), O-12 (void — no migrations), O-22 (harness landed), **O-3** (E-1, warning not hard
+failure — landed in WP2-A's `load_model_configs()`), **O-5** (park-vs-exit landed as
+`MIRA_POST_GATE_FAILURE_ACTION=park|exit`, strictly parsed, default `park`, with `2f980ab`'s
+`PRE_SERVER_GATE_ATTEMPTS=3`/`RETRY=10` and `b88f076`'s `config.api.temperature` probe), **O-11**
+(`ProviderSwitchEvent` consumers enumerated: `events.py:137` definition and `orchestrator.py:44,889`
+branch left dead for WP2-B; emission removed from `lifecycle.py`; the `provider_switch` frame also
+renders at `websocket_chat.py:510-512`, `api-client.js:589`, `messaging.js:1491` — all WP4), **O-18**
+(overwatch ceiling — passed to WP2-B), **O-20** (R-3's verdict: `deploy/migrate.sh`,
+`deploy/lib/migrate.sh` and `deploy/schema_aware_restore.py` are **dead — delete all three plus the
+`--migrate`/`--dry-run` branch and usage text in `deploy.sh:7-13,44-77`**. `migrate.sh:575`
+`if nohup mira >/dev/null 2>&1 &; then` does not parse, on `main` as well, so the whole family including
+its rollback path has been unreachable since `0254a8c1` in 2025-12. **Do not fix the syntax error** —
+deleting is the disposition. WP6 owns it).
+
+**O-10 is a confirmed defect, not merely unverified.** `main.py:290` calls
+`flush_except_whitelist(preserve_prefixes=["session:", "rate_limit:"])` — **`csrf:` is missing**, while
+`auth/session.py`'s `_csrf_key()` writes `csrf:<digest>` paired with `session:<digest>`. Every restart
+flushes CSRF tokens and keeps sessions, so the first unsafe cookie-authenticated request 403s until the
+client re-fetches `/csrf`. Fix is one list entry, but `main.py` is **WP3-B's** file and WP3-A is barred
+from it — so it is recorded for WP3-B's brief rather than steered into WP3-A. This is the answer to the
+question WP3-A explicitly left open.
+
+**O-7 is closed for the `lifecycle.py` half**: WP2-A verified the shapes and ported crm's synthetic
+`{"load": [tool]}` form. The loader-gating half remains with WP4/O-23 as §10 records.
+
+**Plan claims found false during wave 1 — correct these in the bisect before WP4/WP5/WP6 are briefed:**
+
+| Plan location | Claim | Verified reality |
+|---|---|---|
+| §4 D-1, §5 D-7 | CSP tightening "breaks `oss_ui.py:19-20` inlined `marked.min.js`/`purify.min.js`"; follow-up is to "externalise the inlined vendor scripts" | **Wrong.** `oss_ui.py:19-20` *reads* both files at import and `:23-25` *serves* them at `/oss-assets/*.js`; `web/chat/index.html:219-220` loads them by `src`. What `script-src 'self'` actually rejects is **8 inline `<script>` blocks** (2 each in `web/{chat,settings,domaindocs,memories}/index.html`) and **32 `onclick=` attributes** (2 in chat, 30 in domaindocs). D-7 is a materially larger job than the plan states and does not fit WP4's ~150-line budget. |
+| §6.3.6 | "`deploy/postgresql.sh:166-176` seeds only `valkey_url`, `userdata_encryption_key`, `diagnostics_token`"; "Action: seed `app_url`" | **Stale.** Both installers already seed four fields including `app_url="http://localhost:1993"` (`postgresql.sh:197`, `init-mira.sh:242`). The action is already satisfied at main; delete it from WP3-B's brief. |
+| §8.4 | `logging_config.py` −99 L belongs to the Files API | **Misattributed** — see E-13. |
+| §8.4 | "batch mode in … `forage_agent`" | `forage_agent.py` has **no** `use_batch` in mira-OSS; crm-side artifact, nothing to remove. |
+| §8.4 | Omits two mandatory edit sites | `clients/llm_provider.py::build_batch_params` (:54-90) and **`power_on_self_test.py:902,905,972`**, whose required-job lists raise `RuntimeError` at `:911` — a boot failure if D10 deletes the jobs without editing them. |
+| §8.4 | Names no upstream SHA for the Batch deletion | `5c50dfc` (Batch, 16 files +153/−1413), `0134d3d` (Files, 7 files +82/−695). `58c261b` was already named. |
+| §6.3.4 / O-4 | `main.py:99` reads `MIRA_DEV` | It is **`main.py:647`**, in the `__main__` hypercorn block. |
+| §6.1.4 / WP2-A brief | `ROUTE_FALLBACKS` must be re-derived from `utils/user_context.py` | It lives in crm's `clients/llm/resolver.py:17` and **never existed in mira-OSS at all** — OSS's `_check_llm_provider_reachability` already raised unconditionally. The instruction was a no-op; the real work was deleting the `source`/`hidden` classification. |
+
+**New facts established, not previously recorded anywhere:**
+
+- `lt_memory/db_access.py:1409-1647` (~238 L) queries `extraction_batches`, a table WP-S's greenfield
+  schema does not create. That code is **already runtime-dead against a fresh install**, so D10 is a
+  correctness fix as well as a scope reduction.
+- `config.batching.batch_max_age_hours`, consumed at `utils/lt_memory_jobs.py:143`, **does not exist**
+  (`LTMemoryFactory` has no `.config`; there is no `BatchingConfig`). The batch cleanup job is already
+  AttributeError-dead.
+- The mira-OSS tree is **byte-identical to crm's pre-deletion state** for 13 of 16 Batch files and 4 of 7
+  Files files, which makes D10 close to a mechanical patch replay. Drift only in `lt_memory/models.py`
+  (17 lines), `agents/base.py` (84), `segment_collapse_handler.py` (53+), `userdata_manager.py` (4).
+- §8.1's "`sidebar_jobs.py` — LEAVE THIS FILE UNTOUCHED" and §8.4's `SidebarDispatcher(
+  max_concurrent_batch_agents=…)` deletion are a **paper conflict**: §8.1's own parenthetical assigns
+  that line to D10, and crm deleted exactly one line there in `58c261b`. WP2-C owns `sidebar_jobs.py:29`
+  and nothing else in the file; left behind it is a boot-time `AttributeError` whenever
+  `sidebar_dispatcher.enabled` is true.
+- `tests/test_direct_extraction.py` is byte-identical to crm's copy at `5c50dfc` and asserts precisely
+  the post-deletion `DirectExecutionStrategy` shape, which confirms that removing the batch transport is
+  what makes a direct path necessary — `ImmediateExecutionStrategy` is not sufficient because it is
+  dialect-conditional and passes `internal_llm='extraction', allow_negative=True`.
+- `deploy/oss_ui/chat.html` has **no Python consumer** (`git grep chat.html -- '*.py'` → empty). WP6
+  scrub/docs should rule on it.
+- `init-mira.sh:249-252` writes `/opt/vault/provider_endpoint.txt` and `provider_model.txt` that
+  **nothing in the repo reads** — a pre-existing dead mechanism. Consequence: non-Groq container installs
+  keep the groq endpoint on `fast` and no container flow rewrites the `primary` row. WP6 should implement
+  or delete it.
+- `auth/security_middleware.py` now carries a `MIRA_CSP=off|strict` knob (default `off`, strictly
+  parsed at middleware-stack build). Its strict value adds `worker-src 'self'`, which **closes part of
+  D-7**, and omits `frame-src` rather than setting `'none'` — crm set it to third-party payment origins
+  only, which under `default-src 'self'` actively blocked same-origin frames.
 
 **Resolved by WP-S but not yet marked in the plan:** O-20 is *partly* addressed — WP-S deleted
 `deploy/migrations/` and reported on the `deploy/*migrate*` scripts, but the decision whether to delete
