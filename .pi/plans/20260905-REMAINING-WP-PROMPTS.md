@@ -726,9 +726,10 @@ KeyError paths. Your migration resolves both; mention that in the commit body.
                                Delete both in the same commit as the class.
   cns/api/websocket_chat.py:510-512, web/assets/javascript/api-client.js:589,
   web/assets/javascript/messaging.js:1491   the `provider_switch` frame renderers, downstream of the
-                               same dead event. **websocket_chat.py is WP4's file and has not run
-                               yet** — delete the two JS renderers and REPORT the websocket_chat.py
-                               lines for WP4 rather than editing that file.
+                               same dead event. **All three are WP4's files, and none of them affects
+                               your `*.py` headline gate — so delete none of them.** Report all three
+                               locations for WP4, which rewrites the WS protocol and the frontend's
+                               event handling anyway and runs after you.
   web/assets/javascript/thinking-budget.js:14,38,64   calls `get_conversation_llm` /
                                `set_conversation_llm`. Your brief names only `web/settings/index.html`;
                                this is the picker's second frontend consumer and it must go too, or the
@@ -737,6 +738,56 @@ KeyError paths. Your migration resolves both; mention that in the commit body.
                                **Do not edit.** O-20 is resolved: WP6 deletes this file outright along
                                with `deploy/migrate.sh` and `deploy/lib/migrate.sh`. It is excluded
                                from your headline gate for that reason.
+
+## WP2-C hand-off — read this before you start, it changes your checklist
+
+WP2-C has merged. It deleted the Batch API and the Files API upload transport, and it explicitly
+adjudicated several hunks that overlap your inventory. Consequences:
+
+**Already done — do NOT re-migrate these:**
+
+- `lt_memory/processing/execution_strategy.py` — the inventory's `'extraction' x1 -> batch` item is
+  **already satisfied**. WP2-C replaced the file with crm's 205-line post-image, which calls
+  `model_config="batch"` itself and defines `DirectExecutionStrategy`. Re-read it; migrate nothing.
+- `lt_memory/llm_routing.py`, `agents/batch.py`, `lt_memory/processing/batch_coordinator.py`,
+  `lt_memory/batch_result_handlers.py`, `clients/files_manager.py` — **deleted**. The inventory's
+  `agents/batch.py:58` docstring item is void.
+- `cns/api/actions.py:2216` — the `force_immediate=True` kwarg is gone. Your remaining `actions.py`
+  scope is the picker (`:2053-2180`), the effort override, and `:2595`'s `rewriter`.
+- `cns/services/segment_collapse_handler.py` — `force_immediate` and `_cleanup_segment_files` are gone.
+  **Yours is now only the `prefs.conversation_llm == 'demo'` branch** (was `:519`, now around `:509` —
+  locate by content, the file shifted).
+- `cns/services/orchestrator.py` — the `container_id` **read** block is gone; the write side stays.
+  Your scope there is unchanged: `:163` field, `:720-725` renamed-attribute consumer, `:998-1004`.
+
+**Declined by WP2-C as yours — these are on your checklist and still to do:**
+
+- `lt_memory/entity_merge.py` — `internal_llm='analysis'` -> `model_config="fast"`.
+- `agents/implementations/forage_agent.py:21` — `internal_llm_key="forage"` -> `"batch"`.
+- `agents/implementations/memory_curator_agent.py:99` — `"summary"` -> `"primary"`.
+- `agents/implementations/whilethecatsaway_agent.py` — WP2-C removed `use_batch` and
+  `batch_timeout_seconds` but **deliberately kept `internal_llm_key = "whilethecatsaway"`** for you to
+  rename to `"batch"`.
+
+**Declined by WP2-C as belonging elsewhere — not yours either:**
+
+- `lt_memory/hybrid_search.py` — the `global_memories` -> `global_memories_runtime` rename is
+  **WP3-B's** (plan §6.3.8, and open item O-17 alongside `lt_memory/db_access.py`).
+- `cns/api/websocket_chat.py` — the `provider_switch` frame renderer and the `InsufficientBalanceError`
+  blocks remain. WP2-C was told to leave frame emission and auth alone. The `provider_switch` renderer
+  is **WP3-B's** (it is retiring `ProviderSwitchEvent`); the billing block is §8.2/R8.
+- Every `AGENTS.md` map — WP6's sweep (plan D-15). WP2-C enumerated the stale batch lines for you:
+  `agents/AGENTS.md:25`, `cns/AGENTS.md:31`, `cns/services/AGENTS.md:9,20`, `lt_memory/AGENTS.md:7-8`,
+  `lt_memory/processing/AGENTS.md:26`. Do not edit them.
+- `clients/llm/dialects/anthropic.py:781` — a docstring still naming `build_batch_params` and
+  `agents/batch.py`, both now deleted. That file is outside your scope; it is recorded for WP6.
+
+**Line numbers throughout your brief have drifted.** WP2-A and WP2-C both landed after it was written;
+WP2-C reports 30-60 line drift in `power_on_self_test.py`, `config.py`, `websocket_chat.py` and
+`openai_chat_base.py`. **Locate every site by symbol or content, not by line number.**
+
+**Baseline for your differential:** `122 failed, 198 passed, 396 skipped, 16 errors`. Re-measure on your
+own branch before starting rather than trusting that.
 
 ## phoneafriend_tool — D14 consequence, a real tool-contract change
 
