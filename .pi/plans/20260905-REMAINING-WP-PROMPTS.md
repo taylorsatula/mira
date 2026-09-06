@@ -1888,18 +1888,58 @@ Fix these known-stale references (plan §8.5):
   config/prompts/AGENTS.md:31 documents repulsion_rewriter_*.txt with consumer FeedbackDomainHandler —
       mira-OSS KEEPS both (D6), so verify the consumer name is right for OSS rather than deleting the entry
   config/AGENTS.md still names analysis_enabled, which WP1-B removed
-  clients/AGENTS.md says "Callers pass exactly one of primary, fast, or batch" — five routes, and the
-      fifth is `other` not `difficult`
-  deploy/mira_service_schema.sql's COMMENT ON TABLE model_configs — WP-S should have fixed this; verify
+  clients/AGENTS.md said "Callers pass exactly one of primary, fast, or batch" — **WP2-A already fixed
+      this.** Verify rather than redo.
+  deploy/mira_service_schema.sql's COMMENT ON TABLE model_configs — **WP-S already fixed this** (it now
+      describes all five routes and names `other` as deliberately a different vendor from `primary`).
+      Verify.
+
+**Added since this brief was drafted — the stale-reference sweep is larger than §8.5 knew.** WP2-C
+deleted the Batch API and enumerated what it deliberately left for you:
+
+  agents/AGENTS.md:25                 still names max_concurrent_batch_agents
+  cns/AGENTS.md:31                    stale batch contract line
+  cns/services/AGENTS.md:9,20         stale batch contract lines
+  lt_memory/AGENTS.md:7-8             stale batch contract lines
+  lt_memory/processing/AGENTS.md:26   stale batch contract line
+  clients/llm/dialects/anthropic.py:781   a DOCSTRING still naming build_batch_params and
+      agents/batch.py — both deleted. WP2-C left it deliberately because the file belonged to a
+      concurrent package. It is a comment-only fix; make it.
+
+Verify each against the current tree rather than trusting the line numbers, and grep for other
+batch/files references the enumeration may have missed.
 
 O-24: rule on memory-curation-v2-serf-implementation-brief.md. crm's e26d031 deleted this 799-line root
 document as a bundled, unrelated change; WP1-C declined the deletion. Decide whether 2.0 still wants it.
 
-O-20: deploy/deploy.sh --migrate, deploy/migrate.sh, deploy/lib/migrate.sh and
-deploy/schema_aware_restore.py implement a backup-then-restore upgrade path that the 2.0 posture makes
-dead (WP-S deleted deploy/migrations/ entirely). Decide: delete them, or keep a documented export path
-for users salvaging 1.x data. crm kept all three alongside its greenfield schema, which is an
-inconsistency not worth inheriting. Check whether WP-S already reported dangling references.
+O-20 is **RESOLVED — delete, do not keep as a backup path.** An audit of `deploy/` established the
+evidence chain, so this is execution rather than a decision:
+
+- The only live entry is `deploy/deploy.sh:66-71`, which `source`s both `lib/migrate.sh` and
+  `migrate.sh` when `MIGRATE_MODE` is true.
+- **`deploy/migrate.sh` does not parse.** Line 575 is `if nohup mira >/dev/null 2>&1 &; then` —
+  `bash -n` fails with `syntax error near unexpected token ';'`. The same failure reproduces on
+  `main`, and blame points to `0254a8c1` (2025-12-29), so it is **pre-existing, not introduced by this
+  programme**. Because `source` parses the whole file under `set -e`, `deploy.sh --migrate` dies before
+  its first phase. **The entire family, including the rollback path, has been unreachable for months.**
+- **Do not fix line 575.** Repairing the syntax would resurrect a half-broken path:
+  `capture_database_snapshot` and `verify_database_snapshot` silently record `0` for dropped tables
+  (`lib/migrate.sh:684`, `:1196`), so a user would be prompted to "acknowledge data loss" on tables 2.0
+  deleted by design.
+- `schema_aware_restore.py` has exactly one caller (`lib/migrate.sh:1567`) and its headline feature is
+  keyed to `CONFIG_TABLES = {'conversation_llm','internal_llm'}` (`:44`) — both tables are gone, so
+  under 2.0 it degrades to a generic table loader.
+
+**Action: delete `deploy/migrate.sh`, `deploy/lib/migrate.sh` and `deploy/schema_aware_restore.py`, plus
+the `--migrate`/`--dry-run` branch and its usage text in `deploy/deploy.sh:7-13,44-77`, which becomes
+dangling.** `deploy/deploy_database.sh` is **not** part of the family — it is a standalone fresh-install
+tool and stays. In the README's reinstall-not-upgrade wording, say that a user salvaging 1.x data needs
+only `pg_dump` and manual work; that is the honest replacement for the deleted path.
+
+The stale table and column references the audit found inside those files (`lib/migrate.sh:640,645-646,
+684,970,1196`, `schema_aware_restore.py:9,44`, plus `continuums.last_message_position` and a
+`user_activity_days` `ORDER BY created_at` against a table with no such column) all die with the
+ deletion — **do not fix them individually.**
 
 ## 3. Release identity (plan §0.1 obligations)
 
@@ -1910,6 +1950,51 @@ and that 1.x conversation history, memories and domain knowledge do not carry fo
 thing a 1.x user needs to know.
 Update docs/MANUAL_INSTALL.md for the greenfield schema and the deleted migrations directory.
 Retain mira-OSS's NEARFUTURE_FEATURES.md — crm deleted it; that deletion was not adopted.
+
+**R-8 — pin floors for critical dependencies.** `requirements.txt:27` lists `anthropic` with **no
+version constraint**, while `clients/llm/dialects/anthropic.py:341` sends `output_config` — a parameter
+the older 0.52.2 SDK does not have (verified: no `output_config` in `Messages.create`'s signature,
+though `thinking` and `ThinkingConfigDisabledParam` are present). This is **pre-existing, not a 2.0
+regression**: the same reference exists at `main` and at crm HEAD, and crm's `requirements.txt:30` is
+likewise unpinned. It is not an install blocker either — a fresh `pip install` resolves to the latest
+SDK, which is new enough.
+
+It is a **reproducibility defect** for a distributed package whose posture is fresh-install-only: an
+install pinned by a distro, a lockfile or a warm cache breaks at *runtime* with a `TypeError` on the
+`batch` route, and nothing catches it earlier. Note the `assessment` route is unaffected —
+`effort='none'` emits `thinking={"type":"disabled"}` and never reaches `output_config`.
+
+**Action:** establish the minimum `anthropic` version providing `output_config` and pin a floor
+(`anthropic>=<version>`). Audit the other unpinned critical entries the same way — `openai`,
+`httpx[http2]`, `psycopg`, `valkey` — for any feature the code uses that a floor would protect.
+**Pin floors, not exact versions**; exact pins fight the rest of the dependency graph.
+
+**Three loose ends the `deploy/` audit found, all yours:**
+
+- `deploy/docker/scripts/init-mira.sh:249-252` writes `/opt/vault/provider_endpoint.txt` and
+  `provider_model.txt` for non-Groq container providers, with a comment saying the rewrite "will be done
+  after PostgreSQL is running via s6". **Nothing in the repository reads either file** — a pre-existing
+  dead mechanism. Consequence: a non-Groq container install keeps the groq endpoint on the `fast` route,
+  and no container flow ever rewrites the `primary` row. **Implement it or delete it**; do not leave a
+  mechanism that looks like it configures the install and does not.
+- `deploy/oss_ui/chat.html` has **no Python consumer** (`git grep chat.html -- '*.py'` is empty), while
+  its siblings `marked.min.js` and `purify.min.js` are read at import time by `oss_ui.py:19-20` and are a
+  §0 invariant. Rule on `chat.html`: delete it, or document what serves it. **Do not touch the two
+  vendor scripts.**
+- `deploy/deploy_database.sh:151` prints `password: new_secure_password_2024` as example text in its
+  post-install "Next steps" output. A placeholder, not a credential, but it reads like one. Reword.
+
+Also: the repository's `.git/config` registers a `deploy` remote at
+`ssh://admin@192.168.1.9/...`. **That is not in the tree and will not ship**, so it is not a scrub-gate
+failure — but it is the private appliance IP, and it is worth removing from the working repository
+while you are doing the §11 pass. Report whether you removed it.
+
+**D-15 — the two architecture overviews.** `scratch/MIRA_ARCHITECTURE_OVERVIEW.md` (882 lines) and
+`scratch/MIRA_ARCHITECTURE_OVERVIEW copy.md` (599 lines) are gitignored and were never shipped. Both
+document `internal_llm`/`conversation_llm` resolution, `batch_result_handlers` and `files_manager` —
+**all three are gone from 2.0.** Plan D-15's instruction is to **re-derive from the post-backport tree
+rather than update them.** Decide whether 2.0 ships an architecture overview at all; if it does, write
+it against the tree you have, not against those files.
 
 ## 4. Scrub gate — plan §11. This is the release blocker.
 
