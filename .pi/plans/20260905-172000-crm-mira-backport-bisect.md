@@ -327,6 +327,23 @@ Additional OSS-only surface crm never touched: `usage_pricing` table + `main.py:
 `deploy/postgresql.sh:103` `OFFLINE_SQL`, `deploy/lib/migrate.sh:640-1196` table lists,
 `web/settings/index.html` picker.
 
+**The agents framework carries the vocabulary too**, which a call-site-only grep misses.
+`agents/base.py` declares `internal_llm_key: str` as a dataclass field (`:192`) and
+`overwatch_llm_key: str | None` (`:229`), resolves via `get_internal_llm(self.internal_llm_key)`
+(`:673`), and passes `internal_llm=self.overwatch_llm_key` (`:330`). Rename to `model_config_name` and
+`overwatch_model_config_name`. Subclass declarations to update: `forage_agent.py:21` `"forage"` →
+`batch`, `:26` `"overwatch"` → `primary` (with the `max_tokens` override, O-18);
+`memory_curator_agent.py:99` `"summary"` → `primary`; `whilethecatsaway_agent.py:24`
+`"whilethecatsaway"` → `batch`.
+
+**`cns/api/actions.py:2053-2180`** holds the picker surface D13 retires: a `resolve_conversation_llm`
+consumer at `:2062-2083`, and the `get_conversation_llm` / `set_conversation_llm` action definitions
+(`:2106`, `:2111`) and handlers (`:2142-2180`, including `get_conversation_llms()`, the `hidden` check
+and `update_user_preference('conversation_llm', name)`). Delete all of it, plus the matching UI in
+`web/settings/index.html`. `cns/services/orchestrator.py:163` carries a `conversation_llm: str` field
+and `working_memory/core.py:119-123` calls `resolve_conversation_llm(prefs.conversation_llm)`; both
+become the fixed `primary` route.
+
 Signature delta:
 
 ```
@@ -351,7 +368,15 @@ are omitted as CRM. Rename to `other` per D14 costs nothing.
 | `fast` | `analysis` → `subcortical.py:154,241`, `domaindoc_summary_service.py:99`, `tool_result_summarizer.py:207`, `entity_merge.py:170`, `prompt_injection_defense.py:374`; `tidyup`(pager) → `pager_tool.py:1393` | Unanimous crm precedent across all five `analysis` sites. |
 | `batch` | `extraction` → `lt_memory/processing/execution_strategy.py:442`; `forage`; `whilethecatsaway` | Synchronous. Unambiguous after D10 removes the async Batch API. |
 | `assessment` | `assessment_extractor.py:119` | **Judgment call.** crm mapped this to `batch` to avoid a name collision with its own effort=none autonomy gate. That collision only bites if OSS ports `autonomy_service` — it does not. With `assessment` otherwise unclaimed, mapping `assessment_extractor` → `assessment` is self-documenting and frees `batch` to mean purely bulk background work. Both defensible; this plan takes `assessment`. |
-| `other` | `phoneafriend_tool.py:155` (both voices collapsed, D14) | **MUST be seeded to a different vendor/model than `primary`.** Enforce with a startup assertion in `load_model_configs()` or `_check_llm_configuration()` when `other.model == primary.model`. `effort='high'` matches `phoneafriend_claude`. |
+| `other` | `phoneafriend_tool.py:151,155` (both voices collapsed, D14) | **MUST be seeded to a different vendor/model than `primary`.** Enforce with a startup assertion in `load_model_configs()` or `_check_llm_configuration()` when `other.model == primary.model`. `effort='high'` matches `phoneafriend_claude`. See the tool-schema consequence below. |
+
+**D14 consequence for `phoneafriend_tool`'s schema.** The tool exposes a model choice to the calling
+model via `MODEL_INTERNAL_LLMS[model_choice]` (`:151`), resolving to `phoneafriend_claude` or
+`phoneafriend_gemini`. With both collapsed onto `other` there is nothing left to choose between, so the
+parameter becomes illusory. **Remove the choice parameter** and hardcode route `other`, updating the
+tool description and JSON schema accordingly. A parameter that silently does nothing is worse than no
+parameter: the model would reason about a distinction that does not exist. This is a tool-contract
+change and belongs in WP2, not WP1.
 
 Latent main defects resolved by WP-S/WP2: `portrait` and `whilethecatsaway` are referenced in
 code (`portrait_service.py:191,234`; `whilethecatsaway_agent.py:24`) but **never seeded** in any schema
@@ -1092,6 +1117,20 @@ working. This is a correctness gate, not a compatibility one.
 
 Also fold in from §6.3.8, as schema objects rather than migrations: `global_memories_runtime` +
 `can_read_global_memories()` + the grant tightening.
+
+**`utils/power_on_self_test.py` must be updated in the same change.** Its RLS verification check holds
+a hardcoded `expected_tables` list (~`:512-526`) and a matching SQL `WHERE c.relname IN (...)` list
+(~`:537-548`) that must stay in sync. Both currently include `billing_transactions`, which this schema
+drops; left alone the check computes `missing_tables` and **fails the power-on self-test at every
+startup**. Remove `billing_transactions`; add `users`, `magic_links`, `persona_revisions`,
+`persona_state`, `persona_signals`, `user_feedback` — the tables this schema newly gives RLS. Verify
+each added table actually receives at least one policy, or the check fails on `policy_count == 0`
+instead. Verified: `billing_transactions` and `stripe_webhook_events` have **no live application
+readers** in mira-OSS Python — the only references are this self-test and
+`tests/test_greenfield_schema.py`.
+
+Touch nothing else in that file here. Its 15 `internal_llm`/`conversation_llm` references,
+`_check_llm_configuration`, and the `config.api.max_tokens` readers at `:709` and `:1064` are WP2's.
 
 **Do not include** `users_subject_contract` (hardcodes `email ~ '^demo\+[0-9a-fA-F-]{36}@no\.email\.add$'`
 and `demo_expires_at = demo_start_at + INTERVAL '24 hours'`), `users_lifecycle_contract`,
