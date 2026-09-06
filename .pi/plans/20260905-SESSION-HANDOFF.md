@@ -222,8 +222,16 @@ Vault-independent modules. Use these every package; they catch merge damage chea
 
 ## 5. What remains
 
-Dependency chain, revised 2026-09-06 after wave 1 reported: **WP2-A ✅ → WP2-C → WP2-B → {WP3-B ∥ WP5}
-→ WP4 → WP6.** WP7 is descoped.
+Dependency chain, revised 2026-09-06: **WP2-A ✅ → WP2-C ✅ → WP2-B ✅ → {WP3-B ∥ WP5 ∥ WP2-D}
+(in flight) → WP4 → WP6.** WP7 is descoped.
+
+Also landed outside the original chain: **R-3** (deploy audit + three fixes), the **`effort='none'`
+install-blocker fix**, and **WP1-D** (the dormant DST utility wired to its two real consumers, closing
+D-8 and O-13). **WP2-D** was chartered mid-flight for a silent regression no gate could catch.
+
+**Integration tip `47ff2da`, 69 commits ahead of main, 205 files, clean, compiles, differential
+120 failed / 200 passed / 396 skipped / 16 errors.** For orientation: the programme began at
+150/143/396/18.
 
 The revision is structural, not cosmetic. Plan §12 treats WP2 as *one atomic unit that includes D10's
 deletions*; the WP2-A/WP2-B split allocated the chokepoint and the leaf call sites but left D10 —
@@ -289,6 +297,9 @@ Recorded here because they were made under time pressure and are not yet folded 
 | E-13 | **`utils/logging_config.py` is excluded from D10.** Plan §8.4's "Anthropic SDK instrumentation (−99 L)" under the Files API is a **misattribution**. | Verified: the 99-line removal is crm's `ff12722`, the billing/prepaid commit; `0134d3d` does not touch the file. `instrument_anthropic_client` is still defined at crm HEAD, still called by `clients/llm/dialects/anthropic.py:129-131`, and mira-OSS's WP1-landed `utils/llm_tap.py:156` documents that it is attached via that function. Porting §8.4's hunk would have broken shipped WP1 observability. Belongs to §8.2/D-14 triage instead. |
 | E-14 | **Domaindoc sharing gets a minimal SECURITY DEFINER lookup** exposing only `id, email, first_name` for active users, with no member gating (user-approved). | RLS on `users` is unconditional in the landed schema (`:553,559,665`), so three cross-user readers silently return nothing in `multi` mode: `cns/api/actions.py:1849` looks a collaborator up **by email** (how a share target is added — sharing becomes impossible), and `actions.py:1928` plus `utils/domaindoc_shares.py:132` join to another user's row for share listings, so collaborator names and emails vanish. Plan §6.3.8 already concluded crm's fix (`JOIN LATERAL active_member_identity(...)`) is **not portable**, because that function filters `subject_kind='member'` and D12 omits the demo machinery it belongs to. So there is no upstream answer. Rejected alternative: routing these reads through an admin session, which would bypass RLS entirely for a user-facing query. New open item **O-25**; WP3-B owns it. |
 | E-15 | **`effort='none'` means thinking is DISABLED** (user ruling) — not provider default, not lowest level, not "omit and let the model decide". | Resolves the design question behind the install blocker. The greenfield schema seeds `fast` (groq `qwen/qwen3.6-27b`) and `assessment` (anthropic `claude-opus-4-6`) at `effort='none'`, but `clients/llm/types.py:14`'s `EffortLevel` Literal has never included `'none'`, so `coerce_effort('none')` raises `ValueError` from `load_model_configs()` at `utils/user_context.py:248` and **every fresh install aborts at startup**. Plan §5 D-12's "effort=none, cheap" and §6.1.3's effort=none gate both assume the semantic. crm's `98a8f28` fix is a one-line Literal widening that **cannot be ported alone**: `EFFORT_LEVEL_ORDER` derives from `get_args`, so `'none'` sorts first, and crm HEAD's `_LEGACY_BUDGET_PER_EFFORT` has no `'none'` entry — making `anthropic.py:343-344`'s clamp loop `KeyError` on its first iteration for any budget. Open sub-question: Qwen3 on Groq disables thinking via `chat_template_kwargs: {"enable_thinking": false}`, which mira-OSS deliberately does not carry (crm added it in `a7b8694`, removed it in `ed441e5`). If the `fast` route genuinely needs it, that is a reinstatement of a previously declined mechanism and comes back for a decision rather than being added unilaterally. |
+| E-16 | **Accept the chat output ceiling dropping from 31999 to 16000** (WP2-B decision D-2, ratified). | WP2-B deleted `llm_kwargs['max_tokens'] = 31999` ("Frontend generation ceiling"), a caller-side override on a contract whose whole point is that the row owns the ceiling (§6.1.1). crm's post-image omits it too. Worse, `primary` is seeded `openai/gpt-5.5` at `max_tokens=16000`, and per-request overrides win over the row, so 31999 exceeded the model's own ceiling and risked provider 400s on long turns. **Reversible as a one-line row change** in `deploy/mira_service_schema.sql` if longer replies are wanted — that is the correct place, not a caller override. Flagged by the agent as the one user-visible decision it made without instruction. |
+| E-17 | **O-18 is closed, and the briefed fix would have made it worse.** The overwatch ceiling is **80**, not 100. | §10 recorded O-18 as "unverified whether crm's `agents/base.py` actually passes the override". Verified: `_run_overwatch` already passes `max_tokens=self.overwatch_max_tokens` = **80**, and precedence was identical at main, so the observer's effective ceiling was always 80 — the row's 16000 was never reachable. Passing 100 as the brief instructed would have **raised** it 25%. The agent declined the instruction, documented the override as load-bearing so a future cleanup cannot delete it and open the real 160x hole, and closed the item with a value. |
+| E-18 | **A vocabulary gate cannot catch signature breakage.** After a required-kwarg migration, the correct sweep is "find every caller of the changed function", not "grep for the retired names". | `tools/implementations/web_tool.py::_synthesize_content` passed four kwargs WP2-A removed (`endpoint_url=`, `dialect_name=`, `model=`, `api_key=`), so every call raised `TypeError` — swallowed by its own `except Exception: return None`, leaving long-page synthesis silently dead while the fetch still succeeded. The headline gate stayed clean because the file contains no `internal_llm` string, and the differential stayed clean because no test covers it. Found by WP2-B reporting residue, not by any gate. Chartered WP2-D to fix it and to sweep the tree for other callers of `generate_response`/`stream_events` still passing a removed kwarg. |
 
 ---
 
@@ -393,6 +404,38 @@ declines, assign it to WP6.
   parsed at middleware-stack build). Its strict value adds `worker-src 'self'`, which **closes part of
   D-7**, and omits `frame-src` rather than setting `'none'` — crm set it to third-party payment origins
   only, which under `default-src 'self'` actively blocked same-origin frames.
+
+**New open item O-26 — naive local wall times are attributed to UTC. Larger than the DST bug it was
+found beside, and unassigned.** The WP1-D agent surveyed every tool for model-supplied wall times and
+found a different defect class in the *stored-timestamp* paths:
+
+- `memory_tool.create_memory(happens_at=, expires_at=)` takes model-supplied strings, queues them
+  verbatim to Valkey, and they are parsed later at `cns/services/segment_collapse_handler.py:605,610` by
+  `parse_time_string(mem.happens_at)` **with no `tz_name` argument**. `get_default_timezone()`
+  (`utils/timezone_utils.py:99`) returns `"UTC"`. So a naive local wall time is attributed to UTC —
+  **wrong by the user's full offset, every day of the year**, which in some zones exceeds the one-hour
+  DST error. The surrounding `except Exception: logger.warning(...)` then **silently drops the field**.
+- `continuum_tool.search_messages(start_time, end_time)` and its `reference_time` are parsed by
+  `parse_utc_time_string`, i.e. naive input read as UTC. Same class, milder in practice: the schema
+  instructs the model to copy segment-summary `time_boundaries`, which are `Z`-bearing UTC strings, so
+  the normal flow carries no local wall time.
+
+**DST strictness is the wrong remedy here**, and this is the interesting part: by the time these strings
+are parsed the model is no longer on the call stack, so raising loses the memory instead of prompting a
+clarifying question. The correct fix is to parse in the **user's** timezone (available via
+`get_user_preferences().timezone`) rather than the system default, and to stop discarding the field on
+failure. That is a different change from WP1-D's and belongs in its own small package. It touches
+`segment_collapse_handler.py`, which **WP5 is editing right now** — so sequence it after WP5 merges.
+
+**Plan defect: §6.1.5 and the WP2-B brief both name the wrong file for the model picker.** They say the
+picker UI is in `web/settings/index.html`. Verified: that file contains **no** picker (zero `tier` or
+`conversation_llm` hits). The real consumers were `web/chat/index.html`,
+`web/assets/javascript/thinking-budget.js` (181 L, deleted) and `web/assets/style.css:1974-2005`
+(`.thinking-popover`, `.thinking-options`). A related trap: `data-indicator="tier_btn"` is **also** the
+live thinking/emotion indicator — `messaging.js:896` looks it up by `id="thinking-indicator"` — so
+deleting the button along with the popover would have broken the thinking stream. Only `#tier-popover`
+is the picker. Residue left for WP4: the dead picker CSS, and stale tier-label comments at
+`messaging.js:899,916`.
 
 **Resolved by WP-S but not yet marked in the plan:** O-20 is *partly* addressed — WP-S deleted
 `deploy/migrations/` and reported on the `deploy/*migrate*` scripts, but the decision whether to delete
