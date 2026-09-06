@@ -222,16 +222,18 @@ Vault-independent modules. Use these every package; they catch merge damage chea
 
 ## 5. What remains
 
-Dependency chain, revised 2026-09-06: **WP2-A ✅ → WP2-C ✅ → WP2-B ✅ → {WP3-B ∥ WP5 ∥ WP2-D}
-(in flight) → WP4 → WP6.** WP7 is descoped.
+Dependency chain, **complete except WP6-C**: WP2-A ✅ → WP2-C ✅ → WP2-B ✅ → {WP3-B ✅ ∥ WP5 ✅ ∥
+WP2-D ✅} → WP4 ✅ → {WP6-A ✅ ∥ WP6-B ✅} → **WP6-C (in flight)**. WP7 is descoped.
 
 Also landed outside the original chain: **R-3** (deploy audit + three fixes), the **`effort='none'`
-install-blocker fix**, and **WP1-D** (the dormant DST utility wired to its two real consumers, closing
-D-8 and O-13). **WP2-D** was chartered mid-flight for a silent regression no gate could catch.
+install-blocker fix**, **WP1-D** (the dormant DST utility wired to its two real consumers, closing
+D-8 and O-13), **WP2-D** (a silent `TypeError` no vocabulary gate could see), **O-26** and **O-26b**
+(two timezone-attribution defects, the second found by the first), and **sec1**/**sec2** (a
+remotely-triggerable persistent boot brick, plus a second path to it that nobody had named).
 
-**Integration tip `47ff2da`, 69 commits ahead of main, 205 files, clean, compiles, differential
-120 failed / 200 passed / 396 skipped / 16 errors.** For orientation: the programme began at
-150/143/396/18.
+**Integration tip `1c12c54`, 119 commits ahead of main, 256 files, +35,304/−12,478, clean, compiles.**
+Differential **106 failed / 235 passed / 333 skipped / 14 errors**; the programme began at
+150/143/396/18. WP6-C will move it again — two broken contract tests gain real paths.
 
 The revision is structural, not cosmetic. Plan §12 treats WP2 as *one atomic unit that includes D10's
 deletions*; the WP2-A/WP2-B split allocated the chokepoint and the leaf call sites but left D10 —
@@ -300,6 +302,8 @@ Recorded here because they were made under time pressure and are not yet folded 
 | E-16 | **Accept the chat output ceiling dropping from 31999 to 16000** (WP2-B decision D-2, ratified). | WP2-B deleted `llm_kwargs['max_tokens'] = 31999` ("Frontend generation ceiling"), a caller-side override on a contract whose whole point is that the row owns the ceiling (§6.1.1). crm's post-image omits it too. Worse, `primary` is seeded `openai/gpt-5.5` at `max_tokens=16000`, and per-request overrides win over the row, so 31999 exceeded the model's own ceiling and risked provider 400s on long turns. **Reversible as a one-line row change** in `deploy/mira_service_schema.sql` if longer replies are wanted — that is the correct place, not a caller override. Flagged by the agent as the one user-visible decision it made without instruction. |
 | E-17 | **O-18 is closed, and the briefed fix would have made it worse.** The overwatch ceiling is **80**, not 100. | §10 recorded O-18 as "unverified whether crm's `agents/base.py` actually passes the override". Verified: `_run_overwatch` already passes `max_tokens=self.overwatch_max_tokens` = **80**, and precedence was identical at main, so the observer's effective ceiling was always 80 — the row's 16000 was never reachable. Passing 100 as the brief instructed would have **raised** it 25%. The agent declined the instruction, documented the override as load-bearing so a future cleanup cannot delete it and open the real 160x hole, and closed the item with a value. |
 | E-18 | **A vocabulary gate cannot catch signature breakage.** After a required-kwarg migration, the correct sweep is "find every caller of the changed function", not "grep for the retired names". | `tools/implementations/web_tool.py::_synthesize_content` passed four kwargs WP2-A removed (`endpoint_url=`, `dialect_name=`, `model=`, `api_key=`), so every call raised `TypeError` — swallowed by its own `except Exception: return None`, leaving long-page synthesis silently dead while the fetch still succeeded. The headline gate stayed clean because the file contains no `internal_llm` string, and the differential stayed clean because no test covers it. Found by WP2-B reporting residue, not by any gate. Chartered WP2-D to fix it and to sweep the tree for other callers of `generate_response`/`stream_events` still passing a removed kwarg. |
+| E-19 | **O-21 resolved: `VERSION` keeps CalVer with a major suffix** — `2026.09.06-2.0` (user decision). | Semver `2.0.0` was the alternative and was declined. CalVer-first preserves the existing `YYYY.MM.DD` shape and the build-date information operators use to identify a deployment, and releases sort chronologically. **Accepted cost, to be documented in the README rather than discovered later:** with CalVer first, a hypothetical `2027.01.01-2.1` sorts above a `2026.12.01-3.0`. The `-2.0` suffix carries the major marker §0.1 requires. |
+| E-20 | **E-16 reversed: raise `primary.max_tokens` at the row** rather than accept 16000 (user decision). | WP2-B's deletion of the caller-side `max_tokens = 31999` override was correct — §6.1.1 makes the row the owner of the ceiling, and 31999 exceeded the seeded model's limit — but the reduction in maximum reply length is user-visible and worth undoing **at the row**, which is the right place. Conditioned on establishing `openai/gpt-5.5`'s documented maximum output tokens first and choosing a value at or below it: raising past the real limit reintroduces the provider-400 risk the deletion removed. Also requires confirming `validate_compaction_budget(primary_max_tokens)` still yields a sane input budget, since raising the output ceiling shrinks it. `tests/test_greenfield_schema.py` parses the seed dynamically (`:56`,`:63`) rather than hardcoding 16000, so the 32-test gate should survive — a condition to verify, not assume. |
 
 ---
 
