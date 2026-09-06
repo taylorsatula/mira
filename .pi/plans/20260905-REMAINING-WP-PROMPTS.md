@@ -1647,8 +1647,41 @@ this codebase chooses fail-fast over extensive performative testing.
 ## WP5 — Persona as a second parallel system
 
 ```
-git worktree add .worktrees/wp5 -b 2.0/wp5 <integration-branch-after-WP4>
+cd /Users/taylut/Programming/GitHub/mira-OSS
+git worktree add .worktrees/wp5 -b 2.0/wp5 2.0/integration
 ```
+
+Branch after **WP2-B has merged**. WP5 runs **in parallel with WP3-B** — their owned sets are verified
+disjoint — and **before WP4**, not after it as an earlier draft of this brief said. WP5 touches
+`cns/api/actions.py` and `web/settings/index.html`, both of which WP2-B also owns, so WP2-B must land
+first; nothing in WP4 depends on WP5.
+
+### Two large pieces of this package are already done — do not redo them
+
+**All schema work is complete.** §6.5.3's objects were authored by WP-S directly into the greenfield
+`deploy/mira_service_schema.sql` and have been **applied to a live PostgreSQL 17.11 server and
+behaviourally verified**: `persona_revisions`, `persona_state` and `persona_signals` all exist under
+those names; the append-only grant on `persona_revisions` is SELECT+INSERT with no UPDATE or DELETE;
+RLS is enabled on both; and the `provision_baseline_persona()` AFTER INSERT ON `users` trigger was
+**observed to fire**, creating `persona_state` and `persona_revisions` rows for every inserted user.
+So the trigger provisions revision 1 for the `ensure_single_user` bootstrap too, which is §12's WP5
+gate. **You write no SQL.** Verify your repository module against the landed schema and report any
+mismatch, but change nothing in `deploy/`.
+
+**WP2-C already made the D10 deletions in `segment_collapse_handler.py`.** See the wiring section below
+for what that leaves you.
+
+### State you inherit
+
+- The five-route `model_configs` contract is live. `persona_service.py`'s four `model_config="primary"`
+  call sites are already correct — **verify, do not change.**
+- `effort='none'` now means thinking disabled on the wire. Persona's routes are `primary`, so this does
+  not affect you, but `EFFORT_LEVELS` admits `'none'` if you validate any effort input.
+- `cns/api/actions.py` has been edited by WP2-B: the model picker is retired, the D13 effort-override
+  actions are added, and the `rewriter` purpose is migrated. **Locate every site by symbol, not line
+  number** — §6.5.4's line references predate three packages.
+- `web/settings/index.html` likewise: WP2-B removed the picker UI. The LoRA panel at §6.5.4's
+  `:697-800` must still be there and still working, since D1 keeps `LoraDomainHandler`.
 
 ```
 You are executing WP5 of the mira-OSS 2.0 backport: add the Persona subsystem ALONGSIDE the existing
@@ -1705,14 +1738,32 @@ _process_checkin_response, or the repulsion rewrite loop. Decision D6 keeps the 
   cns/integration/factory.py — register PersonaTrinket IN ADDITION TO LoraTrinket. Upstream swaps them
       at :192 and :212; mira-OSS keeps both.
   cns/services/segment_collapse_handler.py — call _process_persona() IN ADDITION TO the existing
-      _process_feedback_loop(). Do NOT take this file wholesale: its upstream 216-line delta bundles the
-      Persona swap (take), batch removal and force_immediate deletion (D10 — check whether WP2 already
-      did this), _cleanup_segment_files / Files-API deletion (D10), and a demo-user skip deletion that
-      depends on prefs.conversation_llm (dead after D13). Hand-edit. Retain _process_feedback_loop,
-      _init_feedback_loop and _invalidate_lora_trinket_cache.
-      Note D-3: _process_persona does NOT swallow exceptions, unlike _process_feedback_loop. A persona
-      failure propagates into the collapse-attempt counter toward MAX_COLLAPSE_ATTEMPTS = 3 tombstone.
-      That asymmetry is intended; leave both behaviours as they are and mention it in the commit body.
+      _process_feedback_loop(), and add _get_persona_service(). Do NOT take this file wholesale.
+
+      **The upstream 216-line delta is now mostly spent.** It came from a single crm commit, `6c055c2`
+      ("replace LoRA user model pipeline with immutable Persona revisions"), which bundled four
+      concerns. Their current disposition:
+
+        batch removal + force_immediate deletion (D10)   DONE by WP2-C — do not redo
+        _cleanup_segment_files / Files-API deletion      DONE by WP2-C — do not redo
+        demo-user skip on prefs.conversation_llm         WP2-B's — it dies under D13/D4, not yours
+        the Persona swap                                 **YOURS, and it is an ADDITION here, not a
+                                                          swap** — crm deleted the user model, D1 keeps it
+
+      So your hand-edit reduces to: add `_process_persona()` (~18 L) and `_get_persona_service()`
+      alongside the existing methods, and wire the call. **Do not copy crm's deletions — they are either
+      already applied or forbidden.** Verify the three D1-retained methods are still present before and
+      after your edit: `_init_feedback_loop`, `_process_feedback_loop`,
+      `_invalidate_lora_trinket_cache`. §12's WP5 gate requires all three.
+
+      WP2-C recorded its touch map for this file so you can see what moved: the `force_immediate`
+      parameter, docstring, propagation and extraction block, a stale batch comment, the
+      `_cleanup_segment_files` call and its definition. The file has shifted — locate by symbol.
+
+      Note D-3: _process_persona does NOT swallow exceptions, unlike _process_feedback_loop (84 L,
+      4 components, lazy-init retry, broad except). A persona failure propagates into the
+      collapse-attempt counter toward MAX_COLLAPSE_ATTEMPTS = 3 tombstone. That asymmetry is intended;
+      leave both behaviours as they are and mention it in the commit body.
   Feature flag: gate Persona behind MIRA_PERSONA_ENABLED, added to the
       SYSTEM_FEATURE_FLAG_ENVIRONMENT_FIELDS registry that WP1-B generalised in
       config/config_manager.py. Strict "0"/"1" parsing, omission at construction in the factory (not
