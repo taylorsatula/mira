@@ -1029,39 +1029,411 @@ RATIONALE, since there is no upstream commit to cite); (6) security_middleware h
 
 ## WP3-B — auth service, API, database, graft, and the SMTP sender
 
-Create after WP3-A and WP-S have both merged. Brief to be written once WP3-A reports, because it depends
-on how WP3-A resolved the `app_url` laziness question and the `auth.config` import constraint. Skeleton:
+**Written 2026-09-06 from WP3-A's actual report.** All three questions this brief was blocked on are
+answered; the answers are baked into the specification below rather than left open.
 
-- `auth/database.py` — port; reconcile `create_user`'s INSERT against WP-S's actual `users` columns
-  (crm's version omits `conversation_llm`/`balance_usd`, which WP-S also omits, so this may now align);
-  port `initialize_mira_account()` and `_prepopulate_welcome_content()` as the replacement for
-  `main.py`'s inline seeding; keep the admin-session / user-session split verbatim.
-- `auth/service.py` — excise the six CRM touch points (`:26`, `:41`, `:132-140`, `:187-194`, `:243`,
-  `:267-289`) via WP3-A's `AccountProvisioner`; generalise the hardcoded dev identity at `:216-231`
-  (`dev@crm-mira.local`, `"Taylor"`, `"America/Detroit"`); prefer lazy `get_auth_service()` over the
-  module-level singleton at `:676`.
-- `auth/api.py` — the region map is in plan §6.3.5. Keep the name `get_current_user`; add the
-  single-user union branch from §6.3.4; excise `_require_billing_entitlement` (`:299-336`) and the
-  `*_entitled_*` ladder; skip `get_current_member*` (D12); repoint `/dev/session` from `/workspace/` to
-  `/chat`; drop or repoint `get_current_user_for_pages` (mira-OSS has no `/login/`).
-- `auth/account_gc.py` — port the concept, replace `CRMWorkspaceLifecycleService.delete_account()` with
-  `NullProvisioner`/`local_teardown`, drop the `LEFT JOIN crm_workspaces` and the `cleanup_pending`
-  branch.
-- `auth/email_service.py` — **new design work, no upstream reference.** crm's posts to a private
-  HMAC-signed gateway whose server side is an untracked PHP file. D3 requires a pluggable SMTP sender.
-- `main.py` — the three-mode bootstrap: keep `ensure_single_user()` running in `single` mode; mount
-  `auth.api.router` at `/v0/auth`; mount `cns/api/oss_ui.py` in `single`/`dev` only; gate the scheduler
-  registration on mode; retain every existing page route and the `/assets` mount.
-- `cns/api/websocket_chat.py` — only the auth path, using `a4df669`'s dual-protocol shape (plan §6.4.5),
-  plus `set_current_user_data()`. The protocol rewrite itself is WP4.
-- Do not port `cns/api/*.py` wholesale (plan §6.3.3).
-- `utils/scheduled_tasks.py` — re-add the `auth.service` registration, mode-gated; do not take
-  `get_users_due_for_job`'s entitlements JOIN.
-- Deploy: seed `app_url` (and email settings for `multi`) in `deploy/postgresql.sh` and
-  `deploy/docker/scripts/init-mira.sh`.
-- Excise `tests/test_auth_graft.py`'s ~7 CRM-only tests (plan §6.3.5) — keep session hashing,
-  `logout_others`, cleanup ordering, compensation-on-failure, the removed-OSS-auth contracts, the
-  explicit-RLS-identity checks and the `conversation_llm` negative assertion.
+```
+cd /Users/taylut/Programming/GitHub/mira-OSS
+git worktree add .worktrees/wp3b -b 2.0/wp3b 2.0/integration
+```
+
+Branch only after **WP2-B has merged**, because both packages edit `main.py`. WP2-C must also have
+merged, because it edits `cns/api/websocket_chat.py`, which you touch for the WS auth path.
+
+```
+You are executing work package WP3-B of the mira-OSS 2.0 backport: the auth service, API and database
+layers, the CRM excision graft, the three-mode bootstrap, and a new pluggable SMTP sender. WP3-A has
+already landed the auth primitives; you build on them and close the deliberate inconsistencies it left.
+This is the largest auth package in the programme and the one that unbreaks `single` mode.
+
+### Why this package is urgent
+
+WP3-A landed `auth/types.py` with `subject_kind` **required and no default**, per plan §0.1's
+no-compatibility-defaults rule. mira-OSS's existing `auth/api.py:41-45` constructs `APITokenContext`
+with three arguments, so from the moment WP3-A merged, `single` mode raises `ValidationError` at
+**request time** on every authenticated endpoint. Verified: the tree imports cleanly and the suite is
+unchanged, but no authenticated request can be served. That is permitted intermediate breakage — it
+never reaches `main` — and **your §6.3.4 union branch is the unblock.** Nothing else in the programme
+closes it.
+
+### WP3-A's handoff: five constraints that bind you
+
+1. **`app_url` is already seeded. Do not add it.** Plan §6.3.6's "Action: seed `app_url` in
+   `deploy/postgresql.sh` and `init-mira.sh:235`" is **stale** — verified at `postgresql.sh:197` and
+   `init-mira.sh:242`, both seeding `app_url="http://localhost:1993"`. That skeleton item is deleted
+   from this brief. `AuthConfig.APP_URL` is a lazy `@property` (`auth/config.py:39-43`) read only when
+   a `WebAuthnService` is constructed (`webauthn_service.py:44,51,56,58`), never at import or startup.
+2. **`auth/config.py` exposes only `APP_URL` plus plain constants.** WP3-A deleted crm's
+   `EMAIL_GATEWAY_URL` / `API_KEY` / `HMAC_SECRET` accessors outright rather than making them lazy,
+   because D3 replaces that transport and plan §11 lists `email_gateway_*` among the Vault key names
+   that map the private security topology and must not reach OSS. It also deleted `DATABASE_URL` and
+   `VALKEY_URL` (zero consumers in either repo). **Consequence: your SMTP sender defines its own
+   configuration.** Nothing may reintroduce the gateway's key names.
+3. **Protect the infrastructure-free import.** `import auth.config` and `import auth.session` now
+   perform zero I/O — verified under `env -i` with no Vault and no environment. The pattern that breaks
+   it is crm's module-level `auth_service = AuthService()` at `service.py:676`, which `utils/
+   scheduled_tasks.py` imports by name string, making a reachable seeded Vault a precondition for
+   importing the module at all. **Use lazy `get_auth_service()` (`api.py:137`'s shape) and mode-gate
+   the scheduler registration.** Do not reintroduce a module-level singleton.
+4. **`AccountProvisioner` is three methods, a non-runtime `Protocol`, idempotent by contract** —
+   `provision(user_id, timezone) -> None`, `ensure(user_id, timezone) -> None`,
+   `delete(user_id) -> bool`. Inject it as `AuthService.__init__(provisioner: AccountProvisioner =
+   NullProvisioner())`. **Do not extend the protocol** — §6.3.5 justifies it as the minimal excision
+   mechanism, not a convergence investment, and §0.2 says the repos are parting.
+   `local_teardown(user_id) -> bool` canonicalises through `uuid.UUID` before any destructive step,
+   then revokes sessions, clears the manager cache, `rmtree`s the user data dir, and deletes the row on
+   an **admin** session. Use it in `account_gc.py`.
+5. **`auth/webauthn_service.py:31` cannot import** — `from .database import AuthDatabase` is the one
+   module in `auth/` that fails, and adding `auth/database.py` is yours. **Do not "fix" this by moving
+   the import inside `__init__`**; that is the soft-failure path the gate exists to catch.
+
+### Also deliberate, and also yours
+
+`SecurityHeadersMiddleware(app)` takes **no** `importmap_csp_hash` argument. crm's mount at
+`crm_mira/main.py:453` passes one; **do not copy that line.** CSP is governed by `MIRA_CSP=off|strict`
+(default `off`, strictly parsed at middleware-stack build). And `auth/mode.py`'s `auth_mode()` has **no
+caller yet** — the union branch, `main.py`'s three-mode bootstrap and the scheduler gate are its first
+three readers.
+
+[AUTHORITY BLOCK]
+
+## Working location
+
+    /Users/taylut/Programming/GitHub/mira-OSS/.worktrees/wp3b
+
+Branch 2.0/wp3b. The crm_mira remote is fetched; its refs resolve here as crm_mira/crm_mira.
+
+## Read first
+
+Plan §6.3.1 (mira-OSS's baseline identity model), §6.3.2 (what crm actually changed — the mechanism was
+untouched, the predicate and call-site discipline were not), §6.3.3 (the request-resolution ladder and
+why `cns/api/*.py` must not be ported wholesale), §6.3.4 (the three-mode table and the union branch,
+given as code), §6.3.5 (the region map for `auth/api.py` and the CRM-coupling table), §6.3.6 (email
+transport), §6.3.8 (multi-user hardening), §8.2 (the eight billing excision points), §0.1, §0.2, and
+§11 (the scrub gate — `dev@crm-mira.local` and `taylor@*` are on it).
+
+## Port order
+
+Plan §12 fixes the dependency order, and WP3-A has already landed the first seven entries. Yours begins
+at `database.py`:
+
+    database.py -> account_gc.py -> provisioning wiring -> service.py -> api.py -> cns/api/base.py
+    -> the SMTP sender -> main.py's three-mode bootstrap -> the WS auth path
+    -> the global_memories_runtime Python companion -> get_active_segments -> deploy Vault seeding
+
+### `auth/database.py` (505 L upstream)
+
+Port, then **reconcile `create_user`'s INSERT against the schema that actually landed**. Plan §6.3.5
+warns that a direct port is a broken INSERT; it no longer is, because WP-S dropped the same columns crm
+did — but verify rather than assume.
+
+**The live `users` column set, read from a PostgreSQL 17.11 server with the greenfield schema applied
+(this is verified fact, not inference — the schema has been applied and its 21 tables confirmed):**
+
+    id, email, first_name, last_name, is_active, created_at, last_login_at, webauthn_credentials,
+    memory_manipulation_enabled, daily_manipulation_last_run, timezone, temperature_unit,
+    subject_kind, cumulative_activity_days, last_activity_date, portrait, portrait_generated_at,
+    deletion_requested_at, soft_deleted_at, purge_deadline, demo_start_at, demo_expires_at
+
+No `conversation_llm`, no `balance_usd`, no `llm_tier` (that last one never existed in any schema —
+`main`'s, WP-S's or crm's — and a WP2 follow-up already removed the query that referenced it).
+`subject_kind` is `TEXT NOT NULL DEFAULT 'member'`. `timezone` is
+`NOT NULL DEFAULT 'America/Chicago'`. Check crm's INSERT and `_USER_RECORD_COLUMNS:127-131` against
+this list and report any column it writes that does not exist, or omits that is `NOT NULL` without a
+default.
+
+- Port `initialize_mira_account()` (`:107`) and `_prepopulate_welcome_content()` (`:235-361`, ~126 L) as
+  the replacement for `main.py:127-176`'s inline seeding.
+- **Preserve the admin-session / user-session split verbatim** (§6.3.2). Pre-auth reads
+  (`create_user`, `get_user_by_id`, `get_user_by_email`, magic-link CRUD, `get_api_token_by_hash`) go
+  through `mira_admin` BYPASSRLS; post-auth per-user reads go through `get_session(user_id)`. RLS is
+  now enabled on `users`, `magic_links` and `api_tokens` (schema `:553,559,565`), so getting this split
+  wrong yields silent zero-row results rather than errors.
+- **O-14:** main also calls `seed_lora_postgres()` (`main.py:177`), retained under D1 — **keep that call
+  and the `feedback_synthesis_tracking` init.** `increment_segment_turn()` depends on
+  `segment_turn_count` being present; verify `_prepopulate_welcome_content` establishes it.
+- Remove the `:124-126` comment referencing the billing `users_provision_member_entitlement` trigger;
+  that trigger is not in the 2.0 schema.
+
+### `auth/service.py` (678 L upstream)
+
+- Excise the six CRM touch points — `:26` (import), `:41` (attr), `:132-140` and `:187-194`
+  (compensation blocks), `:243` (`ensure_workspace`), `:267-289` (`_initialize_account`) — via
+  `AccountProvisioner`. §6.3.5 gives `_initialize_account`'s three lines: keep
+  `initialize_mira_account(...)` (generic), cut `provision_workspace(...)` and the `seed_demo` branch.
+- **Prefer lazy `get_auth_service()` over the module-level singleton at `:676`** — see WP3-A constraint 3.
+- Generalise the hardcoded dev identity at `:216-231`: `dev@crm-mira.local`, `"Taylor"`, `"Developer"`,
+  `"America/Detroit"`, `"Develop crm_mira locally"`. **All five are §11 scrub-gate items.** Derive them
+  from configuration or use neutral placeholders; do not ship a personal name or a CRM domain.
+- Port: `request_magic_link` (`:299`, with the `:324-341` enumeration defence and `random.gauss` timing
+  jitter), `verify_magic_link:401`, `create_api_token:468` (`:488`'s 50-token cap),
+  `validate_api_token:518`, `create_session:552`, `logout_other_devices:607`,
+  `cleanup_expired_tokens:631`, `get_cookie_settings:637-647`, `register_cleanup_jobs:657`.
+- `get_cookie_settings` returns `secure=not development_mode_enabled()` and `samesite="lax"` — the
+  Lax change is `2ac4660` and §8.5 confirms it arrives with WP3. WP3-A already lowercased the
+  `CookieSettings.samesite` Literal in `types.py` for Starlette 0.37.2 (`daf8e4a`).
+### `auth/api.py` (1,178 L upstream)
+
+§6.3.5 carries the full region map — use it line by line. Summary of dispositions:
+
+- **Keep the exact name `get_current_user`.** All seven OSS consumers
+  (`cns/api/{actions,chat,data,files,location,tool_config,trigger_rules}.py`) must keep importing it
+  unchanged.
+- **Prepend §6.3.4's single-user union branch**, given verbatim in the plan. It preserves
+  `auth/api.py:21-45`'s exact contract — same 401 strings, same `token_id="oss_single_user"`, same
+  contextvar writes — and supplies `subject_kind="member"` explicitly, which is what unblocks the
+  `ValidationError` described above. Then fall through to crm's full session / API-token ladder.
+  **Step 8 of that ladder is where RLS context is established** (`set_current_user_id` +
+  `set_current_user_data`); the union branch must do both, exactly as §6.3.4's code shows.
+- Excise `_require_billing_entitlement` (`:299-336`, imports `billing` at `:306-307`) and the whole
+  `*_entitled_*` ladder (`:338-350`, `:1165-1178`) — §8.2's excision points.
+- Skip `get_current_member` / `get_current_member_session` (`:274-297`) per D12.
+- `get_current_user_for_pages` (`:1115-1163`) 302s to `/login/` at `:1141,1148,1160` — **mira-OSS has no
+  `/login/` page.** Drop it or repoint it; report which.
+- Repoint `/dev/session`'s `RedirectResponse("/workspace/", 303)` (`:473`) to `/chat`.
+- `:107-133` does `dataclasses.replace` on a **frozen** `ErrorResponse` and depends on
+  `SuccessResponse`, `create_success_response`, `create_error_response`, `generate_request_id` and
+  `APIError`. **Verify frozen-ness and the helper signatures on landing** — §6.3.5 flags this.
+- Take crm's `cns/api/base.py` delta (+4 L: `http_status: NotRequired[int]` on `ErrorDetail` and
+  `ResponseMeta`).
+
+### `auth/account_gc.py` (152 L upstream)
+
+Port the concept — deleting never-activated signups after 24 h is generic hygiene and directly enables
+multi-user signup. `cleanup_unactivated_accounts:35`, `register_account_gc_job:127` (`0 3 * * *`).
+Replace `CRMWorkspaceLifecycleService.delete_account()` with the injected provisioner's `delete()`
+(which reaches `local_teardown`), and drop the `LEFT JOIN crm_workspaces` (`:64`) and the
+`lifecycle_state='cleanup_pending'` branch (`:71`).
+
+### `auth/email_service.py` — the SMTP sender (new design work, no upstream reference)
+
+crm's 165-line `email_service.py` is generic code but a client for a **proprietary HMAC-signed HTTP
+gateway** (`config.EMAIL_GATEWAY_URL` / `API_KEY` / `HMAC_SECRET`, payload `{email, token, app_url}`,
+via `requests`). Its server side is the untracked `mira_email_gateway_forbiz.php`. No PyPI package
+substitutes, and §11 lists `email_gateway_*` among the Vault key names that must not reach OSS.
+
+**DECISION (E-8, user-confirmed): an abstract `MailSender` interface with a stdlib `smtplib` default
+backend.** Requirements:
+
+- Define a `MailSender` protocol in `auth/email_service.py` (or a sibling module if that reads better).
+  **Mirror `AccountProvisioner`'s conventions, not its parameter list** — WP3-A's guidance: three
+  methods shaped as primitives in / `bool` out, `None` for "did it", raise for "could not do it". A mail
+  sender needs `(recipient, subject, body)`-shaped arguments, and if it has no `ensure` analogue,
+  **do not invent one.**
+- Decide explicitly whether the protocol is `@runtime_checkable`. `AccountProvisioner` is **not**, so a
+  mis-shaped implementation fails at the call rather than at injection. If you want injection-time
+  validation for the mailer, that is a deliberate divergence — make it and say so.
+- Ship one backend: **stdlib `smtplib` only, no new dependency**, configured from environment
+  (`MIRA_SMTP_HOST`, `MIRA_SMTP_PORT`, `MIRA_SMTP_USER`, `MIRA_SMTP_PASSWORD`, `MIRA_SMTP_FROM`, and a
+  `MIRA_SMTP_STARTTLS` toggle). It must work against any relay an operator already has — Postfix, an SES
+  SMTP endpoint, Mailgun, a Gmail app password. **Define this configuration yourself**; per WP3-A
+  constraint 2, `auth/config.py` has no email fields at all and must not gain the gateway's Vault key
+  names.
+- Keep the magic-link email's *content* concerns where they are: `app_url` comes from the lazy
+  `AuthConfig.APP_URL`, and the enumeration defence and timing jitter live in `service.py`, not here.
+- **Email is required only in `multi` mode** (§6.3.4's table). `single` and `dev` must boot and serve
+  with no mailer configured. Fail loud at the point a send is attempted in `multi` without
+  configuration — not at import, not at startup.
+- Drop the `requests` dependency this file currently implies; §6.3.6's table says rewrite on the
+  existing `httpx` **if** you need HTTP at all. With an SMTP-only backend you should need neither.
+- Leave room for an operator to register an HTTP backend (Resend/SES/Postmark) without editing this
+  module, but **do not ship one** — that would tie OSS to a vendor against §0.1.
+### `main.py` — the three-mode bootstrap
+
+§6.3.4's table is the specification. Per mode: `ensure_single_user(app)` **runs verbatim** in `single`,
+is replaced by a dev-session bootstrap in `dev`, and is removed in `multi`; the `user_count > 1 →
+sys.exit(1)` guard at `:66` is kept in `single`, relaxed in `dev`, removed in `multi`;
+`/oss-auth/token` is mounted in `single` only; `auth.api.router` mounts at `/v0/auth` in all three.
+
+- **Retain every existing page route and the `/assets` mount** (`main.py:623-666` region) — ungated in
+  `single` as today, gated in `dev`/`multi`.
+- Mount `SecurityHeadersMiddleware` with **no** `importmap_csp_hash` argument.
+- Gate the scheduler registration on mode: the `auth.service` job runs in `dev` and `multi`, not
+  `single`.
+- **O-10 — confirmed defect, one list entry, and it is yours because you own `main.py`.** `main.py:290`
+  calls `flush_except_whitelist(preserve_prefixes=["session:", "rate_limit:"])`. `auth/session.py`'s
+  `_csrf_key()` writes `csrf:<digest>` **paired with** `session:<digest>`, and `revoke_user_sessions_except`
+  deletes both together. So every restart currently flushes CSRF tokens while preserving sessions, and
+  the first unsafe cookie-authenticated request 403s (`CSRF_REQUIRED`/`CSRF_INVALID` via
+  `_requires_cookie_csrf` / `_validate_cookie_csrf`) until the client re-fetches `/csrf`.
+  **Add `"csrf:"` to that list.** `clients/valkey_client.py:355` needs no change — verified, the
+  whitelist mechanism is generic and already rejects an empty prefix.
+- **O-4 — the `MIRA_DEV` double-read.** `main.py:647` (in the `__main__` hypercorn block; plan §6.3.4
+  says `:99`, which is wrong) reads `MIRA_DEV` inline while `auth/dev_mode.py:7` reads it for auth. Two
+  readers of one env var is a defect. Unify on `development_mode_enabled()`, **or** split into
+  `MIRA_DEV` and a separate auth variable. Decide, implement, and record which — §10 leaves it open.
+- Note `ensure_single_user` already uses `get_admin_session()` for its `SELECT COUNT(*) FROM users`
+  (`main.py:57`) and its row read (`:66`), which is why RLS on `users` does not make it see zero users
+  and provision a duplicate on every boot. **Preserve that.** Any new pre-auth read you add must
+  likewise go through an admin session.
+
+### `cns/api/websocket_chat.py` — the auth path only
+
+Using `a4df669`'s dual-protocol shape (plan §6.4.5), plus `set_current_user_data()`. §6.3.1 records the
+defect this fixes: the WS path at `:185-222` calls **only** `set_current_user_id` (`:221`), so
+`get_current_user()` raises on WS-originated work.
+
+**The protocol rewrite itself is WP4, which has not run.** Touch only the handshake and auth. WP2-C has
+already removed the `file_ref` document-upload block from this file, and WP2-A left a dead
+`provider_switch` frame renderer at `:510-512` — **delete that renderer** as part of retiring
+`ProviderSwitchEvent`, and report it, since WP2-B was told to leave this file to you.
+
+### Do not port `cns/api/*.py` wholesale (§6.3.3)
+
+Their entire delta is the `get_current_user` → `get_current_entitled_user` rename plus CRM domain
+handlers, and `get_current_entitled_user` hard-imports `billing` → `ImportError` at request time under
+D7. All seven OSS consumers keep importing `get_current_user` unchanged.
+
+Related, from §6.3.8: **`cns/api/federation.py:83` — omit the gating entirely.** crm's `fb7065f` adds a
+`subject_kind == "demo"` rejection then `from billing import get_billing_backend`; under D7+D12 that
+would raise `ImportError` inside the endpoint, giving a 500 on every lattice delivery. mira-OSS's
+endpoint already has the `X-Lattice-Delivery-Token` Vault check and `sender_verified` requirement.
+
+### §6.3.8 multi-user hardening — portable independently, and yours
+
+- **The `global_memories_runtime` Python companion.** `lt_memory/hybrid_search.py:169`
+  `FROM global_memories gm` → `FROM global_memories_runtime gm`. **O-17:** verify
+  `lt_memory/db_access.py`'s second reader is switched too. Plan cites `:507`, but **WP2-C deletes
+  `db_access.py:1409-1647`, so line numbers have shifted — locate the query by content, not line.**
+  The view is `security_barrier=true` and gated by `can_read_global_memories()`, which requires an
+  active user; verified live: deactivating a user drops the view from 1 row to 0. mira-OSS's `global_memories`
+  has a full CRUD grant to `mira_dbuser` at main, which at N>1 lets any authenticated user write the
+  shared table every other user reads — a cross-user prompt-injection vector. **Confirm the landed
+  schema grants SELECT only on the view, not the table** (verified: it does).
+- **`get_active_segments()`** (`cns/infrastructure/continuum_repository.py`, crm `:1091-1114`): take
+  `AND users.is_active = TRUE` — main scans deactivated users' active segments. Requires column
+  qualification (`messages.id`, `messages.continuum_id`, …) because the JOIN makes them ambiguous.
+  **Skip the `LEFT JOIN entitlements` half** (D7).
+- `agents/sidebar.py:292-305` and `utils/scheduled_tasks.py:164-183` already have `is_active = TRUE`;
+  crm's only addition is the entitlements JOIN. **Nothing to take.**
+- `utils/domaindoc_shares.py:131` — see O-25 below.
+- `utils/scheduled_tasks.py`: re-add `('auth.service','auth_service',False,None)` (`92d768c`),
+  **mode-gated**. Do not take the `get_users_due_for_job()` rewrite.
+- `utils/power_on_self_test.py:454-500` (`92d768c`) validates nine Vault service-config fields.
+  **Port the shape, not the list** — crm's demands `crm_base_url`, `crm_lifecycle_service_secret`,
+  `square_application_id/secret`, `stripe_*` and `email_gateway_*`. Use an OSS-appropriate list.
+  **Touch only this region of that file**: WP-S owns the RLS `expected_tables` lists, WP2-A the LLM
+  checks, WP2-C the scheduler-job lists.
+- `cns/integration/event_bus.py`: `publish(self, event: ContinuumEvent)` → `publish(self, event: object)`
+  is functionally a no-op (dispatch was already structural on `event.__class__.__name__`). Take or skip;
+  say which.
+
+### O-25 — domaindoc sharing under RLS (decision E-14, user-approved)
+
+RLS on `users` is unconditional in the landed schema, so three cross-user readers silently return
+nothing in `multi` mode:
+
+- `cns/api/actions.py:1849` and `:1890` — `SELECT id, first_name, email FROM users WHERE email = …`,
+  the collaborator lookup by email. **This is how a share target is added**, so sharing becomes
+  impossible.
+- `cns/api/actions.py:1928`, `:2008`, `:2031` and `utils/domaindoc_shares.py:132` —
+  `JOIN users u ON ds.collaborator_user_id = u.id` / `ds.owner_user_id = u.id`, the share listings, so
+  collaborator names and emails vanish.
+
+Plan §6.3.8 already ruled crm's fix (`JOIN LATERAL active_member_identity(ds.owner_user_id) u ON TRUE`)
+**not portable**, because that SECURITY DEFINER function filters `subject_kind='member'` and belongs to
+the demo machinery D12 omits.
+
+**Decision E-14: author a minimal SECURITY DEFINER lookup exposing only `id, email, first_name` for
+active users, with no member gating** — crm's pattern minus the CRM. Roughly 15 lines of SQL plus the
+`GRANT EXECUTE … TO mira_dbuser` and `REVOKE EXECUTE … FROM PUBLIC` pair that
+`can_read_global_memories()` already demonstrates in the same file. Route the five call sites through
+it. Rejected alternative: an admin-session read, which would bypass RLS entirely for a user-facing
+query.
+
+**This is the one item here that requires editing `deploy/mira_service_schema.sql`.** It has been
+applied to a live PostgreSQL 17.11 server and its 21 tables, 19 policies and five-row seed are verified.
+Your addition must be **additive only**: one function, its two grants, and the rewritten joins. Do not
+alter any table, column, constraint, policy or existing grant. `tests/test_greenfield_schema.py` is
+32/32 and must stay 32/32 — it is sensitive to the table set and the seed.
+
+If you judge the function unsafe or the rewrites larger than described, **stop and report** rather than
+substituting an admin-session read.
+
+### Deploy
+
+Seed the SMTP settings for `multi` mode in `deploy/postgresql.sh` and
+`deploy/docker/scripts/init-mira.sh`, following whatever configuration mechanism you chose for
+`MailSender`. **Do not add `app_url` — it is already seeded** (WP3-A finding, verified at
+`postgresql.sh:197` and `init-mira.sh:242`). Do not reintroduce `email_gateway_*` key names (§11).
+
+Note R-3 just landed three fixes here: role provisioning now sets the sentinel password (WP-S had made
+the roles passwordless while the Vault URLs still embedded it, breaking every default install),
+`init-mira.sh` now seeds `subcortical_key`, and `python.sh` fails fast when its schema patch misses.
+Re-read those files rather than working from an older mental model.
+
+### `tests/test_auth_graft.py`
+
+Excise the ~7 CRM-only tests (§6.3.5): `import billing`, `from cns.api import demo`, crm workspace
+tokens, crm page visibility. **Keep** session hashing, `logout_others`, cleanup ordering,
+compensation-on-failure, the removed-OSS-auth contracts, the explicit-RLS-identity checks and the
+`conversation_llm` negative assertion (which matches the `main.py` rewrite WP-S required).
+
+Its `:676` module-level `auth_service = AuthService()` singleton is what forces a reachable seeded
+Vault on import — see WP3-A constraint 3. **Per the Test scope convention: excise, do not rewrite, and
+author no new tests.**
+
+## Do NOT touch
+
+  auth/{session,exceptions,dev_mode,rate_limiter,security_logger,types,webauthn_service,mode,
+      provisioning,config,security_middleware}.py   WP3-A, landed. You consume them; you do not edit
+      them. The single exception is if adding auth/database.py forces a change in webauthn_service.py's
+      import — it should not, and if it does, report it rather than editing.
+  auth/seed_lora.py            STAYS and is unchanged — D1 retains the user model.
+  utils/user_context.py, clients/llm/**, config/config.py   WP2-A, landed.
+  lt_memory/**, agents/**, clients/files_manager.py, utils/document_processing.py,
+      utils/lt_memory_jobs.py   WP2-C.
+  cns/api/actions.py except the five O-25 query sites; cns/services/orchestrator.py; web/**   WP2-B.
+  tests/ except test_auth_graft.py's excision.
+  deploy/mira_service_schema.sql except the additive O-25 function and its two grants.
+
+`cns/api/oss_ui.py` + `deploy/oss_ui/{marked.min.js,purify.min.js,chat.html}` are a **plan §0
+invariant**: `GET /oss-auth/token` is the identity source for `single` mode, and `oss_ui.py:19-20`
+reads both vendor assets **at import time**, so deleting `deploy/oss_ui/` raises during
+`create_app()`. You gate its *mount* by mode; you do not modify or delete it.
+
+Likewise `tools/implementations/web_tool.py`, `utils/url_safety.py` and `utils/http_client.py` stay at
+main's version — they carry the `e401d59` SSRF fix (GHSA-rmgf-f8wc-rc3p) that crm_mira lacks.
+
+## Verification
+
+1. `python3 -m py_compile` every changed file.
+2. **WP3-A's gate must still hold** — this is the check that catches you reintroducing import-time
+   coupling: `env -i PATH="$PATH" python3 -c "import auth"` and every `auth.*` submodule including
+   `auth.database` and `auth.webauthn_service`, with no Vault and no environment set. All must import.
+   `auth.webauthn_service` failing on a missing `auth.database` is the defect you are closing.
+3. `python3 -c "from auth.api import get_current_user"` succeeds, and the name is unchanged.
+4. `git grep -n 'billing\|stripe\|square\|crm_workspace\|_crm_client\|demo_seed\|email_gateway\|entitled' -- auth/ cns/api/ main.py utils/scheduled_tasks.py` → 0.
+5. §11 scrub gate over your files:
+   `git grep -niE '192\.168\.1\.9|mirafor\.biz|/opt/crm_mira|crm-mira|taylorsatula|@admin\.site|dev@|Taylor|America/Detroit' -- auth/ main.py cns/api/ deploy/` → 0.
+6. `git grep -n 'csrf:' -- main.py` → present in the flush whitelist (O-10).
+7. `git grep -n 'global_memories\b' -- lt_memory/` → every reader now uses `global_memories_runtime`.
+8. `python3 -m pytest tests/test_auth_graft.py -q -p no:cacheprovider --tb=short` — report per-test
+   results and classify each failure as yours, another package's, or an environment limit. Many will
+   need live infrastructure; say which.
+9. `python3 -m pytest tests/test_greenfield_schema.py -q -p no:cacheprovider --tb=no` → **must still be
+   32 passed** after your O-25 schema addition.
+10. Differential totals before and after: `python3 -m pytest tests/ -q -p no:cacheprovider 2>&1 | tail -2`.
+    Re-measure your own baseline first. Report every test that changes state and why.
+11. **The headline acceptance gate from plan §12:** the server boots identically with `MIRA_AUTH_MODE`
+    unset, and all seven `cns/api/*` consumers are unchanged. You cannot fully exercise this without
+    Postgres/Vault/Valkey — state precisely what you verified statically and what remains unverified
+    rather than claiming a boot you did not perform.
+
+## Commits
+
+Follow §12's dependency order, one concern per commit, folding only where a split would create a
+non-working intermediate. Suggested: (1) `auth/database.py`; (2) `auth/account_gc.py` + provisioner
+injection; (3) `auth/service.py` excision + dev-identity generalisation; (4) `auth/api.py` graft with
+the single-user union branch — **this is the commit that unbreaks `single` mode, and it is a breaking
+change to the auth contract, so use `!` and a BREAKING CHANGE paragraph**; (5) the `MailSender`
+interface + SMTP backend (no upstream commit to cite — give it a thorough SOLUTION RATIONALE);
+(6) `main.py` three-mode bootstrap + O-10 + O-4; (7) the WS auth path + `provider_switch` removal;
+(8) §6.3.8 hardening including the O-25 SECURITY DEFINER function.
+
+[COMMIT CONVENTION]
+[REPORT FORMAT]
+```
 
 ---
 
