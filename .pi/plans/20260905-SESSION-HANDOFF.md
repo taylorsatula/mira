@@ -464,6 +464,26 @@ inspect the worktree with `git status --porcelain` and `git diff`, determine whi
 verify exclusions, and finish manually. WP1-C's agent had applied all seven steps correctly and only the
 commits were missing.
 
+**R-8 — critical dependencies ship unpinned while the code requires recent SDK features.**
+`requirements.txt:27` lists `anthropic` with no version constraint, and
+`clients/llm/dialects/anthropic.py:341` sends `output_config` — a parameter the installed 0.52.2 does
+not have (`inspect.signature(...create)` confirms no `output_config`, though `thinking` and
+`ThinkingConfigDisabledParam` are both present). Verified **pre-existing, not introduced by 2.0**: the
+`output_config` reference is present at `main` and at crm HEAD, and crm's `requirements.txt:30` is
+likewise unpinned.
+
+So this is *not* an install blocker — a fresh `pip install -r requirements.txt` resolves to 1.4.0
+(latest), which is new enough. It is a **reproducibility and release-quality issue** for a distributed
+package whose stated posture is fresh-install-only (§0.1): the code depends on a feature whose minimum
+SDK version is nowhere recorded, so an install pinned by a distro, a lockfile or an old cache breaks at
+runtime with `TypeError` on the `batch` route rather than at install time. Note the `assessment` route
+is unaffected — `effort='none'` emits `thinking={"type":"disabled"}` and never reaches `output_config`.
+
+**WP6 action:** establish the minimum `anthropic` version that provides `output_config` and pin a floor
+(`anthropic>=<version>`), and audit the other unpinned entries the same way — `openai`, `httpx[http2]`,
+`psycopg`, `valkey` — for any feature the code uses that a floor would protect. Do not pin exact
+versions; a floor is enough and avoids fighting the rest of the dependency graph.
+
 ---
 
 ## 9. Environment and tooling facts
