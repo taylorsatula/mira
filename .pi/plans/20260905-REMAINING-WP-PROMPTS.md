@@ -1548,6 +1548,57 @@ cns/infrastructure/continuum_pool.py:41,86 — do not reimplement them. Message 
 with id/created_at/metadata as constructor params, so _build_turn_messages needs no object.__setattr__
 hack.
 
+## Two facts an AST signature audit established — save yourself the search
+
+**`Continuum.add_user_message` has exactly one production caller:** `cns/services/orchestrator.py:958`,
+`continuum.add_user_message(user_message)`, positional `content` only. crm's post-image signature is
+
+```python
+    def add_user_message(
+        self,
+        content: str | list[ContentBlock],
+        *,
+        message_id: UUID | None = None,
+        metadata: MessageMetadata | None = None,
+    ) -> tuple[Message, list[ContinuumEvent]]:
+```
+
+Both new parameters are **keyword-only with `None` defaults**, so that call site stays valid whether or
+not you update it — there is no hidden breakage here. But you *should* update it, because passing
+`message_id` and `metadata={"turn_id": …, "segment_id": …}` is precisely the fix for §6.4.1 defect 2
+("no turn identity — nothing correlates a frame to a message"). §6.4.2 gives the staging shape:
+`add_user_message(..., message_id=message_id, metadata={...})` immediately followed by
+`unit_of_work.add_messages(persist_user_msg)`.
+
+The three other callers are in `tests/test_ordered_turn_persistence.py` (`:166,188,190`), which is one of
+your acceptance gates. Read how it calls the method — that is the contract you must satisfy, and per the
+Test scope convention you do not edit it to suit your implementation.
+
+**Delete the dead billing pre-check at `cns/services/orchestrator.py:944-955`.** It reads:
+
+```python
+        try:
+            from billing import get_billing_backend
+            from billing.exceptions import InsufficientBalanceError
+            ...
+                if not billing.check_balance(user_id, allow_negative=False):
+                    raise InsufficientBalanceError(billing.get_balance(user_id))
+        except ImportError:
+            pass  # OSS mode - no billing enforcement
+```
+
+`billing` is omitted under D7 and does not exist in mira-OSS, so the import **always** fails and the
+`except ImportError: pass` always swallows it. This is permanently dead code and the last
+`allow_negative=` in the tree — a keyword the migration retired from every LLM signature. Two separate
+packages flagged it and neither owned it. It is also the exact soft-failure pattern this programme has
+been removing: a `try/except ImportError: pass` that silently degrades. Delete the block; do not leave
+an inert shim, and do not add a configuration flag to re-enable it.
+
+Note this is distinct from the `websocket_chat.py` billing block (`InsufficientBalanceError` guard at
+`:40-44` plus two `isinstance` sites) which is §8.2's R8 excision point and also yours. And
+`cns/api/chat.py:24-26,:340` carries the same exception family — **pre-2.0, not in §8.2's list, and
+currently unassigned.** Since you own the billing excision everywhere else, take it too and say so.
+
 ## The three items the frontend patch cannot fix (§6.4.4) — do these deliberately
 
 R5: crm's _server_frame_for_event maps ONLY text->assistant_delta and tool_event->tool, returning None
