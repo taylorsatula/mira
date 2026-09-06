@@ -319,8 +319,36 @@ client re-fetches `/csrf`. Fix is one list entry, but `main.py` is **WP3-B's** f
 from it — so it is recorded for WP3-B's brief rather than steered into WP3-A. This is the answer to the
 question WP3-A explicitly left open.
 
-**O-7 is closed for the `lifecycle.py` half**: WP2-A verified the shapes and ported crm's synthetic
-`{"load": [tool]}` form. The loader-gating half remains with WP4/O-23 as §10 records.
+**O-7 is closed in both halves.** The shape half: WP2-A ported crm's synthetic `{"load": [tool]}` form
+at `clients/llm/lifecycle.py:108`, and I verified it against OSS's tool — `invokeother_tool.py:94-103`
+declares exactly `load` and `load_for_rest_of_session` and `:110` takes those two parameters, so the
+shapes match exactly and the old `{"mode":"load","query":…}` form would not have. The detection half:
+`orchestrator.py:772-777` gated `acc.invoked_tool_loader` on `event.arguments.get("mode", "")` against
+`["load","fallback","prepare_code_execution"]` — but **no `mode` property exists in the tool's schema**,
+so the flag was never set and loader auto-continuation never fired. Steered to WP2-B (it owns the file,
+and §10 assigns O-7 to WP2) as a three-line fix detecting on the parameters the tool actually declares.
+`"fallback"` and `"prepare_code_execution"` are legacy vocabulary nothing emits.
+
+**O-23's remaining half is WP4's and unaffected:** the circuit-breaker finalization from `e26d031` and
+`e370468`'s `persisted_tool_ids` hunk. Of `test_orchestrator_tool_loop.py`'s two known failures, O-7's
+fix should clear `test_successful_tool_loader_triggers_auto_continuation` while
+`test_circuit_breaker_remains_latched_after_final_no_tools_pass` stays red until WP4.
+
+**Plan cross-reference defect: §7.4 does not exist.** Decision D6 cites "§7.4" for the rewriter route
+mapping, but §7 has only 7.1–7.3. The information is present elsewhere — §6.1.3's route table maps
+`rewriter` to `primary` with an `effort='high'` override, §7.1 covers the user-model pipeline including
+the retained `repulsion_rewriter_*` prompts, and §8.3 lists them as deletions to decline. Worth fixing
+the reference in the plan rather than leaving a dangling citation.
+
+**§9's `web_tool.py` synthesis simplification is now portable and needs an owner.** §9 records that crm's
+change (removing `synthesis_model`/`synthesis_endpoint`/`synthesis_api_key_name` config fields and the
+Vault lookup in `_synthesize_content`, switching synthesis to `LLMProvider().generate_response(
+model_config="fast", …)`) "becomes portable only after WP2 lands `0134d3d`'s `model_config=` API".
+**Both preconditions are now met**: `model_config=` landed with WP2-A and `0134d3d` landed with WP2-C.
+It is a surgical edit to `_synthesize_content` and its config block, leaving
+`_request_with_validated_redirects` untouched — which matters because that function carries the
+`e401d59` SSRF pinning (§0 invariant 2). WP2-B was told it is optional and to report either way; if it
+declines, assign it to WP6.
 
 **Plan claims found false during wave 1 — correct these in the bisect before WP4/WP5/WP6 are briefed:**
 
