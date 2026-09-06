@@ -1378,19 +1378,80 @@ nothing in `multi` mode:
   the collaborator lookup by email. **This is how a share target is added**, so sharing becomes
   impossible.
 - `cns/api/actions.py:1928`, `:2008`, `:2031` and `utils/domaindoc_shares.py:132` —
-  `JOIN users u ON ds.collaborator_user_id = u.id` / `ds.owner_user_id = u.id`, the share listings, so
-  collaborator names and emails vanish.
+  `JOIN users u ON ds.collaborator_user_id = u.id` / `ds.owner_user_id = u.id`. **These are INNER
+  joins, so the symptom is worse than blank names: the entire share row disappears.** Verified live —
+  with two users and one share, Alice's outgoing-share listing returns **0 rows**, and Bob's incoming
+  listing returns 0 rows. Both users see an empty share list.
 
 Plan §6.3.8 already ruled crm's fix (`JOIN LATERAL active_member_identity(ds.owner_user_id) u ON TRUE`)
 **not portable**, because that SECURITY DEFINER function filters `subject_kind='member'` and belongs to
 the demo machinery D12 omits.
 
-**Decision E-14: author a minimal SECURITY DEFINER lookup exposing only `id, email, first_name` for
-active users, with no member gating** — crm's pattern minus the CRM. Roughly 15 lines of SQL plus the
-`GRANT EXECUTE … TO mira_dbuser` and `REVOKE EXECUTE … FROM PUBLIC` pair that
-`can_read_global_memories()` already demonstrates in the same file. Route the five call sites through
-it. Rejected alternative: an admin-session read, which would bypass RLS entirely for a user-facing
-query.
+**Decision E-14: a minimal SECURITY DEFINER lookup pair exposing only `id, email, first_name` for
+active users, with no member gating** — crm's pattern minus the CRM. Rejected alternative: an
+admin-session read, which would bypass RLS entirely for a user-facing query.
+
+**This is prototyped and verified against live PostgreSQL 17.11 — copy it, do not redesign it.** The
+exact SQL, which applies cleanly to the greenfield schema and leaves the table count at 21 (so
+`test_greenfield_schema.py` stays 32/32):
+
+```sql
+CREATE FUNCTION resolve_active_user_identity(p_email text)
+RETURNS TABLE (id uuid, email varchar, first_name varchar)
+STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+LANGUAGE sql
+AS $function$
+    SELECT u.id, u.email, u.first_name
+    FROM public.users u
+    WHERE u.email = p_email
+      AND u.is_active = TRUE
+$function$;
+
+CREATE FUNCTION active_user_identity(p_user_id uuid)
+RETURNS TABLE (id uuid, email varchar, first_name varchar)
+STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+LANGUAGE sql
+AS $function$
+    SELECT u.id, u.email, u.first_name
+    FROM public.users u
+    WHERE u.id = p_user_id
+      AND u.is_active = TRUE
+$function$;
+
+GRANT EXECUTE ON FUNCTION resolve_active_user_identity(text) TO mira_dbuser;
+GRANT EXECUTE ON FUNCTION active_user_identity(uuid) TO mira_dbuser;
+REVOKE EXECUTE ON FUNCTION resolve_active_user_identity(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION active_user_identity(uuid) FROM PUBLIC;
+```
+
+Two functions because the two call patterns differ: `resolve_active_user_identity` replaces the
+lookup-by-email at `actions.py:1849`/`:1890` (adding a share target), and `active_user_identity`
+replaces the joins in the listing queries via `JOIN LATERAL active_user_identity(ds.<counterparty>) ai
+ON TRUE`.
+
+Verified behaviour, all executed:
+
+| Check | Result |
+|---|---|
+| As Alice, direct `SELECT … FROM users WHERE email='bob@…'` | **0 rows** — the defect, reproduced |
+| As Alice, `resolve_active_user_identity('bob@example.com')` | returns Bob's `id`, `email`, `first_name` |
+| Outgoing share listing, `JOIN users` vs `JOIN LATERAL active_user_identity` | **0 rows** vs `q3-plan \| pending \| bob@example.com \| Bob` |
+| Incoming share listing, same comparison | **0 rows** vs Alice's identity returned |
+| `SELECT portrait FROM active_user_identity(…)` | `ERROR: column "portrait" does not exist` — no leak of `portrait`, `webauthn_credentials` or the soft-delete timestamps |
+| Deactivate the target user, then call either function | **0 rows** — the `is_active` gate holds |
+| Call with `app.current_user_id = ''` (no user context) | **still returns the row** — so it also serves pre-auth flows such as magic-link signup, where the caller has no RLS identity yet |
+
+Note the last row: because the functions are `SECURITY DEFINER` and carry their own predicate, they do
+not depend on the caller's RLS context. That is what makes them usable from both the authenticated share
+paths and the pre-auth lookup paths.
+
+Also verified while prototyping, and relevant to the call sites you are rewriting: `domaindoc_shares`
+has its own RLS with three policies (`owner_user_id` ALL, `collaborator_user_id` SELECT, and
+`collaborator_user_id` UPDATE) plus `CHECK (owner_user_id <> collaborator_user_id)`, and its `status`
+CHECK admits exactly `pending`, `accepted`, `rejected`, `revoked`. The share row itself is visible to
+both parties; only the `users` side of the join was being emptied.
 
 **This is the one item here that requires editing `deploy/mira_service_schema.sql`.** It has been
 applied to a live PostgreSQL 17.11 server and its 21 tables, 19 policies and five-row seed are verified.
