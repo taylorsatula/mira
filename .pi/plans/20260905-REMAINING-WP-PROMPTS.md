@@ -1686,6 +1686,40 @@ finalization work above.
 Also land e370468's orchestrator hunk (exclude invalid_reason calls from persisted_tool_ids), which
 could not apply in WP1 because persisted_tool_ids did not exist yet. Yours does.
 
+## A third test in your gate asserts a CSP that two locked decisions forbid
+
+`tests/test_web_frontend_protocol.py:39` —
+`test_csp_allows_stripe_and_isolated_content_styles_without_inline_scripts` — is **impossible on
+mira-OSS, twice over**, and it is one of your three acceptance-gate tests. Verified against source:
+
+1. It asserts `script-src 'self' https://js.stripe.com`,
+   `connect-src 'self' ws: wss: https://api.stripe.com` and
+   `frame-src https://js.stripe.com https://hooks.stripe.com`. **D7 omits billing entirely**, and WP3-A
+   was explicitly instructed to drop crm's Stripe origins rather than inherit them. It also **omitted
+   `frame-src` altogether** instead of setting it, so a `frame-src` assertion can never pass.
+2. It does `app.add_middleware(SecurityHeadersMiddleware)` and then reads
+   `headers["content-security-policy"]`. WP3-A made CSP **opt-in** via `MIRA_CSP=off|strict` with
+   default `off`, so with no environment set there is **no CSP header at all** and that line raises
+   `KeyError` before any assertion is reached.
+
+It also stubs Vault with `crm_lifecycle_service_secret`, which is CRM residue from the same upstream
+commit.
+
+**Amend it, do not satisfy it** — §6.3.7's precedent, and the Test scope convention permits minimally
+updating a test the migration invalidates. Concretely: drop the three Stripe assertions and the
+`crm_lifecycle_service_secret` stub; set `MIRA_CSP=strict` explicitly so the test exercises the policy
+that actually exists; and assert mira-OSS's real strict value (`default-src 'self'`, `script-src
+'self'`, `style-src 'self' 'unsafe-inline'`, `img-src 'self' data:`, `connect-src 'self' ws: wss:`,
+`font-src 'self'`, `worker-src 'self'`, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`).
+Read `auth/security_middleware.py` for the authoritative string rather than trusting this list. **Do not
+edit `auth/security_middleware.py` itself** — it is WP3-A's and landed.
+
+Worth also asserting the default: with `MIRA_CSP` unset, no `content-security-policy` header is
+emitted. That is the behaviour D-1/D-7 actually produce, and it is currently untested.
+
+This is the same defect class as `test_model_routing.py`'s `usage_pricing` assertion, which WP2-B
+amends: a recovered crm characterization test asserting something a locked OSS decision forbids.
+
 ## Two mira-OSS tests assert the OLD protocol and must be replaced
 
 tests/api/test_websocket_endpoint.py asserts type in {text, complete, pong} and a ping handler — the
@@ -2066,6 +2100,54 @@ Run every check in §11 against the FULL tree, not just your own changes:
 
 The plan file itself legitimately quotes these values as things to scrub, so exclude it. Report every
 hit with file:line and either fix it or explain why it is acceptable.
+
+**This gate was pre-run against the 2.0 tree on 2026-09-06 at 56 commits, and the result is triaged
+below so you start from a known state rather than re-discovering it.** 24 hits, of which:
+
+*Benign — the project's own public origin, keep as-is (12 hits):* `README.md:21,123`,
+`deploy/deploy.sh:8,39`, `deploy/docker/Dockerfile:15`, `deploy/docker/Dockerfile.base:78`,
+`deploy/finalize.sh:43`, `deploy/python.sh:69,76`, `requirements.txt:84` (the sibling public `lattice`
+repo, in a comment), `utils/logging_config.py:127`. All are
+`github.com/taylorsatula/mira-OSS` — the canonical repository URL, not a private host.
+
+*Benign — assertions that a CRM thing is ABSENT, must stay (5 hits):*
+`tests/test_greenfield_schema.py:110-112,126` (`stripe_customers`, `stripe_subscriptions`,
+`stripe_webhook_events`, `business_voice_directives` in its `REMOVED_TABLES` list) and
+`tests/TRIAGE.md:217` (documenting the nine CRM tests WP0 excluded). Deleting these would weaken the
+greenfield gate.
+
+**Yours to fix — four real items:**
+
+1. **`tests/tools/implementations/test_contacts_tool.py:556` and
+   `tests/tools/implementations/test_continuum_tool.py:1314`** — both hardcode
+   `/Users/taylut/Programming/GitHub/botwithmemory/tools/implementations/<tool>.py` inside a
+   `test_no_print_statements` contract test. That is a **personal absolute path in a shipped file**
+   (§11 lists this class explicitly) *and* a path that cannot exist in this repository, so both tests
+   are broken as well as leaking. Fix by deriving the path from `__file__` or the repository root.
+   This is a minimal repair to an existing test, not test authoring, so the Test scope convention
+   permits it.
+2. **`auth/provisioning.py:12`** — a docstring naming `crm_mira` twice and citing "plan §0.2", an
+   internal document that does not ship. The reasoning it records is sound and worth keeping; the
+   provenance is not. Reword to state the design constraint on its own terms. Note this contradicts the
+   repository's own rule, which the package that wrote it quoted: *"Write what code does, not what it
+   replaced. Historical context goes in commit messages, not docstrings."* Do not touch the code.
+3. **`tests/TRIAGE.md`** — WP0's working document, referencing `crm_mira` and the internal plan file
+   throughout (`:3,4,38,41,42,207`). Decide whether it ships. It is honest provenance for the recovered
+   suite, but it is an engineering artifact rather than user documentation; moving it to `.pi/plans/`
+   alongside the other working documents is a defensible answer. Rule on it and say which.
+4. **`web/assets/javascript/tool-config.js:251`** — a comment using `"square_tool" -> "square"` as its
+   illustrative example. Square is omitted under §8.1. Reword the example to a tool mira-OSS has.
+
+*Also checked and clean:* none of `scripts/seed_closeout_test.sql`, `web/card-playground.html`,
+`docs/workphone.md`, `deploy/docker/DROPLET.md`, `deploy/docker/droplet.env.example`,
+`scripts/deploy_remote.sh`, `scripts/openrouter_opus_chat.sh`, `scripts/extract_imessage_corpus.py` or
+`mira_email_gateway_forbiz.php` exist anywhere in the tree. `license.txt` is intact AGPL-3.0 at exactly
+34,523 bytes. `.gitignore` retains the local-only CRM shields (spelled out individually at `:46-51`
+rather than as a glob) and did **not** inherit crm's bad-paste junk lines.
+
+*One residue to rule on:* `tests/test_auth_graft.py:277,452,455,490` carry `"crm_mira"` and
+`dev@crm-mira.local`. **These are WP3-B's excision targets** (§6.3.5's ~7 CRM-only tests), so verify
+WP3-B removed them rather than fixing them yourself. If WP3-B did not, that is a gap in its report.
 
 Also verify:
   no seed_closeout_test.sql, card-playground.html, workphone.md, DROPLET.md, droplet.env.example,
