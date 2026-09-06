@@ -206,6 +206,36 @@ Recovery: `git show 95254a5^:tests/<file> > tests/<file>`.
 Also: `git ls-tree -r --name-only ee44b18^ -- tests/` → 54 files across `tests/{api,clients,cns,fixtures}/`.
 Predates the divergence; requires repair. Restore `scratch/conftest.py` with it.
 
+### 3.1 The recovered suite requires live infrastructure to run
+
+**Blocking constraint on every acceptance gate in this document phrased as "test X green".**
+
+WP0 recovered the suite and made it *enumerate* (689 tests collected). It does not *run* without
+infrastructure: `tests/conftest.py`'s autouse `reset_test_environment` fixture calls
+`tests.fixtures.reset.full_reset()`, which transitively constructs a Vault client and database pools.
+Absent `VAULT_ADDR` it raises `ValueError`; with `VAULT_ADDR` set it requires `VAULT_ROLE_ID` /
+`VAULT_SECRET_ID`; with those set it attempts a real AppRole login and raises `PermissionError` on
+connection refusal. Every test therefore errors during setup.
+
+Unit tests that do not need that infrastructure run correctly with the fixture bypassed:
+
+```
+python3 -m pytest tests/<file> -q --noconftest
+```
+
+Verified: 9 of 9 pass for `test_openai_tool_schema_validation.py`,
+`test_openrouter_reasoning_roundtrip.py` and `test_sidebar_agent_tool_loop.py`; 8 of 10 pass across
+`test_orchestrator_tool_loop.py`, `test_cognitive_feature_bypasses.py` and
+`test_tool_config_resolution.py`, the 2 failures being orchestrator-side behaviour this repository does
+not have yet (§6.2.1).
+
+`--noconftest` is a diagnostic, not a fix: it also discards fixtures the integration-style tests
+genuinely need. The durable resolution is to split the suite along the seam the abandoned
+`scratch/conftest.py` already anticipated — an `integration` marker plus an opt-in `--integration`
+flag, with `full_reset()` applied only to marked tests. Tracked as O-22. Until then, treat
+`--noconftest` runs as the acceptance signal for pure-unit packages and record which packages could
+not be validated at all.
+
 ---
 
 ## 4. Items admitted under the breakage allowance
@@ -425,7 +455,7 @@ separate commits.
 | 7 | `770d89a` | `_read_secret_version()` does not re-authenticate. AppRole tokens have ~1 h TTL → **any uncached KV read 403s an hour after boot**. | Port `clients/vault_client.py` +15/−6: catch `Unauthorized`/`Forbidden`, re-run `_authenticate_approle()` once. `_authenticate_approle` already at `:73`. Zero coupling. Port first and independently. | +15/−6 |
 | 8 | `f8cfea9` **3 lines only** | `UserDataManager.base_dir` is CWD-relative. | `base_dir` → `Path(__file__).resolve().parent.parent / "data/users"` (`:85-90`). Take only these lines — the rest of that file's diff deletes `_init_contacts_schema` / `_init_files_api_schema`, and `_init_contacts_schema` must survive (contacts_tool is retained, §8.3). | 3 lines |
 | 9 | `457a56e` (partial) | History rows lack tool-call correlation. | Add `tool_call_id` + `is_error` to `continuum_repository.get_history()` and `search_continuums()`. Purely additive, backwards compatible, no frontend change. | additive |
-| 10 | crm `segment_poller.py` (partial) | A poller thread exiting via the exception path at `:146-178` leaves a dead `stop_event` in `_active_pollers`, so **the user's poller is never restarted**. | Take the `_active_pollers.pop(user_id)` cleanup under `with self._pollers_lock:`. **Skip** the `get_billing_backend().has_product_access(...)` gate immediately above it (D7). | ~4 lines |
+| 10 | crm `segment_poller.py` (partial) | A poller thread that exits its loop leaves a dead `stop_event` in `_active_pollers`, so that user's poller is never restarted. **Scope note:** at main, `_poll_once` failures are caught by a per-cycle `except Exception` that *continues* the loop, so that path does not terminate it. Upstream the live trigger was the `break` inside the billing gate, which D7 excludes. The ported cleanup is therefore a **general guard** against loop-local exit rather than a fix for a currently-reproducing leak; its `state.stop_event is stop_event` identity check is what makes it safe when a poller thread outlives `_on_segment_collapsed`'s 5 s join and a replacement has already registered. | Take the `_active_pollers.pop(user_id)` cleanup under `with self._pollers_lock:`. **Skip** the `get_billing_backend().has_product_access(...)` gate immediately above it (D7). | ~4 lines |
 | 11 | `922b1e5` → `e370468` → generic parts of `e26d031` | Providers (esp. OpenRouter-fronted) return tool calls with malformed JSON args, missing required fields, or schema-violating values (`e26d031`'s example: enum `"crm_clients_tool"` against enum `["clients_tool"]`). Before: `_parse_tool_arguments` raised `ProviderProtocolError` → **entire response failed**, no self-correction. `922b1e5` alone introduced a second defect, fixed by `e370468`: the invalid call was replayed as an assistant message with bad `tool_calls` plus a `role=tool` error result → **next request re-sent the schema-invalid arguments → hard 400**, poisoning the conversation. | See §6.2.1. | multi-file |
 | 12 | `f099b5f` | Consecutive OpenRouter `reasoning.text` stream deltas not coalesced. | Port `_accumulate_reasoning_details()` (`openai_chat_base.py:811-854`): concatenates `text`, first-wins `signature`/`format`, raises `ProviderProtocolError` on non-object items and non-string text. Applied in **two** places — stream accumulation (~`:342`) and message round-trip conversion (~`:704`), the latter preventing unbounded `reasoning_details` list growth when replaying history. main's `openai_chat_base.py` is byte-identical to merge-base here → applies cleanly. | as-is |
 | 13 | `a7b8694` net of `ed441e5` | main lacks `reasoning_content` extraction — the llama.cpp/local-server convention. | Port `_extract_reasoning_message` / `_extract_reasoning_delta` from `openai.py`. **Do not** port the `chat_template_kwargs` injection: added by `a7b8694`, removed by `ed441e5`; `git grep chat_template_kwargs` at HEAD returns zero hits. Net effect is extraction only. Directly benefits mira-OSS offline mode. `_is_local_endpoint()` survives at `openai.py:46`. | as-is |
@@ -465,9 +495,35 @@ cns/services/orchestrator.py            invalid ids excluded from persisted_tool
 agents/base.py                          inherits via shared append_tool_result_messages
 ```
 
-Items in `clients/llm/*` plus the one `tool_loop.py` method apply cleanly. The orchestrator and
-`agents/base.py` hunks are 4–8 lines each but sit in heavily diverged files — hand-apply.
-Requires `jsonschema` in `requirements.txt`. Coverage gap: D-9.
+Items in `clients/llm/*` plus the one `tool_loop.py` method apply cleanly. Requires `jsonschema` in
+`requirements.txt`. Coverage gap: D-9.
+
+**The orchestrator hunks do not belong to WP1.** Both `e370468` and `e26d031` modify
+`cns/services/orchestrator.py`. Neither applies, but for two different reasons:
+
+- `e370468` adds `and tool_call.invalid_reason is None` to a `persisted_tool_ids` comprehension.
+  **`persisted_tool_ids` does not exist at main** — it is introduced by `c1297b3` (strict WebSocket
+  protocol, ordered turn persistence), which is WP4. Genuinely WP4-dependent.
+- `e26d031` adds circuit-breaker finalization (a `circuit_breaker_finalization_reason` flag, a
+  `CircuitBreakerEvent`, one `ToolErrorEvent` per unexecuted local call, explanatory fallback text and
+  a terminal `CompleteEvent`) and gates tool-loader auto-continuation on the loader reporting
+  `success: true`. **This one is portable by hand.** main already has `acc.invoked_tool_loader` (4
+  references), already emits `CircuitBreakerEvent` (7), and already has `container_id` (12), so the
+  hunk does not depend on WP4 constructs — it conflicts only because crm's orchestrator had been
+  restructured by then. Deferring it was over-cautious.
+
+  Its loader-gating half *is* blocked, but on O-7 rather than WP4: it rewrites the
+  `event.arguments.get("load")` form that `97951be` introduced, and mira-OSS still detects the loader
+  via `mode in ["load","fallback","prepare_code_execution"]`.
+
+  Consequence of the deferral, coherent but worth closing: WP1 lands breaker *detection*
+  (`tool_loop.py`) without the orchestrator's graceful *finalization*, so a tripped breaker stops the
+  loop but emits no explanatory message to the user.
+  `tests/test_orchestrator_tool_loop.py::test_circuit_breaker_remains_latched_after_final_no_tools_pass`
+  fails until this is applied. Tracked as O-23.
+
+Between WP1 and WP4 the orchestrator can still persist an orphaned pair for an invalid call; sidebar
+agents cannot.
 
 Circuit-breaker hardening (same commit, separable, lands in the same file as the WP4 halt changes —
 split deliberately): main's `CircuitBreaker.should_continue()` (`tool_loop.py:58-77`) trips on *any*
@@ -896,6 +952,12 @@ Port `request_magic_link` (`:299`, with `:324-341` enumeration defence + `random
 `verify_magic_link:401`, `create_api_token:468` (`:488` 50-token cap), `validate_api_token:518`,
 `create_session:552`, `logout_other_devices:607`, `cleanup_expired_tokens:631`,
 `get_cookie_settings:637-647`, `register_cleanup_jobs:657`.
+
+**`tests/test_auth_graft.py` is only partly generic.** WP0 triage found 16 tests collect but roughly 7
+exercise CRM-only surface — `import billing`, `from cns.api import demo`, crm workspace tokens, crm page
+visibility — which §8.1 and §0.2 omit. WP3 keeps session hashing, `logout_others`, cleanup ordering,
+compensation-on-failure, the removed-OSS-auth contracts, the explicit-RLS-identity checks and the
+`conversation_llm` negative assertion, and **excises the rest** rather than stubbing billing.
 **`:676` module-level `auth_service = AuthService()` singleton** constructs `AuthConfig()` →
 `get_database_url()` + 5× `get_service_config()` → **Vault reads at import time**. Combined with
 `utils/scheduled_tasks.py` registering `('auth.service','auth_service',False,None)`, any
@@ -1080,6 +1142,30 @@ Disposition by group, for the record:
 zero-row result** where OSS main currently raises `invalid input syntax for type uuid: ""`. Correct for
 security, wrong for debuggability, and it will mask graft regressions. Add a startup assertion or canary
 query that logs when `app.current_user_id` is empty on an RLS-covered table.
+
+**`tests/test_greenfield_schema.py` is not a usable gate as recovered.** Two defects, both found during
+WP0 triage (`tests/TRIAGE.md` §D):
+
+1. *It passes vacuously against this repository.* It matches tables with `rf"CREATE TABLE\s+{table}\b"`.
+   crm's schema writes bare `CREATE TABLE users (` (22 occurrences, zero `IF NOT EXISTS`); mira-OSS
+   writes `CREATE TABLE IF NOT EXISTS users (`. Against mira's file the regex never matches, so
+   `test_removed_tables_are_absent` **passes while every table it demands absent is present** —
+   `conversation_llm` (L102), `internal_llm` (L122), `usage_pricing` (L163), `users_trash` (L234),
+   `domain_knowledge_blocks` (L307), `domain_knowledge_block_content` (L325),
+   `feedback_synthesis_tracking` (L733), `extraction_batches` (L648). `_table_body()` shares the
+   coupling and raises `table X is missing` for every table it inspects. Make both regexes tolerate
+   `IF NOT EXISTS`, or standardise the new file on crm's bare style, **before** trusting this test.
+2. *Its omission list contradicts the add-back list.* `test_removed_tables_are_absent` encodes crm's
+   omissions, but §6.3.7 requires OSS to add back four of them — `usage_pricing`,
+   `domain_knowledge_blocks`, `domain_knowledge_block_content`, `feedback_synthesis_tracking` — and
+   `feedback_signals` with the OSS column set, which the file's `users`-column assertions do not model.
+   Per §0.2 crm's contracts are not authoritative: **amend the test, do not satisfy it.** The genuinely
+   shared omissions are `conversation_llm`, `internal_llm`, `users_trash`, `extraction_batches`,
+   `post_processing_batches` and the Stripe objects.
+
+Useful negative assertion the same file already carries: `tests/test_auth_graft.py` asserts
+`ensure_single_user` no longer writes `conversation_llm`, which matches the `main.py` rewrite WP-S
+requires.
 
 **`a9fd443`** deletes `tools/schema_distribution.py` and the `initialize_user_database` call. Its root
 cause was crm-specific (`tools/implementations/schemas/` went empty when `contacts_tool.sql` was
@@ -1883,6 +1969,10 @@ schema `COMMENT ON TABLE model_configs` says three routes where the CHECK allows
 `cns/services/AGENTS.md` documents the `model_config` route per service (useful as a mapping source,
 not portable as-is).
 
+One defect this backport introduces rather than inherits: WP1-B removed `ApiConfig.analysis_enabled`,
+but `config/AGENTS.md` still names it in the `ApiConfig` feature-flags line, because that file's hunk
+arrived with item 4 (`2e60260`) rather than item 16. Correct it in this WP6 pass.
+
 ---
 
 ## 9. Reverse direction — the SSRF gap in crm_mira (record; WP7 descoped)
@@ -1979,6 +2069,9 @@ not.
 | **O-19** | `tests/` triage after WP0 | D-14: the restored pre-`ee44b18` suite covers removed subsystems (`files_manager`, batch coordinator) and, per §0.1, characterises **1.x** behaviour. Under 2.0 this is a re-baseline, not a repair: some tests will assert contracts that no longer exist. | WP0 |
 | **O-20** | Deploy path reconciliation | OSS's upgrade path is `deploy/deploy.sh --migrate` (backup → fresh install → `schema_aware_restore.py` restores user data; `deploy/lib/migrate.sh:124-136` re-applies the old schema on rollback). With no migration requirement this is **dead or must be repurposed**. crm retained `deploy/migrate.sh`, `deploy/lib/migrate.sh` and `deploy/schema_aware_restore.py` alongside its greenfield schema — an inconsistency not worth inheriting. Decide: delete all three, or keep a backup/export path for users who want to salvage 1.x data manually. | WP6 |
 | **O-21** | `VERSION` and release identity | `VERSION` is `2026.06.25` (CalVer) in **both** repos. Establish the 2.0 marker and whether the scheme becomes semver (`2.0.0`) or stays CalVer with a major suffix. Touches `README.md`, `docs/MANUAL_INSTALL.md`, and any `AGENTS.md` header. | WP6 |
+| **O-22** | Test suite cannot run without live Vault | §3.1. The autouse `full_reset()` fixture requires a reachable Vault with valid AppRole credentials, so all 689 recovered tests error at setup. Unit tests pass under `--noconftest`, which also discards fixtures the integration tests need. Split the suite on the `integration` marker seam that `scratch/conftest.py` anticipated, or stand up Vault/Postgres/Valkey for acceptance runs. **Gates every "test green" criterion in §12.** | WP0 follow-up |
+| **O-23** | Circuit-breaker finalization deferred | §6.2.1. `e26d031`'s orchestrator finalization is portable by hand and was over-deferred. Without it a tripped breaker stops the loop silently. One `test_orchestrator_tool_loop.py` test fails until applied. Its loader-gating half remains blocked on O-7. | WP4, or earlier by hand |
+| **O-24** | `memory-curation-v2-serf-implementation-brief.md` | crm's `e26d031` deletes this 799-line root document as a bundled, unrelated change. Deletion declined; the file is retained. Rule on whether it is still wanted in 2.0. | WP6 |
 
 ---
 
