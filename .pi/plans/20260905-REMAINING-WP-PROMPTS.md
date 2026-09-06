@@ -615,9 +615,17 @@ WP2-A has already replaced the chokepoint, so get_model_config(name) is what you
 
 ## The complete call-site inventory
 
-I enumerated these myself; treat this as the checklist and report any site you find that is not on it.
+**CORRECTED 2026-09-06.** The original enumeration below was incomplete — ground truth on
+`2.0/integration` was 211 references across 39 Python files, and WP2-A's own consumer inventory plus a
+whole-tree ownership diff found nine files this list never mapped. The additions are in the block that
+follows the inventory; treat the two together as the checklist, and still report any site you find that
+is on neither.
 
-**internal_llm= keyword call sites (22), with target route from §6.1.3:**
+Two counts have also moved. The leaf `internal_llm=` sites number **29**, not 22, measured after WP2-A
+landed. And **WP2-C runs before you** and deletes several files this inventory lists — see the
+"already handled by WP2-C" block. Do not migrate a file WP2-C has deleted.
+
+**internal_llm= keyword call sites, with target route from §6.1.3:**
 
   -> primary
   cns/services/user_model_synthesizer.py   'synthesis' x2, 'critic' x1
@@ -673,6 +681,63 @@ say so and pass it anyway — O-18 is unresolved upstream and 100 is the value m
 `portrait` are referenced in code at main but have no row in any main schema or migration — latent
 KeyError paths. Your migration resolves both; mention that in the commit body.
 
+## ADDITIONS — nine sites the original inventory missed, all verified against source
+
+**Already handled by WP2-C — do NOT touch these, the files are deleted or rewritten:**
+
+  agents/batch.py                      WP2-C DELETES the whole file (139 L). Its :58 docstring reference
+                                       to InternalLLMConfig goes with it. Do not edit it.
+  lt_memory/llm_routing.py             WP2-C DELETES the whole file (8 L, the one
+                                       uses_anthropic_batch_dialect helper).
+  lt_memory/processing/execution_strategy.py   WP2-C rewrites 521 L -> crm's 205 L post-image, which
+                                       removes the 'extraction' call site the inventory mapped to route
+                                       `batch` and introduces DirectExecutionStrategy calling
+                                       `model_config="batch"` itself. Re-read the file after WP2-C
+                                       merges and migrate only what still carries a legacy kwarg.
+  cns/api/actions.py:2216              WP2-C takes the `force_immediate=True` kwarg.
+  utils/power_on_self_test.py          WP2-A owns the LLM checks; WP2-C owns the scheduler-job lists at
+                                       :902,:905,:972. Nothing here is yours.
+  agents/implementations/forage_agent.py   has no `use_batch` in mira-OSS; only the
+                                       `internal_llm_key="forage"` rename at :21 is yours.
+
+**Genuinely yours, and missing from the original inventory:**
+
+  main.py:235-236              `from utils.user_context import load_internal_llm_configs` and the call.
+                               WP2-A DELETED that function, so this is a live ImportError at startup.
+                               Becomes `load_model_configs()`. This is separate from the usage_pricing
+                               seeding block already in your brief at ~:240.
+  agents/base.py:420-428       `get_internal_llm(self.sentry_llm_key)` plus the `sentry_llm_key` field
+                               itself. A THIRD agents-framework key alongside `internal_llm_key` (:192)
+                               and `overwatch_llm_key` (:229), and no prior inventory named it. Rename
+                               to `sentry_model_config_name` and decide its target route from §6.1.3;
+                               report the mapping you chose and why.
+  cns/services/orchestrator.py:720-725   `metadata.conversation_llm_name` — a consumer of the RENAMED
+                               attribute WP2-A changed to `model_config_name` in
+                               `clients/llm/types.py`. Distinct from the :163 field and the :998-1004
+                               `resolve_conversation_llm` path your brief already lists.
+  cns/services/segment_collapse_handler.py:519   `if prefs.conversation_llm == 'demo':`. Dies twice
+                               over — under D13's picker retirement and under D12's member-only
+                               decision. Delete the branch. WP2-C also edits this file (the
+                               `force_immediate` parameter and `_cleanup_segment_files`), so re-read it
+                               after WP2-C merges and touch only this branch.
+  clients/llm/events.py:137    the `ProviderSwitchEvent` class definition. WP2-A removed its emission
+                               from lifecycle.py and deliberately left the class dead for you.
+  cns/services/orchestrator.py:44,889   its import and `isinstance` branch — dead for the same reason.
+                               Delete both in the same commit as the class.
+  cns/api/websocket_chat.py:510-512, web/assets/javascript/api-client.js:589,
+  web/assets/javascript/messaging.js:1491   the `provider_switch` frame renderers, downstream of the
+                               same dead event. **websocket_chat.py is WP4's file and has not run
+                               yet** — delete the two JS renderers and REPORT the websocket_chat.py
+                               lines for WP4 rather than editing that file.
+  web/assets/javascript/thinking-budget.js:14,38,64   calls `get_conversation_llm` /
+                               `set_conversation_llm`. Your brief names only `web/settings/index.html`;
+                               this is the picker's second frontend consumer and it must go too, or the
+                               settings page will call actions you deleted.
+  deploy/schema_aware_restore.py:9,44   `CONFIG_TABLES = {'conversation_llm','internal_llm'}`.
+                               **Do not edit.** O-20 is resolved: WP6 deletes this file outright along
+                               with `deploy/migrate.sh` and `deploy/lib/migrate.sh`. It is excluded
+                               from your headline gate for that reason.
+
 ## phoneafriend_tool — D14 consequence, a real tool-contract change
 
 The tool exposes a model choice to the calling model via MODEL_INTERNAL_LLMS[model_choice] at :151,
@@ -720,8 +785,20 @@ seven-delta harvest from 61315bb is WP6 and must not be conflated with this dele
 
   utils/user_context.py, clients/llm/*, clients/llm_provider.py, config/config.py (WP2-A, already landed)
   deploy/mira_service_schema.sql, deploy/migrations (WP-S)
-  utils/power_on_self_test.py (WP2-A)
+  utils/power_on_self_test.py (WP2-A owns the LLM checks, WP2-C the scheduler-job lists)
   auth/ (WP3), cns/api/websocket_chat.py (WP4), tests/ (WP0/O-22)
+
+**Two deliberate exceptions to the two lists above**, both specified in the ADDITIONS block and in
+verification step 2b — do not treat them as licence to wander:
+
+  clients/llm/events.py:137   delete the dead `ProviderSwitchEvent` class only. WP2-A removed its
+                              emission and left the class for you. Touch nothing else in `clients/llm/`.
+  tests/test_model_routing.py remove the single `usage_pricing` assertion that contradicts D5, per step
+                              2b. Change no other assertion and add no test.
+
+**Sequence:** branch from `2.0/integration` only after **WP2-C has merged**. WP2-C deletes
+`agents/batch.py` and `lt_memory/llm_routing.py` and rewrites `execution_strategy.py`, so starting
+before it lands means migrating call sites in files that are about to disappear.
 
 cns/services/orchestrator.py is shared with WP4 and WP5. Touch ONLY the conversation_llm field, the
 llm_kwargs construction, and the effort-override read. Leave message persistence, frame emission and
@@ -730,8 +807,29 @@ _surface_memories alone.
 ## Verification
 
 1. py_compile every changed file.
-2. `git grep -nE "internal_llm|conversation_llm" -- '*.py'` → must be 0 across the whole tree. This is
-   the headline check; report the count before and after.
+2. `git grep -nE "internal_llm|conversation_llm" -- '*.py'` → the headline check. Report the count
+   before and after (baseline on `2.0/integration` after WP2-A and WP2-C is **29 leaf `internal_llm=`
+   sites**; re-measure the raw grep yourself rather than trusting that number).
+
+   **The target is zero with exactly two permitted exceptions**, and neither is a site you may edit:
+
+   - `tests/test_greenfield_schema.py` — its four references are assertions that the
+     `conversation_llm` and `internal_llm` **tables are absent** from the schema. They are correct and
+     must survive; deleting them would weaken the greenfield gate. Currently 32/32 passing.
+   - `deploy/schema_aware_restore.py` — dead per the O-20 verdict; WP6 deletes the file.
+
+   So run it as:
+   `git grep -nE "internal_llm|conversation_llm" -- '*.py' ':!tests/test_greenfield_schema.py' ':!deploy/schema_aware_restore.py'`
+   and require 0. Report the unfiltered count too, so the two exceptions are visible rather than
+   silently excluded.
+
+2b. `tests/test_model_routing.py::test_runtime_has_no_legacy_routing_identifiers` **asserts something
+   plan §6.1.6 deliberately contradicts**: it flags `usage_pricing` in `utils/cost_accumulator.py`, but
+   D5 retains the `usage_pricing` lookup and only re-keys it. The test can therefore never pass on
+   mira-OSS as written. Per §6.3.7's precedent — *amend the test, do not satisfy it* — and the Test
+   scope convention, **remove the `usage_pricing` assertion from that test and leave every other
+   assertion in it intact.** Record the amendment and its reason in the commit body. Do not otherwise
+   edit any test, and do not add one.
 3. `git grep -n "internal_llm_key\|overwatch_llm_key"` → 0.
 4. `git grep -rn 'model_config=' -- '*.py' | wc -l` → should be roughly 22 plus the agents framework.
 5. `git grep -n 'get_conversation_llm\|set_conversation_llm'` → 0 in Python; report what remains in
