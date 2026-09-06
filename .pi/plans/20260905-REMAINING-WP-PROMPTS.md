@@ -2122,8 +2122,21 @@ it against the tree you have, not against those files.
 
 Run every check in §11 against the FULL tree, not just your own changes:
 
-  git grep -nE '192\.168\.1\.9|/opt/crm_mira|mirafor\.biz|Qwopus|k3-256k|kimi_key|llama_server_key|crm-mira|crm_mira|taylorsatula|/Users/taylut|42069|admin@|mira-origin' \
+  git grep -nE '192\.168\.1\.9|/opt/crm_mira|mirafor\.biz|Qwopus|k3-256k|kimi_key|llama_server_key|crm-mira|crm_mira|taylorsatula|/Users/taylut|42069|admin@|mira-origin|email_gateway' \
       -- . ':!.pi/plans' ':!scratch'
+
+**`email_gateway` was missing from this pattern when the gate was pre-run, and it has 9 hits** — all in
+recovered WP4 test fixtures: `tests/test_history_cursor.py:21-23`,
+`tests/test_ordered_turn_persistence.py:212-214`, `tests/test_web_frontend_protocol.py:29-31`. The
+values are harmless stubs (`https://mail.example.test`, `test-key`, `test-secret`), so no secret leaks,
+but §11 objects to the **key names** because they map the private gateway's topology — and they are now
+stale besides, since WP3-B replaced that gateway with an SMTP sender and nothing reads those fields.
+**Delete the three fixture blocks.** Note this is fixture cleanup, not test authoring, so the Test scope
+convention permits it; do not otherwise alter those tests, which are WP4's acceptance gate.
+
+Recorded so the gap is visible: a scrub gate is only as good as its pattern list, and this one was
+derived from §11's table by hand. Cross-check your pattern against every row of §11 before trusting an
+empty result.
 
 The plan file itself legitimately quotes these values as things to scrub, so exclude it. Report every
 hit with file:line and either fix it or explain why it is acceptable.
