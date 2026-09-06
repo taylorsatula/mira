@@ -79,6 +79,30 @@ infrastructure; integration-style tests skip. If a run shows setup ERRORs mentio
 harness is not present on that branch — either merge `2.0/wp0b-testsplit` or fall back to
 `--noconftest` for pure-unit files.
 
+**Test scope.** This codebase chooses fail-fast over extensive performative testing, and the migration
+inherits that posture. **Do not author new tests, fixtures, conftest helpers or test infrastructure.**
+Your job is to migrate source, not to expand coverage.
+
+In scope:
+- Running the existing suite and reporting per-test results against your acceptance gate.
+- Deleting, or minimally updating, a test that the migration itself invalidates — one asserting a
+  protocol, table, column or symbol a locked decision deliberately removed. **Prefer deletion over
+  authoring a replacement.**
+- Reporting a failing test with its cause classified as your defect, another package's scope, or an
+  environment limit.
+
+Out of scope — do not do these even when they seem helpful:
+- Writing a test to prove your change works. Use your brief's verification steps instead
+  (`py_compile`, targeted greps, import smoke tests, existing characterization tests).
+- Adding coverage for behaviour you introduced that no existing test exercises.
+- Repairing pre-existing failures unrelated to your package. Plan O-19 makes the 1.x suite a
+  re-baseline, not a repair, and that re-baseline is not part of this migration.
+- Adding defensive fallbacks, compatibility shims, dual-mode branches or soft-failure paths to make a
+  test pass or to hedge a migration. Where the specification says fail-loud, raise.
+
+If a characterization test for your own package fails, fix the source, not the test — unless the test
+asserts something D1–D14 deliberately removed, in which case delete it and say so in your report.
+
 ---
 
 ## WP2-A — model_configs: the LLM-layer chokepoint
@@ -87,12 +111,11 @@ Create the worktree first:
 
 ```
 cd /Users/taylut/Programming/GitHub/mira-OSS
-git worktree add .worktrees/wp2a -b 2.0/wp2a <WP-S-merge-result>
+git worktree add .worktrees/wp2a -b 2.0/wp2a 2.0/integration
 ```
 
-where `<WP-S-merge-result>` is the integration branch carrying WP-S (see the handoff for the current
-chain). WP2-A must not start before WP-S is merged, because it validates against the `model_configs`
-table WP-S authors.
+`2.0/integration` carries WP-S, which authored the `model_configs` table and its five-row seed that
+this package validates against. Do not branch from `main`.
 
 ```
 You are executing work package WP2-A of the mira-OSS 2.0 backport: replace the internal_llm /
@@ -140,26 +163,27 @@ LLMProvider.generate_response / stream_events routing kwargs. You own that chain
   clients/llm/types.py        RequestMetadata / ProviderMetadata: internal_llm_name +
                               conversation_llm_name -> model_config_name
   clients/llm/lifecycle.py    propagate the rename; fail-loud (no provider fallback)
-  clients/llm/events.py       drop ProviderSwitchEvent — but FIRST run
-                              `git grep -n ProviderSwitchEvent` and report every consumer.
-                              cns/api/websocket_chat.py may render provider_switch; if it does, note it
-                              for WP4 rather than editing that file (WP4 owns it).
+  clients/llm/events.py       DO NOT DELETE the ProviderSwitchEvent class in this package — see the
+                              ordering constraint in "Four things" item 4 below. Remove only its
+                              emission from lifecycle.py.
   config/config.py            remove ApiConfig.max_tokens and ApiConfig.analysis_enabled's replacement
                               validate_compaction_trigger_tokens; add
                               validate_compaction_budget(primary_max_tokens: int). Take this from
                               6899d07's config/config.py hunk — WP1-B deliberately declined it because
                               it was WP2's. Keep SystemConfig.subcortical_enabled and peanutgallery_enabled
                               (WP1-B added the former).
-  utils/power_on_self_test.py _check_llm_configuration asserting the five routes; and FIX the two
-                              config.api.max_tokens readers at :709 and :1064, which break when you
-                              remove that field. Do NOT touch the RLS expected_tables list — WP-S owns it.
+  utils/power_on_self_test.py _check_llm_configuration (:701) asserting the five routes; FIX the two
+                              config.api.max_tokens readers at :719 and :1074, which break when you
+                              remove that field; and rework _check_llm_provider_reachability (:1014)
+                              for the criticality change in "Four things" item 3. Do NOT touch the RLS
+                              expected_tables list — WP-S owns it.
   utils/cost_accumulator.py   re-key from internal_llm row names to model_config_name (D5). Keep the
                               FALLBACK_PRICES mechanism and the usage_pricing lookup; only the keying
                               changes. Its docstring explicitly names OSS as the reason FALLBACK_PRICES
                               exists — preserve that intent.
   cns/api/chat.py             re-attach cost recording (:272-292 start/drain) if WP-S or D10 disturbed it
 
-## Three things that are yours and easy to miss
+## Four things that are yours and easy to miss
 
 1. **The route set is primary / fast / batch / assessment / `other`.** Not crm's `difficult`. Decision
    D14 renamed it because its purpose is "route to an outside model", and it is the catch-all for future
@@ -175,14 +199,60 @@ LLMProvider.generate_response / stream_events routing kwargs. You own that chain
    operator with a single provider available must still be able to boot. This resolves plan open
    item O-3 — record that in the commit body.
 
-3. **ROUTE_FALLBACKS must be re-derived, not copied.** crm's is
-   {"assessment": "primary", "difficult": "fast"}, encoding a local-llama-server vs cloud split that
-   does not hold for OSS seeding (plan §6.1.4). WP-S seeded all five routes at cloud providers
-   (openrouter / groq / anthropic). Therefore: `other` gets **no** fallback, because falling back would
-   silently convert "consult an outside model" into "consult yourself". Make criticality derive from
-   what the chat path depends on rather than from route names. If every route is cloud and therefore
-   fatal, an empty ROUTE_FALLBACKS is the correct answer — say so explicitly in the commit body rather
-   than leaving a stale mapping.
+3. **ROUTE_FALLBACKS is in `clients/llm/resolver.py:17`, NOT in `utils/user_context.py`, and it must be
+   replaced rather than re-derived.** Verified facts: crm's value is
+   `{"assessment": "primary", "difficult": "fast"}`, with a comment explaining it encodes a
+   local-llama-server vs cloud split. WP-S seeded all five OSS routes at cloud providers
+   (openrouter / groq / anthropic), so that split does not exist here and **no route has a sensible
+   fallback target** — falling `other` back to `primary` would silently convert "consult an outside
+   model" into "consult yourself" (D14), and falling `assessment` back to `primary` when `primary` is
+   the thing that is down is meaningless.
+
+   The dict is **overloaded**: crm's `_check_llm_provider_reachability()` uses `c in ROUTE_FALLBACKS`
+   purely as a **criticality classifier** — a route with a fallback is treated as non-critical local
+   (warn and continue), a route without one as critical cloud (raise, parking startup). mira-OSS
+   already has that function at `utils/power_on_self_test.py:1014`.
+
+   **DECISION (user-confirmed): all five routes are critical.** Delete `ROUTE_FALLBACKS` outright and
+   **do not** introduce a replacement criticality set — with every route critical there is nothing to
+   classify. Collapse the local/cloud classification block in `_check_llm_provider_reachability` to:
+   any probe failure raises, parking startup. Remove the now-dead `local_routes` /
+   `down_local_routes` bookkeeping and the `from clients.llm.resolver import ROUTE_FALLBACKS` import.
+
+   Because this parks boot when any one of three vendors is unreachable, or when an operator does not
+   hold credentials for all of them, **the failure message must be actionable**. Raise with a message
+   that names each failed route, its vendor and model from `model_configs`, and states plainly that all
+   five routes are required at startup. An operator staring at a parked process should learn from the
+   message alone which credential or endpoint to fix. Preserve the existing per-target diagnostic
+   structure (`type(error).__name__: error`) inside that message.
+
+   Rationale to state in the commit body: crm's `ROUTE_FALLBACKS` encoded a local-llama-server vs cloud
+   split that WP-S's all-cloud OSS seeding makes vacuous, and its fallback semantics would silently
+   convert "consult an outside model" into "consult yourself" for `other` (D14). Criticality is now
+   uniform and explicit, so the overloaded dict is deleted rather than re-derived. Per plan §0.2 crm's
+   identifier is a proposal, not authority.
+
+   Also record as a known consequence in your report: an OSS install lacking any one vendor's
+   credentials cannot boot. That is the accepted trade-off of this decision, not a defect to work
+   around. Do not add a soft-failure escape hatch.
+
+4. **`ProviderSwitchEvent` has a consumer you are not allowed to edit — an ordering constraint.**
+   Verified consumers: `clients/llm/events.py:137` (definition), `clients/llm/lifecycle.py:15,194`
+   (import and yield — **yours**), `cns/services/orchestrator.py:44,889` (import and isinstance branch
+   — **WP2-B's file, on your Do NOT touch list**), and `tests/test_model_routing.py:133`
+   (characterization test, WP2's, expected to fail).
+
+   `orchestrator.py` is imported by `main.py`, so deleting the class from `events.py` in this package
+   would break application import in a file you are forbidden to fix. Therefore:
+
+   - **Do**: remove the `yield ProviderSwitchEvent(...)` from `lifecycle.py` and its import there. That
+     is the substantive fail-loud change — with no provider fallback there is nothing to switch to, so
+     the event can never fire.
+   - **Do NOT**: delete the class from `events.py`, or touch `orchestrator.py`.
+   - **Do**: record in your report and in the commit body that `events.py:137` and
+     `orchestrator.py:44,889` now hold a dead class and a dead isinstance branch, and that **WP2-B owns
+     deleting both**. WP2-B's prompt already lists `ProviderSwitchEvent` deletion; this makes the
+     hand-off explicit.
 
 ## Do NOT touch
 
@@ -205,7 +275,13 @@ make the tree consistent — that is WP2-B's scope and doing it here makes the t
    the new chokepoint and no leftover get_internal_llm definition.
 3. `git grep -c 'internal_llm' -- utils/user_context.py clients/llm/ clients/llm_provider.py` → 0.
 4. `git grep -n 'difficult'` → 0 in your files (proves the D14 rename is complete).
-5. `git grep -n 'config.api.max_tokens'` → 0 (you removed the field and fixed both readers).
+5. `git grep -n 'config.api.max_tokens'` → 0 (you removed the field and fixed both readers at :719
+   and :1074).
+5b. `git grep -n 'ROUTE_FALLBACKS'` → 0 tree-wide, and no replacement criticality set introduced.
+    Confirm `utils/power_on_self_test.py` no longer imports it and no longer branches on it.
+5c. `git grep -n 'ProviderSwitchEvent'` → still present in clients/llm/events.py and
+    cns/services/orchestrator.py (deliberately deferred to WP2-B), and **absent** from
+    clients/llm/lifecycle.py.
 6. `git grep -n 'validate_compaction_budget'` → present in config/config.py and called from
    load_model_configs().
 7. `python3 -c "from utils.user_context import ModelConfig, load_model_configs, get_model_config"` —
@@ -731,7 +807,11 @@ pre-D2 vocabulary. It is superseded by tests/test_web_frontend_protocol.py.
 tests/api/test_data_endpoint.py asserts offset/search pagination on ?type=history — exactly what D-2
 removes (test_history_respects_offset_parameter, test_history_supports_search_query, and an
 "offset" in pagination assertion).
-Update or delete both, and say which in your report. Do not leave tests asserting a protocol you removed.
+**Delete both** rather than authoring replacements, and say so in your report. Do not leave tests
+asserting a protocol you removed — and do not write new tests covering the protocol you added. The
+recovered characterization tests (`test_web_frontend_protocol.py`, `test_history_cursor.py`,
+`test_ordered_turn_persistence.py`) are already your acceptance gate; per the Test scope convention,
+this codebase chooses fail-fast over extensive performative testing.
 
 ## Verification
 
