@@ -1995,8 +1995,29 @@ bypass RLS entirely for a user-facing query.
 
 ## WP6 — system prompt, documentation, scrub gate, release identity
 
+**SPLIT INTO THREE SUB-PACKAGES, 2026-09-06.** WP6 absorbed the residue of every preceding package and
+became too large and too sequentially-constrained to run as one agent. The binding constraint is that
+**the §11 scrub gate and the release identity must be the last things that run**, over a tree that
+already contains the prompt harvest and the documentation sweep — a scrub run in parallel with them
+cannot see their output, and it is the release blocker.
+
+| Sub-package | Scope | Sections below | Runs |
+|---|---|---|---|
+| **WP6-A** | the system-prompt harvest and its two open items | §1 only | parallel with WP6-B |
+| **WP6-B** | documentation sweep, O-20 deletions, dependency floors, the three security residues | §2 (docs half), plus the three blocks added after it | parallel with WP6-A |
+| **WP6-C** | full-tree scrub gate and release identity | §3 and §4 | **after both merge** |
+
+File sets are disjoint: WP6-A touches only `config/system_prompt.txt`; WP6-B touches the `AGENTS.md`
+files, `deploy/migrate*`, `deploy/schema_aware_restore.py`, `deploy/deploy.sh`, `requirements.txt`,
+`main.py`, `tests/test_auth_graft.py` and `tests/fixtures/infra.py`; WP6-C touches `VERSION`,
+`README.md`, `docs/MANUAL_INSTALL.md` and whatever the scrub gate finds.
+
 ```
-git worktree add .worktrees/wp6 -b 2.0/wp6 <integration-branch-after-WP5>
+cd /Users/taylut/Programming/GitHub/mira-OSS
+git worktree add .worktrees/wp6a -b 2.0/wp6a 2.0/integration   # WP6-A
+git worktree add .worktrees/wp6b -b 2.0/wp6b 2.0/integration   # WP6-B
+# WP6-C only after both have merged:
+git worktree add .worktrees/wp6c -b 2.0/wp6c 2.0/integration
 ```
 
 ```
@@ -2015,7 +2036,7 @@ Plan §6.6 (the prompt harvest — read the whole section, especially which comm
 §8.5 (documentation and deploy), §11 (the scrub gate, with every located private value),
 §0.1 (the four 2.0 release obligations), §10 (open items O-15, O-16, O-20, O-21, O-24 are yours).
 
-## 1. System prompt — harvest from 61315bb, NEVER from crm HEAD
+## 1. System prompt — harvest from 61315bb, NEVER from crm HEAD  ·· **WP6-A only**
 
 crm HEAD's config/system_prompt.txt is a raw dump from a deployed CRM box (193977c) and is degraded:
 it contains the typos `astutue`, `illedgable`, `toolcals`, one garbled sentence ("an observation,
@@ -2049,7 +2070,7 @@ Then run 61315bb's own self-consistency check on your merged result: grep for em
 contrastive negation ("not X, it's Y"). Its thesis is that the prompt teaches by demonstration, and it
 banned em dashes while containing six. Report the counts; fix what the prompt itself forbids.
 
-## 2. Documentation pass
+## 2. Documentation pass  ·· **WP6-B only**
 
 Update the per-directory AGENTS.md maps for what actually landed. Do NOT merge crm's versions — they
 describe the CRM product. Add auth/AGENTS.md (minus its "one CRM workspace" invariant clause) and
@@ -2114,7 +2135,69 @@ The stale table and column references the audit found inside those files (`lib/m
 `user_activity_days` `ORDER BY created_at` against a table with no such column) all die with the
  deletion — **do not fix them individually.**
 
-## 3. Release identity (plan §0.1 obligations)
+**Added from WP4 — five contract lines that are now actively false, and one that is dangerous:**
+
+  cns/api/AGENTS.md:9     "`InsufficientBalanceError` is conditionally imported … Always guard with
+      `if InsufficientBalanceError is not None and isinstance(...)`." **This one instructs a future
+      agent to reintroduce a pattern that was deliberately excised under D7.** Highest priority of the
+      five.
+  cns/api/AGENTS.md:7     "HTTP status codes map: 402 → `InsufficientBalanceError`" — 402 no longer exists.
+  cns/api/AGENTS.md:15    the `websocket_chat.py` bullet, three separate falsehoods: it describes
+      `{"type":"auth","token":"<api_key>"}` validated *only* against `app.state.api_key` (WP3-B added the
+      full a4df669 ladder plus a mode-gated single branch); "Owns partial-response persistence and the
+      `interrupted` terminal frame" (WP4 replaced both with `turn_stopped`/`turn_error`); and
+      "`billing.exceptions.InsufficientBalanceError` stays `ImportError`-guarded" (deleted).
+  cns/api/AGENTS.md:17    the `data.py` bullet says "Pagination via `offset`/`limit` query params" —
+      history is cursor-only now; only memories keeps offset.
+  cns/services/AGENTS.md:14   the `orchestrator.py` bullet lists exports `TurnMetadata`, `LLMKwargs`,
+      `ToolInteraction` and should add `AssistantStep`, `TurnAccumulator`, `tool_stream_frame`; and
+      "tool/thinking result persistence" should say provider-step-ordered persistence.
+
+**Added from WP5 — five more stale maps:**
+
+  working_memory/AGENTS.md:25      the trinket list ends at `lora_trinket.py`; `persona_trinket.py` missing
+  config/prompts/AGENTS.md         no entries for the seven `persona_*.txt` prompts
+  cns/services/AGENTS.md:1,23,24,39  header and list omit `persona_service.py`; `:39` "User model
+      pipeline (triggered in segment collapse chain)" now has a parallel Persona pass
+  cns/infrastructure/AGENTS.md:29  describes `feedback_repository`/`feedback_tracker` only;
+      `persona_repository.py` missing
+  cns/api/AGENTS.md:16,17          no `persona` domain listed; the `DataType` enum list needs `PERSONA`
+  cns/AGENTS.md:16,27              service list and the "LoRA refinement (user-initiated)" paragraph need
+      a Persona counterpart — two domains, two slots
+
+**Also from WP4 — the frontend billing UI, ~50 lines in `web/chat/index.html`** matching
+`balance`/`Billing`: `#low-balance-warning`, `#balance-popover`, `#header-quick-deposit`, the
+`/settings#billing` link, `#insufficient-balance-modal`, `checkLowBalance()`,
+`showInsufficientBalanceModal()` and `setupBalanceErrorListener()`. That last listener matches
+`data.type === 'error' || data.type === 'interrupted'` with `error_type === 'insufficient_balance'`, so
+after D7 and WP4 it is unreachable twice over. WP4 left it deliberately because deleting a billing modal
+is scrub work, not protocol compatibility. **It is yours.** Confirm against §8.2 that nothing else
+references those ids before deleting.
+
+**Four follow-ups WP4 filed; rule on each and record the ruling:**
+
+  `edbbed2` part a — stream-chunk logging in `utils/llm_tap.py` (WP1-owned) plus a 17-line
+      `clients/llm/dialects/openai_chat_base.py` hunk. A separable diagnostic improvement; take it or
+      decline it with a reason.
+  `cns/infrastructure/continuum_repository.py::search_continuums` — **now has no caller**; its only one
+      was the `search` branch WP4 removed. Typed `SearchHistoryResult` per §6.4.6's "mirror crm's own
+      split", but crm's copy is equally uncalled. Delete or wire.
+  `web/assets/javascript/api-client.js::chat.streamChat` — no callers anywhere in `web/`, and it
+      registers a callback under a `message_id` it never sends, so its promise can never settle.
+      Pre-existing, now visibly inconsistent with turn-bound attribution.
+  `web/assets/javascript/messaging.js` reads `response.metadata.workflow_detected`, which nothing has
+      ever populated.
+
+**D-7's CSP work is NOT in scope for any sub-package and must not be attempted.** WP4 measured it:
+**32** `onclick=` attributes (2 in `web/chat/index.html`, 30 in `web/domaindocs/index.html`) and **8**
+inline `<script>` blocks (2 each in `{chat,settings,domaindocs,memories}/index.html`). `MIRA_CSP` stays
+at its `off` default. Record D-7 in the release notes as deferred to the frontend session, with those
+numbers, so the size of it is visible rather than rediscovered.
+
+**Frontend needs no working-memory section labels** — WP4 verified `git grep working_memory -- web/`
+returns 0 hits, so WP5's `persona_directives` section needs no label. No action.
+
+## 3. Release identity (plan §0.1 obligations)  ·· **WP6-C only**
 
 O-21: VERSION is 2026.06.25 (CalVer, identical in both repos). Set the 2.0 marker and decide whether the
 scheme becomes semver (2.0.0) or stays CalVer with a major suffix.
@@ -2200,7 +2283,11 @@ document `internal_llm`/`conversation_llm` resolution, `batch_result_handlers` a
 rather than update them.** Decide whether 2.0 ships an architecture overview at all; if it does, write
 it against the tree you have, not against those files.
 
-## 4. Scrub gate — plan §11. This is the release blocker.
+## 4. Scrub gate — plan §11. This is the release blocker.  ·· **WP6-C only, and it runs LAST**
+
+WP6-C must not start until WP6-A and WP6-B have both merged. The gate is over the **whole tree**, so
+running it before the prompt harvest and the documentation sweep land means it cannot see their output
+— and those are exactly the edits most likely to reintroduce a stale reference.
 
 Run every check in §11 against the FULL tree, not just your own changes:
 
