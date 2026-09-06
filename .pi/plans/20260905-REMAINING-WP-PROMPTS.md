@@ -1528,8 +1528,15 @@ D-3: fail-loud. Exceptions propagate rather than degrading silently.
 
 ## Server side
 
-Take from c1297b3, 457a56e, a11d04e, edbbed2(part b) and d138ca4. The complete construct list with line
-references is in plan §6.4.2 — ProtocolModel with extra="forbid", the ClientFrame and ServerFrame
+Take from c1297b3, 457a56e, a11d04e and d138ca4. **Do NOT take `edbbed2`** — an earlier draft of this
+brief listed its "part b", but that half moves WebSocket close codes to private values inside
+`web/assets/chat-transport.js`, a class belonging to crm's new ES-module frontend. **That file does not
+exist in mira-OSS** (verified: `web/assets/javascript/` holds `api-client.js`, `messaging.js`,
+`history.js`, `events.js` and others, but no `chat-transport.js`), and §6.4.7 omits it as
+web-redesign-specific. Its other half adds stream-chunk logging to `utils/llm_tap.py`, which is a
+separable diagnostic improvement in a WP1-owned file; skip it and mention it in your report if you think
+it is worth a follow-up. The complete construct list with line references is in plan §6.4.2 —
+ProtocolModel with extra="forbid", the ClientFrame and ServerFrame
 discriminated unions, TypeAdapter validation on BOTH directions, ChatConnection's single-reader /
 single-writer bounded queues (32 in, 128 out) with ClientDisconnected and StopWriter sentinels,
 AssistantStep, TurnAccumulator.append_text returning a stable entry_id, _build_turn_messages emitting
@@ -1537,7 +1544,10 @@ provider-step order with monotonic microsecond offsets from base_time, staged us
 pending_messages committed on failure, TurnCompletedEvent moved to a post-commit callback and suppressed
 when stopped or auto_continuing, transient_system_scaffold plus discard_transient_user_message,
 tool_stream_frame(), set_cancel_reason / get_cancel_reason, and check_cancelled() at the five points in
-tool_loop.py.
+tool_loop.py. **`_format_tool_indicator` is DELETED, not adapted** — §6.4.2 lists it last and it is the
+fix for defect 4: it prepends `[used: tool_a, tool_b]` into `acc.response_text`, which is persisted and
+then **re-fed to the model on every later turn**, so the marker accumulates in durable history. Removing
+it is a data-hygiene fix, not a cosmetic one; say so in the commit body.
 
 Supporting changes: cns/core/message.py gains transient_system_scaffold, tool_arguments, turn_id,
 partial_response, stop_reason and provider_stop_reason (stop_reason is RENAMED to provider_stop_reason
@@ -1595,10 +1605,23 @@ It is portable: main already has acc.invoked_tool_loader, already emits CircuitB
 has container_id. Add circuit_breaker_finalization_reason, the CircuitBreakerEvent, one ToolErrorEvent
 per unexecuted local call, the explanatory fallback text and the terminal CompleteEvent. Without it a
 tripped breaker stops the loop silently.
-Its loader-gating half (gate auto-continuation on the loader reporting success:true) is blocked on O-7:
-it rewrites the event.arguments.get("load") form that 97951be introduced, and mira-OSS still detects the
-loader via mode in ["load","fallback","prepare_code_execution"]. Resolve O-7 — decide the invokeother_tool
-argument shape and make the orchestrator and the tool agree — or defer the gating half and say so.
+**Its loader-gating half is no longer blocked — O-7 is closed.** The argument shape was settled by WP2-A:
+`clients/llm/lifecycle.py:108` synthesises `{"load": [tool_name]}`, which exactly matches
+`tools/implementations/invokeother_tool.py:94-103` (schema declares only `load` and
+`load_for_rest_of_session`) and `:110`'s `run()` signature. The orchestrator's detection was settled by
+WP2-B: `orchestrator.py:772-777` used to gate `acc.invoked_tool_loader` on
+`event.arguments.get("mode", "")` against `["load","fallback","prepare_code_execution"]`, but the tool
+has never declared a `mode` property, so the flag was never set. WP2-B replaced that with detection on
+the parameters the tool actually declares.
+
+So by the time you run, `acc.invoked_tool_loader` works and
+`test_successful_tool_loader_triggers_auto_continuation` should already pass. **Verify that, then
+implement the gating half of `e26d031`** — gate auto-continuation on the loader reporting
+`success:true`. If the test does not already pass, WP2-B's fix did not land as described; investigate
+and report rather than re-fixing the detection yourself.
+The other known failure in that file,
+`test_circuit_breaker_remains_latched_after_final_no_tools_pass`, **is yours** and closes with the
+finalization work above.
 Also land e370468's orchestrator hunk (exclude invalid_reason calls from persisted_tool_ids), which
 could not apply in WP1 because persisted_tool_ids did not exist yet. Yours does.
 
