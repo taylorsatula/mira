@@ -261,6 +261,9 @@ Recorded here because they were made under time pressure and are not yet folded 
 | E-4 | **`billing_transactions` and `stripe_webhook_events` are dropped.** | I verified there are **no live application readers** in mira-OSS Python — the only references were `power_on_self_test.py` (updated) and `test_greenfield_schema.py` (amended). |
 | E-5 | **`deploy/config.sh`, `deploy/deploy_database.sh`, `deploy/docker/scripts/init-mira.sh`, `deploy/finalize.sh` were modified by WP-S.** | Not explicitly in my brief; they reference migrations or roles and had to follow the schema. **Not yet reviewed line-by-line** — see §8 risk R-3. |
 | E-6 | **`2.0/integration` is the de-facto integration branch**, created by renaming `2.0/wp1` in place. | The worktree directory is still `.worktrees/wp1`, which is confusing. Consider renaming the directory or documenting the mismatch. |
+| E-7 | **All five routes are critical at startup** (user-confirmed). `ROUTE_FALLBACKS` is deleted outright with **no replacement criticality set**, and any provider probe failure parks boot. | crm's `ROUTE_FALLBACKS` was overloaded: it encoded a local-llama-server vs cloud split that WP-S's all-cloud OSS seeding makes vacuous, *and* `_check_llm_provider_reachability` used `c in ROUTE_FALLBACKS` purely as a criticality classifier. With every route critical there is nothing to classify. Accepted consequence: an install missing any one vendor's credentials cannot boot. No soft-failure escape hatch. The raised message must name each failed route, vendor and model so an operator can act on it. Resolves O-3 and O-11-adjacent concerns. |
+| E-8 | **`MailSender` is an abstract interface with a stdlib `smtplib` default backend** (user-confirmed), sitting beside WP3-A's `AccountProvisioner`. | Matches the brief's "pluggable SMTP sender" wording and the provisioner pattern. Keeps OSS vendor-neutral (plan §0.1): no new dependency, works against any relay the operator already has. An HTTP backend (Resend/SES/Postmark) can be registered by an operator but is not shipped. To be written into WP3-B's brief. |
+| E-9 | **No test support outside the migration scope** (user directive). Agents must not author tests, fixtures, conftest helpers or coverage; tests the migration invalidates are **deleted**, not replaced. | This codebase chooses fail-fast over extensive performative tests. Encoded once in the prompts file's shared conventions so every dispatch inherits it. Consequence: **O-19 (re-baselining the ~98 pre-existing 1.x failures) is dropped from the inline work list** as test work outside the migration. |
 
 ---
 
@@ -298,11 +301,42 @@ coverage) are the two most likely to be forgotten.
 
 ## 8. Risks and known-weak points
 
-**R-1 — Nothing has been executed against a live database.** No Postgres, Vault or Valkey was available
-in this environment. The 21-table greenfield schema has never been applied to a real server. Static
-review and the (regex-based) schema test are the only evidence it is valid SQL. **The single highest-value
-next verification is `psql` against an empty database.** Balanced `$$` quoting, FK ordering, policy
-targets and role grants are all plausible failure points that static reading does not reliably catch.
+**R-1 — RETIRED 2026-09-06.** The greenfield schema has now been applied to a live PostgreSQL 17.11
+server and the security model behaviourally verified. 17 checks, all passing:
+
+- Apply is clean: **0 errors** both with and without `ON_ERROR_STOP=1`, on a fresh database created
+  exactly as `deploy/postgresql.sh` does (roles `mira_admin LOGIN BYPASSRLS` and `mira_dbuser LOGIN`
+  via its `DO $roles$` block, then `CREATE DATABASE mira_service OWNER mira_admin`). Result: 21 tables,
+  19 policies, 17 RLS-enabled tables, 1 view, 10 triggers, 65 indexes, 5 `model_configs` rows,
+  6 `usage_pricing` rows.
+- The handoff's worry about unbalanced `$$` quoting was **aimed at the wrong delimiter**: the file uses
+  8 balanced `$function$` tags plus a `$schema_precondition$` guard, and no bare `$$`.
+- **RLS fail-closed confirmed.** As `mira_dbuser` with the GUC never set → 0 rows; with
+  `app.current_user_id = ''` (the exact value `clients/postgres_client.py:201` writes for the no-user
+  state) → 0 rows.
+- **Cross-user isolation confirmed.** Alice sees only her 2 memories, Bob only his 1. As Bob: UPDATE of
+  Alice's row → `UPDATE 0`; DELETE → `DELETE 0`; INSERT with `user_id` = Alice → `ERROR: new row
+  violates row-level security policy` (WITH CHECK enforced).
+- **The `global_memories` view gate is not bypassable.** `mira_dbuser` holds no direct grant on
+  `global_memories` — direct SELECT → `ERROR: permission denied for table global_memories`, while
+  `global_memories_runtime` (`security_barrier=true`) returns rows. Deactivating the user closes the
+  gate: `can_read_global_memories()`'s `is_active = TRUE` check drops the view from 1 row to 0.
+- The 4 tables without RLS — `global_memories`, `global_usernames`, `model_configs`, `usage_pricing` —
+  are global by design and correct: config is `GRANT SELECT` only, and `global_memories` is reachable
+  solely through its gated view.
+- **All triggers fire.** `provision_baseline_persona()` created 2 `persona_state` + 2 `persona_revisions`
+  rows for 2 inserted users. `set_updated_at()` leaves `updated_at` NULL on insert and advances it past
+  `created_at` on UPDATE. `set_search_vector()` populated `search_vector` on 3/3 memories.
+- The emptiness guard works: re-applying to a populated database raises
+  `mira_service_schema.sql requires an empty target database`. The schema is deliberately **not**
+  idempotent — this is a fresh-install contract, consistent with plan §0.1.
+- `model_configs` CHECK constraints confirmed live: route names carry **`other`**, not `difficult`
+  (D14 enforced at the database level); `dialect_name` limited to anthropic/openai/openrouter/groq;
+  `effort` to none/low/medium/high/xhigh/max; `max_tokens > 0`.
+
+Residual: this validated SQL correctness and RLS semantics, **not** application behaviour against the
+database — no Postgres, Vault or Valkey is reachable to the Python code, and none of the connection
+paths in `clients/` have been exercised. That gap is closed only at first real install.
 
 **R-2 — WP3's SMTP sender is genuinely new design work.** crm_mira posts to a private HMAC-signed HTTP
 gateway whose server side is an untracked PHP file (`mira_email_gateway_forbiz.php`). No upstream
