@@ -1369,98 +1369,27 @@ endpoint already has the `X-Lattice-Delivery-Token` Vault check and `sender_veri
   is functionally a no-op (dispatch was already structural on `event.__class__.__name__`). Take or skip;
   say which.
 
-### O-25 — domaindoc sharing under RLS (decision E-14, user-approved)
+### O-25 — domaindoc sharing under RLS: **REASSIGNED to WP5, not yours**
 
-RLS on `users` is unconditional in the landed schema, so three cross-user readers silently return
-nothing in `multi` mode:
+Decision E-14 stands (a minimal SECURITY DEFINER lookup pair exposing only `id, email, first_name` for
+active users, no member gating; the SQL is prototyped and verified against live PostgreSQL 17.11). But
+the work has moved.
 
-- `cns/api/actions.py:1849` and `:1890` — `SELECT id, first_name, email FROM users WHERE email = …`,
-  the collaborator lookup by email. **This is how a share target is added**, so sharing becomes
-  impossible.
-- `cns/api/actions.py:1928`, `:2008`, `:2031` and `utils/domaindoc_shares.py:132` —
-  `JOIN users u ON ds.collaborator_user_id = u.id` / `ds.owner_user_id = u.id`. **These are INNER
-  joins, so the symptom is worse than blank names: the entire share row disappears.** Verified live —
-  with two users and one share, Alice's outgoing-share listing returns **0 rows**, and Bob's incoming
-  listing returns 0 rows. Both users see an empty share list.
+**Why:** five of the seven affected query sites are in `cns/api/actions.py`
+(`:1849`, `:1890`, `:1928`, `:2008`, `:2031`), and WP5 owns that file for its `PersonaDomainHandler`.
+Two packages editing `actions.py` in the same wave is exactly the collision this programme resolves by
+re-splitting rather than by merging. WP5 runs beside you, so it takes **all** of O-25: the schema
+function, the five `actions.py` rewrites, and `utils/domaindoc_shares.py:132`.
 
-Plan §6.3.8 already ruled crm's fix (`JOIN LATERAL active_member_identity(ds.owner_user_id) u ON TRUE`)
-**not portable**, because that SECURITY DEFINER function filters `subject_kind='member'` and belongs to
-the demo machinery D12 omits.
+**Consequences for you:**
 
-**Decision E-14: a minimal SECURITY DEFINER lookup pair exposing only `id, email, first_name` for
-active users, with no member gating** — crm's pattern minus the CRM. Rejected alternative: an
-admin-session read, which would bypass RLS entirely for a user-facing query.
+- Do **not** edit `deploy/mira_service_schema.sql` at all. Your brief's earlier instruction to add the
+  O-25 function there is withdrawn. WP5 makes the only additive schema change.
+- Do **not** edit `cns/api/actions.py` or `utils/domaindoc_shares.py`.
+- Verification step 9 (`test_greenfield_schema.py` must stay 32 passed) still applies to you, because
+  WP5's addition lands in parallel — if you merge first, re-run it after WP5 lands rather than assuming.
 
-**This is prototyped and verified against live PostgreSQL 17.11 — copy it, do not redesign it.** The
-exact SQL, which applies cleanly to the greenfield schema and leaves the table count at 21 (so
-`test_greenfield_schema.py` stays 32/32):
-
-```sql
-CREATE FUNCTION resolve_active_user_identity(p_email text)
-RETURNS TABLE (id uuid, email varchar, first_name varchar)
-STABLE SECURITY DEFINER
-SET search_path = pg_catalog, public
-LANGUAGE sql
-AS $function$
-    SELECT u.id, u.email, u.first_name
-    FROM public.users u
-    WHERE u.email = p_email
-      AND u.is_active = TRUE
-$function$;
-
-CREATE FUNCTION active_user_identity(p_user_id uuid)
-RETURNS TABLE (id uuid, email varchar, first_name varchar)
-STABLE SECURITY DEFINER
-SET search_path = pg_catalog, public
-LANGUAGE sql
-AS $function$
-    SELECT u.id, u.email, u.first_name
-    FROM public.users u
-    WHERE u.id = p_user_id
-      AND u.is_active = TRUE
-$function$;
-
-GRANT EXECUTE ON FUNCTION resolve_active_user_identity(text) TO mira_dbuser;
-GRANT EXECUTE ON FUNCTION active_user_identity(uuid) TO mira_dbuser;
-REVOKE EXECUTE ON FUNCTION resolve_active_user_identity(text) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION active_user_identity(uuid) FROM PUBLIC;
-```
-
-Two functions because the two call patterns differ: `resolve_active_user_identity` replaces the
-lookup-by-email at `actions.py:1849`/`:1890` (adding a share target), and `active_user_identity`
-replaces the joins in the listing queries via `JOIN LATERAL active_user_identity(ds.<counterparty>) ai
-ON TRUE`.
-
-Verified behaviour, all executed:
-
-| Check | Result |
-|---|---|
-| As Alice, direct `SELECT … FROM users WHERE email='bob@…'` | **0 rows** — the defect, reproduced |
-| As Alice, `resolve_active_user_identity('bob@example.com')` | returns Bob's `id`, `email`, `first_name` |
-| Outgoing share listing, `JOIN users` vs `JOIN LATERAL active_user_identity` | **0 rows** vs `q3-plan \| pending \| bob@example.com \| Bob` |
-| Incoming share listing, same comparison | **0 rows** vs Alice's identity returned |
-| `SELECT portrait FROM active_user_identity(…)` | `ERROR: column "portrait" does not exist` — no leak of `portrait`, `webauthn_credentials` or the soft-delete timestamps |
-| Deactivate the target user, then call either function | **0 rows** — the `is_active` gate holds |
-| Call with `app.current_user_id = ''` (no user context) | **still returns the row** — so it also serves pre-auth flows such as magic-link signup, where the caller has no RLS identity yet |
-
-Note the last row: because the functions are `SECURITY DEFINER` and carry their own predicate, they do
-not depend on the caller's RLS context. That is what makes them usable from both the authenticated share
-paths and the pre-auth lookup paths.
-
-Also verified while prototyping, and relevant to the call sites you are rewriting: `domaindoc_shares`
-has its own RLS with three policies (`owner_user_id` ALL, `collaborator_user_id` SELECT, and
-`collaborator_user_id` UPDATE) plus `CHECK (owner_user_id <> collaborator_user_id)`, and its `status`
-CHECK admits exactly `pending`, `accepted`, `rejected`, `revoked`. The share row itself is visible to
-both parties; only the `users` side of the join was being emptied.
-
-**This is the one item here that requires editing `deploy/mira_service_schema.sql`.** It has been
-applied to a live PostgreSQL 17.11 server and its 21 tables, 19 policies and five-row seed are verified.
-Your addition must be **additive only**: one function, its two grants, and the rewritten joins. Do not
-alter any table, column, constraint, policy or existing grant. `tests/test_greenfield_schema.py` is
-32/32 and must stay 32/32 — it is sensitive to the table set and the seed.
-
-If you judge the function unsafe or the rewrites larger than described, **stop and report** rather than
-substituting an admin-session read.
+Nothing else in this brief changes.
 
 ### Deploy
 
@@ -1783,8 +1712,9 @@ those names; the append-only grant on `persona_revisions` is SELECT+INSERT with 
 RLS is enabled on both; and the `provision_baseline_persona()` AFTER INSERT ON `users` trigger was
 **observed to fire**, creating `persona_state` and `persona_revisions` rows for every inserted user.
 So the trigger provisions revision 1 for the `ensure_single_user` bootstrap too, which is §12's WP5
-gate. **You write no SQL.** Verify your repository module against the landed schema and report any
-mismatch, but change nothing in `deploy/`.
+gate. **You write no Persona SQL** — verify your repository module against the landed schema and report
+any mismatch. There is exactly one additive schema change in this package and it is not Persona-related;
+see the O-25 section below.
 
 **WP2-C already made the D10 deletions in `segment_collapse_handler.py`.** See the wiring section below
 for what that leaves you.
@@ -1892,6 +1822,94 @@ _process_checkin_response, or the repulsion rewrite loop. Decision D6 keeps the 
       web/settings/index.html:697-800 and D1 keeps it working.
   cns/api/data.py — add DataType.PERSONA alongside the retained DataType.LORA.
 
+## O-25 — domaindoc sharing under RLS (decision E-14, user-approved; reassigned here from WP3-B)
+
+This is yours because five of the seven affected query sites are in `cns/api/actions.py`, which you own
+for `PersonaDomainHandler`. WP3-B runs beside you and has been told explicitly not to touch `actions.py`,
+`utils/domaindoc_shares.py` or the schema.
+
+**The defect.** RLS on `users` is unconditional in the landed schema (`:553`), so cross-user readers
+silently return nothing in `multi` mode. Because the listing queries are **INNER JOINs, the whole share
+row disappears**, not just the collaborator's name — verified live: with two users and one share, both
+the outgoing and the incoming listing return **0 rows**. To a user that reads as lost data.
+
+- `cns/api/actions.py:1849` and `:1890` — `SELECT id, first_name, email FROM users WHERE email = …`,
+  the collaborator lookup by email. This is how a share target is added, so **sharing becomes
+  impossible**.
+- `cns/api/actions.py:1928`, `:2008`, `:2031` and `utils/domaindoc_shares.py:132` —
+  `JOIN users u ON ds.collaborator_user_id = u.id` / `ds.owner_user_id = u.id`.
+
+Plan §6.3.8 already ruled crm's fix (`JOIN LATERAL active_member_identity(…)`) **not portable**, because
+that function filters `subject_kind='member'` and belongs to the demo machinery D12 omits.
+
+**The fix is prototyped and verified against live PostgreSQL 17.11 — transcribe it, do not redesign
+it.** Applying it left the table count at 21, so `test_greenfield_schema.py` stayed 32/32:
+
+```sql
+CREATE FUNCTION resolve_active_user_identity(p_email text)
+RETURNS TABLE (id uuid, email varchar, first_name varchar)
+STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+LANGUAGE sql
+AS $function$
+    SELECT u.id, u.email, u.first_name
+    FROM public.users u
+    WHERE u.email = p_email
+      AND u.is_active = TRUE
+$function$;
+
+CREATE FUNCTION active_user_identity(p_user_id uuid)
+RETURNS TABLE (id uuid, email varchar, first_name varchar)
+STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+LANGUAGE sql
+AS $function$
+    SELECT u.id, u.email, u.first_name
+    FROM public.users u
+    WHERE u.id = p_user_id
+      AND u.is_active = TRUE
+$function$;
+
+GRANT EXECUTE ON FUNCTION resolve_active_user_identity(text) TO mira_dbuser;
+GRANT EXECUTE ON FUNCTION active_user_identity(uuid) TO mira_dbuser;
+REVOKE EXECUTE ON FUNCTION resolve_active_user_identity(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION active_user_identity(uuid) FROM PUBLIC;
+```
+
+Two functions because the call patterns differ: `resolve_active_user_identity` replaces the two
+lookup-by-email sites, `active_user_identity` replaces the four joins via
+`JOIN LATERAL active_user_identity(ds.<counterparty>) ai ON TRUE`.
+
+Verified behaviour:
+
+| Check | Result |
+|---|---|
+| As Alice, direct `SELECT … FROM users WHERE email='bob@…'` | **0 rows** — the defect |
+| As Alice, `resolve_active_user_identity('bob@example.com')` | returns Bob's `id`, `email`, `first_name` |
+| Outgoing listing, `JOIN users` vs `JOIN LATERAL active_user_identity` | **0 rows** vs `q3-plan \| pending \| bob@example.com \| Bob` |
+| Incoming listing, same comparison | **0 rows** vs Alice's identity |
+| `SELECT portrait FROM active_user_identity(…)` | `ERROR: column "portrait" does not exist` — no leak of `portrait`, `webauthn_credentials` or the soft-delete timestamps |
+| Deactivate the target, call either function | **0 rows** — the `is_active` gate holds |
+| Call with `app.current_user_id = ''` | **still returns the row** |
+
+That last row matters: because the functions are `SECURITY DEFINER` with their own predicate, they do
+not depend on the caller's RLS context, so one mechanism serves both the authenticated share paths and
+any pre-auth lookup.
+
+**Constraints on the schema edit:** additive only — these two functions and their four grants. Do not
+alter any table, column, constraint, policy, existing grant or the seed. The schema has been applied to
+a live server and its 21 tables, 19 policies and five-row seed are verified; `test_greenfield_schema.py`
+is 32/32 and must stay 32/32.
+
+Also verified while prototyping, relevant to the queries you are rewriting: `domaindoc_shares` has its
+own RLS with three policies (`owner_user_id` ALL, `collaborator_user_id` SELECT, `collaborator_user_id`
+UPDATE) plus `CHECK (owner_user_id <> collaborator_user_id)`, and its `status` CHECK admits exactly
+`pending`, `accepted`, `rejected`, `revoked`. The share row is visible to both parties; only the `users`
+side of the join was being emptied. Do not change any of that.
+
+Rejected alternative, for the commit body: routing these reads through an admin session, which would
+bypass RLS entirely for a user-facing query.
+
 ## Verification
 
 1. py_compile every changed file.
@@ -1908,6 +1926,15 @@ _process_checkin_response, or the repulsion rewrite loop. Decision D6 keeps the 
    user_model_synthesizer.py, system_prompt_parser.py, lora_trinket.py, auth/seed_lora.py, or any
    repulsion_rewriter prompt.
 7. Differential test totals before and after.
+8. **O-25:** `git grep -n 'JOIN users u ON ds\.' -- cns/api/actions.py utils/domaindoc_shares.py` → 0,
+   and `git grep -c 'active_user_identity\|resolve_active_user_identity'` → present in
+   `deploy/mira_service_schema.sql` (2 functions + 4 grants) and at all six rewritten query sites.
+   Confirm `git grep -n 'FROM users WHERE email' -- cns/api/actions.py` → 0.
+9. `python3 -m pytest tests/test_greenfield_schema.py -q -p no:cacheprovider --tb=no` → **must still be
+   32 passed** after your additive schema change. This is the check that catches an accidental
+   structural edit to a live-validated schema.
+10. `git diff 2.0/integration..HEAD -- deploy/mira_service_schema.sql` must show **only additions** —
+    no `-` lines at all. Report the diff.
 
 [COMMIT CONVENTION]
 [REPORT FORMAT]
