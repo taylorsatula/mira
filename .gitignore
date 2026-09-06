@@ -49,3 +49,6 @@ tools/implementations/crm_jobs_tool.py
 tools/implementations/crm_catalog_tool.py
 tools/implementations/crm_records_tool.py
 tools/implementations/crm_billing_tool.py
+
+# Local scratch / staging area (not shipped)
+scratch/
