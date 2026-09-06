@@ -2142,7 +2142,38 @@ install pinned by a distro, a lockfile or a warm cache breaks at *runtime* with 
 `httpx[http2]`, `psycopg`, `valkey` — for any feature the code uses that a floor would protect.
 **Pin floors, not exact versions**; exact pins fight the rest of the dependency graph.
 
-**Three loose ends the `deploy/` audit found, all yours:**
+### Three small follow-ups from the two security packages — all yours
+
+`2.0/sec1` and `2.0/sec2` closed a remotely-triggerable boot brick: in `single` mode a second `users`
+row makes `main.py`'s guard `sys.exit(1)` forever, and four endpoints could create one
+(`/signup`, `/magic-link`, `/verify`, `/dev/session`). All four now 404 in `single` mode. Three residues
+were reported and left because the files were outside those packages' scope:
+
+1. **`main.py`'s boot-guard message is now incomplete.** It lists the ways a second row can appear as
+   "an unauthenticated POST /v0/auth/signup" and "an interrupted power-on self-test", but omits
+   `/v0/auth/dev/session`, which `sec2` closed. Add it. The message is the only help an operator gets
+   after the damage is done, so it should be complete. **Do not change the guard's semantics** — it must
+   still `sys.exit(1)`, and must not auto-delete anything.
+2. **`tests/test_auth_graft.py` encodes a cell that is now refused.**
+   `test_development_session_route_is_dev_only_and_sets_http_cookie` sets `MIRA_DEV=1` at `:236` and
+   asserts 303 at `:238`, but never sets `MIRA_AUTH_MODE` — so it exercises exactly the
+   `MIRA_DEV=true` + `single` combination `sec2` now rejects. Add
+   `monkeypatch.setenv("MIRA_AUTH_MODE", "dev")` to it. This is a minimal repair to a test the migration
+   invalidated, which the Test scope convention permits; do not otherwise rewrite it.
+3. **`tests/fixtures/infra.py:134` skips `test_auth_graft.py` wholesale, and its reason is now false.**
+   The entry reads *"requires the WP3 multi-user auth stack (auth.session/auth.database/cns.api.demo/
+   billing)"* — but WP3 has landed, `auth.session` and `auth.database` exist, and the `cns.api.demo` and
+   `billing` tests were excised from that file. WP3-B verified via `--noconftest` that **8 of the 10
+   remaining tests run with no infrastructure at all**.
+
+   Removing the entry would give the auth stack its first real signal in the differential — but do it
+   carefully: the other **2** fail at fixture setup on `VAULT_ADDR` because they `import main` and
+   `import cns.api.websocket_chat`, which have pre-existing module-level infrastructure reads. So
+   removing the file-level skip naively converts 10 skips into 8 passes **and 2 new errors**. Mark those
+   two individually as integration rather than letting them error, and report the exact before/after
+   node-id movement. This is the highest-value of the three.
+
+### Two loose ends the `deploy/` audit found, all yours:
 
 - `deploy/docker/scripts/init-mira.sh:249-252` writes `/opt/vault/provider_endpoint.txt` and
   `provider_model.txt` for non-Groq container providers, with a comment saying the rewrite "will be done
