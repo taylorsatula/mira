@@ -13,6 +13,209 @@ All three live under `/Users/taylut/Programming/GitHub/mira-OSS/.pi/plans/`.
 
 ---
 
+# 0. RESUME HERE — authoritative state as of 2026-09-06 ~11:30 EDT
+
+**This section supersedes any conflicting detail in §2–§11 below**, which were written progressively as
+the programme ran and were not retro-fitted. Where a later section gives a different SHA, commit count
+or test total, trust this one.
+
+## 0.1 Where the tree stands
+
+| Ref | Value |
+|---|---|
+| `main` | `f3b930a` — carries the four plan documents and the `scratch/` gitignore rule. **No 2.0 code.** |
+| `2.0/integration` | **`1c12c54`** — 119 commits ahead of main, **256 files, +35,304 / −12,482**, clean, compiles |
+| Differential | **106 failed / 235 passed / 333 skipped / 14 errors** (programme began at 150/143/396/18) |
+| `tests/test_greenfield_schema.py` | **32 passed** — the schema gate, mutation-tested non-vacuous |
+| WP4's four gate files | **25 passed**, zero failures |
+| Nothing pushed | Correct. Pushing was never authorised. |
+
+**Every package has landed except WP6-C.** 24 merge commits on `2.0/integration`; `git branch` shows no
+unmerged `2.0/*` branch other than the in-flight one.
+
+## 0.2 Merged, in dependency order
+
+| Package | Merge | What it did |
+|---|---|---|
+| WP0 | `0384829` | recovered 74 test files, 689 tests enumerated, `tests/TRIAGE.md` |
+| WP1-A/B/C | `8f9a627`, `b85c839`, `12c2aa5` | 16 independent fixes |
+| WP-S | `77e4e4b` | the greenfield schema: 21 tables, 19 policies, five-route seed |
+| O-22 | `ec5e50b` | split the suite on an `integration` marker so it runs with no infrastructure |
+| R-3 | `1b95fcc` | deploy audit + three fixes, including a WP-S role-password regression that broke every default install |
+| WP3-A | `8d2953b` | auth primitives; all 17 modules import under `env -i` |
+| WP2-A | `6f2b635` | the `model_configs` chokepoint |
+| effort-none | `02e6cf8` | **install blocker**: `effort='none'` now disables thinking in all four dialects |
+| WP2-C | `0749ee9` | D10: Anthropic Batch API + Files API *upload* removal, −2,398 lines |
+| WP2-B | `17585f3` | 29 leaf call sites, agents framework, picker retirement, effort override |
+| WP1-D | `47ff2da` | the dormant DST utility wired to its two real consumers (D-8, O-13) |
+| WP2-D | `8a146f5` | `web_tool` synthesis `TypeError` — silent, invisible to every gate |
+| WP5 | `dd26b58` | Persona as a second system + the O-25 `SECURITY DEFINER` sharing fix |
+| WP3-B | `720cb6f` | auth graft, `MailSender` + stdlib SMTP, three-mode bootstrap, O-10, O-4 |
+| O-26 | `7c13f48` | naive local wall times were attributed to UTC in the collapse path |
+| sec1 | `4ab0a52` | **security**: closed the one-request boot brick, plus a self-test that could brick it alone |
+| sec2 | `dd11d63` | **security**: closed the second path to it (`/dev/session` under `MIRA_DEV`) |
+| O-26b | `eafd745` | the same class in the extraction pipeline — config-dependent, every auto-extracted memory |
+| WP4 | `643dab9` | strict turn protocol, ordered persistence, halt, keyset history, frontend patch |
+| WP6-A | `b9248cd` | the seven-delta prompt harvest from `61315bb` |
+| WP6-B | `1c12c54` | 18 `AGENTS.md` maps, O-20 deletions (−3,132 lines), SDK floors, billing UI removal |
+
+## 0.3 WP6-C is in flight — and mid-edit
+
+Agent id `e99887a6-139d-40b`, worktree `.worktrees/wp6c`, branch `2.0/wp6c` from `1c12c54`. At last
+check: 168 tool uses, 21% context, ~75 minutes, **37 dirty files and zero commits**.
+
+Its scope: the §11 scrub gate over the whole tree, release identity (`VERSION` → `2026.09.06-2.0`,
+README reinstall-not-upgrade, `docs/MANUAL_INSTALL.md`), the E-20 `primary.max_tokens` raise, and nine
+items four other packages flagged for it.
+
+**If it died or compaction interrupts it, the recovery procedure is proven** (WP1-C set the precedent):
+
+```bash
+cd /Users/taylut/Programming/GitHub/mira-OSS/.worktrees/wp6c
+git status --porcelain                      # what is dirty
+git diff --stat                             # what changed, by file
+git log --oneline 2.0/integration..HEAD     # what it managed to commit
+```
+
+Then determine which scope items landed, verify the exclusions (both §0 invariants at zero diff,
+`config/system_prompt.txt` untouched, WP4's 25 gate tests still passing), and finish or commit manually.
+Its report, if it produced one, is at the task output path in §9.
+
+## 0.4 What remains after WP6-C
+
+Only the **final integration gate**, which §12 defines as single, local, and after WP6. Concretely:
+
+```bash
+cd /Users/taylut/Programming/GitHub/mira-OSS/.worktrees/wp1   # 2.0/integration
+python3 -m compileall -q . && echo "compiles"
+python3 -m pytest tests/ -q -p no:cacheprovider 2>&1 | tail -2
+python3 -m pytest tests/test_greenfield_schema.py -q -p no:cacheprovider --tb=no   # expect 32
+python3 -m pytest tests/test_ordered_turn_persistence.py tests/test_web_frontend_protocol.py \
+    tests/test_history_cursor.py tests/test_orchestrator_tool_loop.py -q            # expect 25
+git diff --name-only main..HEAD -- cns/api/oss_ui.py deploy/oss_ui/marked.min.js \
+    deploy/oss_ui/purify.min.js tools/implementations/web_tool.py utils/url_safety.py \
+    utils/http_client.py                                    # expect EMPTY (both §0 invariants)
+cat VERSION                                                 # expect 2026.09.06-2.0
+git grep -nE '192\.168\.1\.9|/opt/crm_mira|mirafor\.biz|Qwopus|k3-256k|kimi_key|llama_server_key|crm-mira|crm_mira|taylorsatula|/Users/taylut|42069|admin@|mira-origin|email_gateway' -- . ':!.pi/plans' ':!scratch'
+wc -c license.txt                                           # expect exactly 34523
+```
+
+Then the re-validation against live PostgreSQL, which is cheap and has caught real defects twice:
+
+```bash
+docker cp deploy/mira_service_schema.sql mira-schema-check:/tmp/final.sql
+docker exec mira-schema-check psql -U postgres -c "DROP DATABASE IF EXISTS mira_service"
+docker exec mira-schema-check psql -U postgres -c "CREATE DATABASE mira_service OWNER mira_admin"
+docker exec mira-schema-check psql -U postgres -d mira_service -v ON_ERROR_STOP=1 -f /tmp/final.sql
+# expect exit 0, zero errors, 21 tables, 5 model_configs rows, both O-25 functions present
+```
+
+**Not yet done by anyone, and the honest gap:** no full application boot has ever been performed. No
+Postgres, Vault or Valkey has been reachable to the Python code at any point in this programme. Every
+package reported this limit. The gate that would close it — boot all three `MIRA_AUTH_MODE` values
+against seeded services, exercise a `multi` two-user signup over a throwaway SMTP relay, confirm RLS
+isolation end to end, and load `web/chat/index.html` in a real browser against the new protocol — is a
+staging run, not something this environment can do. **Say so plainly rather than implying the tree is
+release-verified.**
+
+## 0.5 Risk register — final status
+
+| ID | Status |
+|---|---|
+| **R-1** | **RETIRED.** The schema was applied to live PostgreSQL 17.11 and RLS behaviourally verified across 17 checks. Residual that remains: SQL and RLS semantics are proven, **application behaviour against a database is not** — no Python connection path has ever been exercised. |
+| **R-2** | **CLOSED.** `MailSender` protocol + stdlib `smtplib` backend landed in WP3-B (decision E-8), zero new dependencies, zero `email_gateway_*` names. `multi` mode refuses to boot without a mailer; `single`/`dev` need none. Still unexercised against a real relay. |
+| **R-3** | **CLOSED.** R-3 audited all 26 changed `deploy/` files and found three real defects, including a WP-S-introduced role-password regression that broke **every default install**. |
+| **R-4** | **CLOSED.** WP4 landed the ~150-line frontend patch (net +51 lines in `web/`), verified by executing the real `api-client.js` in a Node VM against a fake socket — 27/27 assertions. **Not verified in a browser.** It also cache-busted `?v=` on the patched assets, without which a returning browser would silently run the old transport. |
+| **R-5** | **CLOSED.** `cns/api/actions.py` was sequenced through four packages without a conflict: WP2-B (picker, effort override, rewriter), WP2-C (`:2216` only), WP5 (`PersonaDomainHandler` + the six O-25 query sites). The collision was resolved by re-splitting ownership, not by merging. |
+| **R-6** | **Confirmed and quantified: fourteen brief or specification errors**, all caught by verification rather than by agent output. See §0.7. |
+| **R-7** | Provider quota. Subagents ran on `qwen/qwen3.8-flash` throughout without exhaustion. The mid-run death recovery procedure is proven twice (WP1-C, and the `get_subagent_result` cleanup workaround in §9). |
+| **R-8** | **CLOSED by WP6-B.** Floors pinned with provenance: `anthropic>=0.78.0`, `httpx[http2]>=0.25.2`, `psycopg[binary]>=3.1.0`, `valkey>=6.0.0`. The local env has anthropic 0.52.2, below the floor, confirming the defect was real. `openai` needs no floor — it is not a dependency and nothing imports the SDK. |
+
+## 0.6 Open items — final status
+
+**Closed during execution:** O-1, O-2 (E-2), O-3 (E-1), O-4 (WP3-B unified on
+`development_mode_enabled()`), O-5 (`MIRA_POST_GATE_FAILURE_ACTION=park|exit`), O-7 (both halves),
+O-9, O-10 (**confirmed defect**, `csrf:` was missing from the flush whitelist — WP3-B), O-11, O-12,
+O-13 (WP1-D), O-15 (WP6-A: assessable section ids identical before and after), O-16 (WP6-A reworded),
+O-17 (**already closed** by WP2-C — `db_access.py` uses the view), O-18 (E-17: the value is **80**, and
+the briefed fix would have raised it 25%), O-20 (WP6-B deleted the family), O-22, O-23 (WP4),
+O-24 (WP6-B moved the serf brief to `.pi/plans/`), O-25 (WP5, live-verified).
+
+**O-21 → E-19** (`VERSION` = `2026.09.06-2.0`), WP6-C. **O-19 dropped** per E-9 — the 1.x re-baseline
+is test work outside the migration scope. **O-8 unaddressed** — renaming the misnamed "LoRA" subsystem
+is independent of this backport and remains open.
+
+**New items opened during execution:** **O-26** (naive-as-UTC attribution) and **O-26b** (the same class
+in the extraction pipeline) are both **closed**. **O-27 candidate, unruled:**
+`config/system_prompt_proverbial.txt` and `config/system_prompt_original.txt` are referenced by no
+Python — the real loader is `config/config_manager.py::_load_system_prompt()`, which reads only
+`config/system_prompt.txt`. WP6-C was asked to rule on whether they ship.
+
+## 0.7 The supervision lesson, quantified
+
+**Fourteen errors in my own briefs or in the specification were caught by verifying against source, not
+by reading reports.** The ones that would have caused damage:
+
+| Error | Consequence if uncaught |
+|---|---|
+| Told WP2-A to rename a kwarg where §6.1.6 required deleting the module and slimming the hook | Wrong fix to a billing-gated policy that D7 makes dead logic |
+| `ROUTE_FALLBACKS` mislocated, then found never to have existed in mira-OSS at all | An agent hunting for a file that isn't there |
+| §8.4 attributes a 99-line `logging_config.py` removal to the Files API | **Would have broken shipped WP1 observability** — it is billing commit `ff12722`, and `instrument_anthropic_client` is still called |
+| §4 D-1 says the CSP work means "externalise two inlined vendor scripts" | `oss_ui.py` *serves* them; the real work is 8 inline `<script>` blocks and 32 `onclick=` attributes. D-7 was materially under-scoped |
+| My O-7 patch detected the loader on `ToolExecutingEvent` | **Agent overrode me with measurement**: that event fires before the outcome is known, so a failed load would set the flag and regress a passing test |
+| My O-18 instruction to pass `max_tokens=100` | **Agent overrode me**: the effective ceiling was already 80; 100 would have raised it 25% |
+| WP2-B's inventory named 22 call sites in 19 files | Ground truth was 211 refs across 39 files; nine files were owned by nobody, so its own headline gate was unreachable |
+| Told WP5 the `_invalidate_cache` hdel was in `persona_trinket.py` | It is in `persona_service.py`. Following me would have made Persona clear the **user model's** cache slot and leave stale Persona directives in Valkey |
+| D10 had no owner at all | §12 treats WP2 as one unit including D10; the A/B split orphaned ~1,900 lines across 21 files, 11 claimed by nobody |
+| Scrub pattern hand-derived from §11 omitted `email_gateway` | Reported clean with nine hits outstanding |
+| Said `openai` needed a version floor | Not a dependency; nothing imports the SDK |
+
+**Three agents correctly overrode an instruction from me with measured evidence.** That is the loop
+working. The pattern to preserve: *briefs inherit the errors of the analysis they were derived from*, so
+pre-verify patches with `git apply --check`, state exclusions as explicitly as inclusions, locate by
+symbol rather than line number, and check the agent's claims against source rather than trusting the
+report.
+
+**The gate lesson (E-18):** a vocabulary grep cannot catch signature breakage. `web_tool.py` passed four
+removed kwargs, raised `TypeError` on every call, and was invisible to both the grep (no retired words in
+the file) and the differential (no test covers it). After a required-parameter migration the sweep must
+be over **callers of the changed function**. An AST kwarg-vs-signature audit found zero remaining
+production offenders at ~85% first-party coverage, validated by a planted-bug kill check.
+
+## 0.8 Durable assets
+
+| Asset | Where | Note |
+|---|---|---|
+| The specification | `.pi/plans/20260905-172000-crm-mira-backport-bisect.md` | 2,204 lines. §0.1 and §0.2 first. **Read in full during this session**; ~14 defects in it are recorded in §7's correction table and in §0.7 above. |
+| Package briefs | `.pi/plans/20260905-REMAINING-WP-PROMPTS.md` | All eight verified against source. Fences balanced. |
+| This handoff | `.pi/plans/20260905-SESSION-HANDOFF.md` | §0 is authoritative; §2–§11 are the historical record and are partly stale. |
+| **Live PostgreSQL 17.11** | Docker container `mira-schema-check`, up 11 h, `pgvector/pgvector:pg17`, port 55432 | Roles `mira_admin` (BYPASSRLS) and `mira_dbuser` exist. **Reusable for schema re-validation** — this caught real defects twice. Drop with `docker rm -f mira-schema-check` when done. |
+| **AST signature audit** | `scratch/kwarg-audit/audit.py` (gitignored, deliberately not shipped) | ~1,000 lines, `ast`-only, with a synthetic planted-bug fixture. Re-run after any signature change. The agent recommended checking it in with a coverage ratchet; **declined per E-9** as verification infrastructure outside migration scope — revisit as a post-2.0 decision. |
+| Flushed Slack WIP | `/tmp/slack-wip-flushed-20260905/` | **Will not survive a reboot.** |
+| Worktrees | 20 under `.worktrees/`, one per package | All merged branches retained so any package can be inspected or reverted alone. `git worktree prune` after deleting. |
+
+## 0.9 Resume commands
+
+```bash
+cd /Users/taylut/Programming/GitHub/mira-OSS
+git worktree list
+git -C .worktrees/wp1 log --oneline main..2.0/integration | head -30
+git -C .worktrees/wp1 diff --shortstat main..2.0/integration
+
+# WP6-C's state, if still in flight or interrupted:
+git -C .worktrees/wp6c status --porcelain | head -40
+git -C .worktrees/wp6c log --oneline 2.0/integration..HEAD
+
+# Subagent reports survive registry cleanup as JSONL; the final assistant text block is the report:
+ls /var/folders/wd/gk07dvzx6yg5fkz7wb59b14w0000gn/T/pi-subagents-501/Users-taylut-Programming-GitHub/01a07325-efc2-7c32-b9b4-4d810524a837/tasks/
+```
+
+Subagents: `model: qwen/qwen3.8-flash`, `subagent_type: general-purpose`, `run_in_background: true`.
+Concurrency limit observed: 4. Point each agent at its brief section in the prompts file rather than
+transcribing it — that eliminates copy errors and keeps the corrected text authoritative.
+
+---
+
 ## 1. Mission
 
 Backport general-purpose improvements from `crm_mira` (proprietary descendant, 162 commits ahead of
