@@ -55,7 +55,7 @@ const AppState = {
 	historyOpen: false,
 	responseActive: false,
 	historyDrawer: {
-		currentOffset: 0,
+		nextBefore: null,   // opaque keyset cursor into older history pages
 		currentScope: 'today',
 		isLoading: false,
 		hasMore: false

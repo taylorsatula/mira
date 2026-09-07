@@ -128,6 +128,7 @@ class MessageMetadata(TypedDict, total=False):
     complexity_score: int
     display_mode: Literal["extended", "precis"]  # ephemeral, set by cache loader
     tools_used: list[str]
+    transient_system_scaffold: bool
     segment_embedding_value: list[float]
     has_segment_embedding: bool
     collapse_attempts: int
@@ -136,6 +137,7 @@ class MessageMetadata(TypedDict, total=False):
     has_tool_calls: bool
     tool_calls: list[dict[str, object]]
     tool_name: str
+    tool_arguments: dict[str, object]
     tool_result_id: str
     tool_result_session_id: str
     tool_result_compacted: bool
@@ -153,6 +155,10 @@ class MessageMetadata(TypedDict, total=False):
     thinking: str
     model_error: bool
     model_error_reason: str
+    turn_id: str
+    partial_response: bool
+    stop_reason: Literal["halt", "disconnect"]
+    provider_stop_reason: str
     # Embedding fields
     embedding_value: list[float]
     # Memory fields

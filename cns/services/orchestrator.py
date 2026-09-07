@@ -13,15 +13,16 @@ import logging
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta
 from typing import Callable, TypedDict, TYPE_CHECKING
-from uuid import uuid4
+from uuid import UUID, uuid4
 import numpy as np
 
 if TYPE_CHECKING:
     from cns.infrastructure.continuum_repository import ContinuumRepository
     from cns.infrastructure.continuum_pool import UnitOfWork
-    from cns.core.message import Message
+    from cns.core.message import Message, MessageMetadata
     from cns.services.memory_relevance_service import MemoryRelevanceService
     from cns.services.subcortical import SubcorticalLayer
     from cns.integration.event_bus import EventBus
@@ -40,17 +41,21 @@ from clients.llm.events import (
     CircuitBreakerEvent,
     CompleteEvent,
     FileArtifactEvent,
+    GenerationCancelled,
     ModelStepCompletedEvent,
-    ProviderSwitchEvent,
     StreamEvent,
     TextEvent,
     ThinkingEvent,
+    ToolDetectedEvent,
     ToolCompletedEvent,
     ToolErrorEvent,
     ToolExecutingEvent,
 )
 from clients.llm_provider import LLMProvider, ContextOverflowError
-from clients.llm.tool_messages import append_tool_result_messages
+from clients.llm.tool_messages import (
+    append_tool_result_messages,
+    assistant_message_from_result,
+)
 from clients.llm.types import Result, ToolCall, ToolDefinition, ToolResult, Usage
 from cns.services.tool_loop import CircuitBreaker, ToolLoopExecutor
 from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
@@ -65,7 +70,7 @@ from lt_memory.proactive import (
     MAX_ASSISTANT_MEMORIES,
 )
 from utils.tag_parser import TagParser, match_memory_id
-from utils.user_context import get_current_segment_id
+from utils.user_context import get_cancel_reason, get_current_segment_id
 
 # Context overflow remediation
 CONTEXT_OVERFLOW_FALLBACK_TEXT_LIMIT = 400
@@ -76,9 +81,32 @@ TOOL_RESULT_MAX_CHARS = 31999  # Max chars for single tool result before truncat
 # Tool result persistence
 TOMBSTONE_MODE = False  # When True, tool results not persisted to history
 MAX_LOCAL_TOOL_CALLS_PER_TURN = 50
-from utils.timezone_utils import utc_now
 
 logger = logging.getLogger(__name__)
+
+
+def tool_stream_frame(event: StreamEvent) -> dict[str, object] | None:
+    """Serialize a provider-neutral tool event without discarding lifecycle data."""
+    if not isinstance(
+        event,
+        (ToolDetectedEvent, ToolExecutingEvent, ToolCompletedEvent, ToolErrorEvent),
+    ):
+        return None
+    frame: dict[str, object] = {
+        "type": "tool_event",
+        "event": event.type,
+        "tool_name": event.tool_name,
+        "tool_id": event.tool_id,
+    }
+    if isinstance(event, ToolExecutingEvent):
+        frame["arguments"] = event.arguments
+    elif isinstance(event, ToolCompletedEvent):
+        frame["result"] = event.result
+        frame["is_error"] = False
+    elif isinstance(event, ToolErrorEvent):
+        frame["result"] = event.result
+        frame["is_error"] = True
+    return frame
 
 
 def _try_json_list_truncation(result: str, limit: int) -> tuple[str, str] | None:
@@ -156,21 +184,23 @@ class TurnMetadata(TypedDict, total=False):
     thinking: str
     model_error: bool
     model_error_reason: str
+    stopped: bool
+    stop_reason: str
 
 
 class LLMKwargs(TypedDict, total=False):
-    """Keyword arguments matching LLMProvider.stream_events() explicit params."""
-    conversation_llm: str
-    dialect_name: str
+    """Keyword arguments matching LLMProvider.stream_events() explicit params.
+
+    ``model_config`` is required by the provider and is always present by the
+    time these kwargs reach the stream; the remaining keys are per-request
+    overrides that win over the ``model_configs`` row defaults.
+    """
+    model_config: str
     effort: str
-    endpoint_url: str
-    model: str
-    api_key: str
     container_id: str
     temperature: float
     max_tokens: int
     system_prompt: str
-    allow_negative: bool
 
 
 @dataclass
@@ -193,6 +223,16 @@ class ToolInteraction:
 
 
 @dataclass
+class AssistantStep:
+    """One provider assistant step and its durable message identity."""
+
+    entry_id: UUID = field(default_factory=uuid4)
+    text: str = ""
+    result: Result | None = None
+    partial: bool = False
+
+
+@dataclass
 class TurnAccumulator:
     """Accumulates state during the LLM streaming event loop."""
     # User-visible text assembled from streamed TextEvent chunks. If a model
@@ -211,6 +251,43 @@ class TurnAccumulator:
     # step that produced tool_calls (stop_reason="tool_use"). The final Result
     # for the user turn is stored in raw_response.
     tool_call_results: list[Result] = field(default_factory=list)
+    assistant_steps: list[AssistantStep] = field(default_factory=list)
+    current_step: AssistantStep | None = None
+
+    def append_text(self, content: str) -> UUID:
+        """Append visible text to the current provider step and return its stable ID."""
+        if self.current_step is None:
+            self.current_step = AssistantStep()
+        self.current_step.text += content
+        self.response_text += content
+        return self.current_step.entry_id
+
+    def finish_step(self, result: Result) -> AssistantStep:
+        """Finish the current provider step, creating an empty tool-call step when needed."""
+        step = self.current_step or AssistantStep()
+        step.result = result
+        self.assistant_steps.append(step)
+        self.current_step = None
+        return step
+
+    def finish_partial_step(self) -> AssistantStep | None:
+        """Close non-empty streamed text for Halt persistence."""
+        if self.current_step is None or not self.current_step.text:
+            return None
+        self.current_step.partial = True
+        step = self.current_step
+        self.assistant_steps.append(step)
+        self.current_step = None
+        return step
+
+    def finish_text_step(self) -> AssistantStep | None:
+        """Close non-empty synthetic text as a normal assistant message."""
+        if self.current_step is None or not self.current_step.text:
+            return None
+        step = self.current_step
+        self.assistant_steps.append(step)
+        self.current_step = None
+        return step
 
     def reset(self):
         """Reset for overflow retry — clears all accumulated state."""
@@ -223,6 +300,8 @@ class TurnAccumulator:
         self.events = []
         self.tool_interactions = []
         self.tool_call_results = []
+        self.assistant_steps = []
+        self.current_step = None
 
 
 class ContinuumOrchestrator:
@@ -240,7 +319,7 @@ class ContinuumOrchestrator:
         working_memory: WorkingMemory,
         tool_repo: ToolRepository,
         tag_parser: TagParser,
-        subcortical_layer: SubcorticalLayer,
+        subcortical_layer: SubcorticalLayer | None,
         event_bus: EventBus,
         memory_relevance_service: MemoryRelevanceService,
         live_context_compaction_service: LiveContextCompactionService,
@@ -257,8 +336,9 @@ class ContinuumOrchestrator:
             working_memory: Working memory system for prompt composition (required)
             tool_repo: Tool repository for tool definitions (required)
             tag_parser: Tag parser for response parsing (required)
-            subcortical_layer: Subcortical layer for retrieval query expansion (required).
-                              Raises RuntimeError on generation failures - no degraded state.
+            subcortical_layer: Subcortical layer for retrieval query expansion, or None when
+                              the deliberate no-memory fast path is configured. Enabled-path
+                              generation failures propagate.
             event_bus: Event bus for publishing/subscribing to events (required)
             memory_relevance_service: Memory relevance service for surfacing long-term memories (required).
                                      Raises exceptions on infrastructure failures - no degraded state.
@@ -293,94 +373,92 @@ class ContinuumOrchestrator:
 
         logger.info("ContinuumOrchestrator initialized")
 
-    def _format_tool_indicator(self, events: list) -> str:
-        """Format tool usage indicator from stream events."""
-        tool_names = []
-        for event in events:
-            if isinstance(event, ToolExecutingEvent) and event.tool_name not in tool_names:
-                tool_names.append(event.tool_name)
-
-        if not tool_names:
-            return ""
-        return f"[used: {', '.join(tool_names)}]"
-
-    def _build_tool_history_messages(
+    def _build_turn_messages(
         self,
-        interactions: list[ToolInteraction],
-        tool_call_results: list[Result],
+        acc: TurnAccumulator,
+        assistant_metadata: MessageMetadata,
+        *,
+        turn_id: UUID,
+        segment_id: str,
+        base_time: datetime,
+        stop_reason: str | None = None,
     ) -> list[Message]:
-        """
-        Build Message objects for persisting tool use/result history.
+        """Build assistant/tool messages in exact provider-step order.
 
-        Produces one assistant message per tool-call iteration (using
-        assistant_message_from_result for faithful reasoning/metadata),
-        followed by tool result messages for each interaction.
-        Timestamps are offset by microseconds to guarantee deterministic
-        intra-batch ordering without leapfrogging the final text assistant
-        message created immediately after this returns.
+        Each assistant step carries only the text streamed under its own durable
+        entry_id, so a step's message can never duplicate text already persisted
+        for another step. Timestamps are monotonic microsecond offsets from the
+        accepted user message, which keeps provider order stable under the
+        repository's `ORDER BY created_at DESC, id DESC` keyset.
         """
-        from datetime import timedelta
         from cns.core.message import Message, MessageMetadata
-        from clients.llm.tool_messages import assistant_message_from_result
 
-        base_time = utc_now()
         messages: list[Message] = []
-        us_offset = 1  # microsecond counter for deterministic ordering
-
-        # Index completed interactions by tool_id for matching to Results.
-        # Failed tools are completed interactions too: their role="tool" result
-        # carries is_error=True so provider replay remains structurally valid.
-        completed_interactions_by_tool_id: dict[str, ToolInteraction] = {
-            i.tool_id: i for i in interactions if i.completed
+        offset = 1
+        completed_by_tool_id = {
+            interaction.tool_id: interaction
+            for interaction in acc.tool_interactions
+            if interaction.completed and interaction.tool_name != "code_execution"
         }
 
-        for result in tool_call_results:
-            persisted_tool_call_ids = {
+        for step in acc.assistant_steps:
+            result = step.result
+            # An invalid_reason call was never executable, so persisting it as an
+            # assistant tool_call would replay schema-invalid arguments to the
+            # provider on every later turn.
+            persisted_tool_ids = {
                 tool_call.id
-                for tool_call in result.tool_calls
+                for tool_call in (result.tool_calls if result is not None else ())
                 if (
                     tool_call.tool_name != "code_execution"
-                    and tool_call.id in completed_interactions_by_tool_id
+                    and tool_call.invalid_reason is None
+                    and tool_call.id in completed_by_tool_id
                 )
             }
-            if not persisted_tool_call_ids:
+            step_metadata: MessageMetadata = {
+                **assistant_metadata,
+                "turn_id": str(turn_id),
+                "segment_id": segment_id,
+            }
+
+            if result is not None and persisted_tool_ids and not TOMBSTONE_MODE:
+                assistant_dict = assistant_message_from_result(
+                    replace(result, text=step.text),
+                    include_tool_call_ids=persisted_tool_ids,
+                )
+                content = assistant_dict["content"]
+                step_metadata["has_tool_calls"] = True
+                if assistant_dict.get("thinking_signatures"):
+                    step_metadata["thinking_signatures"] = assistant_dict["thinking_signatures"]
+                if assistant_dict.get("reasoning_details"):
+                    step_metadata["reasoning_details"] = assistant_dict["reasoning_details"]
+            else:
+                content = step.text
+
+            if step.partial:
+                step_metadata["partial_response"] = True
+                if stop_reason is not None:
+                    step_metadata["stop_reason"] = stop_reason
+
+            if isinstance(content, str) and not content.strip():
                 continue
 
-            # Build faithful assistant dict from the Result — preserves
-            # reasoning blocks, text, thinking_signatures, reasoning_details —
-            # but only includes tool calls with matching persisted results.
-            assistant_dict = assistant_message_from_result(
-                result,
-                include_tool_call_ids=persisted_tool_call_ids,
-            )
-            content = assistant_dict["content"]
-
-            # Extract metadata that lives on Message.metadata, not on content
-            assistant_metadata: MessageMetadata = {"has_tool_calls": True}
-            if assistant_dict.get("thinking_signatures"):
-                assistant_metadata["thinking_signatures"] = assistant_dict["thinking_signatures"]
-            if assistant_dict.get("reasoning_details"):
-                assistant_metadata["reasoning_details"] = assistant_dict["reasoning_details"]
-
-            assistant_msg = Message(
+            assistant_message = Message(
+                id=step.entry_id,
                 content=content,
                 role="assistant",
-                metadata=assistant_metadata,
+                metadata=step_metadata,
+                created_at=base_time + timedelta(microseconds=offset),
             )
-            object.__setattr__(
-                assistant_msg, 'created_at',
-                base_time + timedelta(microseconds=us_offset),
-            )
-            us_offset += 1
-            messages.append(assistant_msg)
+            offset += 1
+            messages.append(assistant_message)
 
-            # Tool result messages for each persisted tool call in this Result
-            limit = TOOL_RESULT_MAX_CHARS
+            if not persisted_tool_ids or TOMBSTONE_MODE:
+                continue
+            assert result is not None
             for tool_call in result.tool_calls:
-                if tool_call.tool_name == "code_execution":
-                    continue
-                interaction = completed_interactions_by_tool_id.get(tool_call.id)
-                if interaction is None:
+                interaction = completed_by_tool_id.get(tool_call.id)
+                if interaction is None or tool_call.id not in persisted_tool_ids:
                     continue
                 tool_result = interaction.result
                 is_retrieved_result = (
@@ -392,44 +470,41 @@ class ContinuumOrchestrator:
                 if (
                     not is_retrieved_result
                     and isinstance(tool_result, str)
-                    and len(tool_result) > limit
+                    and len(tool_result) > TOOL_RESULT_MAX_CHARS
                 ):
                     tool_result = _truncate_tool_result(
-                        tool_result, limit, interaction.tool_name,
+                        tool_result,
+                        TOOL_RESULT_MAX_CHARS,
+                        interaction.tool_name,
                     )
 
                 message_id = uuid4()
-                tool_metadata: MessageMetadata = {"tool_name": interaction.tool_name}
+                tool_metadata: MessageMetadata = {
+                    "turn_id": str(turn_id),
+                    "segment_id": segment_id,
+                    "tool_name": interaction.tool_name,
+                    "tool_arguments": interaction.arguments,
+                }
                 if is_retrieved_result:
                     tool_metadata["tool_result_retrieved"] = True
                     source_id = interaction.arguments.get("tool_result_id")
                     if isinstance(source_id, str):
                         tool_metadata["tool_result_source_id"] = source_id
-                elif (
-                    not interaction.is_error
-                    and isinstance(tool_result, str)
-                    and (segment_id := get_current_segment_id())
-                ):
+                elif not interaction.is_error and isinstance(tool_result, str):
                     session_prefix = segment_id.replace("-", "")[:8]
-                    tool_metadata["tool_result_id"] = (
-                        f"tr_{session_prefix}_{message_id.hex}"
-                    )
+                    tool_metadata["tool_result_id"] = f"tr_{session_prefix}_{message_id.hex}"
                     tool_metadata["tool_result_session_id"] = segment_id
 
-                tool_msg = Message(
+                messages.append(Message(
                     id=message_id,
                     content=tool_result,
                     role="tool",
                     metadata=tool_metadata,
                     tool_call_id=interaction.tool_id,
                     is_error=interaction.is_error,
-                )
-                object.__setattr__(
-                    tool_msg, 'created_at',
-                    base_time + timedelta(microseconds=us_offset),
-                )
-                us_offset += 1
-                messages.append(tool_msg)
+                    created_at=base_time + timedelta(microseconds=offset),
+                ))
+                offset += 1
 
         return messages
 
@@ -441,7 +516,6 @@ class ContinuumOrchestrator:
         self,
         continuum: Continuum,
         system_prompt: str,
-        llm_config_name: str,
     ) -> list[dict[str, object]]:
         from cns.core.events import ComposeSystemPromptEvent
 
@@ -472,17 +546,6 @@ class ContinuumOrchestrator:
             system_blocks.append({
                 "type": "text",
                 "text": "\n\n".join(all_system_parts),
-            })
-
-        if llm_config_name == "gpt-legacy":
-            system_blocks.append({
-                "type": "text",
-                "text": (
-                    "GPT-4o HAS A HISTORY OF BEING OVERTLY SYCOPHANTIC TO USERS. "
-                    "PLEASE BE AWARE OF THIS PULL AND COURSE CORRECT IF YOU SEE "
-                    "YOURSELF FORMING RESPONSES LIKE THIS INCLUDING STEPPING BACK "
-                    "AND ADDRESSING YOUR ACTIONS DIRECTLY WITH THE USER."
-                ),
             })
 
         prefix_messages = [
@@ -560,6 +623,7 @@ class ContinuumOrchestrator:
         accumulated_usage: Usage | None = None
         executed_local_tool_calls = 0
         tool_limit_finalization_attempted = False
+        circuit_breaker_finalization_reason: str | None = None
 
         while True:
             result: Result | None = None
@@ -590,6 +654,37 @@ class ContinuumOrchestrator:
             if not local_tool_calls:
                 final_usage = accumulated_usage if accumulated_usage is not None else result.usage
                 yield CompleteEvent(response=result.with_usage(final_usage))
+                return
+            if circuit_breaker_finalization_reason is not None:
+                # The breaker tripped and tools were disabled, but the model
+                # asked for another tool anyway. Say so and terminate the turn:
+                # without this the loop just stops, and the user gets no text.
+                reason = (
+                    f"{circuit_breaker_finalization_reason}; "
+                    "model requested another tool after tools were disabled"
+                )
+                fallback_text = (
+                    "I stopped the tool sequence because it repeated a failing or "
+                    "identical call. I can continue from the information already gathered, "
+                    "or you can send a follow-up message to start a new turn."
+                )
+                yield CircuitBreakerEvent(reason=reason)
+                for tool_call in local_tool_calls:
+                    yield ToolErrorEvent(
+                        tool_name=tool_call.tool_name,
+                        tool_id=tool_call.id,
+                        error=reason,
+                        result="Tool call was not executed because the circuit breaker is open.",
+                    )
+                yield TextEvent(content=fallback_text)
+                final_usage = accumulated_usage if accumulated_usage is not None else result.usage
+                yield CompleteEvent(response=Result(
+                    text=fallback_text,
+                    usage=final_usage,
+                    stop_reason="end_turn",
+                    provider_metadata=result.provider_metadata,
+                    container_id=result.container_id,
+                ))
                 return
             if (
                 executed_local_tool_calls >= MAX_LOCAL_TOOL_CALLS_PER_TURN
@@ -663,6 +758,7 @@ class ContinuumOrchestrator:
                             "information gathered so far."
                         ),
                     )
+                    circuit_breaker_finalization_reason = reason
                     available_tools = []
                 else:
                     available_tools = self._cached_tool_definitions()
@@ -716,18 +812,8 @@ class ContinuumOrchestrator:
     def _continuation_llm_kwargs(self, llm_kwargs: LLMKwargs, result: Result) -> LLMKwargs:
         metadata = result.provider_metadata
         continuation = dict(llm_kwargs)
-        if metadata.conversation_llm_name:
-            for key in ("dialect_name", "endpoint_url", "model", "api_key"):
-                continuation.pop(key, None)
-            continuation["conversation_llm"] = metadata.conversation_llm_name
-        else:
-            continuation.pop("conversation_llm", None)
-            if metadata.dialect_name:
-                continuation["dialect_name"] = metadata.dialect_name
-            if metadata.endpoint_url:
-                continuation["endpoint_url"] = metadata.endpoint_url
-            if metadata.model:
-                continuation["model"] = metadata.model
+        if metadata.model_config_name:
+            continuation["model_config"] = metadata.model_config_name
         return continuation
 
     def _consume_stream(
@@ -750,7 +836,12 @@ class ContinuumOrchestrator:
         valkey = get_valkey()
 
         for event in stream_events:
-            check_cancelled()
+            # A tool invocation that has already started is allowed to finish.
+            # Record its terminal event before honoring a concurrent Halt.
+            if not isinstance(event, (ToolExecutingEvent, ToolCompletedEvent, ToolErrorEvent)):
+                check_cancelled()
+
+            synthetic_text: str | None = None
 
             # Tool execution tracking
             if isinstance(event, ToolExecutingEvent):
@@ -769,11 +860,6 @@ class ContinuumOrchestrator:
                     code = event.arguments.get("code", "")
                     logger.info("Python code to execute: %s characters", len(code))
                     logger.info("=" * 80)
-                elif event.tool_name == "invokeother_tool":
-                    mode = event.arguments.get("mode", "")
-                    if mode in ["load", "fallback", "prepare_code_execution"]:
-                        acc.invoked_tool_loader = True
-                        logger.info(f"Detected invokeother_tool execution with mode={mode}")
                 else:
                     logger.info(
                         "Tool executing: %s with argument keys: %s",
@@ -806,6 +892,22 @@ class ContinuumOrchestrator:
                             acc.touch_resolved_uuids = tool_result.get("resolved_uuids", [])
                     except (json.JSONDecodeError, AttributeError):
                         logger.warning("Failed to parse memory_tool touch result")
+                elif event.tool_name == "invokeother_tool":
+                    # invokeother_tool's schema declares load and
+                    # load_for_rest_of_session and forbids additional
+                    # properties, so no caller can supply a `mode` argument.
+                    # Detect on the tool's own success contract instead: a
+                    # failed load must not auto-continue the turn.
+                    try:
+                        tool_result = json.loads(event.result) if isinstance(event.result, str) else event.result
+                        if isinstance(tool_result, dict) and tool_result.get("success"):
+                            acc.invoked_tool_loader = True
+                            logger.info(
+                                "Detected invokeother_tool execution loading %s",
+                                tool_result.get("loaded", []),
+                            )
+                    except (json.JSONDecodeError, AttributeError):
+                        logger.warning("Failed to parse invokeother_tool result")
                 elif isinstance(event.result, list):
                     # Content blocks (images) — log text blocks only, skip base64
                     text_block_count = sum(1 for b in event.result if b.get('type') == 'text')
@@ -830,8 +932,7 @@ class ContinuumOrchestrator:
                         alt = image_artifact.get("alt_text", "Generated image")
                         fid = image_artifact["file_id"]
                         image_tag = f"\n\n![{alt}](/v0/api/images/{fid})\n\n📥 [Download full resolution](/v0/api/files/{fid})\n\n"
-                        stream_callback({"type": "text", "content": image_tag})
-                        acc.response_text += image_tag
+                        synthetic_text = image_tag
                 except (json.JSONDecodeError, KeyError, TypeError):
                     pass  # Not an image-producing tool, ignore
 
@@ -855,18 +956,28 @@ class ContinuumOrchestrator:
             # Accumulate user-visible text exactly as it was streamed. Text
             # emitted before a model asks for a tool is still visible output.
             if isinstance(event, TextEvent):
-                acc.response_text += event.content
+                entry_id = acc.append_text(event.content)
 
             # Stream to callback
             if stream and stream_callback:
                 if isinstance(event, TextEvent):
-                    stream_callback({"type": "text", "content": event.content})
+                    stream_callback({
+                        "type": "text",
+                        "entry_id": str(entry_id),
+                        "content": event.content,
+                    })
                 elif isinstance(event, ThinkingEvent) and show_thinking_stream:
                     stream_callback({"type": "thinking", "content": event.content})
-                elif hasattr(event, 'tool_name'):
-                    stream_callback({"type": "tool_event", "event": event.type, "tool": event.tool_name})
+                elif (tool_frame := tool_stream_frame(event)) is not None:
+                    stream_callback(tool_frame)
                 elif isinstance(event, CircuitBreakerEvent):
-                    if "failed after correction" in event.reason:
+                    # The breaker's trip reason is matched on the text it
+                    # actually emits. The retired phrase was "failed after
+                    # correction"; a tool that fails twice on identical
+                    # arguments is the current one, and it is the only trip
+                    # reason that means "the model misused a tool" rather than
+                    # "the turn ran out of tool budget".
+                    if "failed on repeated attempt" in event.reason:
                         stream_callback({
                             "type": "model_error",
                             "reason": event.reason
@@ -883,15 +994,16 @@ class ContinuumOrchestrator:
                     safe_display = event.filename.replace('[', '\\[').replace(']', '\\]')
                     download_link = f"\n\n\ud83d\udcce **[{safe_display}](/v0/api/files/{event.file_id})** ({size_str})\n\n"
 
-                    stream_callback({"type": "text", "content": download_link})
-                    acc.response_text += download_link
-                elif isinstance(event, ProviderSwitchEvent):
-                    stream_callback({
-                        "type": "provider_switch",
-                        "backup_model": event.backup_model,
-                        "reason": event.reason,
-                    })
+                    synthetic_text = download_link
 
+            if synthetic_text is not None:
+                synthetic_entry_id = acc.append_text(synthetic_text)
+                if stream and stream_callback:
+                    stream_callback({
+                        "type": "text",
+                        "entry_id": str(synthetic_entry_id),
+                        "content": synthetic_text,
+                    })
             acc.events.append(event)
 
             # Capture model-step responses for replay separately from the
@@ -899,9 +1011,11 @@ class ContinuumOrchestrator:
             # orchestrator stream; ModelStepCompletedEvent is not.
             if isinstance(event, ModelStepCompletedEvent):
                 acc.tool_call_results.append(event.response)
+                acc.finish_step(event.response)
             elif isinstance(event, CompleteEvent):
                 acc.raw_response = event.response
                 acc.thinking_content = self.llm_provider.extract_thinking_content(event.response)
+                acc.finish_step(event.response)
 
             if isinstance(event, (ModelStepCompletedEvent, CompleteEvent)):
                 # Store container_id in Valkey for reuse (1-hour TTL)
@@ -932,6 +1046,9 @@ class ContinuumOrchestrator:
         unit_of_work: UnitOfWork | None = None,
         storage_content: str | list[dict[str, object]] | None = None,
         segment_turn_number: int = 1,
+        message_id: UUID | None = None,
+        turn_id: UUID | None = None,
+        _internal_continuation: bool = False,
     ) -> tuple[Continuum, str, TurnMetadata]:
         """
         Process user message through complete continuum flow.
@@ -950,30 +1067,60 @@ class ContinuumOrchestrator:
                            is used for persistence.
             segment_turn_number: Turn number within current segment (1-indexed).
                                Incremented at API entry point for real user messages.
+            message_id: Client-supplied identity for the accepted user message,
+                        so the browser's optimistic id reconciles with the row.
+            turn_id: Transport-assigned identity for this turn, stamped on every
+                     durable message so frames and rows correlate.
+            _internal_continuation: Whether this is the transient provider prompt
+                                  used after loading an on-demand tool.
 
         Returns:
             Tuple of (updated_continuum, final_response, metadata)
         """
         metadata: TurnMetadata = {}
-
-        # Balance pre-check - UX optimization (skipped in OSS mode)
-        # The atomic record_usage() in LLM provider is the authoritative check
-        try:
-            from billing import get_billing_backend
-            from billing.exceptions import InsufficientBalanceError
-            from utils.user_context import get_current_user_id, has_user_context
-
-            if has_user_context():
-                user_id = str(get_current_user_id())
-                billing = get_billing_backend()
-                if not billing.check_balance(user_id, allow_negative=False):
-                    raise InsufficientBalanceError(billing.get_balance(user_id))
-        except ImportError:
-            pass  # OSS mode - no billing enforcement
+        active_turn_id = turn_id or uuid4()
+        segment_id = get_current_segment_id()
+        if segment_id is None:
+            raise RuntimeError("Message processing requires an active segment ID")
+        if unit_of_work is None:
+            raise ValueError("Unit of Work is required for message persistence")
 
         # Add user message to continuum cache (no persistence yet)
-        user_msg_obj, user_events = continuum.add_user_message(user_message)
+        user_metadata: MessageMetadata = {
+            "turn_id": str(active_turn_id),
+            "segment_id": segment_id,
+        }
+        if _internal_continuation:
+            user_metadata["transient_system_scaffold"] = True
+
+        user_msg_obj, user_events = continuum.add_user_message(
+            user_message,
+            message_id=message_id,
+            metadata=user_metadata,
+        )
         self._publish_events(user_events)
+
+        # Stage the accepted user message before any model work, so a later
+        # failure still commits what the user was told was received. The
+        # transient scaffold prompt is cache-only and never staged.
+        if not _internal_continuation:
+            if isinstance(user_msg_obj.content, list):
+                has_image = any(item.get('type') == 'image' for item in user_msg_obj.content)
+                if has_image and storage_content is None:
+                    raise ValueError(
+                        "storage_content is required when user_message contains images. "
+                        "Callers must provide the 512px WebP storage tier for image persistence."
+                    )
+            persist_content = storage_content if storage_content is not None else user_msg_obj.content
+            from cns.core.message import Message
+            persist_user_msg = Message(
+                content=persist_content,
+                role=user_msg_obj.role,
+                id=user_msg_obj.id,
+                created_at=user_msg_obj.created_at,
+                metadata=user_msg_obj.metadata,
+            )
+            unit_of_work.add_messages(persist_user_msg)
 
         # Extract text content for weighted context (bypass for multimodal)
         text_for_context = user_message
@@ -981,7 +1128,7 @@ class ContinuumOrchestrator:
             text_parts = [item['text'] for item in user_message if item.get('type') == 'text']
             text_for_context = ' '.join(text_parts) if text_parts else 'Image uploaded'
 
-        # Memory surfacing: subcortical → retention → fresh retrieval → merge
+        # Memory surfacing, or the configured direct-response fast path.
         previous_memories = self._get_previous_memories()
         mem = self._surface_memories(continuum, text_for_context, previous_memories)
 
@@ -993,32 +1140,48 @@ class ContinuumOrchestrator:
             context={"memories": mem.surfaced_memories}
         ))
 
-        # Apply conversation LLM intent and thinking configuration
-        from utils.user_context import get_user_preferences, resolve_conversation_llm
+        # Chat runs on the fixed `primary` route. 2.0 removed the per-user
+        # conversation tier, so there is no preference to resolve here.
+        from utils.user_context import get_model_config
 
-        llm_kwargs: LLMKwargs = {}
-        prefs = get_user_preferences()
-        llm_config = resolve_conversation_llm(prefs.conversation_llm)
-
-        llm_kwargs['conversation_llm'] = llm_config.name
-        llm_kwargs['max_tokens'] = 31999  # Frontend generation ceiling
+        llm_kwargs: LLMKwargs = {"model_config": "primary"}
+        primary_config = get_model_config("primary")
         show_thinking_stream = not (
-            llm_config.dialect_name != "anthropic"
+            primary_config.dialect_name != "anthropic"
             and not config.api.show_openai_compat_thinking
         )
 
+        # Ephemeral effort override (Valkey, 1h TTL) — takes precedence over
+        # the subcortical assessment, which is skipped when one is present.
+        try:
+            from clients.valkey_client import get_valkey_client
+            from utils.user_context import get_current_user_id
+
+            valkey = get_valkey_client()
+            override_value = valkey.get(f"effort_override:{get_current_user_id()}")
+            if override_value is not None:
+                effort_str = (
+                    override_value.decode()
+                    if isinstance(override_value, bytes)
+                    else override_value
+                )
+                llm_kwargs["effort"] = effort_str
+                logger.info(f"Effort override active: {effort_str}")
+        except Exception:
+            # The override is optional — a Valkey outage must not stop the turn.
+            pass
+
         # Extended thinking: enabled only when subcortical layer provides complexity assessment
-        if mem.subcortical_result is not None:
+        if mem.subcortical_result is not None and "effort" not in llm_kwargs:
             effort_level = mem.subcortical_result.get_effort_level()
             llm_kwargs['effort'] = effort_level
             logger.info(f"Thinking: complexity={mem.subcortical_result.complexity} effort={effort_level}")
 
         def compose_messages() -> list[dict[str, object]]:
-            return self._compose_llm_messages(continuum, system_prompt, llm_config.name)
+            return self._compose_llm_messages(continuum, system_prompt)
 
         complete_messages = compose_messages()
         messages_for_llm = complete_messages
-        available_tools = self._cached_tool_definitions()
 
         # Use last turn's actual provider-reported input tokens for compaction check.
         # Segment collapse invalidation via _invalidate_on_segment_collapse event handler.
@@ -1029,27 +1192,13 @@ class ContinuumOrchestrator:
             input_tokens=last_input,
         )
 
-        # Retrieve container_id from Valkey for provider-owned container reuse.
-        # Container reuse is Anthropic-only (server-side code_execution feature);
-        # OpenAI-compatible providers reject container params and capability validation
-        # would refuse the request, so the container_id is intentionally not forwarded
-        # for non-Anthropic dialects.
-        if llm_config.dialect_name == "anthropic":
-            from clients.valkey_client import get_valkey
-            valkey = get_valkey()
-            valkey_key = f"container:{continuum.id}"
-            container_id = valkey.get(valkey_key)
-            if container_id:
-                llm_kwargs['container_id'] = container_id
-                logger.info(f"📦 Reusing container from Valkey: {container_id}")
-            else:
-                logger.debug("📦 No existing container - new container will be created")
-
         # Stream LLM response with overflow remediation
         acc = TurnAccumulator()
         continuum_id = str(continuum.id)
         overflow_attempt = 0
         deep_fallback_active = False
+        stopped = False
+        stop_reason: str | None = None
 
         def compose_messages_for_tool_loop() -> list[dict[str, object]]:
             base_messages = compose_messages()
@@ -1069,6 +1218,14 @@ class ContinuumOrchestrator:
                 )
                 break  # Success
 
+            except GenerationCancelled:
+                stopped = True
+                stop_reason = get_cancel_reason()
+                acc.finish_partial_step()
+                metadata["stopped"] = True
+                metadata["stop_reason"] = stop_reason
+                break
+
             except ContextOverflowError as e:
                 overflow_attempt += 1
                 logger.warning(
@@ -1083,23 +1240,32 @@ class ContinuumOrchestrator:
                     continue
 
                 acc.reset()
-                acc.response_text = "collapse the segment, please. incremental compaction failed"
+                fallback = "collapse the segment, please. incremental compaction failed"
+                fallback_entry_id = acc.append_text(fallback)
+                acc.finish_text_step()
                 metadata["model_error"] = True
                 metadata["model_error_reason"] = "incremental_compaction_failed"
                 if stream and stream_callback:
                     stream_callback({
                         "type": "text",
-                        "content": "collapse the segment, please. incremental compaction failed",
+                        "entry_id": str(fallback_entry_id),
+                        "content": fallback,
                     })
                 break
 
-        # Prepend tool indicator for cache visibility (so MIRA sees its tool usage in history)
-        tool_indicator = self._format_tool_indicator(acc.events)
-        if tool_indicator:
-            acc.response_text = f"{tool_indicator}\n\n{acc.response_text}"
-
-        # Parse tags from final response (preserve emotion tag for frontend extraction)
+        # Parse tags from the final response (preserve emotion tag for frontend
+        # extraction), then normalise every provider step the same way so the
+        # persisted text of each step matches the text streamed under its own
+        # entry_id. The retired synthetic tool-usage indicator is deliberately
+        # gone: it was prepended into acc.response_text, persisted, and re-fed
+        # to the model on every later turn, so the marker accumulated in
+        # durable history and polluted the context it was meant to inform.
         parsed_tags = self.tag_parser.parse_response(acc.response_text, preserve_tags=['my_emotion'])
+        for step in acc.assistant_steps:
+            step.text = self.tag_parser.parse_response(
+                step.text,
+                preserve_tags=['my_emotion'],
+            )['clean_text']
         clean_response_text = parsed_tags['clean_text']
 
         # Process check-in response if Mira produced one
@@ -1112,7 +1278,7 @@ class ContinuumOrchestrator:
         # Check if model tool error caused a blank response - provide user-friendly fallback
         model_tool_error = next(
             (e for e in acc.events if isinstance(e, CircuitBreakerEvent)
-             and "failed after correction" in e.reason),
+             and "failed on repeated attempt" in e.reason),
             None
         )
         if model_tool_error and (not clean_response_text or not clean_response_text.strip()):
@@ -1122,11 +1288,16 @@ class ContinuumOrchestrator:
                 "tool call that couldn't be corrected. This is a limitation of the model, "
                 "not MIRA. Please try rephrasing your request."
             )
+            if acc.assistant_steps:
+                acc.assistant_steps[-1].text = clean_response_text
+            else:
+                acc.assistant_steps.append(AssistantStep(text=clean_response_text))
             metadata["model_error"] = True
             metadata["model_error_reason"] = str(model_tool_error.reason)
 
-        # Validate response is not blank before saving
-        if not clean_response_text or not clean_response_text.strip():
+        # Validate response is not blank before saving. A halted turn is
+        # allowed to end with only partial text; that is not a blank response.
+        if not stopped and (not clean_response_text or not clean_response_text.strip()):
             logger.error("Attempted to save blank assistant response - rejecting")
             raise ValueError("Assistant response cannot be blank or empty. This may indicate an API error.")
 
@@ -1148,45 +1319,11 @@ class ContinuumOrchestrator:
             assistant_metadata["thinking"] = acc.thinking_content
 
         if acc.raw_response:
-            assistant_metadata["stop_reason"] = acc.raw_response.stop_reason
+            assistant_metadata["provider_stop_reason"] = acc.raw_response.stop_reason
 
         if metadata.get("model_error"):
             assistant_metadata["model_error"] = True
             assistant_metadata["model_error_reason"] = metadata["model_error_reason"]
-
-        # Build tool history messages for persistence (before assistant message
-        # so they appear in correct chronological order in the cache)
-        # Exclude code_execution: server tools can't be replayed to the API as
-        # forged client-side tool_use blocks. The streaming path persists the
-        # result inline in the assistant's text response and via container reuse.
-        completed_interactions = [
-            i for i in acc.tool_interactions
-            if i.completed and i.tool_name != "code_execution"
-        ]
-        tool_history_messages: list[Message] = []
-        if completed_interactions and not TOMBSTONE_MODE:
-            tool_history_messages = self._build_tool_history_messages(
-                completed_interactions, acc.tool_call_results,
-            )
-            continuum.add_tool_history(tool_history_messages)
-
-        assistant_msg_obj, response_events = continuum.add_assistant_message(
-            clean_response_text, assistant_metadata
-        )
-        self._publish_events(response_events)
-
-        # Publish turn completed event
-        turn_number = (len(continuum.messages) + 1) // 2
-        self._publish_events([TurnCompletedEvent.create(
-            continuum_id=continuum_id,
-            turn_number=turn_number,
-            segment_turn_number=segment_turn_number,
-            continuum=continuum
-        )])
-
-        # Speculatively warm vLLM's prefix cache for the next turn's subcortical
-        # call while the user reads/types. No-op unless prefill_warmup is enabled.
-        self.subcortical_layer.warm_cache(continuum, mem.surfaced_memories)
 
         final_response = clean_response_text
 
@@ -1202,34 +1339,19 @@ class ContinuumOrchestrator:
         if acc.thinking_content:
             metadata["thinking"] = acc.thinking_content
 
-        # Unit of Work is required for proper persistence
-        if not unit_of_work:
-            raise ValueError("Unit of Work is required for message persistence")
-
-        # Validate: if user_message contains images, storage_content MUST be provided
-        if isinstance(user_msg_obj.content, list):
-            has_image = any(item.get('type') == 'image' for item in user_msg_obj.content)
-            if has_image and storage_content is None:
-                raise ValueError(
-                    "storage_content is required when user_message contains images. "
-                    "Callers must provide the 512px WebP storage tier for image persistence."
-                )
-
-        persist_content = storage_content if storage_content is not None else user_msg_obj.content
-
-        from cns.core.message import Message
-        persist_user_msg = Message(
-            content=persist_content,
-            role=user_msg_obj.role,
-            id=user_msg_obj.id,
-            created_at=user_msg_obj.created_at,
-            metadata=user_msg_obj.metadata
+        turn_messages = self._build_turn_messages(
+            acc,
+            assistant_metadata,
+            turn_id=active_turn_id,
+            segment_id=segment_id,
+            base_time=user_msg_obj.created_at,
+            stop_reason=stop_reason,
         )
-
-        unit_of_work.add_messages(persist_user_msg, *tool_history_messages, assistant_msg_obj)
+        continuum.add_tool_history(turn_messages)
+        unit_of_work.add_messages(*turn_messages)
         unit_of_work.mark_metadata_updated()
         committed_tool_messages = [
-            message for message in tool_history_messages
+            message for message in turn_messages
             if message.role == "tool"
         ]
         if committed_tool_messages:
@@ -1241,9 +1363,32 @@ class ContinuumOrchestrator:
                 lambda event=committed_event: self._publish_events([event])
             )
 
+        # A tool-loader turn ends with a synthetic continuation prompt, not an
+        # answer, so subscribers must not observe it as a completed turn.
+        auto_continuing = acc.invoked_tool_loader and not _tried_loading_all_tools
+        if not stopped and not auto_continuing:
+            # Warm the provider cache before registering successful-completion
+            # callbacks. A warm failure must not publish TurnCompletedEvent.
+            if self.subcortical_layer is not None:
+                self.subcortical_layer.warm_cache(continuum, mem.surfaced_memories)
+
+            # The transient scaffold is present in the cache but is not a
+            # conversation record, so it must not inflate the turn number.
+            durable_message_count = len(continuum.messages) - int(_internal_continuation)
+            turn_number = (durable_message_count + 1) // 2
+            completed_event = TurnCompletedEvent.create(
+                continuum_id=continuum_id,
+                turn_number=turn_number,
+                segment_turn_number=segment_turn_number,
+                continuum=continuum,
+            )
+            unit_of_work.add_post_commit_callback(
+                lambda event=completed_event: self._publish_events([event])
+            )
+
         # Auto-continuation: If tools were loaded and we haven't already tried,
         # automatically continue with the task
-        if acc.invoked_tool_loader and not _tried_loading_all_tools:
+        if auto_continuing:
             logger.info("Auto-continuing after tool loading...")
 
             synthetic_message = (
@@ -1251,20 +1396,27 @@ class ContinuumOrchestrator:
                 "Continue with the original task.</system-scaffold>"
             )
 
-            continuum, final_response, metadata = self.process_message(
-                continuum,
-                synthetic_message,
-                system_prompt,
-                stream=stream,
-                stream_callback=stream_callback,
-                _tried_loading_all_tools=True,
-                unit_of_work=unit_of_work,
-                segment_turn_number=segment_turn_number
-            )
+            synthetic_message_id = uuid4()
+            try:
+                continuum, final_response, metadata = self.process_message(
+                    continuum,
+                    synthetic_message,
+                    system_prompt,
+                    stream=stream,
+                    stream_callback=stream_callback,
+                    _tried_loading_all_tools=True,
+                    unit_of_work=unit_of_work,
+                    segment_turn_number=segment_turn_number,
+                    message_id=synthetic_message_id,
+                    turn_id=active_turn_id,
+                    _internal_continuation=True,
+                )
+            finally:
+                continuum.discard_transient_user_message(synthetic_message_id)
             logger.info("Auto-continuation completed successfully")
 
         return continuum, final_response, metadata
-    
+
     def _handle_system_prompt_composed(self, event: ContinuumEvent) -> None:
         """Handle system prompt composed event."""
         from cns.core.events import SystemPromptComposedEvent
@@ -1307,10 +1459,10 @@ class ContinuumOrchestrator:
         previous_memories: list[MemoryDict],
     ) -> MemorySurfacingResult:
         """
-        Run the full memory surfacing pipeline: subcortical → retention → fresh retrieval → merge.
+        Run subcortical memory surfacing, or return an empty deliberate fast-path result.
 
-        Handles subcortical failure gracefully by retaining all previous memories
-        (hard-capped) without fresh retrieval.
+        Enabled subcortical failures propagate. They are infrastructure/model failures,
+        not evidence that memory surfacing should silently look disabled.
 
         Args:
             continuum: Current continuum state (passed to subcortical layer)
@@ -1320,32 +1472,23 @@ class ContinuumOrchestrator:
         Returns:
             MemorySurfacingResult with surfaced_memories, pinned_ids, and subcortical_result
         """
+        if self.subcortical_layer is None:
+            logger.info("Subcortical fast path: memory surfacing skipped")
+            return MemorySurfacingResult(
+                surfaced_memories=[],
+                pinned_ids=set(),
+                subcortical_result=None,
+            )
+
         max_pinned = MAX_PINNED_MEMORIES
         max_surfaced = MAX_SURFACED_MEMORIES
         min_fresh = MIN_FRESH_MEMORIES
 
-        try:
-            subcortical_result = self.subcortical_layer.generate(
-                continuum,
-                text_for_context,
-                previous_memories=previous_memories
-            )
-        except Exception:
-            logger.exception("Subcortical processing failed; retaining previous memories without fresh retrieval")
-            pinned_ids: set[str] = set()
-            pinned_memories = previous_memories
-
-            if len(pinned_memories) > max_pinned:
-                pinned_memories.sort(key=lambda m: m.get('importance_score', 0.5), reverse=True)
-                pinned_memories = pinned_memories[:max_pinned]
-                logger.info(f"Hard cap (fallback): truncated pinned to {max_pinned}")
-
-            logger.info(f"Memory surfacing: {len(pinned_memories)} pinned (no fresh retrieval)")
-            return MemorySurfacingResult(
-                surfaced_memories=pinned_memories,
-                pinned_ids=pinned_ids,
-                subcortical_result=None,
-            )
+        subcortical_result = self.subcortical_layer.generate(
+            continuum,
+            text_for_context,
+            previous_memories=previous_memories
+        )
 
         # LLM-guided retention
         pinned_ids = subcortical_result.pinned_memory_ids

@@ -3,9 +3,14 @@ Data API endpoint - unified data access with type-based routing.
 
 Uses proper repository methods for safe data access with user isolation.
 """
+import base64
+import binascii
+import json
 import logging
+from datetime import datetime
 from typing import Any
 from enum import Enum
+from uuid import UUID
 
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import JSONResponse
@@ -22,6 +27,36 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _encode_history_cursor(created_at: datetime, message_id: UUID) -> str:
+    """Encode an exclusive history keyset without exposing a mutable offset."""
+    payload = json.dumps(
+        {"created_at": created_at.isoformat(), "id": str(message_id)},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_history_cursor(cursor: object) -> tuple[datetime, UUID] | None:
+    """Decode and validate the opaque history keyset."""
+    if cursor is None:
+        return None
+    if not isinstance(cursor, str) or cursor == "":
+        raise ValidationError("before must be a non-empty opaque history cursor")
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        raw = base64.b64decode(padded, altchars=b"-_", validate=True)
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict) or set(payload) != {"created_at", "id"}:
+            raise ValueError("cursor payload has unexpected fields")
+        if not isinstance(payload["created_at"], str) or not isinstance(payload["id"], str):
+            raise ValueError("cursor values must be strings")
+        created_at = parse_utc_time_string(payload["created_at"])
+        message_id = UUID(payload["id"])
+    except (binascii.Error, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        raise ValidationError("before is not a valid history cursor") from error
+    return created_at, message_id
+
+
 class DataType(str, Enum):
     """Supported data types."""
     HISTORY = "history"
@@ -31,6 +66,7 @@ class DataType(str, Enum):
     DOMAINDOCS = "domaindocs"
     WORKING_MEMORY = "working_memory"
     LORA = "lora"
+    PERSONA = "persona"
 
 
 class DataEndpoint(BaseHandler):
@@ -61,59 +97,65 @@ class DataEndpoint(BaseHandler):
             return self._get_working_memory(**request_params)
         elif data_type == DataType.LORA:
             return self._get_lora(**request_params)
+        elif data_type == DataType.PERSONA:
+            return self._get_persona(**request_params)
         else:
             raise ValidationError(f"Invalid data type: {data_type}")
     
     def _get_history(self, **params) -> dict[str, Any]:
-        """Get continuum history using ContinuumRepository."""
+        """Get one chronological history page using an opaque keyset cursor.
+
+        Offset pagination and history search are removed, not deprecated.
+        Offset over a descending, insert-heavy table skips and repeats rows
+        across a page boundary, and a full-text search over those same rows has
+        no stable keyset to page on at all. `before` is the only continuation
+        token, and it is opaque so a client cannot aim it at a row it was never
+        given.
+        """
         user_id = get_current_user_id()
 
         limit = params.get('limit', 50)
-        offset = params.get('offset', 0)
+        if 'offset' in params:
+            raise ValidationError("offset is not supported for history; use before")
+        if params.get('search'):
+            raise ValidationError("search is not supported by the ordered history endpoint")
         start_date = params.get('start_date')
         end_date = params.get('end_date')
-        search_query = params.get('search')
         message_type = params.get('message_type', 'regular')
+        if message_type not in {'regular', 'all'}:
+            raise ValidationError("message_type must be regular or all")
+        before = _decode_history_cursor(params.get('before'))
         from cns.infrastructure.continuum_repository import get_continuum_repository
 
         repo = get_continuum_repository()  # Use singleton
 
-        # If search query provided, use search instead of regular history
-        if search_query:
-            history_data = repo.search_continuums(
-                user_id=user_id,
-                search_query=search_query,
-                offset=offset,
-                limit=limit,
-                message_type=message_type
-            )
-        else:
-            # Parse dates if provided
-            start_dt = None
-            end_dt = None
-            if start_date:
-                start_dt = parse_utc_time_string(start_date.replace('Z', '+00:00'))
-            if end_date:
-                end_dt = parse_utc_time_string(end_date.replace('Z', '+00:00'))
+        # Parse dates if provided
+        start_dt = None
+        end_dt = None
+        if start_date:
+            start_dt = parse_utc_time_string(start_date.replace('Z', '+00:00'))
+        if end_date:
+            end_dt = parse_utc_time_string(end_date.replace('Z', '+00:00'))
 
-            history_data = repo.get_history(
-                user_id=user_id,
-                offset=offset,
-                limit=limit,
-                start_date=start_dt,
-                end_date=end_dt,
-                message_type=message_type
-            )
-        
+        history_data = repo.get_history(
+            user_id=user_id,
+            limit=limit,
+            before=before,
+            start_date=start_dt,
+            end_date=end_dt,
+            message_type=message_type,
+        )
+        next_before = history_data["next_before"]
+
         return {
-            "messages": history_data.get("messages", []),
+            "messages": history_data["messages"],
             "meta": {
-                "total_returned": len(history_data.get("messages", [])),
-                "has_more": history_data.get("has_more", False),
-                "next_offset": history_data.get("next_offset"),
-                "limit": limit,
-                "offset": offset,
-                "search_query": history_data.get("search_query")
+                "has_more": history_data["has_more"],
+                "next_before": (
+                    _encode_history_cursor(*next_before)
+                    if next_before is not None
+                    else None
+                ),
             }
         }
     
@@ -412,6 +454,44 @@ class DataEndpoint(BaseHandler):
             "message": f"User model: {len(observations)} observations across {len(set(o['section_id'] for o in observations))} sections"
         }
 
+    def _get_persona(self, **params) -> dict[str, Any]:
+        """Return the current Persona and its immutable revision history.
+
+        Reads MIRA's own behavioral directives, not observations about the user —
+        `type=lora` above remains the user-model read. The revision rows exist for every
+        user regardless of MIRA_PERSONA_ENABLED, because the baseline is provisioned by
+        an AFTER INSERT trigger on users, so this read stays available even where the
+        evaluation pass is switched off.
+        """
+        from cns.services.persona_service import PersonaService
+
+        user_id = get_current_user_id()
+        service = PersonaService()
+        current = service.get_current(user_id)
+        return {
+            "current": {
+                "id": str(current.id),
+                "revision_number": current.revision_number,
+                "directives": current.directives,
+                "source": current.source,
+                "created_at": format_utc_iso(current.created_at),
+            },
+            "revisions": [
+                {
+                    "id": str(revision.id),
+                    "revision_number": revision.revision_number,
+                    "directives": revision.directives,
+                    "source": revision.source,
+                    "parent_revision_id": (
+                        str(revision.parent_revision_id)
+                        if revision.parent_revision_id else None
+                    ),
+                    "created_at": format_utc_iso(revision.created_at),
+                }
+                for revision in service.get_history(user_id)
+            ],
+        }
+
 
 def get_data_handler() -> DataEndpoint:
     """Get data endpoint handler instance."""
@@ -421,14 +501,15 @@ def get_data_handler() -> DataEndpoint:
 @router.get("/data")
 async def data_endpoint(
     type: DataType = Query(..., description="Data type to retrieve"),
-    limit: int | None = Query(None, ge=1, le=100, description="Pagination limit"),
-    offset: int | None = Query(None, ge=0, description="Pagination offset"),
+    limit: int | None = Query(None, ge=1, le=500, description="Pagination limit"),
+    offset: int | None = Query(None, ge=0, description="Pagination offset (memories only)"),
+    before: str | None = Query(None, description="Opaque exclusive history cursor"),
     start_date: str | None = Query(None, description="Start date filter (ISO-8601)"),
     end_date: str | None = Query(None, description="End date filter (ISO-8601)"),
     subtype: str | None = Query(None, description="Type-specific filtering"),
     fields: str | None = Query(None, description="Comma-separated field selection"),
-    search: str | None = Query(None, description="Search query for full-text search"),
-    message_type: str = Query("regular", description="Message type filter: 'regular', 'summaries', or 'all'"),
+    search: str | None = Query(None, description="Search query for full-text search (memories only)"),
+    message_type: str = Query("regular", description="History message filter: 'regular' or 'all'"),
     label: str | None = Query(None, description="Domain label to retrieve (for type=domaindocs)"),
     archived: bool | None = Query(None, description="Filter archived domaindocs: true=archived only, false/absent=non-archived (for type=domaindocs)"),
     section: str | None = Query(None, description="Specific trinket section to retrieve (for type=working_memory)"),
@@ -444,6 +525,8 @@ async def data_endpoint(
             request_params['limit'] = limit
         if offset is not None:
             request_params['offset'] = offset
+        if before is not None:
+            request_params['before'] = before
         if start_date is not None:
             request_params['start_date'] = start_date
         if end_date is not None:

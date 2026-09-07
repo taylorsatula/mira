@@ -15,7 +15,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Literal, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,25 @@ def set_cancel_event(event: threading.Event) -> None:
 def get_cancel_event() -> Optional[threading.Event]:
     """Get the cancellation event for the current request, or None if not set."""
     return _cancel_event.get(None)
+
+
+def set_cancel_reason(reason: Literal["halt", "disconnect"]) -> None:
+    """Attach the Halt reason to the shared cancellation signal."""
+    if reason not in {"halt", "disconnect"}:
+        raise ValueError("Cancellation reason must be halt or disconnect")
+    event = _cancel_event.get(None)
+    if event is None:
+        raise RuntimeError("Cannot set a cancellation reason without an active signal")
+    event.mira_stop_reason = reason
+
+
+def get_cancel_reason() -> Literal["halt", "disconnect"]:
+    """Return the active signal's exact persistence reason."""
+    event = _cancel_event.get(None)
+    reason = getattr(event, "mira_stop_reason", "halt") if event is not None else "halt"
+    if reason not in {"halt", "disconnect"}:
+        raise RuntimeError(f"Invalid cancellation reason on active signal: {reason}")
+    return reason
 
 
 def check_cancelled() -> None:
@@ -166,169 +185,116 @@ def set_current_segment_id(segment_id: str) -> contextvars.Token:
 
 
 # ============================================================
-# ConversationLLM - Database-backed conversation LLM definitions
+# ModelConfig - fixed database-backed model routes
 # ============================================================
 
 @dataclass(frozen=True)
-class ConversationLLMConfig:
-    """LLM configuration for a user-facing conversation model."""
+class ModelConfig:
+    """One of MIRA's five fixed model routes.
+
+    Routes are capability-addressed: a caller names the capability it needs
+    and the model_configs row owns dialect, model, endpoint, Vault key,
+    default effort, and output-token ceiling for it. `other` is seeded to a
+    different vendor than `primary` so it can consult an outside model (D14).
+
+    `api_key_name` is None when the route requires no credential. The column is
+    `text NOT NULL` and stores '' for that case, so `load_model_configs()`
+    normalises the sentinel to None here — the only place that has to know it.
+    """
+
     name: str
     model: str
-    thinking_budget: int
-    description: str
-    display_order: int
-    dialect_name: str = "anthropic"
-    endpoint_url: Optional[str] = None
-    api_key_name: Optional[str] = None
-    hidden: bool = False
-
-
-# Module-level cache for conversation LLMs (loaded once per process)
-_conversation_llm_cache: Optional[dict[str, ConversationLLMConfig]] = None
-
-
-def get_conversation_llms() -> dict[str, ConversationLLMConfig]:
-    """
-    Get all available conversation LLM configs from database.
-    Cached at module level (configs rarely change).
-    """
-    global _conversation_llm_cache
-    if _conversation_llm_cache is not None:
-        return _conversation_llm_cache
-
-    from clients.postgres_client import PostgresClient
-    db = PostgresClient('mira_service')
-
-    results = db.execute_query(
-        "SELECT name, model, thinking_budget, description, display_order, dialect_name, endpoint_url, api_key_name, hidden FROM conversation_llm ORDER BY display_order"
-    )
-
-    _conversation_llm_cache = {
-        row['name']: ConversationLLMConfig(
-            name=row['name'],
-            model=row['model'],
-            thinking_budget=row['thinking_budget'],
-            description=row['description'] or '',
-            display_order=row['display_order'],
-            dialect_name=row['dialect_name'],
-            endpoint_url=row['endpoint_url'],
-            api_key_name=row['api_key_name'],
-            hidden=row.get('hidden', False) or False,
-        )
-        for row in results
-    }
-    return _conversation_llm_cache
-
-
-def resolve_conversation_llm(name: str) -> ConversationLLMConfig:
-    """Get LLM config for a conversation LLM name."""
-    conversation_llms = get_conversation_llms()
-    if name not in conversation_llms:
-        raise ValueError(f"Unknown conversation LLM: {name}")
-    return conversation_llms[name]
-
-
-
-# ============================================================
-# InternalLLM - Database-backed internal LLM configurations
-# ============================================================
-
-@dataclass(frozen=True)
-class InternalLLMConfig:
-    """Internal LLM configuration for system operations (not user-facing).
-
-    Single source of truth for all LLM-tuning params. Both build_batch_params()
-    and generate_response(internal_llm=) read from these fields.
-    """
-    name: str
-    model: str
-    endpoint_url: str
-    api_key_name: Optional[str]
-    description: str
-    max_tokens: int
     dialect_name: str
-    effort: Optional[str] = None  # 'low'|'medium'|'high'|'xhigh'|'max'
+    endpoint_url: str
+    api_key_name: str | None
+    effort: str | None
+    max_tokens: int
 
 
-_internal_llm_cache: dict[tuple[str, str], InternalLLMConfig] | None = None
+_model_config_cache: dict[str, ModelConfig] | None = None
+_MODEL_CONFIG_NAMES = frozenset({"primary", "fast", "batch", "assessment", "other"})
 
 
-def load_internal_llm_configs() -> None:
-    """Load internal LLM configs at startup. Call during app boot."""
-    global _internal_llm_cache
+def load_model_configs() -> None:
+    """Load and validate the complete fixed model-config set at startup."""
+    global _model_config_cache
+    from clients.llm.resolver import optional_api_key_name
     from clients.postgres_client import PostgresClient
-    db = PostgresClient('mira_service')
+    db = PostgresClient("mira_service")
+
     results = db.execute_query(
-        "SELECT name, tier, model, endpoint_url, api_key_name, description, "
-        "max_tokens, effort, dialect_name FROM internal_llm"
+        "SELECT name, model, dialect_name, endpoint_url, api_key_name, effort, max_tokens FROM model_configs"
     )
-    _internal_llm_cache = {
-        (row['name'], row['tier']): InternalLLMConfig(
-            name=row['name'],
-            model=row['model'],
-            endpoint_url=row['endpoint_url'],
-            api_key_name=row['api_key_name'],
-            description=row['description'] or '',
-            max_tokens=row['max_tokens'],
-            dialect_name=row['dialect_name'],
-            effort=row.get('effort'),
+
+    loaded = {
+        row["name"]: ModelConfig(
+            name=row["name"],
+            model=row["model"],
+            dialect_name=row["dialect_name"],
+            endpoint_url=row["endpoint_url"],
+            api_key_name=optional_api_key_name(
+                row["api_key_name"],
+                f"model_config '{row['name']}' api_key_name",
+            ),
+            effort=row["effort"],
+            max_tokens=row["max_tokens"],
         )
         for row in results
     }
 
+    if set(loaded) != _MODEL_CONFIG_NAMES:
+        raise RuntimeError(
+            "model_configs must contain exactly primary, fast, batch, assessment, "
+            f"and other; found {sorted(loaded)}"
+        )
 
-def get_internal_llm(name: str) -> InternalLLMConfig:
-    """Get internal LLM config by name, resolved by user's card-on-file status.
+    # D14 seeding constraint: `other` exists to consult an outside model. If
+    # it resolves to primary's model, phoneafriend_tool degenerates into
+    # self-review. Warn rather than fail — an operator with a single provider
+    # available must still be able to boot (O-3).
+    if loaded["other"].model == loaded["primary"].model:
+        logger.warning(
+            "model_configs route 'other' is seeded to the same model as 'primary' (%s); "
+            "outside-model consultation will be consulting the same model it is asking for help",
+            loaded["other"].model,
+        )
 
-    Every config has exactly two rows (free + cof). Resolution is a single
-    exact-match lookup — no fallback chain.
+    from clients.llm.resolver import ModelSelection
+    from clients.llm.types import coerce_dialect_name, coerce_effort
 
-    In OSS mode (no billing module), defaults to 'cof' tier.
-    """
-    if _internal_llm_cache is None:
-        raise RuntimeError("Internal LLM configs not loaded. Call load_internal_llm_configs() at startup.")
+    for model_config in loaded.values():
+        dialect_name = coerce_dialect_name(model_config.dialect_name)
+        effort = coerce_effort(model_config.effort) if model_config.effort else None
+        ModelSelection(
+            dialect_name=dialect_name,
+            model=model_config.model,
+            endpoint_url=model_config.endpoint_url,
+            api_key_name=model_config.api_key_name,
+            max_tokens=model_config.max_tokens,
+            effort=effort,
+            model_config_name=model_config.name,
+        )
 
-    tier = _resolve_user_internal_tier()
-    key = (name, tier)
+    from config import config
 
-    config = _internal_llm_cache.get(key)
-    if config:
-        return config
-
-    raise KeyError(f"No internal_llm config for '{name}' with tier='{tier}'")
+    config.api.validate_compaction_budget(loaded["primary"].max_tokens)
+    _model_config_cache = loaded
 
 
-def _resolve_user_internal_tier() -> str:
-    """Determine whether the current user gets 'free' or 'cof' internal models.
+def get_model_configs() -> dict[str, ModelConfig]:
+    """Return all fixed model routes after startup loading."""
+    if _model_config_cache is None:
+        raise RuntimeError("Model configs not loaded. Call load_model_configs() at startup.")
+    return dict(_model_config_cache)
 
-    Returns 'cof' if user has a payment method on file, 'free' otherwise.
-    In OSS mode (no billing module), returns 'cof' (OSS schema seeds
-    both tiers with the same models, so the value doesn't matter — but
-    'cof' gives the best-available config by convention).
-    """
+
+def get_model_config(name: str) -> ModelConfig:
+    """Resolve one fixed model route by name or raise."""
+    configs = get_model_configs()
     try:
-        from billing import get_billing_backend  # noqa: F401
-    except ImportError:
-        return 'cof'  # OSS mode — no billing, use cof-tier configs
-
-    if not has_user_context():
-        # Expected at startup (factory init, singleton services caching LLM configs).
-        # If this appears during request handling, a service is resolving LLM config
-        # outside user context — that's a bug.
-        logger.warning("get_internal_llm() called without user context (expected at startup only), defaulting to 'cof' tier")
-        return 'cof'
-
-    user_id = get_current_user_id()
-
-    from clients.postgres_client import PostgresClient
-    db = PostgresClient("mira_service", admin=True)
-    result = db.execute_single(
-        "SELECT stripe_payment_method_id FROM users WHERE id = %s",
-        (user_id,),
-    )
-    if result and result.get("stripe_payment_method_id"):
-        return 'cof'
-    return 'free'
+        return configs[name]
+    except KeyError as error:
+        raise KeyError(f"Unknown model_config '{name}'") from error
 
 
 # ============================================================
@@ -345,7 +311,6 @@ class UserPreferences(BaseModel):
     timezone: str = Field(default="America/Chicago")
     temperature_unit: str = Field(default="fahrenheit")
     memory_manipulation_enabled: bool = Field(default=True)
-    conversation_llm: str = Field(default="primary")
     created_at: Optional[datetime] = None
 
 
@@ -375,9 +340,9 @@ def get_user_preferences() -> UserPreferences:
         return UserPreferences(**data)
 
     # Cache miss - fetch from database
-    db = PostgresClient('mira_service')
+    db = PostgresClient('mira_service', user_id=user_id)
     result = db.execute_single(
-        """SELECT first_name, last_name, timezone, temperature_unit, memory_manipulation_enabled, conversation_llm, created_at
+        """SELECT first_name, last_name, timezone, temperature_unit, memory_manipulation_enabled, created_at
            FROM users WHERE id = %s""",
         (user_id,)
     )
@@ -388,7 +353,6 @@ def get_user_preferences() -> UserPreferences:
         timezone=result.get('timezone') or 'America/Chicago',
         temperature_unit=result.get('temperature_unit') or 'fahrenheit',
         memory_manipulation_enabled=result.get('memory_manipulation_enabled', True),
-        conversation_llm=result.get('conversation_llm') or 'minimax',
         created_at=result.get('created_at'),
     )
 
@@ -403,7 +367,7 @@ def update_user_preference(field: str, value: Any) -> UserPreferences:
     Update a single preference field in database and invalidate cache.
 
     Args:
-        field: Preference field name (timezone, conversation_llm, etc.)
+        field: Preference field name (timezone, temperature_unit, etc.)
         value: New value for the field
 
     Returns:
@@ -417,7 +381,7 @@ def update_user_preference(field: str, value: Any) -> UserPreferences:
     from clients.postgres_client import PostgresClient
     from clients.valkey_client import get_valkey_client
 
-    db = PostgresClient('mira_service')
+    db = PostgresClient('mira_service', user_id=user_id)
 
     db.execute_update(
         f"UPDATE users SET {field} = %s WHERE id = %s",

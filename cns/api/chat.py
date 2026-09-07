@@ -17,16 +17,10 @@ from pydantic import BaseModel, Field
 
 from auth.api import get_current_user
 from auth.types import SessionData, APITokenContext
-from clients.files_manager import FilesManager
 from config.config_manager import config as app_config
 from cns.services.async_work_barrier import get_async_work_barrier
 from utils.distributed_lock import UserRequestLock
 
-# Import billing exception for proper type checking (None if OSS mode)
-try:
-    from billing.exceptions import InsufficientBalanceError
-except ImportError:
-    InsufficientBalanceError = None  # type: ignore[misc, assignment]
 from utils.document_processing import process_document, ProcessedDocument, SUPPORTED_DOCUMENT_FORMATS, MAX_DOCUMENT_SIZE_MB
 from utils.image_compression import compress_image, CompressedImage
 from utils.text_sanitizer import sanitize_message_content
@@ -162,7 +156,6 @@ class ChatEndpoint(BaseHandler):
             # Use a validation error to preserve consistent error envelope
             raise ValidationError("Another chat request is already in progress for this user")
 
-        files_manager: FilesManager | None = None
         try:
             # Resolve dependencies
             orchestrator = get_orchestrator()
@@ -189,18 +182,14 @@ class ChatEndpoint(BaseHandler):
             segment_turn_number = result.turn_number
             segment_id = result.segment_id
 
-            # Process document with Files API support
+            # Process documents into provider-neutral text.
             processed_doc: ProcessedDocument | None = None
             if document_bytes:
-                files_manager = orchestrator.llm_provider.create_files_manager()
-
                 try:
                     processed_doc = process_document(
                         document_bytes,
                         document_type,
-                        files_manager=files_manager,
                         filename=f"document.{document_type.split('/')[-1]}",  # Extract extension from MIME
-                        segment_id=segment_id
                     )
                 except ValueError as e:
                     raise ValidationError(f"Document processing failed: {e}")
@@ -231,32 +220,16 @@ class ChatEndpoint(BaseHandler):
                     }
                 ]
             elif processed_doc:
-                # Document handling based on content_type
-                if processed_doc.content_type == "container_upload":
-                    # Structured data: Files API with file_id (CSV, XLSX, JSON for code execution)
-                    doc_block: ContentBlock = {
-                        "type": "file_ref",
-                        "file_id": processed_doc.data  # file_id from Files API
-                    }
-                elif processed_doc.content_type == "document":
-                    # PDF: Base64 document block
-                    doc_block = {
-                        "type": "document",
-                        "media_type": processed_doc.media_type,
-                        "data": processed_doc.data,
-                    }
-                else:
-                    # DOCX/plain text: Extracted text
-                    doc_block = {
-                        "type": "text",
-                        "text": f"[Document: {processed_doc.media_type}]\n{processed_doc.data}",
-                    }
+                doc_block: ContentBlock = {
+                    "type": "text",
+                    "text": f"[Document: {processed_doc.media_type}]\n{processed_doc.data}",
+                }
 
                 inference_content = [{"type": "text", "text": msg}, doc_block]
-                # Storage: Use same block as inference (file_id persists until segment collapse)
+                # Storage uses the same provider-neutral document block.
                 storage_content = [
                     {"type": "text", "text": msg},
-                    doc_block  # Reuse same block (file_id or base64)
+                    doc_block
                 ]
             else:
                 inference_content = msg
@@ -265,7 +238,8 @@ class ChatEndpoint(BaseHandler):
             uow = continuum_pool.begin_work(continuum)
 
             # Per-request cost tracking (opt-in). Started before any LLM calls
-            # fire (including subcortical and internal_llm purposes), drained
+            # fire (including the fast route's subcortical work and every other
+            # model_configs route the turn touches), drained
             # after the orchestrator returns so the summary covers every call
             # the turn triggered.
             if show_cost:
@@ -319,7 +293,6 @@ class ChatEndpoint(BaseHandler):
             )
 
         finally:
-            # Note: File cleanup happens on segment collapse, not per-request
             _user_request_lock.release(user_id)
 
 
@@ -359,21 +332,6 @@ def chat_endpoint(
             }
         )
     except Exception as e:
-        # Check for InsufficientBalanceError (billing module may not exist in OSS)
-        if InsufficientBalanceError is not None and isinstance(e, InsufficientBalanceError):
-            return JSONResponse(
-                status_code=402,  # Payment Required
-                content={
-                    "success": False,
-                    "error": {
-                        "code": "INSUFFICIENT_BALANCE",
-                        "message": str(e),
-                        "balance": str(e.balance),
-                        "next_drip_at": e.next_drip_at.isoformat(),
-                        "seconds_until_drip": int(e.time_until_drip.total_seconds())
-                    }
-                }
-            )
         logger.error(f"Chat endpoint error: {e}", exc_info=True)
         return JSONResponse(
             status_code=500,

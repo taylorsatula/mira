@@ -13,8 +13,31 @@ from typing import Any
 
 from clients.llm.events import StreamEvent, ToolCompletedEvent, ToolErrorEvent, ToolExecutingEvent
 from clients.llm.types import ToolCall, ToolResult
+from utils.user_context import check_cancelled, get_cancel_event
 
 logger = logging.getLogger(__name__)
+
+
+class ToolReportedError(RuntimeError):
+    """A tool ran successfully but reported that its requested operation failed."""
+
+    @classmethod
+    def from_result(cls, tool_name: str, result: dict[str, Any]) -> "ToolReportedError":
+        raw_error = result.get("error")
+        if isinstance(raw_error, dict):
+            code = raw_error.get("code") or "TOOL_ERROR"
+            message = raw_error.get("message")
+        else:
+            code = raw_error or "TOOL_ERROR"
+            message = result.get("message")
+        recovery = result.get("recovery")
+
+        parts = [f"{tool_name} reported {code}"]
+        if isinstance(message, str) and message.strip():
+            parts.append(message.strip())
+        if isinstance(recovery, str) and recovery.strip():
+            parts.append(f"Recovery: {recovery.strip()}")
+        return cls(" | ".join(parts))
 
 
 @dataclass
@@ -23,6 +46,7 @@ class ToolExecution:
 
     tool_name: str
     result_hash: str | None
+    input_hash: str
     error: Exception | None
 
 
@@ -39,16 +63,23 @@ class ToolExecutionResult:
 
 @dataclass
 class CircuitBreaker:
-    """Stops local tool chains on repeated failures or identical loops."""
+    """Stops local tool chains when the same tool with the same arguments fails twice."""
 
     tool_results: list[ToolExecution] = field(default_factory=list)
 
-    def record_execution(self, tool_name: str, result: Any, error: Exception | None = None) -> None:
+    def record_execution(
+        self,
+        tool_name: str,
+        result: Any,
+        input_hash: str,
+        error: Exception | None = None,
+    ) -> None:
         serialized_result = json.dumps(result, sort_keys=True, default=str) if error is None else ""
         self.tool_results.append(
             ToolExecution(
                 tool_name=tool_name,
                 result_hash=None if error else hashlib.sha256(serialized_result.encode()).hexdigest(),
+                input_hash=input_hash,
                 error=error,
             )
         )
@@ -58,22 +89,18 @@ class CircuitBreaker:
             return True, "First tool"
         last = self.tool_results[-1]
         if last.error is not None:
-            prior_errors = sum(
-                1
+            prior_failures = [
+                execution
                 for execution in self.tool_results[:-1]
-                if execution.tool_name == last.tool_name and execution.error is not None
-            )
-            if prior_errors > 0:
-                return False, f"Tool '{last.tool_name}' failed after correction attempt: {last.error}"
-        if len(self.tool_results) >= 2:
-            current = self.tool_results[-1]
-            previous = self.tool_results[-2]
-            if (
-                current.tool_name == previous.tool_name
-                and current.result_hash == previous.result_hash
-                and current.result_hash is not None
-            ):
-                return False, "Repeated identical results"
+                if execution.tool_name == last.tool_name
+                and execution.input_hash == last.input_hash
+                and execution.error is not None
+            ]
+            if prior_failures:
+                return (
+                    False,
+                    f"Tool '{last.tool_name}' failed on repeated attempt with same arguments: {last.error}",
+                )
         return True, "Continue"
 
 
@@ -97,34 +124,57 @@ class ToolLoopExecutor:
             else:
                 parallel.append(tool_call)
 
-        for tool_call in tool_calls:
+        results: list[ToolResult] = []
+        for tool_call in sequential:
+            check_cancelled()
             yield ToolExecutingEvent(
                 tool_name=tool_call.tool_name,
                 tool_id=tool_call.id,
                 arguments=dict(tool_call.input),
             )
-
-        results: list[ToolResult] = []
-        for tool_call in sequential:
             execution = self._execute_tool(tool_call)
             self._emit_tool_result(execution, breaker, results)
             yield from self._events_for_tool_execution(execution)
+        if sequential:
+            check_cancelled()
 
         if parallel:
+            check_cancelled()
             context = copy_context()
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = {
-                    executor.submit(context.copy().run, self._execute_tool, tool_call): tool_call
-                    for tool_call in parallel
-                }
+                futures = {}
+                for tool_call in parallel:
+                    # A halt must stop later calls from starting, but never
+                    # abandons one that already started: its terminal event is
+                    # still owed to the provider conversation.
+                    cancel_event = get_cancel_event()
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
+                    future = executor.submit(context.copy().run, self._execute_tool, tool_call)
+                    futures[future] = tool_call
+                    yield ToolExecutingEvent(
+                        tool_name=tool_call.tool_name,
+                        tool_id=tool_call.id,
+                        arguments=dict(tool_call.input),
+                    )
                 for future in concurrent.futures.as_completed(futures):
                     execution = future.result()
                     self._emit_tool_result(execution, breaker, results)
                     yield from self._events_for_tool_execution(execution)
+            check_cancelled()
 
         return tuple(results)
 
     def _execute_tool(self, tool_call: ToolCall) -> ToolExecutionResult:
+        if tool_call.invalid_reason:
+            error = ValueError(
+                f"Invalid tool call arguments for '{tool_call.tool_name}': "
+                f"{tool_call.invalid_reason}"
+            )
+            logger.warning("Provider returned invalid tool call for %s: %s", tool_call.tool_name, error)
+            result_content = f"Error: {error}{self._schema_hint(tool_call.tool_name, error)}"
+            return ToolExecutionResult(tool_call, result_content, None, None, error)
+
         try:
             raw_result = self.tool_repo.invoke_tool(tool_call.tool_name, dict(tool_call.input))
             if isinstance(raw_result, list):
@@ -134,6 +184,20 @@ class ToolLoopExecutor:
                 result_content = json.dumps(raw_result)
             else:
                 result_content = str(raw_result)
+            if isinstance(raw_result, dict) and raw_result.get("success") is False:
+                # A structured rejection is an operation failure the model can
+                # correct, not a success. Without this the input-aware circuit
+                # breaker sees no error and lets the model repeat the identical
+                # failing call forever.
+                error = ToolReportedError.from_result(tool_call.tool_name, raw_result)
+                logger.warning("Tool reported an operation failure: %s", error)
+                return ToolExecutionResult(
+                    tool_call,
+                    result_content,
+                    raw_result,
+                    None,
+                    error,
+                )
             return ToolExecutionResult(
                 tool_call,
                 result_content,
@@ -174,9 +238,13 @@ class ToolLoopExecutor:
         breaker: CircuitBreaker,
         results: list[ToolResult],
     ) -> None:
+        input_hash = hashlib.sha256(
+            json.dumps(dict(execution.tool_call.input), sort_keys=True, default=str).encode()
+        ).hexdigest()
         breaker.record_execution(
             execution.tool_call.tool_name,
             execution.hash_material,
+            input_hash,
             execution.error,
         )
         results.append(ToolResult(

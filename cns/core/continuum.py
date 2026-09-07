@@ -67,20 +67,54 @@ class Continuum:
         """
         self._message_cache = messages
     
-    def add_user_message(self, content: str | list[ContentBlock]) -> tuple[Message, list[ContinuumEvent]]:
+    def add_user_message(
+        self,
+        content: str | list[ContentBlock],
+        *,
+        message_id: UUID | None = None,
+        metadata: MessageMetadata | None = None,
+    ) -> tuple[Message, list[ContinuumEvent]]:
         """
         Add user message to continuum.
+
+        The transport boundary supplies ``message_id`` and turn metadata so the
+        durable row can be reconciled with the client's optimistic id and with
+        the frames streamed for the same turn.
 
         Returns:
             Tuple of (created Message, list of domain events)
         """
         # Create message with original content for processing
-        message = Message(content=content, role="user")
+        message = Message(
+            content=content,
+            role="user",
+            id=message_id or uuid4(),
+            metadata=metadata or {},
+        )
 
         # Add to cache only - persistence will be handled by orchestrator
         self._message_cache.append(message)
 
         return message, []
+
+    def discard_transient_user_message(self, message_id: UUID) -> bool:
+        """Remove one internal continuation prompt from the hot cache.
+
+        Internal system scaffolds may be present while composing a provider
+        continuation, but they are not conversation records. Refuse to remove
+        ordinary messages through this narrow cache-only operation.
+        """
+        for index, message in enumerate(self._message_cache):
+            if message.id != message_id:
+                continue
+            if (
+                message.role != "user"
+                or message.metadata.get("transient_system_scaffold") is not True
+            ):
+                raise ValueError("Only a transient system-scaffold user message can be discarded")
+            del self._message_cache[index]
+            return True
+        return False
     
     def add_assistant_message(self, content: str, metadata: MessageMetadata | None = None) -> tuple[Message, list[ContinuumEvent]]:
         """

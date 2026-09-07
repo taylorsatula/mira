@@ -41,7 +41,12 @@
  * - events.js (calls history functions from UI interactions)
  *
  * KEY PATTERNS:
- * - Pagination state in AppState.historyDrawer (offset, hasMore, isLoading)
+ * - Pagination state in AppState.historyDrawer (nextBefore keyset cursor,
+ *   hasMore, isLoading). Ordered history is cursor-only: no offset, and no
+ *   server-side search either (the drawer filters the loaded DOM instead).
+ *   Every renderer in this file reads pages newest-first, which is what
+ *   api-client's history service hands back after reversing the endpoint's
+ *   chronological page.
  * - IntersectionObserver for infinite scroll triggering
  * - Date key normalization (today/yesterday → YYYY-MM-DD)
  * - Temporal link state stored in button data attributes
@@ -56,7 +61,7 @@
 
 async function renderConversations() {
 	try {
-		AppState.historyDrawer.currentOffset = 0;
+		AppState.historyDrawer.nextBefore = null;
 		AppState.historyDrawer.hasMore = false;
 		AppState.historyDrawer.isLoading = false;
 
@@ -72,20 +77,25 @@ async function renderConversations() {
 	}
 }
 
-async function loadConversations(offset = 0, limit = 20) {
+// `before` is the opaque next_before token from the previous page; null means
+// "start at the newest message". Pagination state, and every consumer of it,
+// reads pages newest-first — see the header note on where that is normalised.
+async function loadConversations(before = null, limit = 20) {
 	if (AppState.historyDrawer.isLoading) return;
 
+	const isFirstPage = !before;
 	AppState.historyDrawer.isLoading = true;
 
 	try {
-		const response = await AppState.apiClient.history.getHistory({ offset, limit });
+		const response = await AppState.apiClient.history.getHistory({ before, limit });
+		const meta = response.meta || {};
 
-		if (offset === 0) {
+		if (isFirstPage) {
 			elements.historyContent.innerHTML = '';
 		}
 
-		if (response.messages.length === 0) {
-			if (offset === 0) {
+		if (!response.messages || response.messages.length === 0) {
+			if (isFirstPage) {
 				elements.historyContent.innerHTML = '<div class="empty-state">No conversations found</div>';
 			}
 			AppState.historyDrawer.hasMore = false;
@@ -93,10 +103,10 @@ async function loadConversations(offset = 0, limit = 20) {
 		}
 
 		const messageGroups = groupMessagesByDate(response.messages);
-		renderMessageGroups(messageGroups, offset === 0);
+		renderMessageGroups(messageGroups, isFirstPage);
 
-		AppState.historyDrawer.currentOffset = response.next_offset || 0;
-		AppState.historyDrawer.hasMore = response.has_more;
+		AppState.historyDrawer.nextBefore = meta.next_before || null;
+		AppState.historyDrawer.hasMore = Boolean(meta.has_more) && Boolean(meta.next_before);
 
 		if (AppState.historyDrawer.hasMore) {
 			addInfiniteScrollTrigger();
@@ -104,7 +114,7 @@ async function loadConversations(offset = 0, limit = 20) {
 
 	} catch (error) {
 		console.error('Failed to load conversations:', error);
-		if (offset === 0) {
+		if (isFirstPage) {
 			elements.historyContent.innerHTML = '<div class="empty-state">Failed to load conversations</div>';
 		}
 	} finally {
@@ -241,7 +251,7 @@ function addInfiniteScrollTrigger() {
 	AppState.scrollObserver = new IntersectionObserver(
 		(entries) => {
 			if (entries[0].isIntersecting && AppState.historyDrawer.hasMore && !AppState.historyDrawer.isLoading) {
-				loadConversations(AppState.historyDrawer.currentOffset, 20);
+				loadConversations(AppState.historyDrawer.nextBefore, 20);
 			}
 		},
 		{ threshold: 0.1 }
@@ -407,16 +417,22 @@ async function renderCalendar(date = new Date()) {
 async function getConversationDaysForMonth(year, month) {
 	try {
 		const activeDays = new Set();
-		let offset = 0;
+		let before = null;
 		const limit = 100;
 		let hasMore = true;
+		let pages = 0;
 
 		console.log('Calendar activity debug - fetching for year:', year, 'month:', month);
 
-		while (hasMore && offset < 500) {
-			const response = await AppState.apiClient.history.getHistory({ offset, limit });
+		// A keyset cursor cannot be offset, so the scan is bounded by page count
+		// instead of by a row index. Five pages of 100 is the same 500-message
+		// window the offset loop covered.
+		while (hasMore && pages < 5) {
+			pages += 1;
+			const response = await AppState.apiClient.history.getHistory({ before, limit });
+			const meta = response.meta || {};
 
-			console.log(`API response for offset ${offset}:`, response);
+			console.log(`API response for cursor page ${pages}:`, response);
 
 			if (response.messages && Array.isArray(response.messages) && response.messages.length > 0) {
 				response.messages.forEach(message => {
@@ -429,8 +445,9 @@ async function getConversationDaysForMonth(year, month) {
 					}
 				});
 
-				hasMore = response.meta?.has_more && response.messages.length === limit;
-				offset += limit;
+				hasMore = Boolean(meta.has_more) && response.messages.length === limit;
+				before = meta.next_before || null;
+				if (!before) hasMore = false;
 			} else {
 				hasMore = false;
 			}
@@ -458,7 +475,6 @@ async function selectDate(date) {
 		const apiDate = date.toISOString().split('T')[0];
 
 		const response = await AppState.apiClient.history.getHistory({
-			offset: 0,
 			limit: 100,
 			date: apiDate
 		});
@@ -605,7 +621,7 @@ async function updateTemporalLinkStates() {
 const InlineHistoryState = {
 	isExpanded: false,
 	loadedSegments: [],     // Cached segment data [{sentinel, pairs}]
-	currentOffset: 0,       // API pagination cursor
+	nextBefore: null,       // Opaque keyset cursor into older messages
 	hasMore: true,
 	isLoading: false,
 	savedScrollPosition: null,
@@ -687,17 +703,21 @@ async function loadInlineHistory() {
 	const scrollTopBefore = elements.responseBox.scrollTop;
 
 	try {
-		// Skip first 2 messages (current turn) on initial load
+		// Skip the current turn on initial load. A keyset cursor cannot skip
+		// rows, so the newest two messages are dropped client-side instead of
+		// being offset past on the server.
 		const skipCurrentTurn = InlineHistoryState.loadedSegments.length === 0 ? 2 : 0;
-		const apiOffset = InlineHistoryState.currentOffset + skipCurrentTurn;
 
 		const response = await AppState.apiClient.history.getHistory({
-			offset: apiOffset,
+			before: InlineHistoryState.nextBefore,
 			limit: INLINE_PAIR_LIMIT
 		});
 
-		if (response.messages && response.messages.length > 0) {
-			const segments = groupMessagesIntoSegments(response.messages);
+		let pageMessages = response.messages || [];
+		if (skipCurrentTurn) pageMessages = pageMessages.slice(skipCurrentTurn);
+
+		if (pageMessages.length > 0) {
+			const segments = groupMessagesIntoSegments(pageMessages);
 
 			// Render each segment
 			segments.forEach(segment => {
@@ -706,10 +726,10 @@ async function loadInlineHistory() {
 				elements.inlineHistorySentinel.after(segmentElement);
 			});
 
+			const meta = response.meta || {};
 			InlineHistoryState.loadedSegments = [...segments, ...InlineHistoryState.loadedSegments];
-			InlineHistoryState.currentOffset += response.messages.length;
-			InlineHistoryState.hasMore = response.has_more ||
-				(response.meta && response.meta.has_more);
+			InlineHistoryState.nextBefore = meta.next_before || null;
+			InlineHistoryState.hasMore = Boolean(meta.has_more) && Boolean(meta.next_before);
 		} else {
 			InlineHistoryState.hasMore = false;
 		}
