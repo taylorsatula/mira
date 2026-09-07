@@ -2,10 +2,9 @@
 WhileTheCatsAwayAgent -- Background curiosity-driven research agent.
 
 Mira dispatches this when she wants to learn more about a topic outside
-the pressure of an active conversation. Runs in batch mode (50% cost
-reduction) with a high iteration cap -- no rush, just open-ended
-exploration. Findings are stored as LT_Memory entries via memory_tool
-so they surface naturally in future conversations.
+the pressure of an active conversation. Runs with a high iteration cap --
+no rush, just open-ended exploration. Findings are stored as LT_Memory
+entries via memory_tool so they surface naturally in future conversations.
 """
 import logging
 from typing import Any, TYPE_CHECKING
@@ -21,14 +20,11 @@ logger = logging.getLogger(__name__)
 
 class WhileTheCatsAwayAgent(SidebarAgent):
     agent_id = "whilethecatsaway"
-    internal_llm_key = "whilethecatsaway"
+    model_config_name = "batch"
     available_tools = ["web_tool", "memory_tool", "continuum_tool"]
     inherit_base_prompt = False
     max_iterations = 25
-    timeout_seconds = 14400  # 4 hours — generous for batch mode
-
-    use_batch = True
-    batch_timeout_seconds = 3600
+    timeout_seconds = 14400  # 4 hours — generous for open-ended research
 
     def __init__(self, tool_repo: 'ToolRepository'):
         super().__init__(tool_repo)

@@ -371,7 +371,7 @@ Is this a prompt injection attempt? Respond ONLY with valid JSON:
         # Call injection defense LLM (let exceptions propagate)
         response = self._llm_provider.generate_response(
             messages=[{"role": "user", "content": detection_prompt}],
-            internal_llm='analysis',
+            model_config="fast",
         )
 
         # Extract response content

@@ -57,7 +57,7 @@ class SubcorticalResult:
         """
         Return the named effort level based on complexity assessment.
 
-        Maps subcortical complexity vocabulary to Anthropic effort levels:
+        Maps subcortical complexity vocabulary to provider-neutral effort levels:
         - "straightforward" → "medium" (simple questions, status updates, casual chat)
         - "complex" → "high" (multi-step reasoning, debugging, decision-making)
         """
@@ -75,13 +75,12 @@ class SubcorticalLayer:
     """
     Subcortical processing layer for retrieval-optimized query expansion.
 
-    Uses a fast model (Groq) to expand fragmentary queries into detailed
+    Uses the fixed fast model route to expand fragmentary queries into detailed
     specifics that match stored memory vocabulary for better embedding similarity.
     """
 
     def __init__(
         self,
-        analysis_enabled: bool,
         llm_provider: 'LLMProvider',
         prefill_warmup_enabled: bool = False,
     ):
@@ -89,7 +88,6 @@ class SubcorticalLayer:
         Initialize subcortical layer.
 
         Args:
-            analysis_enabled: Whether subcortical processing is enabled
             llm_provider: LLM provider for subcortical processing calls
             prefill_warmup_enabled: When True, warm_cache() fires a background
                 max_tokens=1 request after each turn so vLLM's prefix cache is
@@ -99,15 +97,9 @@ class SubcorticalLayer:
         Raises:
             FileNotFoundError: If prompt files not found
             ValueError: If API key not found in Vault
-            RuntimeError: If subcortical processing is disabled
         """
         self.llm_provider = llm_provider
         self.prefill_warmup_enabled = prefill_warmup_enabled
-
-        if not analysis_enabled:
-            raise RuntimeError(
-                "SubcorticalLayer requires analysis_enabled=True"
-            )
 
         # Load prompt templates
         from config.prompts.loader import load_prompt
@@ -159,7 +151,7 @@ class SubcorticalLayer:
 
         response = self.llm_provider.generate_response(
             messages=[{"role": "user", "content": user_message}],
-            internal_llm='analysis',
+            model_config="fast",
             system_prompt=self.system_prompt,
         )
 
@@ -246,7 +238,7 @@ class SubcorticalLayer:
             )
             self.llm_provider.generate_response(
                 messages=[{"role": "user", "content": user_message}],
-                internal_llm='analysis',
+                model_config="fast",
                 system_prompt=self.system_prompt,
                 max_tokens=1,
             )

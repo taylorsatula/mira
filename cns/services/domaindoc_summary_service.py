@@ -96,8 +96,7 @@ def _generate_summary(header: str, content: str) -> str:
     llm = _get_llm_provider()
     response = llm.generate_response(
         messages=messages,
-        internal_llm='analysis',
-        allow_negative=True  # System task — background summary generation
+        model_config="fast",
     )
 
     return llm.extract_text_content(response).strip()

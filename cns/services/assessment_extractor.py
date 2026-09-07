@@ -116,8 +116,7 @@ class AssessmentExtractor:
 
         response = self.llm_provider.generate_response(
             messages=llm_messages,
-            internal_llm='assessment',
-            allow_negative=True  # System task — segment already paid for
+            model_config="assessment",
         )
 
         raw_output = self.llm_provider.extract_text_content(response)

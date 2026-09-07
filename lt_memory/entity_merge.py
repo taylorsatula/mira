@@ -167,8 +167,7 @@ def _assess_groups(
     ]
     response = llm.generate_response(
         messages=messages,
-        internal_llm='analysis',
-        allow_negative=True,  # Background maintenance task
+        model_config="fast",
     )
     raw = llm.extract_text_content(response).strip()
     try:

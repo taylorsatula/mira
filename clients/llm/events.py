@@ -131,14 +131,3 @@ class FileArtifactEvent(StreamEvent):
     size_bytes: int
     type: str = field(default="file_artifact", init=False)
     timestamp: float = field(default_factory=time.time, init=False)
-
-
-@dataclass
-class ProviderSwitchEvent(StreamEvent):
-    """Primary provider stalled or failed, switching to backup."""
-
-    original_endpoint: str
-    backup_model: str
-    reason: str
-    type: str = field(default="provider_switch", init=False)
-    timestamp: float = field(default_factory=time.time, init=False)

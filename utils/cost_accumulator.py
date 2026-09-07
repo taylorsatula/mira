@@ -2,14 +2,17 @@
 Per-request LLM cost accumulator for user-facing "what did this cost" feedback.
 
 A request handler (typically `cns/api/chat.py`) calls `start()` when the user
-has asked to see cost. Every LLM call site in `clients/llm_provider.py` then
-calls `record()` with the call's token usage and context (`internal_llm` name
-if applicable). At the end of the request the handler calls `drain()` which
-returns a structured summary.
+has asked to see cost. Every completed provider call in
+`clients/llm/lifecycle.py` then calls `record(result)` with the final
+`Result`, from which the usage tokens and the `model_configs` route name are
+derived. At the end of the request the handler calls `drain()` which returns
+a structured summary.
 
-Pricing is looked up from the `usage_pricing` table. Rows with NULL prices
-fall back to `FALLBACK_PRICES` below — keeps the feature useful in OSS where
-the closed `billing` module isn't present to auto-populate from OpenRouter.
+Pricing is looked up from the `usage_pricing` table, price field by field, in
+precedence order: the route's own row, then the reserved `__default__` row, then
+`FALLBACK_PRICES` below. The lower tiers are what keeps the feature useful in OSS,
+where the closed `billing` module isn't present to auto-populate from OpenRouter,
+and where the greenfield schema seeds route rows with no prices at all.
 
 The accumulator is scoped to a contextvar, so call-site code can be ignorant
 of whether cost tracking is active — `record()` is a no-op when it isn't.
@@ -18,13 +21,17 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Dict, List, Optional, TypedDict
+from typing import TYPE_CHECKING, Dict, List, Optional, TypedDict
 
 from utils.database_session_manager import get_shared_session_manager
 
+if TYPE_CHECKING:
+    from clients.llm.types import Result
 
-# Public pricing as of 2026-04. Used only when `usage_pricing` has NULL for a
-# key the user exercised. Values are USD per million tokens.
+
+# Public pricing as of 2026-04. Used only when `usage_pricing` has no price for
+# a field the user exercised, for either the route or the reserved default row.
+# Values are USD per million tokens.
 # Updating this table is a low-risk change; Anthropic and Groq publish their
 # prices openly. A hosted install with a real billing backend will have
 # populated `usage_pricing` rows and never hit this fallback.
@@ -37,6 +44,17 @@ FALLBACK_PRICES: Dict[str, Dict[str, float]] = {
     # Groq (subcortical)
     "qwen/qwen3.6-27b":          {"input":  0.29, "output":  0.39, "cache_read": 0.0,   "cache_write":  0.0},
 }
+
+# Reserved `usage_pricing` key seeded by the greenfield schema as the fallback
+# price pair for any route without an explicit price. It is not a model_configs
+# route name, so it never collides with a pricing_key.
+DEFAULT_PRICING_KEY = "__default__"
+
+_PRICE_FIELDS = ("input", "output", "cache_read", "cache_write")
+# A record is only costable when both dominant dimensions resolve somewhere in
+# the chain. The `__default__` row is deliberately seeded with input/output
+# alone, so an unresolved cache field costs 0.0 rather than voiding the record.
+_CORE_PRICE_FIELDS = ("input", "output")
 
 
 class _UsageRecord(TypedDict):
@@ -88,36 +106,33 @@ def is_active() -> bool:
     return _records.get() is not None
 
 
-def record(
-    *,
-    internal_llm_name: Optional[str],
-    model: str,
-    input_tokens: int,
-    output_tokens: int,
-    cache_read_tokens: int = 0,
-    cache_write_tokens: int = 0,
-) -> None:
-    """Append a usage record. No-op if no accumulator is active.
+def record(result: "Result") -> None:
+    """Append a usage record derived from one completed provider Result.
 
-    `internal_llm_name` is the `internal_llm` purpose key (e.g. `"summary"`)
-    when the call was made with `internal_llm=...`, or None when the call
-    used the user's account tier (regular user-facing chat).
+    No-op if no accumulator is active or the result carries no usage. The
+    pricing key is the result's `model_configs` route name (primary, fast,
+    batch, assessment, or other); None route provenance means the call cannot
+    be priced and is skipped.
     """
     records = _records.get()
     if records is None:
         return
-    pricing_key = _resolve_pricing_key(internal_llm_name)
+    usage = result.usage
+    if usage is None:
+        return
+    metadata = result.provider_metadata
+    pricing_key = _resolve_pricing_key(metadata.model_config_name)
     if pricing_key is None:
         # Called outside user context (rare — startup, admin jobs). Skip silently;
         # cost tracking is only meaningful inside a user request anyway.
         return
     records.append(_UsageRecord(
         pricing_key=pricing_key,
-        model=model,
-        input_tokens=int(input_tokens or 0),
-        output_tokens=int(output_tokens or 0),
-        cache_read_tokens=int(cache_read_tokens or 0),
-        cache_write_tokens=int(cache_write_tokens or 0),
+        model=metadata.model or "unknown",
+        input_tokens=int(usage.input_tokens or 0),
+        output_tokens=int(usage.output_tokens or 0),
+        cache_read_tokens=int(usage.cache_read_input_tokens or 0),
+        cache_write_tokens=int(usage.cache_creation_input_tokens or 0),
     ))
 
 
@@ -145,7 +160,7 @@ def drain() -> Optional[CostSummary]:
 
     for r in records:
         db_price = prices.get(r["pricing_key"])
-        price, is_fallback = _price_for_record(db_price, r["model"])
+        price, is_fallback = _price_for_record(db_price, prices.get(DEFAULT_PRICING_KEY), r["model"])
         if price is None:
             unpriced += 1
             continue
@@ -170,40 +185,35 @@ def drain() -> Optional[CostSummary]:
     )
 
 
-def _resolve_pricing_key(internal_llm_name: Optional[str]) -> Optional[str]:
+def _resolve_pricing_key(model_config_name: Optional[str]) -> Optional[str]:
     """Compute the `usage_pricing.name` for the call being recorded.
 
-    Internal LLM purposes key by "{name}:{tier}" (e.g. "summary:cof");
-    user-facing chat keys by the user's `account_tiers.name` (e.g. "primary").
-    Returns None when there is no active user context.
+    `usage_pricing` is keyed by `model_configs` route name (D5 re-key).
+    Returns None when there is no active user context or the call carried no
+    route name — cost tracking is only meaningful inside a user request.
+
+    The `__default__` fallback is applied at pricing time in `_price_for_record`,
+    not here: this function records which route made the call, so an operator can
+    seed a route-specific row later without re-attributing past usage.
     """
-    from utils.user_context import has_user_context, get_current_user_id, _resolve_user_internal_tier
+    from utils.user_context import has_user_context
 
     if not has_user_context():
         return None
 
-    if internal_llm_name is not None:
-        return f"{internal_llm_name}:{_resolve_user_internal_tier()}"
-
-    # User-tier chat — read llm_tier from the users row.
-    from clients.postgres_client import PostgresClient
-    db = PostgresClient("mira_service", admin=True)
-    row = db.execute_single(
-        "SELECT llm_tier FROM users WHERE id = %(id)s",
-        {"id": str(get_current_user_id())},
-    )
-    return row["llm_tier"] if row else None
+    return model_config_name
 
 
 def _fetch_prices(keys: set[str]) -> Dict[str, Optional[Dict[str, Optional[float]]]]:
-    """Return {pricing_key: price_dict_or_None} for the given keys.
+    """Return {pricing_key: price_dict_or_None} for the given keys and the default.
 
     Each price_dict has 'input'/'output'/'cache_read'/'cache_write' floats, any
     of which may be None if that column is NULL. Keys with no row at all map
-    to None.
+    to None. The reserved `__default__` row is always fetched — it is the tier
+    between a route's row and FALLBACK_PRICES.
     """
-    if not keys:
-        return {}
+    lookup_keys = set(keys)
+    lookup_keys.add(DEFAULT_PRICING_KEY)
     with get_shared_session_manager().get_admin_session() as session:
         rows = session.execute_query(
             """SELECT name,
@@ -213,9 +223,9 @@ def _fetch_prices(keys: set[str]) -> Dict[str, Optional[Dict[str, Optional[float
                       cache_write_price_per_mtok
                  FROM usage_pricing
                 WHERE name = ANY(%(keys)s)""",
-            {"keys": list(keys)},
+            {"keys": list(lookup_keys)},
         )
-    result: Dict[str, Optional[Dict[str, Optional[float]]]] = {k: None for k in keys}
+    result: Dict[str, Optional[Dict[str, Optional[float]]]] = {k: None for k in lookup_keys}
     for row in rows:
         result[row["name"]] = {
             "input":       float(row["input_price_per_mtok"])       if row["input_price_per_mtok"]       is not None else None,
@@ -228,31 +238,43 @@ def _fetch_prices(keys: set[str]) -> Dict[str, Optional[Dict[str, Optional[float
 
 def _price_for_record(
     db_price: Optional[Dict[str, Optional[float]]],
+    default_price: Optional[Dict[str, Optional[float]]],
     model: str,
 ) -> tuple[Optional[Dict[str, float]], bool]:
-    """Choose the price to use for a single record.
+    """Resolve one record's prices through the fallback chain, field by field.
 
-    Preference order:
-      1. usage_pricing row with all four columns populated.
-      2. FALLBACK_PRICES by model name.
-      3. None — record is unpriced and will be counted but not costed.
+    Precedence for each of input/output/cache_read/cache_write: the route's own
+    `usage_pricing` row, then the reserved `__default__` row, then
+    FALLBACK_PRICES by model name, then no price at all. Resolving per field is
+    what makes a partially populated row usable — the schema documents a non-NULL
+    column as a manual override and seeds `__default__` with input/output only.
 
-    Returns (price_dict, is_fallback). `price_dict` always has all four
-    fields as concrete floats when not None.
+    Returns (price_dict, is_fallback). price_dict is None when input or output
+    resolved nowhere, so the record is counted but not costed; a cache field that
+    resolved nowhere contributes 0.0. When a price is returned, `price_dict` has
+    all four fields as concrete floats, as before.
     """
-    if db_price is not None and all(
-        db_price.get(k) is not None for k in ("input", "output", "cache_read", "cache_write")
-    ):
-        return (
-            {
-                "input":       db_price["input"],       # type: ignore[typeddict-item]
-                "output":      db_price["output"],      # type: ignore[typeddict-item]
-                "cache_read":  db_price["cache_read"],  # type: ignore[typeddict-item]
-                "cache_write": db_price["cache_write"], # type: ignore[typeddict-item]
-            },
-            False,
-        )
     fallback = FALLBACK_PRICES.get(model)
-    if fallback is not None:
-        return (dict(fallback), True)
-    return (None, False)
+    resolved: Dict[str, Optional[float]] = {}
+    used_fallback = False
+    for field in _PRICE_FIELDS:
+        value: Optional[float] = None
+        for tier, from_fallback in ((db_price, False), (default_price, False), (fallback, True)):
+            if tier is None:
+                continue
+            candidate = tier.get(field)
+            if candidate is not None:
+                value = float(candidate)
+                used_fallback = used_fallback or from_fallback
+                break
+        resolved[field] = value
+
+    if any(resolved[field] is None for field in _CORE_PRICE_FIELDS):
+        return (None, False)
+    return (
+        {
+            field: (resolved[field] if resolved[field] is not None else 0.0)
+            for field in _PRICE_FIELDS
+        },
+        used_fallback,
+    )

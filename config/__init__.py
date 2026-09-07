@@ -9,10 +9,10 @@ Usage:
     from config import config
     
     # Access using attribute notation
-    max_tokens = config.api.max_tokens
+    timeout = config.api.provider_response_timeout
 
     # Or using get() method with dot notation
-    max_tokens = config.get("api.max_tokens")
+    timeout = config.get("api.provider_response_timeout")
     
     # For required values (raises exception if missing)
     api_key = config.require("api.key")

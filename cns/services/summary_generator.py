@@ -64,7 +64,7 @@ class SummaryGenerator:
         """
         self.repository = repository
 
-        # Use provided LLM or create default (routing via internal_llm= per-call)
+        # Use provided LLM or create default (routing via model_config= per-call)
         self.llm_provider = llm_provider or LLMProvider()
         self.tag_parser = TagParser()
         self._load_prompts()
@@ -145,8 +145,7 @@ class SummaryGenerator:
         try:
             response = self.llm_provider.generate_response(
                 messages=llm_messages,
-                internal_llm='summary',
-                allow_negative=True  # System task — segment already paid for
+                model_config="primary",
             )
 
             raw_summary_output = self.llm_provider.extract_text_content(response)
@@ -369,8 +368,7 @@ class SummaryGenerator:
                 {"role": "system", "content": formatted_system_prompt},
                 {"role": "user", "content": prompt_text}
             ],
-            internal_llm='summary',
-            allow_negative=True  # System task — segment already paid for
+            model_config="primary",
         )
 
         raw_output = self.llm_provider.extract_text_content(response)
@@ -397,8 +395,7 @@ class SummaryGenerator:
                 {"role": "system", "content": self._synthesis_system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            internal_llm='summary',
-            allow_negative=True  # System task — segment already paid for
+            model_config="primary",
         )
 
         raw_output = self.llm_provider.extract_text_content(response)

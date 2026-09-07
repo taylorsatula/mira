@@ -143,10 +143,13 @@ class Dialect(ABC):
     ) -> "Dialect":
         """Construct a dialect instance from a resolved ModelSelection.
 
-        Implementations source the credential from the api_key argument or
-        from selection.api_key_name via Vault. Failure modes (missing
-        endpoint, missing key) raise loudly here so the orchestrator never
-        sees a partially-constructed dialect.
+        Implementations source the credential from the api_key argument or,
+        when that is None, from selection.api_key_name via Vault. A None
+        api_key_name means the route requires no credential: skip the lookup
+        entirely and build the client unauthenticated (a local endpoint needs
+        no Authorization header). Failure modes (missing endpoint, missing key
+        on a transport that cannot work unauthenticated) raise loudly here so
+        the orchestrator never sees a partially-constructed dialect.
         """
 
     @abstractmethod

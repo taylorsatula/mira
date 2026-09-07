@@ -22,8 +22,8 @@ from typing import Any, Literal, TYPE_CHECKING
 from typing_extensions import NotRequired, TypedDict
 
 from clients.llm.tool_messages import (
+    append_tool_result_messages,
     assistant_message_from_result,
-    tool_result_messages,
 )
 from clients.llm.types import Result, ToolCall, ToolResult
 from clients.llm_provider import LLMProvider
@@ -164,7 +164,8 @@ class SidebarAgent(ABC):
 
     Implementations define:
         agent_id         -- unique identifier (e.g. "forage")
-        internal_llm_key -- key into internal_llm DB table
+        model_config_name -- one of the five model_configs routes:
+                            primary, fast, batch, assessment, other
         available_tools  -- domain-specific tool names from registry
                             (sidebar_tool is always included automatically)
         get_agent_prompt()          -> str  -- agent-specific rubric
@@ -176,9 +177,8 @@ class SidebarAgent(ABC):
     publishing.
 
     Optional features (set the relevant attribute to activate):
-        sentry_llm_key           -- cheap pre-filter; see build_sentry_message()
-        overwatch_llm_key        -- passive iteration observer
-        use_batch                -- Anthropic Batch API (50% cost)
+        sentry_model_config_name -- cheap pre-filter; see build_sentry_message()
+        overwatch_model_config_name -- passive iteration observer
         sanitize_untrusted_input -- injection defense before main loop
         max_retries              -- dispatcher retry-on-failure threshold
 
@@ -189,7 +189,7 @@ class SidebarAgent(ABC):
 
     # Required -- subclasses must define
     agent_id: str
-    internal_llm_key: str
+    model_config_name: str
     available_tools: list[str]
 
     def __init__(self, tool_repo: 'ToolRepository'):
@@ -207,26 +207,27 @@ class SidebarAgent(ABC):
     sanitize_untrusted_input: bool = False
     max_retries: int = 0  # 0 = fire-and-forget, no retry on failure
 
-    # Batch mode -- opt-in 50% cost reduction via Anthropic Batch API.
-    # Subclasses that set use_batch=True must also raise timeout_seconds
-    # to accommodate batch_timeout_seconds * max_iterations.
-    use_batch: bool = False
-    batch_timeout_seconds: int = 3600  # Max wait per batch iteration result
-
     # Per-tool schema overrides. Maps tool name → custom tool_schema.
     # Used to restrict tool capabilities for sidebar agents (e.g.
     # email_tool → reply_to_email only).
     tool_schema_overrides: dict[str, dict[str, Any]] = {}
 
     # Sentry gate -- opt-in cheap pre-filter before the main loop.
-    # Set sentry_llm_key to an internal_llm name to activate.
-    sentry_llm_key: str | None = None
+    # Set sentry_model_config_name to activate. The gate exists to discard
+    # work items cheaply, so it belongs on `fast` like the other high-volume
+    # auxiliary judgments (subcortical, tool-result summary, entity merge,
+    # injection defense); sentry_max_tokens stays a per-request ceiling so a
+    # route change cannot widen it.
+    sentry_model_config_name: str | None = None
     sentry_max_tokens: int = 150
 
     # Overwatch -- opt-in passive observer that summarizes each iteration
     # via a cheap one-shot LLM call in a background thread. The agent
-    # loop is unaware of the observer. Set overwatch_llm_key to activate.
-    overwatch_llm_key: str | None = None
+    # loop is unaware of the observer. Set overwatch_model_config_name to activate.
+    # overwatch_max_tokens is load-bearing: the observer runs on `primary`
+    # whose row ceiling is 16000, and a per-request override is the only
+    # thing keeping the observer's output to one summary line.
+    overwatch_model_config_name: str | None = None
     overwatch_max_tokens: int = 80
 
     @abstractmethod
@@ -268,7 +269,7 @@ class SidebarAgent(ABC):
         """Called with the overwatch one-sentence summary.
 
         Override to publish progress to the appropriate trinket.
-        Default is no-op — agents that don't set overwatch_llm_key
+        Default is no-op — agents that don't set overwatch_model_config_name
         never reach this.
         """
 
@@ -282,7 +283,7 @@ class SidebarAgent(ABC):
         tool_results: list[ToolResult],
     ) -> None:
         """Spawn background thread for non-blocking overwatch LLM call."""
-        if not self.overwatch_llm_key:
+        if not self.overwatch_model_config_name:
             return
 
         import contextvars
@@ -316,7 +317,7 @@ class SidebarAgent(ABC):
     ) -> None:
         """Overwatch thread body — one-shot LLM call, then publish summary."""
         try:
-            assert self.overwatch_llm_key is not None
+            assert self.overwatch_model_config_name is not None
             llm = LLMProvider()
             task_context = self.get_overwatch_context(work_item)
             prompt = _build_overwatch_prompt(
@@ -327,7 +328,7 @@ class SidebarAgent(ABC):
 
             response = llm.generate_response(
                 messages=[{"role": "user", "content": prompt}],
-                internal_llm=self.overwatch_llm_key,
+                model_config=self.overwatch_model_config_name,
                 max_tokens=self.overwatch_max_tokens,
                 system_prompt=_OVERWATCH_SYSTEM_PROMPT,
             )
@@ -361,7 +362,7 @@ class SidebarAgent(ABC):
     def build_sentry_message(self, work_item: 'WorkItem') -> str:
         """Build the sentry evaluation prompt.
 
-        Only called when sentry_llm_key is set. Must return a single
+        Only called when sentry_model_config_name is set. Must return a single
         user-role message asking the cheap model to evaluate whether
         the agent should proceed.
 
@@ -370,7 +371,7 @@ class SidebarAgent(ABC):
             <reason>Brief explanation</reason>
         """
         raise NotImplementedError(
-            f"{self.agent_id} has sentry_llm_key set but no "
+            f"{self.agent_id} has sentry_model_config_name set but no "
             "build_sentry_message() implementation"
         )
 
@@ -417,15 +418,15 @@ class SidebarAgent(ABC):
         assert trace is not None
         assert event_bus is not None
         try:
-            from utils.user_context import get_internal_llm
+            from utils.user_context import get_model_config
 
-            assert self.sentry_llm_key is not None
-            sentry_cfg = get_internal_llm(self.sentry_llm_key)
+            assert self.sentry_model_config_name is not None
+            sentry_cfg = get_model_config(self.sentry_model_config_name)
             llm = LLMProvider()
             message = self.build_sentry_message(work_item)
             response = llm.generate_response(
                 messages=[{"role": "user", "content": message}],
-                internal_llm=self.sentry_llm_key,
+                model_config=self.sentry_model_config_name,
                 max_tokens=self.sentry_max_tokens,
             )
 
@@ -666,11 +667,11 @@ class SidebarAgent(ABC):
         _save_trace(self.agent_id, self._work_item.item_id, self._trace)
 
     def _resolve_llm(self) -> tuple['LLMProvider', Any]:
-        """Resolve internal_llm_key to LLMProvider and config."""
-        from utils.user_context import get_internal_llm
+        """Resolve the agent's fixed model route."""
+        from utils.user_context import get_model_config
 
         assert self._trace is not None
-        llm_cfg = get_internal_llm(self.internal_llm_key)
+        llm_cfg = get_model_config(self.model_config_name)
         llm = LLMProvider()
         self._trace['model'] = llm_cfg.model
         return llm, llm_cfg
@@ -697,7 +698,7 @@ class SidebarAgent(ABC):
 
     def _run_sentry_gate(self, work_item: 'WorkItem') -> bool:
         """Run sentry gate if configured. Returns True to proceed, False to exit."""
-        if self.sentry_llm_key is None:
+        if self.sentry_model_config_name is None:
             return True
         assert self._trace is not None
         assert self._event_bus is not None
@@ -717,29 +718,18 @@ class SidebarAgent(ABC):
         """Execute a single iteration. Returns True if agent completed."""
         assert self._trace is not None
 
-        if self.use_batch:
-            from agents.batch import batch_generate_response
-            response = batch_generate_response(
-                messages=messages,
-                tool_schemas=tool_schemas,
-                system_prompt=system_prompt,
-                llm_cfg=llm_cfg,
-                timeout_seconds=self.batch_timeout_seconds,
-            )
-        else:
-            response = llm.generate_response(
-                messages=messages,
-                tools=tool_schemas,
-                internal_llm=llm_cfg.name,
-                system_prompt=system_prompt,
-            )
+        response = llm.generate_response(
+            messages=messages,
+            tools=tool_schemas,
+            model_config=llm_cfg.name,
+            system_prompt=system_prompt,
+        )
 
         tool_calls = llm.extract_tool_calls(response)
         assistant_text = llm.extract_text_content(response)
 
-        messages.append(assistant_message_from_result(response))
-
         if not tool_calls:
+            messages.append(assistant_message_from_result(response))
             self._trace['iterations'].append(IterationTrace(
                 iteration=iteration,
                 assistant_text=assistant_text,
@@ -795,7 +785,7 @@ class SidebarAgent(ABC):
             else self.get_heartbeat(iteration)
         )
 
-        messages.extend(tool_result_messages(tuple(tool_results)))
+        messages[:] = append_tool_result_messages(messages, response, tuple(tool_results))
         messages.append({"role": "user", "content": heartbeat})
         return False
 
@@ -880,6 +870,10 @@ def _execute_tool_call(
     agent_id: str,
 ) -> ToolResult:
     try:
+        if tc.invalid_reason:
+            raise ValueError(
+                f"Invalid tool call arguments for '{tc.tool_name}': {tc.invalid_reason}"
+            )
         tool = tool_repo.get_tool(tc.tool_name)
         result = tool.run(**dict(tc.input))
         return ToolResult(

@@ -204,9 +204,8 @@ class ToolResultSummarizer:
                     tool_output=content,
                 ),
             }],
-            internal_llm="analysis",
+            model_config="fast",
             max_tokens=SUMMARY_MAX_TOKENS,
-            allow_negative=True,
         )
         response_text = self._llm_provider.extract_text_content(response).strip()
         if not response_text:

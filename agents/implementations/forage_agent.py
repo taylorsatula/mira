@@ -18,12 +18,12 @@ logger = logging.getLogger(__name__)
 
 class ForageAgent(SidebarAgent):
     agent_id = "forage"
-    internal_llm_key = "forage"
+    model_config_name = "batch"
     available_tools = ["continuum_tool", "memory_tool", "web_tool"]
     inherit_base_prompt = False
     max_iterations = 20
     timeout_seconds = 600
-    overwatch_llm_key = "overwatch"
+    overwatch_model_config_name = "primary"
 
     _PROGRESS_BAR_WIDTH = 20
 

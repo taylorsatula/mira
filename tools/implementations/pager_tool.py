@@ -1390,7 +1390,7 @@ Provide ONLY the distilled message, no explanations or meta-text."""
         try:
             response = self.llm.generate_response(
                 messages=[{"role": "user", "content": prompt}],
-                internal_llm='tidyup',
+                model_config="fast",
                 max_tokens=200
             )
 

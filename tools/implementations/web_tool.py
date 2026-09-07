@@ -6,12 +6,12 @@ Three operations:
 - fetch: Extract webpage content via trafilatura (HTTP first, Playwright escalation for JS-heavy pages)
 - http: Make direct HTTP requests to APIs
 """
-import os
 import re
 from dataclasses import dataclass
 from typing import Dict, Any, List, Literal, Optional
 from urllib.parse import urljoin, urlparse
 
+import httpx
 from pydantic import BaseModel, Field, field_validator
 
 from tools.repo import Tool
@@ -57,19 +57,6 @@ class WebToolConfig(BaseModel):
     enabled: bool = Field(default=True, description="Whether this tool is enabled")
     default_timeout: int = Field(default=30, description="Default timeout in seconds")
     max_timeout: int = Field(default=120, description="Maximum allowed timeout")
-    # LLM config for synthesis of long pages (trafilatura text in, compressed text out)
-    synthesis_model: str = Field(
-        default=os.getenv("MIRA_WEB_TOOL_SYNTHESIS_MODEL", "openai/gpt-oss-120b"),
-        description="Model for content synthesis",
-    )
-    synthesis_endpoint: str = Field(
-        default=os.getenv("MIRA_WEB_TOOL_SYNTHESIS_ENDPOINT", "https://api.groq.com/openai/v1/chat/completions"),
-        description="Synthesis LLM endpoint",
-    )
-    synthesis_api_key_name: Optional[str] = Field(
-        default=os.getenv("MIRA_WEB_TOOL_SYNTHESIS_API_KEY_NAME", "subcortical_key") or None,
-        description="Vault key name for API key",
-    )
 
 
 registry.register("web_tool", WebToolConfig)
@@ -429,19 +416,8 @@ class WebTool(Tool):
 
     def _synthesize_content(self, text: str, url: str, focus: Optional[str] = None) -> Optional[str]:
         """Compress long page content via LLM. Receives clean text, returns condensed text."""
-        from config import config
-        from clients.vault_client import get_api_key
-        from clients.llm_provider import LLMProvider
-
-        tool_config = config.web_tool
-
-        if tool_config.synthesis_api_key_name:
-            api_key = get_api_key(tool_config.synthesis_api_key_name)
-            if not api_key:
-                self.logger.warning(f"API key '{tool_config.synthesis_api_key_name}' not found — skipping synthesis")
-                return None
-        else:
-            api_key = None
+        from clients.llm_provider import LLMProvider, ContextOverflowError
+        from clients.llm.dialects.base import ProviderError
 
         if len(text) > self._MAX_SYNTHESIS_INPUT:
             text = text[:self._MAX_SYNTHESIS_INPUT]
@@ -461,15 +437,20 @@ class WebTool(Tool):
             llm = LLMProvider()
             response = llm.generate_response(
                 messages=[{"role": "user", "content": user_message}],
-                endpoint_url=tool_config.synthesis_endpoint,
-                dialect_name="groq",
-                model=tool_config.synthesis_model,
-                api_key=api_key,
+                model_config="fast",
                 max_tokens=2048,
                 system_prompt=f"{self._SYNTHESIS_PROMPT}\n\nSource: {url}"
             )
             return llm.extract_text_content(response)
-        except Exception as e:
+        # Degrade only on external failures the provider path reports: normalized
+        # dialect transport/protocol/auth/stall errors (ProviderError, which also
+        # covers the lifecycle stall watchdog), the route's context-window
+        # overflow, and raw httpx transport errors that leak past the
+        # OpenAI-family dialects' httpx.post. Anything else (TypeError, KeyError
+        # for an unknown route, misconfiguration) is a programming or deployment
+        # error and propagates loudly; a broad handler here hid a guaranteed
+        # TypeError on every call for the whole 2.0 migration.
+        except (ProviderError, ContextOverflowError, httpx.TransportError) as e:
             self.logger.warning(f"Content synthesis failed: {e}")
             return None
 

@@ -173,8 +173,7 @@ class UserModelSynthesizer:
 
         response = self.llm_provider.generate_response(
             messages=llm_messages,
-            internal_llm='synthesis',
-            allow_negative=True  # System task — segment already paid for
+            model_config="primary",
         )
 
         return self.llm_provider.extract_text_content(response)
@@ -199,8 +198,7 @@ class UserModelSynthesizer:
 
         response = self.llm_provider.generate_response(
             messages=llm_messages,
-            internal_llm='critic',
-            allow_negative=True  # System task — segment already paid for
+            model_config="primary",
         )
 
         raw_output = self.llm_provider.extract_text_content(response)
@@ -252,8 +250,7 @@ class UserModelSynthesizer:
 
         response = self.llm_provider.generate_response(
             messages=llm_messages,
-            internal_llm='synthesis',
-            allow_negative=True  # System task — segment already paid for
+            model_config="primary",
         )
 
         return self.llm_provider.extract_text_content(response)

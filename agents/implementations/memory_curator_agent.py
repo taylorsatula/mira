@@ -94,9 +94,9 @@ class MemoryCuratorAgent(SidebarAgent):
     """Agentic curator of the memory graph (integration + floor modes)."""
 
     agent_id = "memory_curator"
-    # Reuse the system summary model (internal_llm 'summary') for curation
-    # judgment — no dedicated internal_llm row is needed.
-    internal_llm_key = "summary"
+    # Curation judgment shares the chat substrate rather than having its own
+    # route -- it is the same kind of reflective work, on the same model.
+    model_config_name = "primary"
     available_tools = ["memory_tool"]  # sidebar_tool auto-appended by the base
 
     # The curator operates on existing memories only -- never creates new ones.
@@ -107,9 +107,7 @@ class MemoryCuratorAgent(SidebarAgent):
     # Self-contained rubric prompts (include their own loop/complete_task framing).
     inherit_base_prompt = False
 
-    # Sync (no use_batch): integration must finish before the user's next
-    # conversation; per-mode batch behavior isn't cleanly expressible in one
-    # class. The rubric drives early complete_task; this ceiling is generous
+    # The rubric drives early complete_task; this ceiling is generous
     # enough for ~8 memories (multiple tool calls per turn).
     max_iterations = 8
     timeout_seconds = 480

@@ -116,11 +116,15 @@ class WorkingMemory:
             "{relative time since account creation}", duration
         )
 
-        # Resolve current model substrate (re-resolved each turn so mid-chat model switches are visible)
-        from utils.user_context import resolve_conversation_llm
-        llm_config = resolve_conversation_llm(prefs.conversation_llm)
+        # Resolve the fixed chat substrate. 2.0 removed per-user model
+        # switching, so this is stable for the lifetime of the route table.
+        # {model_name} carries the route label rather than a tier description:
+        # ModelConfig has no description field, and the route is the
+        # operator-facing name the tier used to be.
+        from utils.user_context import get_model_config
+        llm_config = get_model_config("primary")
         personalized_prompt = personalized_prompt.replace("{model_id}", llm_config.model)
-        personalized_prompt = personalized_prompt.replace("{model_name}", llm_config.description)
+        personalized_prompt = personalized_prompt.replace("{model_name}", llm_config.name)
 
         # Set base prompt
         self.composer.set_base_prompt(personalized_prompt)

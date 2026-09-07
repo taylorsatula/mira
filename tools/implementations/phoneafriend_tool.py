@@ -1,8 +1,8 @@
 """
 Phone-a-friend tool for consulting an outside model during a conversation.
 
-The tool stores a small, segment-scoped message thread per consulted model so
-MIRA can continue with the same outside voice across synchronous tool calls.
+The tool stores a small, segment-scoped message thread so MIRA can continue
+with the same outside voice across synchronous tool calls.
 """
 import json
 import logging
@@ -30,32 +30,21 @@ class PhoneAFriendToolConfig(BaseModel):
 registry.register("phoneafriend_tool", PhoneAFriendToolConfig)
 
 
-MODEL_SYSTEM_PROMPTS = {
-    "claude": """\
-You are a level-headed outside thought partner consulted by MIRA through a synchronous tool call.
+OUTSIDE_MODEL_SYSTEM_PROMPT = """\
+You are an outside voice consulted by MIRA through a synchronous tool call -- a level-headed thought partner with a strong, broad understanding of the world.
 You do not see MIRA's main context window, conversation history, memories, or system prompt unless the current inquiry includes them.
 
 Give an independent answer to the inquiry. Be calm, precise, and skeptical of weak assumptions.
 If the inquiry asks you to continue from earlier phone-a-friend turns, use only this subagent thread's prior messages.
-Do not claim access to hidden context. Name uncertainty directly when the inquiry lacks needed facts.""",
-    "gemini": """\
-You are an outside voice consulted by MIRA through a synchronous tool call.
-You have a strong broad understanding of the world, but you do not see MIRA's main context window, conversation history, memories, or system prompt unless the current inquiry includes them.
+Do not claim access to hidden context. Name uncertainty directly when the inquiry lacks needed facts."""
 
-Use broad world knowledge and clear reasoning to answer the inquiry directly.
-If the inquiry asks you to continue from earlier phone-a-friend turns, use only this subagent thread's prior messages.
-Do not claim access to hidden context. Name uncertainty directly when the inquiry lacks needed facts.""",
-}
+OUTSIDE_MODEL_ROLE = "an independent outside voice with a broad understanding of the world"
 
-MODEL_DESCRIPTIONS = {
-    "claude": "level-headed thought partner",
-    "gemini": "strong understanding of the world",
-}
-
-MODEL_INTERNAL_LLMS = {
-    "claude": "phoneafriend_claude",
-    "gemini": "phoneafriend_gemini",
-}
+# Route `other` is the single outside-model route (D14). The tool no longer
+# offers a model choice: both of the voices it used to expose collapse onto
+# this one route, so a `model_choice` parameter would let the calling model
+# reason about a distinction that the contract cannot honour.
+OUTSIDE_MODEL_CONFIG = "other"
 
 KEY_PREFIX = "phoneafriend"
 THREAD_TTL_SECONDS = 24 * 60 * 60
@@ -68,31 +57,22 @@ class PhoneAFriendTool(Tool):
     parallel_safe = False
 
     simple_description = (
-        "Phone another model as an outside voice on an inquiry, with a resumable "
-        "segment-scoped subagent thread. claude is a level-headed thought "
-        "partner; gemini has a strong understanding of the world."
+        "Phone an outside model as an independent voice on an inquiry, with a "
+        "resumable segment-scoped subagent thread."
     )
 
     tool_schema = {
         "name": "phoneafriend_tool",
         "description": (
-            "Phone another model as an outside voice to an inquiry. The consulted "
-            "model does not see the main context window or conversation history "
-            "unless you put that context in inquiry. Reuse subagent_ref to continue "
-            "the same outside-model thread for this conversation segment."
+            "Phone an outside model as an independent voice to an inquiry. The "
+            "consulted model is MIRA's designated outside route and does not see "
+            "the main context window or conversation history unless you put that "
+            "context in inquiry. Reuse subagent_ref to continue the same "
+            "outside-model thread for this conversation segment."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "model_choice": {
-                    "type": "string",
-                    "enum": ["claude", "gemini"],
-                    "description": (
-                        "Outside model to consult. claude is for having a "
-                        "level-headed thought partner. gemini has a very "
-                        "strong understanding of the world."
-                    ),
-                },
                 "inquiry": {
                     "type": "string",
                     "description": (
@@ -106,8 +86,7 @@ class PhoneAFriendTool(Tool):
                     "description": (
                         "Reconnect string returned by an earlier call, formatted "
                         "as 'phoneafriend:<id>'. Pass it to resume that exact "
-                        "outside-model thread. When subagent_ref is provided, omit "
-                        "model_choice because the stored thread already fixes the model."
+                        "outside-model thread."
                     ),
                 },
             },
@@ -125,7 +104,6 @@ class PhoneAFriendTool(Tool):
     def run(
         self,
         inquiry: str,
-        model_choice: str | None = None,
         subagent_ref: str | None = None,
     ) -> Dict[str, Any]:
         """Consult or resume an outside model thread for the active segment."""
@@ -138,40 +116,33 @@ class PhoneAFriendTool(Tool):
 
         if subagent_ref:
             thread = self._load_thread(valkey, segment_id, subagent_ref)
-            model_choice = thread["model_choice"]
         else:
-            if model_choice is None:
-                raise ValueError("model_choice is required when subagent_ref is not provided")
-            model_choice = self._validate_model_choice(model_choice)
-            thread = self._create_thread(segment_id, model_choice)
+            thread = self._create_thread(segment_id)
 
         messages = thread["messages"]
         messages.append({"role": "user", "content": inquiry})
 
-        internal_llm_key = MODEL_INTERNAL_LLMS[model_choice]
         llm_provider = self.llm_provider or LLMProvider()
         response = llm_provider.generate_response(
             messages=list(messages),
-            internal_llm=internal_llm_key,
-            system_prompt=MODEL_SYSTEM_PROMPTS[model_choice],
-            allow_provider_stall_fallback=False,
+            model_config=OUTSIDE_MODEL_CONFIG,
+            system_prompt=OUTSIDE_MODEL_SYSTEM_PROMPT,
         )
         response_text = llm_provider.extract_text_content(response).strip()
         if not response_text:
-            raise RuntimeError(f"{model_choice} returned an empty phone-a-friend response")
+            raise RuntimeError("the outside model returned an empty phone-a-friend response")
 
         messages.append({"role": "assistant", "content": response_text})
         self._save_thread(valkey, thread, messages)
 
         return {
             "success": True,
-            "model_choice": model_choice,
-            "model_role": MODEL_DESCRIPTIONS[model_choice],
+            "model_role": OUTSIDE_MODEL_ROLE,
             "subagent_ref": thread["subagent_ref"],
             "segment_id": segment_id,
             "response": response_text,
             "message": (
-                f"{model_choice} responded. Reuse subagent_ref "
+                f"The outside model responded. Reuse subagent_ref "
                 f"{thread['subagent_ref']} to continue this outside-model thread."
             ),
         }
@@ -184,13 +155,7 @@ class PhoneAFriendTool(Tool):
         self.valkey_client = get_valkey_client()
         return self.valkey_client
 
-    def _validate_model_choice(self, model_choice: str) -> str:
-        if model_choice not in MODEL_SYSTEM_PROMPTS:
-            allowed = ", ".join(MODEL_SYSTEM_PROMPTS)
-            raise ValueError(f"model_choice must be one of: {allowed}")
-        return model_choice
-
-    def _create_thread(self, segment_id: str, model_choice: str) -> Dict[str, Any]:
+    def _create_thread(self, segment_id: str) -> Dict[str, Any]:
         now = format_utc_iso(utc_now())
         thread_id = uuid4().hex
         thread = {
@@ -198,7 +163,6 @@ class PhoneAFriendTool(Tool):
             "subagent_ref": f"{KEY_PREFIX}:{thread_id}",
             "owner_user_id": self.user_id,
             "segment_id": segment_id,
-            "model_choice": model_choice,
             "messages": [],
             "created_at": now,
             "updated_at": now,
@@ -222,7 +186,6 @@ class PhoneAFriendTool(Tool):
             raise ValueError(
                 f"subagent_ref {subagent_ref} is not active in this conversation segment"
             )
-        self._validate_model_choice(thread["model_choice"])
         return thread
 
     def _save_thread(

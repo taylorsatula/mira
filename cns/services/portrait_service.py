@@ -135,7 +135,7 @@ def read_portrait(user_id: str) -> str:
     """
     try:
         from clients.postgres_client import PostgresClient
-        db = PostgresClient('mira_service')
+        db = PostgresClient('mira_service', user_id=user_id)
         row = db.execute_single(
             "SELECT portrait FROM users WHERE id = %s",
             (user_id,)
@@ -188,8 +188,7 @@ def _call_llm(summaries: list[str]) -> str:
     response = llm.generate_response(
         messages=[{"role": "user", "content": user_message}],
         system_prompt=_system_prompt,
-        internal_llm="portrait",
-        allow_negative=True,  # Background system task — not user-initiated
+        model_config="primary",
     )
 
     return llm.extract_text_content(response).strip()
@@ -231,8 +230,7 @@ def refine_portrait(user_id: str, instructions: str) -> dict[str, str]:
     response = llm.generate_response(
         messages=[{"role": "user", "content": user_message}],
         system_prompt=refinement_system,
-        internal_llm="portrait",
-        allow_negative=True,  # Background system task
+        model_config="primary",
     )
     proposed = llm.extract_text_content(response).strip()
 
@@ -349,7 +347,7 @@ def _save_portrait(user_id: str, content: str) -> None:
     from clients.postgres_client import PostgresClient
     from utils.timezone_utils import utc_now
 
-    db = PostgresClient('mira_service')
+    db = PostgresClient('mira_service', user_id=user_id)
     db.execute_update(
         "UPDATE users SET portrait = %s, portrait_generated_at = %s WHERE id = %s",
         (content, utc_now(), UUID(user_id)),
