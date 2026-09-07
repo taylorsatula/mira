@@ -1,11 +1,12 @@
 """
-Maps API integration tool.
+Maps integration tool backed by OpenStreetMap.
 
-This tool enables the bot to interact with Maps APIs to resolve
-natural language location queries to coordinates, retrieve place details,
-and perform geocoding operations.
+This tool enables the bot to resolve natural language location queries to
+coordinates, retrieve place details, and perform geocoding operations using
+the Nominatim and Overpass APIs. No API key required.
 
-Requires Maps API key in the config file.
+Place IDs are OpenStreetMap element references in the form "<T><osm_id>"
+where T is N (node), W (way), or R (relation), e.g. "N123456789".
 """
 
 import logging
@@ -14,15 +15,12 @@ from typing import Dict, List, Any, Optional
 from pydantic import BaseModel, Field
 from tools.repo import Tool
 from tools.registry import registry
+from utils import nominatim_client
 
-# Define configuration class for  MapsTool
+# Define configuration class for MapsTool
 class MapsToolConfig(BaseModel):
     """Configuration for the maps_tool."""
     enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
-    timeout: int = Field(default=60, description="Timeout in seconds for Google Maps API requests")
-    max_retries: int = Field(default=3, description="Maximum number of retries for failed requests")
-    backoff_factor: float = Field(default=2.0, description="Backoff factor for retries")
-    cache_timeout: int = Field(default=86400, description="Cache timeout in seconds (default: 24 hours)")
 
 # Register with registry
 registry.register("maps_tool", MapsToolConfig)
@@ -43,7 +41,7 @@ class ReverseGeocodeInput(BaseModel):
 
 class PlaceDetailsInput(BaseModel):
     """Input for place details operation."""
-    place_id: str = Field(..., min_length=1, description="Google Places ID")
+    place_id: str = Field(..., min_length=1, description="OpenStreetMap place ID (e.g. 'N123456789') from a geocode, find_place, or places_nearby result")
 
 
 class PlacesNearbyInput(BaseModel):
@@ -51,19 +49,13 @@ class PlacesNearbyInput(BaseModel):
     lat: float = Field(..., ge=-90, le=90, description="Latitude of center point")
     lng: float = Field(..., ge=-180, le=180, description="Longitude of center point")
     radius: int = Field(default=1000, ge=1, le=50000, description="Search radius in meters")
-    keyword: Optional[str] = Field(default=None, description="Keywords to search for")
+    keyword: Optional[str] = Field(default=None, description="Keywords to match against place names")
     type: Optional[str] = Field(default=None, description="Place type filter (e.g., 'restaurant')")
-    language: Optional[str] = Field(default=None, description="Language code for results")
-    open_now: Optional[bool] = Field(default=None, description="Filter to only open places")
 
 
 class FindPlaceInput(BaseModel):
     """Input for find place operation."""
     query: str = Field(..., min_length=1, description="Place name or description")
-    fields: List[str] = Field(
-        default=["place_id", "name", "formatted_address", "geometry", "types", "business_status", "rating"],
-        description="Specific fields to request"
-    )
 
 
 class CalculateDistanceInput(BaseModel):
@@ -78,7 +70,7 @@ class CalculateDistanceInput(BaseModel):
 
 class MapsTool(Tool):
     """
-    Tool for interacting with Maps APIs to resolve locations and places.
+    Tool for interacting with OpenStreetMap to resolve locations and places.
 
     Features:
     1. Geocoding:
@@ -88,19 +80,21 @@ class MapsTool(Tool):
 
     2. Place Details:
        - Get detailed information about places
-       - Retrieve business information, opening hours, ratings
-       - Get contact information for businesses
+       - Retrieve address components, website, phone, opening hours when available
 
     3. Reverse Geocoding:
        - Convert coordinates to formatted addresses
        - Get neighborhood, city, state information from coordinates
+
+    4. Nearby Search:
+       - Find points of interest within a radius of a coordinate
     """
 
     name = "maps_tool"
-    
+
     tool_schema = {
         "name": "maps_tool",
-        "description": "Provides comprehensive location intelligence and geographical services through Maps API integration. Use this tool for geocoding, place details, distance calculations, and location-based searches.",
+        "description": "Provides comprehensive location intelligence and geographical services through OpenStreetMap integration. Use this tool for geocoding, place details, distance calculations, and location-based searches.",
         "input_schema": {
                 "type": "object",
                 "properties": {
@@ -114,7 +108,7 @@ class MapsTool(Tool):
                             "find_place",
                             "calculate_distance"
                         ],
-                        "description": "The Maps API operation to perform"
+                        "description": "The maps operation to perform"
                     },
                     "query": {
                         "type": "string",
@@ -122,7 +116,7 @@ class MapsTool(Tool):
                     },
                     "place_id": {
                         "type": "string",
-                        "description": "Google Places ID for place_details operation"
+                        "description": "OpenStreetMap place ID for place_details operation (e.g. 'N123456789'), as returned in geocode, find_place, or places_nearby results"
                     },
                     "lat": {
                         "type": "number",
@@ -171,23 +165,7 @@ class MapsTool(Tool):
                     },
                     "keyword": {
                         "type": "string",
-                        "description": "Keywords to search for in places_nearby operation"
-                    },
-                    "open_now": {
-                        "type": "boolean",
-                        "description": "Filter to only show places currently open for places_nearby"
-                    },
-                    "language": {
-                        "type": "string",
-                        "description": "Language code for results (e.g., 'en', 'fr', 'es')"
-                    },
-                    "fields": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        },
-                        "description": "Specific fields to request for find_place operation",
-                        "default": ["place_id", "name", "formatted_address", "geometry", "types", "business_status", "rating"]
+                        "description": "Keywords to match against place names in places_nearby operation"
                     }
                 },
                 "required": ["operation"]
@@ -197,62 +175,27 @@ class MapsTool(Tool):
     description = "Location services: geocoding, place details, nearby search, and distance calculation"
 
     def __init__(self):
-        """Initialize the Google Maps tool."""
+        """Initialize the maps tool."""
         super().__init__()
         self.logger = logging.getLogger(__name__)
-        self._client = None
 
-    @property
-    def client(self):
-        """
-        Get the Google Maps client, initializing it if needed.
-        Lazy loading approach.
+    @staticmethod
+    def _process_nominatim_result(result: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize a Nominatim result dict into the tool's output shape."""
+        processed = {
+            "formatted_address": result.get("display_name", ""),
+            "place_id": nominatim_client.osm_place_id(result.get("osm_type", ""), result.get("osm_id")),
+            "types": [t for t in (result.get("category"), result.get("type")) if t],
+        }
+        if result.get("lat") is not None and result.get("lon") is not None:
+            processed["location"] = {"lat": float(result["lat"]), "lng": float(result["lon"])}
+        return processed
 
-        Returns:
-            Google Maps client instance
-
-        Raises:
-            ValueError: If Google Maps API key is not set or client initialization fails
-        """
-        if self._client is None:
-            try:
-                from googlemaps import Client
-
-                # Get API key from config
-                from config import config
-                api_key = config.google_maps_api_key
-                if not api_key:
-                    self.logger.error("Google Maps API key not found in configuration for maps_tool")
-                    raise ValueError("Google Maps API key not found in configuration.")
-
-                # Create client with API key
-                self.logger.info("Creating Google Maps client with API key")
-                self._client = Client(key=api_key)
-            except ImportError:
-                self.logger.error("googlemaps library not installed for maps_tool")
-                raise ValueError("googlemaps library not installed. Run: pip install googlemaps")
-            except Exception as e:
-                self.logger.error(f"Failed to initialize Google Maps client: {e}")
-                raise ValueError(f"Failed to initialize Google Maps client: {e}")
-        return self._client
-
-        
     def _geocode(self, input: GeocodeInput) -> Dict[str, Any]:
         """Convert a natural language query to geographic coordinates."""
         try:
-            results = self.client.geocode(address=input.query)
-            processed_results = []
-
-            for result in results:
-                processed_result = {
-                    "formatted_address": result.get("formatted_address", ""),
-                    "place_id": result.get("place_id", ""),
-                    "location": result.get("geometry", {}).get("location", {}),
-                    "types": result.get("types", [])
-                }
-                processed_results.append(processed_result)
-
-            return {"results": processed_results}
+            results = nominatim_client.search(input.query)
+            return {"results": [self._process_nominatim_result(r) for r in results]}
         except Exception as e:
             self.logger.error(f"Geocoding failed for '{input.query}': {e}")
             raise ValueError(f"Failed to geocode query: {e}")
@@ -260,18 +203,8 @@ class MapsTool(Tool):
     def _reverse_geocode(self, input: ReverseGeocodeInput) -> Dict[str, Any]:
         """Convert geographic coordinates to an address."""
         try:
-            results = self.client.reverse_geocode((input.lat, input.lng))
-            processed_results = []
-
-            for result in results:
-                processed_result = {
-                    "formatted_address": result.get("formatted_address", ""),
-                    "place_id": result.get("place_id", ""),
-                    "types": result.get("types", [])
-                }
-                processed_results.append(processed_result)
-
-            return {"results": processed_results}
+            result = nominatim_client.reverse(input.lat, input.lng)
+            return {"results": [self._process_nominatim_result(result)]}
         except Exception as e:
             self.logger.error(f"Reverse geocoding failed for ({input.lat}, {input.lng}): {e}")
             raise ValueError(f"Failed to reverse geocode coordinates: {e}")
@@ -279,28 +212,18 @@ class MapsTool(Tool):
     def _place_details(self, input: PlaceDetailsInput) -> Dict[str, Any]:
         """Get detailed information about a place."""
         try:
-            result = self.client.place(place_id=input.place_id)
+            place = nominatim_client.lookup(input.place_id)
+            extratags = place.get("extratags", {})
 
-            if "result" not in result:
-                raise ValueError(f"No details found for place ID: {input.place_id}")
+            details = self._process_nominatim_result(place)
+            details["name"] = place.get("name") or place.get("display_name", "").split(",")[0]
 
-            place = result["result"]
-            details = {
-                "name": place.get("name", ""),
-                "formatted_address": place.get("formatted_address", ""),
-                "formatted_phone_number": place.get("formatted_phone_number", ""),
-                "international_phone_number": place.get("international_phone_number", ""),
-                "website": place.get("website", ""),
-                "url": place.get("url", ""),
-                "rating": place.get("rating", 0),
-                "types": place.get("types", []),
-            }
-
-            if "geometry" in place and "location" in place["geometry"]:
-                details["location"] = place["geometry"]["location"]
-
-            if "opening_hours" in place:
-                details["opening_hours"] = place["opening_hours"]
+            if extratags.get("website"):
+                details["website"] = extratags["website"]
+            if extratags.get("phone"):
+                details["phone"] = extratags["phone"]
+            if extratags.get("opening_hours"):
+                details["opening_hours"] = extratags["opening_hours"]
 
             return details
 
@@ -311,39 +234,29 @@ class MapsTool(Tool):
     def _places_nearby(self, input: PlacesNearbyInput) -> Dict[str, Any]:
         """Find places near a specific location."""
         try:
-            params = {
-                "location": (input.lat, input.lng),
-                "radius": input.radius
-            }
-
-            if input.keyword:
-                params["keyword"] = input.keyword
-            if input.type:
-                params["type"] = input.type
-            if input.language:
-                params["language"] = input.language
-            if input.open_now is not None:
-                params["open_now"] = input.open_now
-
-            results = self.client.places_nearby(**params)
+            elements = nominatim_client.nearby(
+                input.lat, input.lng, input.radius,
+                place_type=input.type, keyword=input.keyword,
+            )
             processed_results = []
 
-            for place in results.get("results", []):
+            for element in elements:
+                tags = element.get("tags", {})
+
+                # Way/relation elements report a center; nodes report lat/lon directly.
+                center = element.get("center", element)
+                if center.get("lat") is None or center.get("lon") is None:
+                    continue
+
                 processed_place = {
-                    "name": place.get("name", ""),
-                    "place_id": place.get("place_id", ""),
-                    "vicinity": place.get("vicinity", ""),
-                    "types": place.get("types", []),
+                    "name": tags.get("name", ""),
+                    "place_id": nominatim_client.osm_place_id(element.get("type", ""), element.get("id")),
+                    "location": {"lat": float(center["lat"]), "lng": float(center["lon"])},
+                    "types": [tags[k] for k in ("amenity", "shop", "tourism", "leisure") if k in tags],
                 }
 
-                if "geometry" in place and "location" in place["geometry"]:
-                    processed_place["location"] = place["geometry"]["location"]
-
-                if "rating" in place:
-                    processed_place["rating"] = place["rating"]
-
-                if "opening_hours" in place and "open_now" in place["opening_hours"]:
-                    processed_place["open_now"] = place["opening_hours"]["open_now"]
+                address_parts = [tags.get("addr:street"), tags.get("addr:city")]
+                processed_place["vicinity"] = ", ".join(p for p in address_parts if p)
 
                 processed_results.append(processed_place)
 
@@ -356,33 +269,8 @@ class MapsTool(Tool):
     def _find_place(self, input: FindPlaceInput) -> Dict[str, Any]:
         """Find a specific place using a text query."""
         try:
-            params = {
-                "input": input.query,
-                "input_type": "textquery",
-                "fields": input.fields
-            }
-
-            results = self.client.find_place(**params)
-            processed_results = []
-
-            for place in results.get("candidates", []):
-                processed_place = {
-                    "name": place.get("name", ""),
-                    "place_id": place.get("place_id", ""),
-                    "formatted_address": place.get("formatted_address", ""),
-                    "types": place.get("types", []),
-                }
-
-                if "geometry" in place and "location" in place["geometry"]:
-                    processed_place["location"] = place["geometry"]["location"]
-
-                if "rating" in place:
-                    processed_place["rating"] = place["rating"]
-
-                processed_results.append(processed_place)
-
-            return {"results": processed_results}
-
+            results = nominatim_client.search(input.query)
+            return {"results": [self._process_nominatim_result(r) for r in results]}
         except Exception as e:
             self.logger.error(f"Find place failed for '{input.query}': {e}")
             raise ValueError(f"Failed to find place: {e}")

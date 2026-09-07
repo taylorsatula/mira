@@ -21,7 +21,7 @@ from typing import Dict, List, Any, Optional, Union
 from datetime import timedelta
 
 # Third-party imports
-from utils import http_client
+from utils import http_client, nominatim_client
 from pydantic import BaseModel, Field
 
 # Import timezone utilities for UTC-everywhere approach
@@ -564,7 +564,6 @@ class WeatherTool(Tool):
         
         # Defer user-context-dependent operations to first use
         self._cache_directory = None
-        self._maps_client = None
     
     @property
     def cache_directory(self):
@@ -573,85 +572,47 @@ class WeatherTool(Tool):
             self._cache_directory = self.make_dir("cache")
         return self._cache_directory
     
-    @property
-    def maps_client(self):
-        """
-        Get the Google Maps client, initializing it if needed.
-        Lazy loading approach extracted from maps_tool pattern.
-
-        Returns:
-            Google Maps client instance
-
-        Raises:
-            ValueError: If Google Maps API key is not set or client initialization fails
-        """
-        if self._maps_client is None:
-            try:
-                from googlemaps import Client
-
-                # Get API key from config
-                from config import config
-                api_key = config.google_maps_api_key
-                if not api_key:
-                    self.logger.error("Google Maps API key not found in configuration for weather_tool geocoding")
-                    raise ValueError("Google Maps API key not found in configuration.")
-
-                # Create client with API key
-                self.logger.info("Creating Google Maps client for weather_tool geocoding")
-                self._maps_client = Client(key=api_key)
-            except ImportError:
-                self.logger.error("googlemaps library not installed for weather_tool geocoding")
-                raise ValueError("googlemaps library not installed. Run: pip install googlemaps")
-            except Exception as e:
-                self.logger.exception("Failed to initialize Google Maps client for weather_tool")
-                raise ValueError(f"Failed to initialize Google Maps client: {e}")
-        return self._maps_client
-    
     def _geocode_location(self, location: str) -> tuple:
         """
-        Convert a location name to coordinates using Google Maps geocoding API.
-        
+        Convert a location name to coordinates using OpenStreetMap Nominatim.
+
         Args:
             location: Location name (e.g., "New York", "Paris, France")
-            
+
         Returns:
             Tuple of (latitude, longitude)
-            
+
         Raises:
             ValueError: If location cannot be found or geocoding fails
         """
-        self.logger.info(f"Geocoding location using Google Maps: {location}")
-        
+        self.logger.info(f"Geocoding location using Nominatim: {location}")
+
         try:
-            # Call Google Maps geocoding API (extracted from maps_tool pattern)
-            results = self.maps_client.geocode(address=location.strip())
-            
+            results = nominatim_client.search(location.strip(), limit=1)
+
             if not results:
                 raise ValueError(
                     f"Location '{location}' not found. Please check the spelling or try a more specific location (e.g., 'Paris, France')",
                     {"location": location}
                 )
-            
+
             # Get the first (best) result
             result = results[0]
-            geometry = result.get("geometry", {})
-            location_data = geometry.get("location", {})
-            
-            latitude = location_data.get("lat")
-            longitude = location_data.get("lng")
-            
+            latitude = result.get("lat")
+            longitude = result.get("lon")
+
             if latitude is None or longitude is None:
                 raise ValueError(
                     f"Invalid geocoding response for location '{location}'",
                     {"location": location, "result": result}
                 )
-            
+
             # Log the resolved location info
-            formatted_address = result.get("formatted_address", "")
+            formatted_address = result.get("display_name", "")
             self.logger.info(f"Resolved '{location}' to {formatted_address} ({latitude}, {longitude})")
-            
+
             return (float(latitude), float(longitude))
-            
+
         except Exception as e:
             if isinstance(e, ValueError) and "Location" in str(e):
                 # Re-raise our custom ValueError messages

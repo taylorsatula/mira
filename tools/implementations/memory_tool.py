@@ -211,8 +211,9 @@ class MemoryTool(Tool):
         self.logger = logging.getLogger(__name__)
 
         # Load configuration
-        config_cls = registry.get("memory_tool") or MemoryToolConfig
-        self._config = config_cls()
+        from config import config
+
+        self._config = config.get_tool_config("memory_tool")
 
         # Lightweight service initialization (no spaCy)
         self._embeddings_provider = get_hybrid_embeddings_provider()
