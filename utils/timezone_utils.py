@@ -13,6 +13,7 @@ Core principles:
 """
 
 import logging
+import re
 from datetime import datetime, timezone, timedelta, UTC
 from typing import Optional
 
@@ -432,6 +433,80 @@ def format_relationship_duration(created_at: datetime) -> str:
     else:
         years = total_days / 365.25
         return f"{_fractional_duration(int(years), years - int(years), 'year')} {date_str}"
+
+
+# Mirrors the strptime mask accepted by local_datetime_to_utc_iso: a full local
+# wall time carrying no UTC designator and no offset. Seconds are optional because
+# that is how the model-facing tool schemas advertise the format ('2025-01-02T09:00').
+_EXACT_LOCAL_WALL_TIME = re.compile(
+    r"^(?P<date>\d{4}-\d{2}-\d{2})[tT](?P<hour>\d{2}):(?P<minute>\d{2})(?::(?P<second>\d{2}))?$"
+)
+
+
+def normalize_exact_local_wall_time(value: Optional[str]) -> Optional[str]:
+    """Return an exact local wall time as YYYY-MM-DDTHH:MM:SS, or None.
+
+    Model-facing tools gate on this before calling local_datetime_to_utc_iso, so that
+    daylight-saving strictness applies only to a wall time the model supplied to name
+    one specific moment. Relative phrases, date-only and time-only inputs, and strings
+    already carrying an offset or 'Z' return None and keep their existing lenient path.
+    """
+    if not value:
+        return None
+    match = _EXACT_LOCAL_WALL_TIME.match(value.strip())
+    if not match:
+        return None
+    return (
+        f"{match.group('date')}T{match.group('hour')}:{match.group('minute')}"
+        f":{match.group('second') or '00'}"
+    )
+
+
+def local_datetime_to_utc_iso(local_datetime: str, timezone_name: str) -> str:
+    """Convert one exact local wall-clock datetime to a UTC ISO instant.
+
+    Model-facing tools use local time so the model never performs daylight-saving
+    arithmetic. Ambiguous and nonexistent wall times fail instead of silently
+    selecting the wrong UTC instant.
+    """
+    try:
+        naive = datetime.strptime(local_datetime, "%Y-%m-%dT%H:%M:%S")
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "Local datetime must use exact ISO format YYYY-MM-DDTHH:MM:SS "
+            "without Z or a timezone offset."
+        ) from error
+
+    local_timezone = get_timezone_instance(timezone_name)
+    candidates = (
+        naive.replace(tzinfo=local_timezone, fold=0),
+        naive.replace(tzinfo=local_timezone, fold=1),
+    )
+    valid_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate.astimezone(UTC_TIMEZONE)
+        .astimezone(local_timezone)
+        .replace(tzinfo=None)
+        == naive
+    ]
+    if not valid_candidates:
+        raise ValueError(
+            f"Local datetime {local_datetime} does not exist in timezone "
+            f"{timezone_name} because of a daylight-saving transition."
+        )
+    if (
+        len(valid_candidates) == 2
+        and valid_candidates[0].utcoffset() != valid_candidates[1].utcoffset()
+    ):
+        raise ValueError(
+            f"Local datetime {local_datetime} occurs twice in timezone "
+            f"{timezone_name} because of a daylight-saving transition. "
+            "Choose an unambiguous appointment time."
+        )
+
+    utc_datetime = valid_candidates[0].astimezone(UTC_TIMEZONE)
+    return utc_datetime.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def parse_time_string(

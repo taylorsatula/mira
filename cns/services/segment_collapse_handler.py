@@ -10,6 +10,8 @@ Handles SessionTimeoutEvent by:
 6. Extracting feedback signals (DIY reinforcement loop)
 7. Running pattern synthesis if use-day threshold reached (every 7 use-days)
 8. Portrait synthesis if use-day threshold reached (every 10 use-days)
+9. Evaluating MIRA against the behavioral contract and refining Persona (parallel
+   to 6-7 by D1: the user model describes the user, Persona prescribes to MIRA)
 """
 from __future__ import annotations
 
@@ -18,6 +20,8 @@ from typing import List, Optional, TYPE_CHECKING
 from uuid import UUID
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from lt_memory.factory import LTMemoryFactory
     from lt_memory.models import Memory
     from lt_memory.db_access import LTMemoryDB
@@ -32,8 +36,10 @@ from cns.infrastructure.continuum_repository import ContinuumRepository
 from clients.hybrid_embeddings_provider import HybridEmbeddingsProvider
 from clients.valkey_client import get_valkey_client
 from cns.integration.event_bus import EventBus
-from utils.timezone_utils import utc_now, parse_time_string
-from utils.user_context import set_current_user_id, get_current_user_id, clear_user_context
+from utils.timezone_utils import utc_now, parse_time_string, ensure_utc, validate_timezone
+from utils.user_context import (
+    set_current_user_id, get_current_user_id, clear_user_context, get_user_preferences,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +47,70 @@ logger = logging.getLogger(__name__)
 # Prevents infinite retry loops when a persistent failure (billing, DB schema,
 # missing config) causes every attempt to fail after the expensive LLM call.
 MAX_COLLAPSE_ATTEMPTS = 3
+
+
+def _resolve_pending_memory_timezone(segment_id: str) -> str:
+    """Timezone to read pending manual memory temporal fields in.
+
+    `memory_tool.create_memory` queues `happens_at`/`expires_at` verbatim, so they
+    arrive here as the model's naive local wall time and must be resolved against
+    the user's timezone rather than the system default (UTC). Called once per
+    collapse, never per field or per memory.
+
+    Falls back to UTC when preferences cannot be read. This is a background
+    durability path, not a request path: `get_user_preferences()` needs a user
+    context plus Valkey and Postgres, and letting any of those raise would discard
+    every pending memory in the segment. `validate_timezone` runs inside the guard
+    for the same reason — a single malformed `users.timezone` row would otherwise
+    make every parse in the batch fail and strip every temporal anchor.
+    """
+    try:
+        return validate_timezone(get_user_preferences().timezone)
+    except Exception:
+        logger.warning(
+            "User preferences unavailable while collapsing segment %s; "
+            "reading pending manual memory times as UTC",
+            segment_id,
+            exc_info=True,
+        )
+        return "UTC"
+
+
+def _parse_pending_temporal_field(
+    value: str,
+    field: str,
+    pending_id: str,
+    tz_name: str,
+) -> Optional[datetime]:
+    """Parse one temporal field of a pending manual memory, or return None.
+
+    Returns a UTC-aware datetime -- the representation `lt_memory` and the
+    `timestamptz` columns work in -- so the attributed instant never depends on a
+    consumer knowing which zone the parse happened in.
+
+    Returns None instead of raising: by collapse time the model is off the call
+    stack, so an exception loses the memory outright rather than prompting a
+    clarifying question, and one bad timestamp must not fail the whole segment.
+    That trade-off is only defensible if the log carries what the silent drop
+    lacked — the raw value, the timezone it was read against, and the parser's
+    reason — so the anchor's loss is diagnosable and repairable by hand.
+    """
+    try:
+        return ensure_utc(parse_time_string(value, tz_name=tz_name))
+    except Exception as exc:
+        logger.warning(
+            "Unparseable %s on pending manual memory %s: value=%r, timezone=%s. "
+            "Storing the memory without that temporal field -- text is preserved, but "
+            "relevance scoring and decay will treat this record as untimed. "
+            "Parser said: %s: %s",
+            field,
+            pending_id,
+            value,
+            tz_name,
+            type(exc).__name__,
+            exc,
+        )
+        return None
 
 
 class SegmentCollapseHandler:
@@ -61,6 +131,7 @@ class SegmentCollapseHandler:
         continuum_pool: ContinuumPool,
         lt_memory_factory: LTMemoryFactory,
         tool_repo: 'ToolRepository',
+        persona_enabled: bool = True,
     ):
         """
         Initialize collapse handler.
@@ -73,6 +144,9 @@ class SegmentCollapseHandler:
             continuum_pool: Continuum pool for cache invalidation
             lt_memory_factory: LT_Memory factory for extraction
             tool_repo: Tool repository for spawning the MemoryCuratorAgent
+            persona_enabled: Whether the Persona pass runs on collapse. Supplied by
+                the factory from MIRA_PERSONA_ENABLED, so the switch decides
+                construction here and the collapse path never re-reads config.
         """
         self.continuum_repo = continuum_repo
         self.summary_generator = summary_generator
@@ -98,6 +172,12 @@ class SegmentCollapseHandler:
         self._feedback_tracker = None
         self._synthesizer = None
         self._feedback_loop_initialized = False
+
+        # Persona is a second, parallel system (D1). Its service is built lazily like
+        # the feedback-loop components, but unlike them a disabled Persona is omitted
+        # at construction by the factory rather than checked per collapse.
+        self._persona_enabled = persona_enabled
+        self._persona_service = None
 
         # Subscribe to timeout events
         self.event_bus.subscribe('SegmentTimeoutEvent', self.handle_timeout)
@@ -138,6 +218,14 @@ class SegmentCollapseHandler:
             )
             return False
 
+    def _get_persona_service(self):
+        """Build the Persona service on first use, like the feedback-loop components."""
+        if self._persona_service is None:
+            from cns.services.persona_service import PersonaService
+
+            self._persona_service = PersonaService()
+        return self._persona_service
+
     def handle_timeout(self, event: SegmentTimeoutEvent) -> None:
         """
         Event subscriber wrapper for segment timeout.
@@ -161,7 +249,6 @@ class SegmentCollapseHandler:
     def collapse_segment(
         self,
         event: SegmentTimeoutEvent,
-        force_immediate: bool = False
     ) -> Message:
         """
         Collapse a segment: generate summary, update sentinel, trigger downstream.
@@ -171,9 +258,6 @@ class SegmentCollapseHandler:
 
         Args:
             event: SegmentTimeoutEvent with segment details
-            force_immediate: If True, run memory extraction inline instead of via
-                batch. Used for manual collapse so memories are ready before the
-                user's next conversation.
 
         Returns:
             Collapsed sentinel Message
@@ -311,11 +395,7 @@ class SegmentCollapseHandler:
             collapsed_sentinel,
             messages,
             result.synopsis,
-            force_immediate=force_immediate
         )
-
-        # Cleanup Files API uploads for this segment
-        self._cleanup_segment_files(event.segment_id)
 
         # DIY Reinforcement Loop: Extract feedback and run synthesis if due
         self._process_feedback_loop(
@@ -323,6 +403,16 @@ class SegmentCollapseHandler:
             segment_id=UUID(event.segment_id),
             continuum_id=UUID(event.continuum_id),
         )
+
+        # Evaluate MIRA behavior and refine Persona on the use-day cadence.
+        # Runs beside the user-model loop above, not instead of it (D1), and unlike
+        # it failures propagate: see _process_persona's docstring (D-3).
+        if self._persona_enabled:
+            self._process_persona(
+                messages=messages,
+                segment_id=UUID(event.segment_id),
+                continuum_id=UUID(event.continuum_id),
+            )
 
         # Portrait synthesis if use-day threshold reached
         self._process_portrait_synthesis()
@@ -484,13 +574,12 @@ class SegmentCollapseHandler:
         sentinel: Message,
         messages: List[Message],
         summary: str,
-        force_immediate: bool = False
     ) -> None:
         """
         Trigger downstream processing after segment collapse.
 
         Submits segment to:
-        1. Memory extraction (batch or immediate) - skipped for tombstoned segments
+        1. Memory extraction (direct through model_config=batch) - skipped for tombstoned segments
         2. Domain knowledge updates (if enabled)
 
         Requires: Active user context (set via set_current_user_id at handler entry)
@@ -501,7 +590,6 @@ class SegmentCollapseHandler:
             sentinel: Collapsed segment sentinel
             messages: Messages in segment
             summary: Generated summary text (checked for tombstone)
-            force_immediate: If True, run extraction inline (skips batch)
 
         Raises:
             RuntimeError: If memory extraction submission fails
@@ -513,26 +601,18 @@ class SegmentCollapseHandler:
             logger.warning(f"Skipping memory extraction for tombstoned segment {segment_id}")
             return
 
-        # Skip memory extraction for demo users (ephemeral sessions)
-        from utils.user_context import get_user_preferences
-        prefs = get_user_preferences()
-        if prefs.conversation_llm == 'demo':
-            logger.info(f"Skipping memory extraction for demo user segment {segment_id}")
-            return
-
-        # Memory extraction (immediate for manual collapse, batch otherwise)
+        # Memory extraction (direct through the fixed background route)
         if messages:
-            # submit_segment_extraction is self-contained: loads messages, submits, marks boundary
-            batch_submitted = self.lt_memory_factory.extraction_orchestrator.submit_segment_extraction(
+            # submit_segment_extraction is self-contained: loads messages, extracts, marks boundary
+            extracted = self.lt_memory_factory.extraction_orchestrator.submit_segment_extraction(
                 user_id=user_id,
                 boundary_message_id=str(sentinel.id),
-                force_immediate=force_immediate
             )
 
-            if not batch_submitted:
-                raise RuntimeError(f"Failed to submit segment {segment_id} for memory extraction - submission failed")
+            if not extracted:
+                raise RuntimeError(f"Failed to extract memories from segment {segment_id}")
 
-            logger.info(f"{'Immediate' if force_immediate else 'Batch'} extraction submitted for segment {segment_id}")
+            logger.info("Direct extraction completed for segment %s", segment_id)
 
         # Process pending manual memories (from memory_tool.create_memory)
         self._process_pending_manual_memories(user_id, segment_id)
@@ -599,6 +679,10 @@ class SegmentCollapseHandler:
         session_manager = get_shared_session_manager()
         db = LTMemoryDB(session_manager)
 
+        # Resolved once for the whole batch, before the loop, so a preferences
+        # outage degrades to UTC here instead of failing each memory below.
+        memory_tz = _resolve_pending_memory_timezone(segment_id)
+
         # Collect stored manual memories so the integration curator can tend
         # them after the loop (preserving their user-specified attributes).
         stored_manual = []  # list[tuple[str, str]] of (full_uuid_str, text)
@@ -608,19 +692,18 @@ class SegmentCollapseHandler:
                 # Generate embedding (768d deep encoder)
                 embedding = embeddings_provider.encode_deep([mem.text])[0].tolist()
 
-                # Parse temporal fields
+                # Parse temporal fields in the user's timezone — these strings are
+                # model-supplied local wall times, not UTC instants.
                 parsed_happens_at = None
                 parsed_expires_at = None
                 if mem.happens_at:
-                    try:
-                        parsed_happens_at = parse_time_string(mem.happens_at)
-                    except Exception:
-                        logger.warning(f"Invalid happens_at for pending memory {mem.pending_id}")
+                    parsed_happens_at = _parse_pending_temporal_field(
+                        mem.happens_at, "happens_at", mem.pending_id, memory_tz
+                    )
                 if mem.expires_at:
-                    try:
-                        parsed_expires_at = parse_time_string(mem.expires_at)
-                    except Exception:
-                        logger.warning(f"Invalid expires_at for pending memory {mem.pending_id}")
+                    parsed_expires_at = _parse_pending_temporal_field(
+                        mem.expires_at, "expires_at", mem.pending_id, memory_tz
+                    )
 
                 # Create ExtractedMemory
                 extracted = ExtractedMemory(
@@ -635,7 +718,7 @@ class SegmentCollapseHandler:
                 memory_id = created_ids[0]
 
                 # Manual memories skip entity extraction (no LLM extraction context).
-                # Entities get linked when batch extraction processes the segment.
+                # Entities get linked when segment extraction processes the segment.
 
                 # Create supersedes links if provided
                 for short_id in mem.supersedes_memory_ids:
@@ -827,32 +910,6 @@ class SegmentCollapseHandler:
 
         return sorted(list(tools_used))
 
-    def _cleanup_segment_files(self, segment_id: str) -> None:
-        """
-        Cleanup Files API uploads for collapsed segment.
-
-        Called after segment collapse to delete uploaded files from Anthropic storage.
-        Files are tracked per-segment and deleted when segment is archived.
-
-        Args:
-            segment_id: Segment UUID to cleanup files for
-        """
-        try:
-            from cns.services.orchestrator import get_orchestrator
-
-            orchestrator = get_orchestrator()
-            files_manager = orchestrator.llm_provider.create_files_manager()
-            files_manager.cleanup_segment_files(segment_id)
-
-            logger.debug(f"Cleaned up Files API uploads for segment {segment_id}")
-        except Exception:
-            # Log but don't fail segment collapse on cleanup errors
-            logger.warning(
-                "Failed to cleanup Files API uploads for segment %s",
-                segment_id,
-                exc_info=True
-            )
-
     def _count_user_segments(self) -> int:
         """
         Count total segments for user (for ManifestUpdatedEvent).
@@ -957,6 +1014,37 @@ class SegmentCollapseHandler:
                 "Assessment signals and/or synthesis were lost for this segment.",
                 segment_id, e, exc_info=True
             )
+
+    def _process_persona(
+        self,
+        messages: List[Message],
+        segment_id: UUID,
+        continuum_id: UUID,
+    ) -> None:
+        """Store segment evidence and publish a validated Persona revision when due.
+
+        Deliberately does not catch exceptions, unlike _process_feedback_loop above.
+        That loop swallows failures because the user model is a best-effort overlay on
+        an already-collapsed segment; a Persona failure is instead propagated to
+        handle_timeout's caller and counted toward the MAX_COLLAPSE_ATTEMPTS tombstone,
+        so a persistent breakage surfaces loudly rather than silently stopping the
+        revision history from growing (D-3).
+        """
+        user_id = get_current_user_id()
+        service = self._get_persona_service()
+        signals = service.evaluate_segment(
+            user_id,
+            messages,
+            segment_id=segment_id,
+            continuum_id=continuum_id,
+        )
+        revision = service.refine_automatically_if_due(user_id)
+        logger.info(
+            "Persona processed segment %s: %d signals%s",
+            segment_id,
+            len(signals),
+            f", published revision {revision.revision_number}" if revision else "",
+        )
 
     def _process_portrait_synthesis(self) -> None:
         """

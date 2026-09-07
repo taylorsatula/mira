@@ -1,12 +1,15 @@
 """
 Pydantic models for LT_Memory system.
 
-All data structures for memories, links, batches, and processing chunks.
+All data structures for memories, links, and processing chunks.
 """
+import logging
 from pydantic import BaseModel, Field, field_validator
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Literal, NamedTuple, NotRequired, Optional, TypedDict
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 # Valid relationship types for memory linking
 # Used across extraction, linking, and processing modules
@@ -19,9 +22,6 @@ VALID_RELATIONSHIP_TYPES = frozenset({
 RelationshipType = Literal[
     "corroborates", "conflicts", "supersedes", "refines",
     "precedes", "contextualizes", "exemplifies", "null"
-]
-BatchStatus = Literal[
-    "submitted", "processing", "result_processing", "completed", "failed", "expired", "cancelled"
 ]
 
 
@@ -125,13 +125,6 @@ class EntityPairRow(TypedDict):
     sim: float
 
 
-class ChunkMetadata(TypedDict):
-    """Metadata stored with ExtractionBatch for result processing."""
-    message_count: int
-    short_to_uuid: dict[str, str]
-    segment_id: str | None
-
-
 class MemoryDict(TypedDict):
     """Dictionary representation of a Memory for proactive surfacing."""
     id: str
@@ -205,6 +198,23 @@ class Memory(BaseModel):
     linked_memories: Optional[List['Memory']] = Field(default=None, exclude=True)
     link_metadata: Optional[LinkMetadata] = Field(default=None, exclude=True)
 
+    @field_validator('embedding', mode='before')
+    @classmethod
+    def _coerce_embedding(cls, v):
+        """Coerce pgvector Vector → list[float] at the DB deserialization boundary.
+
+        register_vector() (pgvector psycopg3 adapter) returns pgvector.types.Vector
+        for `vector` columns. Memory.embedding is typed list[float], and Vector is
+        neither iterable nor a list subclass, so Pydantic rejects it without this
+        coercion. Vector exposes to_list(); list(v) raises TypeError.
+        """
+        if v is None or isinstance(v, list):
+            return v
+        to_list = getattr(v, 'to_list', None)
+        if to_list is not None:
+            return to_list()
+        return v
+
 
 
 class ExtractionRef(TypedDict):
@@ -231,6 +241,34 @@ class ExtractedMemory(BaseModel):
 
     # Source segment for context exploration
     source_segment_id: Optional[UUID] = None  # Segment this memory was extracted from
+
+    @field_validator('happens_at', 'expires_at', mode='after')
+    @classmethod
+    def _anchor_naive_temporal_fields(cls, value):
+        """Guarantee no naive datetime is stored through a timestamptz column.
+
+        psycopg binds a naive datetime under whatever TimeZone the Postgres
+        server/session happens to have, so a naive value here means the stored
+        instant is decided by a configuration the application never set. The
+        extraction pipeline is responsible for handing this model aware UTC (see
+        memory_processor._parse_model_temporal_field); this guard is the last-line
+        backstop for any other construction with a naive value, pinning it to UTC
+        so behaviour is at least deterministic and config-independent.
+
+        Warns rather than raises because a ValidationError raised during
+        extraction aborts every memory in the segment batch (no per-memory catch
+        exists upstream). A naive value reaching here has already bypassed
+        user-timezone attribution and needs an operator-visible trail.
+        """
+        if value is not None and value.tzinfo is None:
+            logger.warning(
+                "Naive datetime %r reached ExtractedMemory; pinned to UTC. Callers "
+                "must supply temporal fields as aware UTC (parse model wall time in "
+                "the user's timezone, then ensure_utc).",
+                value,
+            )
+            return value.replace(tzinfo=timezone.utc)
+        return value
 
     @field_validator('entities')
     @classmethod
@@ -311,11 +349,10 @@ class Entity(BaseModel):
 
 
 class ProcessingChunk(BaseModel):
-    """
-    Ephemeral continuum chunk for batch extraction processing.
+    """Ephemeral continuum chunk for direct memory extraction.
 
-    Temporary container that holds messages and metadata during batch
-    submission orchestration. Discarded after batch request is built.
+    Temporary container that holds messages and metadata during direct
+    extraction. Discarded after the extraction request is built.
     Holds Message objects directly (no conversion to dict).
     """
     messages: List[Any]  # Message objects from cns.core.message
@@ -346,7 +383,7 @@ class ProcessingChunk(BaseModel):
         Create ProcessingChunk from continuum Message objects.
 
         Holds Message objects directly without conversion to preserve
-        all attributes and methods during batch payload construction.
+        all attributes and methods during extraction payload construction.
 
         Args:
             messages: List of Message objects from continuum
@@ -370,35 +407,6 @@ class ProcessingChunk(BaseModel):
             memory_context_snapshot=None,
             segment_id=segment_id
         )
-
-
-class ExtractionBatch(BaseModel):
-    """
-    Batch extraction tracking.
-
-    Represents a row in extraction_batches table.
-    """
-    id: Optional[UUID] = None  # Generated by database
-    batch_id: str  # Anthropic batch ID
-    custom_id: str
-    user_id: UUID
-    chunk_index: int
-    request_payload: Dict[str, Any]
-    chunk_metadata: Optional[ChunkMetadata] = None
-    memory_context: Optional[MemoryContext] = None
-    status: BatchStatus
-    created_at: datetime
-    submitted_at: datetime
-    completed_at: Optional[datetime] = None
-    expires_at: Optional[datetime] = None
-    result_url: Optional[str] = None
-    result_payload: Optional[Dict[str, Any]] = None
-    extracted_memories: Optional[List[Dict[str, Any]]] = None
-    error_message: Optional[str] = None
-    retry_count: int = 0
-    processing_time_ms: Optional[int] = None
-    tokens_used: Optional[int] = None
-
 
 
 class PendingManualMemory(BaseModel):

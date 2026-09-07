@@ -10,7 +10,10 @@ from pydantic import BaseModel, Field
 
 from tools.registry import registry
 from tools.repo import Tool
-from utils.timezone_utils import convert_to_utc, ensure_utc, parse_time_string, utc_now, parse_utc_time_string
+from utils.timezone_utils import (
+    convert_to_utc, ensure_utc, parse_time_string, utc_now, parse_utc_time_string,
+    local_datetime_to_utc_iso, normalize_exact_local_wall_time
+)
 from utils.user_context import get_current_user_id, get_user_preferences
 from utils.userdata_manager import get_user_data_manager
 
@@ -158,7 +161,7 @@ class PunchclockTool(Tool):
                     },
                     "start_time": {
                         "type": "string",
-                        "description": "Start time override: offset ('-10m', '+30m') or ISO timestamp ('2025-01-02T09:00')",
+                        "description": "Start time override: offset ('-10m', '+30m') or local ISO timestamp ('2025-01-02T09:00'). An exact time that is ambiguous or nonexistent across a daylight-saving transition is rejected — ask the user which time they meant",
                     },
                     "session_id": {
                         "type": "string",
@@ -166,7 +169,7 @@ class PunchclockTool(Tool):
                     },
                     "time": {
                         "type": "string",
-                        "description": "Time override for pause, resume, or punch_out: offset ('-10m', '+30m') or ISO timestamp",
+                        "description": "Time override for pause, resume, or punch_out: offset ('-10m', '+30m') or local ISO timestamp. An exact time that is ambiguous or nonexistent across a daylight-saving transition is rejected — ask the user which time they meant",
                     },
                     "include_completed": {
                         "type": "boolean",
@@ -254,6 +257,15 @@ class PunchclockTool(Tool):
             tz_name = get_user_preferences().timezone
         except RuntimeError:
             tz_name = "UTC"
+
+        # An exact local wall time names one specific moment, so resolve it with
+        # daylight-saving strictness ahead of the lenient parse below — and outside its
+        # except, whose generic "Could not parse time input" would hide the ambiguity and
+        # leave the model unable to tell the user which side of the transition they meant.
+        # Offsets ('-15m'), 'now', and offset-bearing instants keep their existing paths.
+        wall_time = normalize_exact_local_wall_time(time_input)
+        if wall_time is not None:
+            return parse_utc_time_string(local_datetime_to_utc_iso(wall_time, tz_name))
 
         try:
             parsed = parse_time_string(time_input, tz_name=tz_name)

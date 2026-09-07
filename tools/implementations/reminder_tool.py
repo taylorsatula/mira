@@ -19,7 +19,8 @@ from tools.registry import registry
 from utils.timezone_utils import (
     convert_to_timezone,
     format_datetime, parse_time_string, utc_now, ensure_utc, format_utc_iso,
-    parse_utc_time_string, convert_from_utc
+    parse_utc_time_string, convert_from_utc, local_datetime_to_utc_iso,
+    normalize_exact_local_wall_time
 )
 from utils.user_context import get_user_preferences
 
@@ -71,7 +72,7 @@ class ReminderTool(Tool):
                     },
                     "date": {
                         "type": "string",
-                        "description": "Reminder datetime. Accepts ISO 8601 (YYYY-MM-DDTHH:MM:SS) or relative phrases like 'tomorrow', 'in 2 days', 'next week'. Required for add_reminder, optional for update_reminder"
+                        "description": "Reminder datetime in the user's timezone. Accepts ISO 8601 (YYYY-MM-DDTHH:MM:SS) or relative phrases like 'tomorrow', 'in 2 days', 'next week'. An exact time that is ambiguous or nonexistent across a daylight-saving transition is rejected — ask the user which time they meant. Required for add_reminder, optional for update_reminder"
                     },
                     "description": {
                         "type": "string",
@@ -1083,10 +1084,24 @@ class ReminderTool(Tool):
         - in N day(s)/week(s)/month(s)/hour(s)/minute(s)
         - next day/week/month
 
+        An exact local wall time (YYYY-MM-DDTHH:MM:SS, no offset) is resolved against the
+        user's timezone with daylight-saving strictness: a time that occurs twice or does
+        not exist raises instead of silently selecting the wrong UTC instant.
+
         Returns a timezone-aware datetime object in UTC.
         """
         user_tz = get_user_preferences().timezone
         ds = (date_str or "").strip().lower()
+
+        # An exact local wall time is the model naming one specific moment in the user's
+        # timezone, so resolve it with daylight-saving strictness. This stays outside the
+        # fallback ladder below: parse_time_string's replace(tzinfo=...) silently picks the
+        # first of two ambiguous instants and shifts nonexistent ones by an hour, and the
+        # broad excepts there would replace the ambiguity message with "Invalid date format"
+        # — the message the model needs in order to ask the user which time they meant.
+        wall_time = normalize_exact_local_wall_time(date_str)
+        if wall_time is not None:
+            return parse_utc_time_string(local_datetime_to_utc_iso(wall_time, user_tz))
 
         # Handle simple natural language
         try:

@@ -163,6 +163,7 @@ The test: Could reasonable people disagree? If yes, frame as belief.
 happens_at: Set when information describes a specific scheduled event.
 expires_at: Set when information becomes invalid after a date.
 Most memories have neither field. Use only for genuinely time-bound information.
+Write the wall-clock time exactly as it appears in the conversation, in the user's local time. The system reads a value with no offset as the user's local wall time — never convert times to UTC or invent an offset; conversion is not your job.
 </temporal_fields>
 
 <relationship_linking>
@@ -262,8 +263,8 @@ Conditional fields — REQUIRED when their condition is met:
 "related_memory_ids": [{"id": "8-char-id", "bond": "3 words max"}]  — required when extending or updating an existing memory referenced via <meta><references_memory>
 
 Time-bound fields — include only when the information is genuinely time-bound:
-"expires_at": "ISO-8601 string"         — information becomes invalid after this date
-"happens_at": "ISO-8601 string"         — a specific scheduled event
+"expires_at": "YYYY-MM-DDTHH:MM:SS"    — information becomes invalid after this date; user's local wall time, no UTC conversion. Example: "2026-03-05T17:00:00"
+"happens_at": "YYYY-MM-DDTHH:MM:SS"    — a specific scheduled event; user's local wall time, no UTC conversion. Example: "2026-09-15T14:00:00"
 
 If no memories warrant extraction, return: []
 </output_format>

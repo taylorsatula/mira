@@ -13,7 +13,7 @@ using the provided time boundaries for detailed information.
 
 import logging
 import math
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 
 from pydantic import BaseModel, Field
@@ -21,9 +21,31 @@ from pydantic import BaseModel, Field
 from tools.repo import Tool, coerce_to_int
 from tools.registry import registry
 from cns.infrastructure.continuum_repository import get_continuum_repository
-from utils.timezone_utils import format_utc_iso, parse_utc_time_string, utc_now
-from utils.user_context import get_current_segment_id
+from utils.timezone_utils import (
+    ensure_utc, format_utc_iso, parse_time_string, utc_now,
+)
+from utils.user_context import get_current_segment_id, get_user_preferences
 from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
+
+
+def _parse_model_wall_time(value: str) -> datetime:
+    """Read one of this tool's temporal parameters as a UTC instant.
+
+    A value carrying no offset is the user's local wall time: the only clock the
+    model is given is <current_datetime>, rendered in the user's timezone, and the
+    other model-facing temporal tools (memory_tool, reminder_tool, punchclock_tool)
+    already read naive input that way. Values carrying 'Z' or an offset are honoured
+    exactly as given, so the documented copy-through from segment summary
+    time_boundaries -- whose values are written with '+00:00' -- is unaffected.
+
+    No user context means no user timezone to attribute to, so fall back to UTC; a
+    malformed timestamp keeps raising so the model can correct it on the next turn.
+    """
+    try:
+        tz_name = get_user_preferences().timezone
+    except RuntimeError:
+        tz_name = "UTC"
+    return ensure_utc(parse_time_string(value, tz_name=tz_name))
 
 
 class ContinuumSearchToolConfig(BaseModel):
@@ -192,16 +214,20 @@ class ContinuumSearchTool(Tool):
                     "type": "string",
                     "description": (
                         "ISO 8601 datetime for start of search window. Required with search_mode='messages'. "
-                        "Must be before end_time. Copy from segment summary time_boundaries.start. "
-                        "Example: '2024-10-15T14:00:00'"
+                        "Must be before end_time. Copy the value from segment summary time_boundaries.start "
+                        "verbatim, including its '+00:00' offset. A value with no offset is read as the user's "
+                        "local wall time, not UTC. "
+                        "Example: '2024-10-15T14:00:00+00:00'"
                     )
                 },
                 "end_time": {
                     "type": "string",
                     "description": (
                         "ISO 8601 datetime for end of search window. Required when search_mode='messages'. "
-                        "Must be after start_time. Copy from segment summary time_boundaries.end. "
-                        "Example: '2024-10-15T16:30:00'"
+                        "Must be after start_time. Copy the value from segment summary time_boundaries.end "
+                        "verbatim, including its '+00:00' offset. A value with no offset is read as the user's "
+                        "local wall time, not UTC. "
+                        "Example: '2024-10-15T16:30:00+00:00'"
                     )
                 },
                 "temporal_direction": {
@@ -216,7 +242,9 @@ class ContinuumSearchTool(Tool):
                 "reference_time": {
                     "type": "string",
                     "description": (
-                        "ISO 8601 datetime anchor for temporal_direction filtering. "
+                        "ISO 8601 datetime anchor for temporal_direction filtering. Give it in the user's local "
+                        "time as shown in <current_datetime>, with or without that offset; a value with no offset "
+                        "is read as the user's local wall time. "
                         "Ignored unless temporal_direction is also set. Only applies to search_mode='summaries'. "
                         "Example: '2024-10-15T14:00:00'"
                     )
@@ -279,8 +307,9 @@ class ContinuumSearchTool(Tool):
         self.logger = logging.getLogger(__name__)
 
         # Load configuration
-        config_cls = registry.get("continuum_tool") or ContinuumSearchToolConfig
-        self._config = config_cls()
+        from config import config
+
+        self._config = config.get_tool_config("continuum_tool")
 
         # Get continuum repository for database access
         self._conversation_repo = get_continuum_repository()
@@ -485,7 +514,7 @@ class ContinuumSearchTool(Tool):
         temporal_params = []  # Data parameters
 
         if temporal_direction and reference_time:
-            ref_time = parse_utc_time_string(reference_time)
+            ref_time = _parse_model_wall_time(reference_time)
 
             if temporal_direction == "before":
                 temporal_clause = "AND m.created_at < %s"
@@ -832,8 +861,8 @@ class ContinuumSearchTool(Tool):
             Dict with message results within the timeframe
         """
         # Parse timestamps
-        start_ts = parse_utc_time_string(start_time)
-        end_ts = parse_utc_time_string(end_time)
+        start_ts = _parse_model_wall_time(start_time)
+        end_ts = _parse_model_wall_time(end_time)
 
         # Validate time range
         if start_ts >= end_ts:

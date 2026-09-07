@@ -13,13 +13,16 @@ This module is pure data processing with no side effects.
 """
 import json
 import logging
-from typing import List, Dict, Any, NamedTuple, NotRequired, Optional, Tuple, TypedDict
+from datetime import datetime
+from typing import Any, Dict, List, NamedTuple, NotRequired, Optional, Tuple, TypedDict, Union
 from uuid import UUID
 
 from rapidfuzz import fuzz
 
 from lt_memory.models import ExtractedMemory, ExtractionResult, MemoryContext
 from lt_memory.vector_ops import VectorOps
+from utils.timezone_utils import ensure_utc, parse_time_string, validate_timezone
+from utils.user_context import get_user_preferences
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +36,76 @@ class DuplicateCheckResult(NamedTuple):
     is_duplicate: bool
     similarity: float | None
     duplicate_id: str | None
+
+
+def _resolve_extraction_timezone() -> str:
+    """Timezone to read model-supplied temporal fields in.
+
+    The extraction prompt asks the model for wall times as stated in the
+    conversation (the user's local time), so a naive ISO string must be resolved
+    against the user's timezone — never against the system default. Pydantic's own
+    coercion of a naive string yields a naive datetime whose stored instant is then
+    decided by the Postgres server/session ``TimeZone`` setting, a configuration
+    value the application never sets (verified four-hour drift on a live server).
+
+    Called once per response, before the memory loop, and falls back to UTC when
+    preferences are unreachable: extraction is a background durability path, not a
+    request path — raising here would discard every memory in the segment. Runs
+    ``validate_timezone`` inside the guard for the same reason; a single malformed
+    ``users.timezone`` row must not strip every temporal anchor in the batch.
+    """
+    try:
+        return validate_timezone(get_user_preferences().timezone)
+    except Exception:
+        logger.warning(
+            "User preferences unavailable during extraction; "
+            "reading model-supplied memory times as UTC",
+            exc_info=True,
+        )
+        return "UTC"
+
+
+def _parse_model_temporal_field(
+    value: Union[str, datetime],
+    field: str,
+    memory_text: str,
+    tz_name: str,
+) -> Optional[datetime]:
+    """Parse one model-supplied temporal field into an aware UTC datetime, or None.
+
+    Returns None instead of raising: by extraction time the model is off the call
+    stack, so an exception loses the memory outright rather than prompting a
+    clarifying question — a ValidationError here aborts every memory constructed so
+    far in this response (no per-memory catch exists upstream). A value that will
+    not parse logs the raw string, the timezone it was read against, and the
+    parser's own reason, so the lost anchor stays diagnosable, and the memory is
+    still stored without that field. Text is never dropped.
+
+    Deliberately lenient about daylight-saving ambiguity and nonexistent times
+    (``parse_time_string`` resolves both against the user's zone): strictness
+    belongs to the model-facing scheduling tools, where the caller can be asked to
+    choose. Nobody can be asked here.
+    """
+    if isinstance(value, datetime):
+        # Defensive: an already-parsed value bypasses string parsing but still
+        # must never reach the column naive.
+        return ensure_utc(value)
+    try:
+        return ensure_utc(parse_time_string(value, tz_name=tz_name))
+    except Exception as exc:
+        logger.warning(
+            "Unparseable %s on extracted memory %.60r: value=%r, timezone=%s. "
+            "Storing the memory without that temporal field -- text is preserved, "
+            "but temporal scoring and decay treat this record as untimed. "
+            "Parser said: %s: %s",
+            field,
+            memory_text,
+            value,
+            tz_name,
+            type(exc).__name__,
+            exc,
+        )
+        return None
 
 
 class RawMemoryDict(TypedDict, total=False):
@@ -64,7 +137,7 @@ class MemoryProcessor:
         memory_context: MemoryContext
     ) -> ExtractionResult:
         """
-        Process batch extraction result from LLM response.
+        Process a direct extraction result from the LLM response.
 
         Complete pipeline: Parse → Remap IDs → Validate → Deduplicate
 
@@ -86,6 +159,10 @@ class MemoryProcessor:
         memories_data = self._remap_short_ids_to_full(memories_data, short_to_uuid)
 
         # Step 3: Validate and deduplicate memories
+        # Timezone resolved once for the whole response, before the loop, so a
+        # preferences outage degrades to UTC here instead of failing each memory.
+        extraction_tz = _resolve_extraction_timezone()
+
         # Track index mapping: original LLM response index → filtered list index
         extracted_memories = []
         original_to_filtered_idx = {}
@@ -108,13 +185,29 @@ class MemoryProcessor:
                 )
                 continue
 
-            # Create ExtractedMemory object
-            # Temporal fields are validated by Pydantic model
+            # Create ExtractedMemory object.
+            # Temporal fields are parsed HERE, not by Pydantic: coercion of a naive
+            # model string yields a naive datetime, which psycopg then binds under
+            # whatever TimeZone Postgres happens to have configured. Parsing through
+            # the user's timezone keeps the stored instant the user meant, and the
+            # tolerate-and-log shape keeps one bad timestamp from losing the batch.
+            happens_at_raw = memory_dict.get("happens_at")
+            expires_at_raw = memory_dict.get("expires_at")
             extracted_memory = ExtractedMemory(
                 text=memory_dict["text"],
                 importance_score=DEFAULT_IMPORTANCE_SCORE,
-                expires_at=memory_dict.get("expires_at"),
-                happens_at=memory_dict.get("happens_at"),
+                expires_at=(
+                    _parse_model_temporal_field(
+                        expires_at_raw, "expires_at", memory_dict["text"], extraction_tz
+                    )
+                    if expires_at_raw else None
+                ),
+                happens_at=(
+                    _parse_model_temporal_field(
+                        happens_at_raw, "happens_at", memory_dict["text"], extraction_tz
+                    )
+                    if happens_at_raw else None
+                ),
                 related_memory_ids=memory_dict.get("related_memory_ids", []),
                 entities=memory_dict.get("entities", [])
             )
