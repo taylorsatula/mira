@@ -1,0 +1,319 @@
+{
+  "conversation_scenario": "Software engineer working on a memory-enabled AI system over several days",
+  "messages": [
+    {
+      "role": "user",
+      "content": "I'm building a conversational AI system with persistent memory. Can you help me understand the best architectural patterns for this?",
+      "metadata": {
+        "topic_changed": true,
+        "procedural_memory_detected": "architecture_design"
+      },
+      "timestamp_offset_hours": -72
+    },
+    {
+      "role": "assistant", 
+      "content": "Building a conversational AI with persistent memory is a fascinating challenge! There are several key architectural patterns to consider:\n\n**Memory Architecture Patterns:**\n1. **Hierarchical Memory** - Short-term (working memory) + Long-term (consolidated memories)\n2. **Event-Driven Memory** - Trigger memory consolidation based on conversation events\n3. **Vector-Based Retrieval** - Use embeddings for semantic memory search\n\n**Key Components:**\n- **Memory Extraction**: Identify important information to persist\n- **Memory Consolidation**: Merge and summarize related memories\n- **Memory Retrieval**: Surface relevant context for new conversations\n\nWhat specific aspects are you most interested in? Are you dealing with single-user or multi-user scenarios?",
+      "metadata": {
+        "procedural_memory_id": "architecture_design",
+        "tools_used": ["knowledge_retrieval", "structured_output"]
+      },
+      "timestamp_offset_hours": -72
+    },
+    {
+      "role": "user",
+      "content": "Multi-user, and I'm particularly interested in the memory extraction part. How do you decide what's worth remembering?",
+      "metadata": {
+        "procedural_memory_id": "architecture_design"
+      },
+      "timestamp_offset_hours": -71
+    },
+    {
+      "role": "assistant",
+      "content": "Great question! Memory extraction is crucial for building useful long-term context. Here are the key strategies:\n\n**What to Remember:**\n- **User Preferences**: Coding style, tools, frameworks they prefer\n- **Project Context**: Current projects, goals, constraints\n- **Problem Patterns**: Common issues they face and solutions that work\n- **Decision Points**: Important choices made and the reasoning\n- **Learning Moments**: New concepts they've grasped or struggled with\n\n**Extraction Techniques:**\n1. **Topic Boundary Detection** - Identify when conversation shifts topics\n2. **Sentiment Analysis** - Note when user expresses strong preferences/dislikes\n3. **Entity Extraction** - Track mentioned technologies, people, projects\n4. **Action Items** - Capture TODOs, plans, commitments\n\n**Multi-User Considerations:**\n- **User Isolation**: Strict data separation between users\n- **Privacy Controls**: What users want remembered vs. forgotten\n- **Tenant Boundaries**: Organization-level vs. personal memories\n\nFor implementation, consider using a pipeline: Raw conversation → Topic segmentation → Importance scoring → Memory candidates → Validation → Storage.\n\nAre you planning to use LLMs for the extraction process itself?",
+      "metadata": {
+        "procedural_memory_id": "architecture_design"
+      },
+      "timestamp_offset_hours": -71
+    },
+    {
+      "role": "user",
+      "content": "Yes, I'm thinking of using LLMs for extraction. What prompting strategies work best for memory extraction?",
+      "metadata": {
+        "procedural_memory_id": "architecture_design"
+      },
+      "timestamp_offset_hours": -70
+    },
+    {
+      "role": "assistant",
+      "content": "LLM-based memory extraction can be very effective with the right prompting strategies!\n\n**Effective Prompting Patterns:**\n\n**1. Multi-Stage Extraction:**\n```\nStage 1: \"Identify the main topics discussed in this conversation\"\nStage 2: \"For each topic, extract key facts, decisions, and preferences\"\nStage 3: \"Rate the importance of each extracted item (1-5)\"\n```\n\n**2. Structured Output Prompts:**\n```\nExtract memories in this JSON format:\n{\n  \"user_preferences\": [...],\n  \"project_updates\": [...],\n  \"decisions_made\": [...],\n  \"action_items\": [...]\n}\n```\n\n**3. Few-Shot Examples:**\nProvide 2-3 examples of good memory extraction from similar conversations.\n\n**4. Contextual Prompts:**\n- Include user's previous memories for consistency\n- Reference ongoing projects/contexts\n- Note conversation patterns\n\n**Best Practices:**\n- **Temperature 0.1-0.3** for consistent extraction\n- **Validation stage**: \"Do these memories accurately reflect the conversation?\"\n- **Deduplication**: \"Are any of these similar to existing memories?\"\n- **Privacy filter**: \"Remove any sensitive information\"\n\n**Error Handling:**\n- Fallback to simpler extraction if structured output fails\n- Human-in-the-loop for edge cases\n- Confidence scoring for memory quality\n\nWould you like me to elaborate on any of these patterns?",
+      "metadata": {
+        "procedural_memory_id": "architecture_design",
+        "tools_used": ["code_examples", "structured_output"]
+      },
+      "timestamp_offset_hours": -70
+    },
+    {
+      "role": "user",
+      "content": "This is really helpful! Let me switch topics - I need to plan my work for this week. Can you help me organize my tasks?",
+      "metadata": {
+        "topic_changed": true,
+        "procedural_memory_detected": "task_planning"
+      },
+      "timestamp_offset_hours": -69
+    },
+    {
+      "role": "assistant",
+      "content": "Absolutely! I'd be happy to help you organize your weekly tasks. \n\nTo give you the best planning advice, could you tell me:\n\n1. **Current projects** - What are you working on this week?\n2. **Key deadlines** - Any important due dates coming up?\n3. **Time constraints** - How many hours/days do you have available?\n4. **Priorities** - What's most critical to accomplish?\n5. **Dependencies** - Any tasks that block others or need input from teammates?\n\nAlso, are you looking for help with:\n- Breaking down large tasks into smaller ones?\n- Time estimation and scheduling?\n- Balancing different types of work?\n- Setting realistic goals?\n\nOnce I understand your situation better, I can help you create a structured plan that sets you up for success!",
+      "metadata": {
+        "procedural_memory_id": "task_planning"
+      },
+      "timestamp_offset_hours": -69
+    },
+    {
+      "role": "user",
+      "content": "I need to finish the memory extraction pipeline we discussed, write unit tests, deploy to staging, and also handle some code reviews. Plus I have a team meeting Thursday to present progress.",
+      "metadata": {
+        "procedural_memory_id": "task_planning"
+      },
+      "timestamp_offset_hours": -69
+    },
+    {
+      "role": "assistant",
+      "content": "Perfect! Let me help you organize this into a manageable weekly plan. Here's how I'd structure it:\n\n## **This Week's Plan (Priority-Ordered)**\n\n### **Monday-Tuesday: Core Development**\n- **Memory Extraction Pipeline** (6-8 hours)\n  - Implement LLM prompting strategies we discussed\n  - Add structured output parsing\n  - Create validation/confidence scoring\n- **Unit Tests** (3-4 hours)\n  - Test extraction accuracy with sample conversations\n  - Mock LLM responses for consistent testing\n  - Edge case handling (empty responses, malformed JSON)\n\n### **Wednesday: Integration & Review**\n- **Code Reviews** (2-3 hours) - Handle these mid-week when you're fresh\n- **Staging Deployment** (2-3 hours)\n  - Deploy memory pipeline\n  - Smoke test in staging environment\n  - Document any deployment issues\n\n### **Thursday: Presentation Prep & Delivery**\n- **Morning**: Final touches, prepare demo\n- **Team Meeting**: Present progress, get feedback\n- **Afternoon**: Address any urgent feedback\n\n### **Friday: Buffer & Next Steps**\n- Address any bugs found in staging\n- Plan next iteration based on team feedback\n\n**Daily Code Review Budget**: 30 minutes each day for quick turnaround\n\nDoes this timeline feel realistic given your other commitments? Any adjustments needed?",
+      "metadata": {
+        "procedural_memory_id": "task_planning",
+        "tools_used": ["task_breakdown", "time_estimation"]
+      },
+      "timestamp_offset_hours": -69
+    },
+    {
+      "role": "user",
+      "content": "That looks great! One question about the memory pipeline - should I implement the multi-stage extraction we talked about, or start with something simpler?",
+      "metadata": {
+        "procedural_memory_id": "task_planning",
+        "topic_changed": true
+      },
+      "timestamp_offset_hours": -68
+    },
+    {
+      "role": "assistant",
+      "content": "Great question! For your timeline, I'd recommend starting simpler and building up:\n\n## **Week 1 (This Week): MVP Approach**\n**Single-Stage Extraction** with structured output:\n```python\n# Simple but effective\nprompt = \"\"\"\nAnalyze this conversation and extract important information:\n\nReturn JSON with:\n- main_topics: [list of topics discussed]\n- user_preferences: [any preferences mentioned]\n- action_items: [tasks or next steps]\n- key_decisions: [important choices made]\n\nConversation: {conversation_text}\n\"\"\"\n```\n\n**Why start simple:**\n- Easier to test and debug\n- Faster to implement for Thursday demo\n- You can measure baseline performance\n- Less complex error handling needed\n\n## **Week 2+: Enhanced Approach**\nOnce the basic version works:\n- Add importance scoring\n- Implement multi-stage refinement\n- Add deduplication logic\n- Enhance with few-shot examples\n\n## **Pro Tip for Demo:**\nHave 2-3 sample conversations ready that showcase different memory types (preferences, decisions, technical learnings). This will make your presentation much more compelling!\n\n**Time saved this week:** ~4-6 hours by avoiding over-engineering\n**Demo impact:** Actually working system vs. complex but incomplete one\n\nDoes this approach align with your goals for the presentation?",
+      "metadata": {
+        "procedural_memory_id": "task_planning",
+        "has_tool_calls": true,
+        "tool_calls": [
+          {
+            "id": "call_1234",
+            "type": "function",
+            "function": {
+              "name": "code_example",
+              "arguments": "{\"language\": \"python\", \"code\": \"prompt = ...\"}"
+            }
+          }
+        ]
+      },
+      "timestamp_offset_hours": -68
+    },
+    {
+      "role": "user",
+      "content": "Perfect, that makes total sense. Let me work on the implementation now. Thanks for the help!",
+      "metadata": {
+        "procedural_memory_id": "task_planning"
+      },
+      "timestamp_offset_hours": -68
+    },
+    {
+      "role": "assistant",
+      "content": "You're very welcome! That sounds like a solid plan.\n\n**Quick reminder for your implementation:**\n- Keep the prompts simple and clear\n- Add good error handling for JSON parsing\n- Log the LLM responses for debugging\n- Test with a few different conversation types\n\nGood luck with the memory pipeline! Feel free to come back if you run into any issues or want to bounce ideas off me. \n\nYou've got this! 🚀",
+      "metadata": {
+        "procedural_memory_id": "task_planning"
+      },
+      "timestamp_offset_hours": -68
+    },
+    {
+      "role": "user",
+      "content": "Hey, I'm running into an issue with the JSON parsing. The LLM sometimes returns markdown-formatted JSON instead of plain JSON. How should I handle this?",
+      "metadata": {
+        "topic_changed": true,
+        "procedural_memory_detected": "debugging"
+      },
+      "timestamp_offset_hours": -48
+    },
+    {
+      "role": "assistant",
+      "content": "Ah yes, that's a super common issue! LLMs love to wrap JSON in markdown code blocks. Here's a robust solution:\n\n```python\nimport json\nimport re\n\ndef extract_json_from_response(response_text):\n    \"\"\"Extract JSON from LLM response, handling markdown formatting.\"\"\"\n    \n    # First, try direct JSON parsing\n    try:\n        return json.loads(response_text.strip())\n    except json.JSONDecodeError:\n        pass\n    \n    # Try to extract from markdown code blocks\n    json_patterns = [\n        r'```json\\s*([\\s\\S]*?)\\s*```',  # ```json ... ```\n        r'```\\s*([\\s\\S]*?)\\s*```',      # ``` ... ```\n        r'`([^`]*)`',                    # Single backticks\n    ]\n    \n    for pattern in json_patterns:\n        matches = re.findall(pattern, response_text, re.IGNORECASE)\n        for match in matches:\n            try:\n                return json.loads(match.strip())\n            except json.JSONDecodeError:\n                continue\n    \n    # If all else fails, try to find JSON-like content\n    json_match = re.search(r'\\{[\\s\\S]*\\}', response_text)\n    if json_match:\n        try:\n            return json.loads(json_match.group())\n        except json.JSONDecodeError:\n            pass\n    \n    raise ValueError(f\"Could not extract valid JSON from response: {response_text[:200]}...\")\n```\n\n**Alternative: Improve the prompt**\n```\n\"Return only valid JSON, no markdown formatting or explanations:\"\n```\n\nThis parsing approach has saved me countless debugging hours! Does this help with your extraction pipeline?",
+      "metadata": {
+        "procedural_memory_id": "debugging",
+        "has_tool_calls": true,
+        "tool_calls": [
+          {
+            "id": "call_5678",
+            "type": "function",
+            "function": {
+              "name": "code_solution",
+              "arguments": "{\"language\": \"python\", \"solution_type\": \"json_parsing\"}"
+            }
+          }
+        ],
+        "tools_used": ["code_solution", "debugging_tips"]
+      },
+      "timestamp_offset_hours": -48
+    },
+    {
+      "role": "user",
+      "content": "That's exactly what I needed! The regex approach is clever. I implemented it and it's working much better now.",
+      "metadata": {
+        "procedural_memory_id": "debugging"
+      },
+      "timestamp_offset_hours": -47
+    },
+    {
+      "role": "assistant",
+      "content": "Awesome! I'm glad that solved it. The regex fallback approach is definitely a lifesaver when working with LLM outputs.\n\n**Pro tip:** You might want to add some logging to track which parsing method succeeds most often:\n\n```python\nlogger.info(f\"JSON extracted using method: {method_used}\")\n```\n\nThis can help you optimize your prompts over time. If you're seeing a lot of markdown formatting, you can adjust the prompt to be more explicit about wanting plain JSON.\n\nHow's the rest of the memory extraction pipeline coming along? Are you on track for your Thursday presentation?",
+      "metadata": {
+        "procedural_memory_id": "debugging"
+      },
+      "timestamp_offset_hours": -47
+    },
+    {
+      "role": "user",
+      "content": "Going well! I've got the basic extraction working. Now I'm working on the unit tests. What's the best way to test LLM-based extraction without making actual API calls?",
+      "metadata": {
+        "topic_changed": true,
+        "procedural_memory_detected": "testing"
+      },
+      "timestamp_offset_hours": -46
+    },
+    {
+      "role": "assistant",
+      "content": "Great question! Testing LLM components without API calls is crucial for fast, reliable tests. Here are the best approaches:\n\n## **1. Mock the LLM Provider**\n```python\n# In your test file\nfrom unittest.mock import Mock, patch\n\n@patch('your_module.llm_provider')\ndef test_memory_extraction(mock_llm):\n    # Mock a realistic response\n    mock_llm.generate_response.return_value = {\n        'content': '''{\n            \"main_topics\": [\"memory architecture\", \"LLM prompting\"],\n            \"user_preferences\": [\"structured JSON output\"],\n            \"action_items\": [\"implement extraction pipeline\"],\n            \"key_decisions\": [\"start with simple single-stage approach\"]\n        }'''\n    }\n    \n    result = your_memory_extractor.extract(sample_conversation)\n    assert result['main_topics'] == [\"memory architecture\", \"LLM prompting\"]\n```\n\n## **2. Fixture-Based Responses**\n```python\n# tests/fixtures/llm_responses.json\n{\n    \"memory_extraction_success\": {\n        \"main_topics\": [...],\n        \"user_preferences\": [...]\n    },\n    \"memory_extraction_malformed\": \"```json\\n{broken json}\",\n    \"memory_extraction_markdown\": \"```json\\n{...}\\n```\"\n}\n```\n\n## **3. Test Different Scenarios**\n- ✅ Valid JSON response\n- ✅ Markdown-wrapped JSON\n- ✅ Malformed JSON (test error handling)\n- ✅ Empty response\n- ✅ Very long conversation\n\n## **4. Integration Test Layer**\nKeep one test that hits the real API for smoke testing:\n```python\n@pytest.mark.integration\ndef test_real_llm_extraction():\n    # Use actual API for end-to-end validation\n```\n\nThis gives you fast unit tests plus confidence that the real integration works!",
+      "metadata": {
+        "procedural_memory_id": "testing",
+        "tools_used": ["testing_patterns", "mock_examples"]
+      },
+      "timestamp_offset_hours": -46
+    },
+    {
+      "role": "user",
+      "content": "Perfect! I love the fixture approach - that'll let me test all the edge cases. One more question: how do you handle rate limiting when you do need to test against the real API?",
+      "metadata": {
+        "procedural_memory_id": "testing"
+      },
+      "timestamp_offset_hours": -45
+    },
+    {
+      "role": "assistant",
+      "content": "Excellent question! Rate limiting is a real pain point for LLM testing. Here's how to handle it gracefully:\n\n## **1. Test Markers & Selective Running**\n```python\n# Run fast tests by default\npytest  # Skips integration tests\n\n# Run with real API when needed\npytest -m integration\npytest -m \"not slow\"  # Custom markers\n```\n\n## **2. Rate Limiting Strategies**\n```python\nimport time\nfrom functools import wraps\n\nclass RateLimiter:\n    def __init__(self, calls_per_minute=20):\n        self.calls_per_minute = calls_per_minute\n        self.last_call_time = 0\n        \n    def wait_if_needed(self):\n        time_since_last = time.time() - self.last_call_time\n        min_interval = 60 / self.calls_per_minute\n        \n        if time_since_last < min_interval:\n            time.sleep(min_interval - time_since_last)\n        \n        self.last_call_time = time.time()\n\n# In your test client\ndef make_llm_call(self, prompt):\n    self.rate_limiter.wait_if_needed()\n    return self.llm.generate_response(prompt)\n```\n\n## **3. CI/CD Strategy**\n```yaml\n# In GitHub Actions / CI\n- name: Run unit tests\n  run: pytest -m \"not integration\"\n  \n- name: Run integration tests (limited)\n  run: pytest -m integration --maxfail=3\n  if: github.event_name == 'push' and github.ref == 'refs/heads/main'\n```\n\n## **4. Response Caching**\n```python\n# Cache successful responses for repeated test runs\n@pytest.fixture(scope=\"session\")\ndef cached_llm_responses():\n    cache_file = \"test_responses.json\"\n    if os.path.exists(cache_file):\n        return json.load(open(cache_file))\n    return {}\n```\n\nThis way you get comprehensive testing without burning through your API quota!",
+      "metadata": {
+        "procedural_memory_id": "testing",
+        "has_tool_calls": true,
+        "tool_calls": [
+          {
+            "id": "call_3456",
+            "type": "function",
+            "function": {
+              "name": "rate_limiting_solution",
+              "arguments": "{\"strategies\": [\"markers\", \"rate_limiter\", \"ci_cd\", \"caching\"]}"
+            }
+          }
+        ]
+      },
+      "timestamp_offset_hours": -45
+    },
+    {
+      "role": "user",
+      "content": "Brilliant! The rate limiter is especially clever. I think I have everything I need for the tests now. Time to get back to coding!",
+      "metadata": {
+        "procedural_memory_id": "testing"
+      },
+      "timestamp_offset_hours": -44
+    },
+    {
+      "role": "assistant",
+      "content": "Fantastic! You're all set up for success. That rate limiter will save you a lot of headaches down the road.\n\n**Quick testing checklist for your implementation:**\n- ✅ Mock tests for speed\n- ✅ Fixture-based edge cases  \n- ✅ Rate-limited integration tests\n- ✅ Error handling validation\n\nYou're well-prepared for Thursday's demo! The combination of working code + solid tests will make for a compelling presentation.\n\nHappy coding! 🎯",
+      "metadata": {
+        "procedural_memory_id": "testing"
+      },
+      "timestamp_offset_hours": -44
+    },
+    {
+      "role": "user",
+      "content": "Quick update - I've deployed to staging and everything is working! The memory extraction is pulling out the right information and the tests are all passing. Feeling good about tomorrow's demo.",
+      "metadata": {
+        "topic_changed": true,
+        "procedural_memory_detected": "status_update"
+      },
+      "timestamp_offset_hours": -20
+    },
+    {
+      "role": "assistant",
+      "content": "That's fantastic news! 🎉 Congratulations on getting everything working and deployed successfully!\n\nIt sounds like you executed the plan perfectly:\n- ✅ Memory extraction pipeline implemented\n- ✅ Robust JSON parsing handling\n- ✅ Comprehensive test suite\n- ✅ Successfully deployed to staging\n- ✅ All systems working as expected\n\n**For tomorrow's demo, you'll be able to show:**\n- Real working memory extraction\n- Live staging environment\n- Test coverage and reliability\n- Practical examples of what gets remembered\n\nYou should feel confident! Having a working system that you can actually demonstrate is so much more impactful than slides or promises.\n\n**Demo tip:** Have a backup conversation ready to run through the extraction live if there's time - teams love seeing the actual system in action.\n\nBest of luck tomorrow! You've put in great work and it shows. 🚀",
+      "metadata": {
+        "procedural_memory_id": "status_update"
+      },
+      "timestamp_offset_hours": -20
+    },
+    {
+      "role": "user",
+      "content": "The demo went amazingly well! The team loved seeing the live extraction and they're excited about the possibilities. They want me to start working on the memory consolidation features next.",
+      "metadata": {
+        "topic_changed": true,
+        "procedural_memory_detected": "project_planning"
+      },
+      "timestamp_offset_hours": -1
+    },
+    {
+      "role": "assistant",
+      "content": "That's incredible! 🎊 Congratulations on a successful demo! There's nothing quite like the feeling of showing your working system and seeing the team get excited about it.\n\nSounds like you nailed the presentation and got exactly the response you were hoping for. The fact that they want you to move forward with memory consolidation shows they really see the value in what you've built.\n\n**Memory consolidation** is the next logical step - taking all those extracted memories and intelligently merging, summarizing, and organizing them over time. That's where the real magic happens for long-term conversation intelligence.\n\nSome interesting challenges ahead:\n- Identifying related memories to consolidate\n- Maintaining important details while summarizing\n- Handling conflicting or outdated information\n- Temporal organization (daily/weekly/monthly rollups)\n\nAre you thinking of tackling daily consolidation first, or do you have other priorities for the memory consolidation features?\n\nReally exciting progress! Your systematic approach with the extraction pipeline has clearly paid off. 🌟",
+      "metadata": {
+        "procedural_memory_id": "project_planning"
+      },
+      "timestamp_offset_hours": -1
+    },
+    {
+      "role": "user",
+      "content": "Thanks! Yeah, I'm thinking daily consolidation first. The idea is to take all the memories from a day and create a summary that captures the key themes and progress. What patterns work well for this kind of temporal summarization?",
+      "metadata": {
+        "procedural_memory_id": "project_planning"
+      },
+      "timestamp_offset_hours": -1
+    },
+    {
+      "role": "assistant",
+      "content": "Excellent choice! Daily consolidation creates a natural rhythm and gives users a sense of progress. Here are proven patterns for temporal summarization:\n\n## **Daily Consolidation Patterns**\n\n### **1. Chronological Narrative**\n```\n\"Today's Work Session:\n- Morning: Focused on memory extraction pipeline debugging\n- Afternoon: Implemented JSON parsing improvements  \n- Evening: Deployed to staging and validated functionality\n\nKey Achievements: Successfully resolved LLM output parsing issues\nDecisions Made: Chose simple single-stage extraction for MVP\nNext Steps: Prepare demo materials for Thursday presentation\"\n```\n\n### **2. Thematic Clustering**\n```\n\"Daily Summary - [Date]\n\n🔧 Technical Progress:\n- Completed memory extraction implementation\n- Added robust error handling for malformed JSON\n- Deployed pipeline to staging environment\n\n📋 Planning & Organization:\n- Structured weekly task breakdown\n- Prioritized features for demo\n- Identified next iteration goals\n\n💡 Learning & Insights:\n- LLM output consistency challenges\n- Value of starting simple before optimizing\"\n```\n\n### **3. Structured Consolidation**\n```json\n{\n  \"date\": \"2024-XX-XX\",\n  \"primary_focus\": \"Memory extraction pipeline\",\n  \"accomplishments\": [...],\n  \"problems_solved\": [...],\n  \"decisions_made\": [...],\n  \"tomorrow_priorities\": [...],\n  \"mood/energy\": \"productive\",\n  \"notable_conversations\": [\"architectural discussion\", \"debugging session\"]\n}\n```\n\n**Key Consolidation Strategies:**\n- **Deduplicate** similar memories from the day\n- **Identify patterns** (recurring themes, progress on projects)\n- **Preserve context** (why decisions were made)\n- **Track momentum** (what's building vs. what's stuck)\n\nWhich approach resonates most with your vision for the user experience?",
+      "metadata": {
+        "procedural_memory_id": "project_planning",
+        "tools_used": ["pattern_examples", "structured_output"]
+      },
+      "timestamp_offset_hours": -1
+    },
+    {
+      "role": "user",
+      "content": "I really like the thematic clustering approach! It feels natural and would be useful for users to see their day organized that way. How would you implement the clustering logic?",
+      "metadata": {
+        "procedural_memory_id": "project_planning"
+      },
+      "timestamp_offset_hours": 0
+    },
+    {
+      "role": "assistant",
+      "content": "Great choice! Thematic clustering feels much more intuitive than pure chronology. Here's how I'd approach the clustering logic:\n\n## **Implementation Strategy**\n\n### **1. Two-Stage LLM Approach**\n```python\n# Stage 1: Identify themes in the day's memories\ntheme_prompt = \"\"\"\nAnalyze these extracted memories from one day and identify 3-5 main themes:\n\nMemories: {daily_memories}\n\nReturn themes as:\n{\n  \"themes\": [\n    {\"name\": \"Technical Progress\", \"emoji\": \"🔧\", \"keywords\": [\"code\", \"implementation\", \"debugging\"]},\n    {\"name\": \"Planning & Strategy\", \"emoji\": \"📋\", \"keywords\": [\"planning\", \"roadmap\", \"priorities\"]}\n  ]\n}\n\"\"\"\n\n# Stage 2: Cluster memories into themes\ncluster_prompt = \"\"\"\nGroup these memories into the identified themes:\n\nThemes: {themes}\nMemories: {memories}\n\nReturn: {\"theme_name\": [\"memory1\", \"memory2\", ...]}\n\"\"\"\n```\n\n### **2. Semantic Similarity Backup**\n```python\nfrom sentence_transformers import SentenceTransformer\n\ndef semantic_clustering(memories):\n    model = SentenceTransformer('all-MiniLM-L6-v2')\n    embeddings = model.encode([m['content'] for m in memories])\n    \n    # Use clustering (K-means, hierarchical, etc.)\n    from sklearn.cluster import KMeans\n    clusters = KMeans(n_clusters=min(5, len(memories)//3))\n    cluster_labels = clusters.fit_predict(embeddings)\n    \n    return group_by_clusters(memories, cluster_labels)\n```\n\n### **3. Hybrid Approach**\n```python\ndef consolidate_daily_memories(memories):\n    # Try LLM clustering first\n    try:\n        themes = identify_themes_llm(memories)\n        clustered = cluster_memories_llm(memories, themes)\n        return format_thematic_summary(clustered)\n    except Exception:\n        # Fallback to semantic clustering\n        clusters = semantic_clustering(memories)\n        return format_cluster_summary(clusters)\n```\n\n**Benefits:**\n- LLM gives natural, contextual themes\n- Semantic similarity as reliable fallback\n- Can learn theme patterns over time\n\nWould you want to start with the LLM approach, or build both from the start?",
+      "metadata": {
+        "procedural_memory_id": "project_planning",
+        "has_tool_calls": true,
+        "tool_calls": [
+          {
+            "id": "call_9012",
+            "type": "function",
+            "function": {
+              "name": "implementation_strategy",
+              "arguments": "{\"approach\": \"hybrid\", \"primary\": \"llm\", \"fallback\": \"semantic\"}"
+            }
+          }
+        ],
+        "tools_used": ["code_implementation", "architecture_design"]
+      },
+      "timestamp_offset_hours": 0
+    }
+  ]
+}
