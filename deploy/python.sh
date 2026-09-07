@@ -94,7 +94,7 @@ run_quiet rm -rf /tmp/mira-OSS-main
 print_success "MIRA installed to /opt/mira/app"
 
 # Offline mode: LLM endpoints are configured post-schema by postgresql.sh
-# (INSERTs qwopus tier, UPDATEs internal_llm to llama-server endpoints/models)
+# (UPDATEs all five model_configs rows to llama-server endpoints and models)
 if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
     echo ""
     echo -e "${DIM}NOTE: Tools (web_tool, forage_tool) use hardcoded LLM configs.${RESET}"
@@ -102,30 +102,39 @@ if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
     echo -e "${DIM}  - tools/implementations/web_tool.py (WebToolConfig)${RESET}"
     echo -e "${DIM}  - tools/implementations/forage_tool.py (ForageToolConfig)${RESET}"
     echo ""
-    echo -e "${DIM}NOTE: phoneafriend entries remain remote (Anthropic/OpenRouter).${RESET}"
-    echo -e "${DIM}They will fail gracefully if called while air-gapped.${RESET}"
+    echo -e "${DIM}NOTE: the 'other' route has no outside vendor to consult when air-gapped.${RESET}"
+    echo -e "${DIM}postgresql.sh points it at the small local instance so routing stays valid.${RESET}"
     echo ""
 fi
 
-# Patch schema for user's configured providers (chat tier + subcortical)
+# Patch schema for user's configured providers (primary route + fast route)
 if [ "$CONFIG_OFFLINE_MODE" != "yes" ]; then
     SCHEMA="/opt/mira/app/deploy/mira_service_schema.sql"
+    PRIMARY_ROW="('primary', 'openai/gpt-5.5', 'openrouter', 'https://openrouter.ai/api/v1/chat/completions', 'provider_key', 'high', 16000)"
 
-    # --- Chat tier: patch primary row if OpenAI-compatible, or if Anthropic with non-default model ---
+    # --- Chat tier: rewrite the primary row's dialect, endpoint and key ---
     if [ "$CONFIG_CHAT_PROVIDER_TYPE" = "generic" ]; then
         echo -ne "${DIM}${ARROW}${RESET} Configuring chat tier (OpenAI-compatible: ${CONFIG_CHAT_MODEL})... "
+        REPLACEMENT="('primary', '${CONFIG_CHAT_MODEL}', 'openai', '${CONFIG_CHAT_ENDPOINT}', 'provider_key', 'high', 16000)"
+    elif [ "$CONFIG_CHAT_MODEL" != "openai/gpt-5.5" ] && [ -n "$CONFIG_CHAT_MODEL" ]; then
+        echo -ne "${DIM}${ARROW}${RESET} Configuring chat tier (Anthropic: ${CONFIG_CHAT_MODEL})... "
+        REPLACEMENT="('primary', '${CONFIG_CHAT_MODEL}', 'anthropic', 'https://api.anthropic.com/v1/messages', 'anthropic_key', 'high', 16000)"
+    else
+        REPLACEMENT=""
+    fi
+    if [ -n "$REPLACEMENT" ]; then
         if [ "$OS" = "macos" ]; then
-            sed -i '' "s|('primary', 'claude-sonnet-4-6', 0, 'Primary', 1, 'anthropic', NULL, NULL, FALSE)|('primary', '${CONFIG_CHAT_MODEL}', 0, 'Primary', 1, 'openai', '${CONFIG_CHAT_ENDPOINT}', 'provider_key', FALSE)|" "$SCHEMA"
+            sed -i '' "s|${PRIMARY_ROW}|${REPLACEMENT}|" "$SCHEMA"
         else
-            sed -i "s|('primary', 'claude-sonnet-4-6', 0, 'Primary', 1, 'anthropic', NULL, NULL, FALSE)|('primary', '${CONFIG_CHAT_MODEL}', 0, 'Primary', 1, 'openai', '${CONFIG_CHAT_ENDPOINT}', 'provider_key', FALSE)|" "$SCHEMA"
+            sed -i "s|${PRIMARY_ROW}|${REPLACEMENT}|" "$SCHEMA"
         fi
-        echo -e "${CHECKMARK}"
-    elif [ "$CONFIG_CHAT_MODEL" != "claude-sonnet-4-6" ] && [ -n "$CONFIG_CHAT_MODEL" ]; then
-        echo -ne "${DIM}${ARROW}${RESET} Patching chat model (${CONFIG_CHAT_MODEL})... "
-        if [ "$OS" = "macos" ]; then
-            sed -i '' "s|'claude-sonnet-4-6'|'${CONFIG_CHAT_MODEL}'|" "$SCHEMA"
-        else
-            sed -i "s|'claude-sonnet-4-6'|'${CONFIG_CHAT_MODEL}'|" "$SCHEMA"
+        # sed exits 0 when the pattern never matches, which would silently
+        # leave the stock openrouter row installed. Fail fast instead.
+        if ! grep -qF "$REPLACEMENT" "$SCHEMA"; then
+            echo -e "${ERROR}"
+            print_error "Could not find the seeded primary model_configs row in $SCHEMA"
+            print_info "deploy/python.sh is out of sync with the installed schema; refusing to continue"
+            exit 1
         fi
         echo -e "${CHECKMARK}"
     fi

@@ -2,15 +2,17 @@
 # MIRA Deployment Orchestrator
 # This is the main entry point for deploying MIRA
 #
-# Usage: ./deploy/deploy.sh [--loud] [--migrate] [--dry-run]
+# Usage: ./deploy/deploy.sh [--loud]
 #
 # Quick start (downloads and runs):
 #   git clone https://github.com/taylorsatula/mira-OSS.git /tmp/mira-install && /tmp/mira-install/deploy/deploy.sh
 #
 # Options:
 #   --loud     Show verbose output during installation
-#   --migrate  Upgrade existing installation, preserving user data
-#   --dry-run  (with --migrate) Show what would happen without making changes
+#
+# There is no in-place upgrade path: 2.0 installs the greenfield schema from
+# deploy/mira_service_schema.sql into an empty database. A user salvaging data
+# from an older install needs only pg_dump and manual work.
 #
 # The deployment is broken into modular scripts:
 #   lib/output.sh     - Visual output functions (colors, spinners)
@@ -42,15 +44,9 @@ fi
 
 # Parse arguments
 LOUD_MODE=false
-MIGRATE_MODE=false
-DRY_RUN_MODE=false
 for arg in "$@"; do
     if [ "$arg" = "--loud" ]; then
         LOUD_MODE=true
-    elif [ "$arg" = "--migrate" ]; then
-        MIGRATE_MODE=true
-    elif [ "$arg" = "--dry-run" ]; then
-        DRY_RUN_MODE=true
     fi
 done
 
@@ -60,23 +56,6 @@ done
 source "${SCRIPT_DIR}/lib/output.sh"
 source "${SCRIPT_DIR}/lib/services.sh"
 source "${SCRIPT_DIR}/lib/vault.sh"
-
-# ============================================================================
-# Migration Mode (--migrate flag)
-# ============================================================================
-# If --migrate flag is passed, run migration workflow instead of fresh install
-if [ "$MIGRATE_MODE" = true ]; then
-    export DRY_RUN_MODE
-    source "${SCRIPT_DIR}/lib/migrate.sh"
-    source "${SCRIPT_DIR}/migrate.sh"
-    exit 0
-fi
-
-# --dry-run only makes sense with --migrate
-if [ "$DRY_RUN_MODE" = true ]; then
-    echo "Error: --dry-run can only be used with --migrate"
-    exit 1
-fi
 
 # ============================================================================
 # Phase 1: Configuration Gathering

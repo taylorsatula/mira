@@ -168,9 +168,41 @@ EOF
         sleep 1
     done
 
+    # Provision roles and database. The schema is a pure DDL contract that
+    # assumes both already exist and targets an empty database. The roles are
+    # created with the default sentinel password because pg_hba below uses
+    # scram-sha-256 for TCP: a passwordless role could never authenticate the
+    # postgresql:// URLs that init_vault stores in Vault.
+    print_step "Provisioning database roles and database..."
+    sudo -u postgres psql -d postgres -v ON_ERROR_STOP=1 -c "DO \$roles\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_admin') THEN CREATE ROLE mira_admin LOGIN PASSWORD 'changethisifdeployingpwd' BYPASSRLS; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_dbuser') THEN CREATE ROLE mira_dbuser LOGIN PASSWORD 'changethisifdeployingpwd'; END IF; END \$roles\$;"
+    # Guard so a first boot that crashed before the schema ran resumes instead
+    # of dying on "database already exists" (matches deploy/postgresql.sh). A
+    # crash mid-schema still fails fast on the schema's emptiness guard.
+    if ! sudo -u postgres psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'mira_service'" | grep -q 1; then
+        sudo -u postgres createdb -O mira_admin mira_service
+    fi
+
     # Apply schema
     print_step "Applying database schema..."
-    sudo -u postgres psql -f /opt/mira/app/deploy/mira_service_schema.sql
+    sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 -f /opt/mira/app/deploy/mira_service_schema.sql
+
+    # Non-Groq provider: repoint the generic-key routes at the endpoint the
+    # wizard collected. Postgres is running here, so the rewrite happens at
+    # once — there is no deferred s6 step. This mirrors what the bare-metal
+    # installer does (python.sh rewrites the seeded rows pre-schema;
+    # postgresql.sh rewrites all five rows for offline installs). A container
+    # install collects ONE generic provider key and model, so 'other' shares
+    # the provider: like an air-gapped install, it has no genuinely different
+    # outside vendor to route to. The anthropic routes ('batch',
+    # 'assessment') keep the separately collected Anthropic key.
+    if [ "$CONFIG_PROVIDER_NAME" != "Groq" ] && [ -n "$CONFIG_PROVIDER_ENDPOINT" ]; then
+        if [ -z "$CONFIG_PROVIDER_MODEL" ]; then
+            print_error "Provider '$CONFIG_PROVIDER_NAME' needs a model name (MIRA_PROVIDER_MODEL, or answer the wizard prompt); refusing to install routes that cannot resolve."
+            exit 1
+        fi
+        print_step "Routing primary/fast/other model_configs at $CONFIG_PROVIDER_NAME..."
+        sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 -c "UPDATE model_configs SET dialect_name = 'openai', endpoint_url = '$CONFIG_PROVIDER_ENDPOINT', model = '$CONFIG_PROVIDER_MODEL' WHERE name IN ('primary', 'fast', 'other');"
+    fi
 
     # Update passwords if custom password provided
     if [ "$CONFIG_DB_PASSWORD" != "changethisifdeployingpwd" ]; then
@@ -217,10 +249,15 @@ init_vault() {
 
     # Store secrets in Vault
     print_step "Storing API credentials in Vault..."
+    # model_configs seeds 'fast' with api_key_name = subcortical_key and
+    # 'other'/'primary' with provider_key. The container collects one generic
+    # fast-inference key, so seed it under both names or the fast route
+    # resolves to a missing Vault field at runtime.
     vault kv put secret/mira/api_keys \
         anthropic_key="$CONFIG_ANTHROPIC_KEY" \
         anthropic_batch_key="$CONFIG_ANTHROPIC_BATCH_KEY" \
         provider_key="$CONFIG_PROVIDER_KEY" \
+        subcortical_key="$CONFIG_PROVIDER_KEY" \
         kagi_api_key="$CONFIG_KAGI_KEY"
 
     vault kv put secret/mira/database \
@@ -232,19 +269,26 @@ init_vault() {
     CONFIG_USERDATA_ENCRYPTION_KEY=$(openssl rand -base64 32)
     CONFIG_DIAGNOSTICS_TOKEN=$(openssl rand -base64 32)
 
-    vault kv put secret/mira/services \
-        app_url="http://localhost:1993" \
-        valkey_url="valkey://localhost:6379" \
-        userdata_encryption_key="$CONFIG_USERDATA_ENCRYPTION_KEY" \
-        diagnostics_token="$CONFIG_DIAGNOSTICS_TOKEN"
-
-    # Update provider endpoint in database if non-Groq
-    if [ "$CONFIG_PROVIDER_NAME" != "Groq" ] && [ -n "$CONFIG_PROVIDER_ENDPOINT" ]; then
-        print_step "Configuring custom provider endpoint..."
-        # This will be done after PostgreSQL is running via s6
-        echo "$CONFIG_PROVIDER_ENDPOINT" > /opt/vault/provider_endpoint.txt
-        [ -n "$CONFIG_PROVIDER_MODEL" ] && echo "$CONFIG_PROVIDER_MODEL" > /opt/vault/provider_model.txt
+    # Optional SMTP relay for multi-user mode: MIRA_SMTP_* set on the
+    # container at init time is persisted to Vault, which the mail sender
+    # reads after the environment (auth/email_service.py). Unset everywhere
+    # is fine outside MIRA_AUTH_MODE=multi.
+    SMTP_ARGS=""
+    if [ -n "${MIRA_SMTP_HOST:-}" ]; then
+        SMTP_ARGS="smtp_host=\"${MIRA_SMTP_HOST}\""
+        [ -n "${MIRA_SMTP_PORT:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_port=\"${MIRA_SMTP_PORT}\""
+        [ -n "${MIRA_SMTP_FROM:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_from=\"${MIRA_SMTP_FROM}\""
+        [ -n "${MIRA_SMTP_USER:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_user=\"${MIRA_SMTP_USER}\""
+        [ -n "${MIRA_SMTP_PASSWORD:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_password=\"${MIRA_SMTP_PASSWORD}\""
+        [ -n "${MIRA_SMTP_STARTTLS:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_starttls=\"${MIRA_SMTP_STARTTLS}\""
     fi
+
+    eval vault kv put secret/mira/services \
+        app_url=\"http://localhost:1993\" \
+        valkey_url=\"valkey://localhost:6379\" \
+        userdata_encryption_key=\"\$CONFIG_USERDATA_ENCRYPTION_KEY\" \
+        diagnostics_token=\"\$CONFIG_DIAGNOSTICS_TOKEN\" \
+        \$SMTP_ARGS
 
     # Stop Vault (s6 will manage it from here)
     print_step "Stopping temporary Vault instance..."

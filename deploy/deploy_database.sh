@@ -5,6 +5,9 @@
 
 set -e  # Exit on any error
 
+# Resolve the schema next to this script so the tool works from any directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 echo "==================================================================="
 echo "=== MIRA Database Deployment                                    ==="
 echo "==================================================================="
@@ -52,13 +55,31 @@ else
 fi
 
 # =====================================================================
-# STEP 3: Deploy clean schema
+# STEP 3: Provision roles and database, then deploy clean schema
 # =====================================================================
 
 echo ""
-echo "Step 3: Deploying mira_service schema..."
+echo "Step 3: Provisioning roles and database..."
 
-psql -U $SUPERUSER -h localhost -d postgres -f deploy/mira_service_schema.sql > /dev/null 2>&1
+# The schema is a pure DDL contract: it creates no roles and no database, and
+# refuses to run against a database that already has tables. Provision both
+# here, then apply the schema to the empty mira_service database.
+psql -U $SUPERUSER -h localhost -d postgres -v ON_ERROR_STOP=1 -c "\
+DO \$roles\$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_admin') THEN
+        CREATE ROLE mira_admin LOGIN PASSWORD 'changethisifdeployingpwd' BYPASSRLS;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_dbuser') THEN
+        CREATE ROLE mira_dbuser LOGIN PASSWORD 'changethisifdeployingpwd';
+    END IF;
+END \$roles\$;"
+
+psql -U $SUPERUSER -h localhost -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE mira_service OWNER mira_admin"
+
+echo ""
+echo "Step 4: Deploying mira_service schema..."
+
+psql -U $SUPERUSER -h localhost -d mira_service -v ON_ERROR_STOP=1 -f "${SCRIPT_DIR}/mira_service_schema.sql" > /dev/null 2>&1
 
 if [ $? -eq 0 ]; then
     echo "✓ Schema deployed successfully"
@@ -68,11 +89,11 @@ else
 fi
 
 # =====================================================================
-# STEP 4: Verify deployment
+# STEP 5: Verify deployment
 # =====================================================================
 
 echo ""
-echo "Step 4: Verifying deployment..."
+echo "Step 5: Verifying deployment..."
 
 # Check database exists
 DB_EXISTS=$(psql -U $SUPERUSER -h localhost -lqt | cut -d \| -f 1 | grep -w mira_service | wc -l)
@@ -85,7 +106,7 @@ fi
 
 # Check roles
 echo ""
-echo "Roles created:"
+echo "Roles provisioned by deployment tooling:"
 psql -U $SUPERUSER -h localhost -d postgres -c "
 SELECT
     rolname,
@@ -127,10 +148,11 @@ echo "==================================================================="
 echo "✓ Database deployment complete!"
 echo ""
 echo "Next steps:"
-echo "1. Add to Vault (mira/database):"
-echo "   service_url: postgresql://mira_dbuser:PASSWORD@localhost:5432/mira_service"
+echo "1. Both roles were created with the sentinel password 'changethisifdeployingpwd'."
+echo "   Set real passwords (ALTER ROLE mira_admin/mira_dbuser WITH PASSWORD ...), then add them to Vault (mira/database):"
+echo "   service_url: postgresql://mira_dbuser:<mira_dbuser password>@localhost:5432/mira_service"
 echo "   username: mira_admin"
-echo "   password: new_secure_password_2024"
+echo "   password: <mira_admin password>"
 echo ""
 echo "2. Update application config to use mira_service"
 echo "3. Start the application: python main.py"
