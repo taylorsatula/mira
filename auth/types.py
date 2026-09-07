@@ -7,6 +7,9 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
+SubjectKind = Literal["member", "demo"]
+
+
 class UserRecord(BaseModel):
     """Database user record structure."""
     id: str
@@ -20,6 +23,8 @@ class UserRecord(BaseModel):
     memory_manipulation_enabled: bool
     daily_manipulation_last_run: Optional[datetime] = None
     timezone: str
+    subject_kind: SubjectKind
+    demo_expires_at: Optional[datetime] = None
 
 
 class UserProfile(BaseModel):
@@ -28,12 +33,19 @@ class UserProfile(BaseModel):
     email: str
     is_active: bool
     created_at: datetime
+    subject_kind: SubjectKind
+    demo_expires_at: Optional[datetime] = None
 
 
 class SessionData(BaseModel):
     """Session data stored in Valkey."""
     user_id: str
     email: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    timezone: str
+    subject_kind: SubjectKind
+    demo_expires_at: Optional[str] = None
     created_at: str  # ISO format for JSON serialization
     last_activity: str  # ISO format for JSON serialization
     max_expiry: str  # ISO format for JSON serialization
@@ -52,7 +64,7 @@ class MagicLinkRecord(BaseModel):
 
 class CookieSettings(BaseModel):
     """Secure cookie configuration."""
-    samesite: Literal["Strict", "Lax", "None"]
+    samesite: Literal["strict", "lax", "none"]
     httponly: bool
     secure: bool
     max_age: int
@@ -63,3 +75,5 @@ class APITokenContext(BaseModel):
     user_id: str
     token_type: str
     token_id: str
+    subject_kind: SubjectKind
+    demo_expires_at: Optional[str] = None
