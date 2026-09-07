@@ -11,18 +11,20 @@ starlette         # FastAPI dependency - used in middleware
 hypercorn         # ASGI server with HTTP/2 support - required for all environments
 
 # == DATABASE & DATA PERSISTENCE ==
-psycopg[binary]   # PostgreSQL driver v3 - postgres_client.py, database utils
-psycopg-pool      # Connection pooling for psycopg v3
+psycopg[binary]>=3.1.0  # PostgreSQL driver v3 - postgres_client.py, database utils
+psycopg-pool       # Connection pooling for psycopg v3
 pgvector          # PostgreSQL vector extension - postgres_client.py
 
 # == CACHING & KEY-VALUE STORE ==
-valkey            # Redis-compatible cache - valkey_client.py, many services
+valkey>=6.0.0      # Redis-compatible cache - valkey_client.py, many services
 
 # == AUTHENTICATION & SECURITY ==
 cryptography      # Encryption utilities - userdata_manager.py
+email-validator   # Pydantic EmailStr validation - auth/api.py (multi-user signup)
+webauthn          # Passkey registration and authentication - auth/webauthn_service.py (pulls cbor2)
 
 # == AI & MACHINE LEARNING ==
-anthropic        # Anthropic Claude API SDK - primary LLM provider with prompt caching
+anthropic>=0.78.0  # Anthropic Messages SDK - anthropic dialect; >=0.78.0 because clients/llm/dialects/anthropic.py sends output_config.effort on adaptive-thinking requests (output_config param: 0.77.0; effort in OutputConfigParam: 0.78.0)
 numpy            # Numerical computing - embeddings, vector operations, ML utilities
 torch            # PyTorch CPU wheel managed explicitly for sentence-transformers
 sentence-transformers  # Sentence embeddings - mdbr-leaf-ir-asym
@@ -34,11 +36,10 @@ spacy>=3.7.0     # NER and NLP - entity extraction for memory linking
 apscheduler      # Task scheduling - scheduler_service.py, lt_memory_jobs.py, sidebar_jobs.py
 
 # == HTTP CLIENT & NETWORKING ==
-httpx[http2]     # Modern HTTP client with HTTP/2 support - tools, LLM provider, embeddings, weather/web tools
+httpx[http2]>=0.25.2  # Modern HTTP client with HTTP/2 support - tools, LLM provider, embeddings, weather/web tools; >=0.25.2 because utils/http_client.py's IP-pinning transport needs httpcore 1.x's public NetworkBackend/SyncBackend/SOCKET_OPTION (first httpx pinning httpcore==1.*)
 mcp              # Model Context Protocol SDK - mcp_client.py for MCP server connections
 
 # == TOOL-SPECIFIC LIBRARIES ==
-googlemaps       # Google Maps API - maps_tool.py
 google-genai     # Google Gemini GenAI SDK - imagegen_tool.py
 kagiapi          # Kagi search API - web_tool.py (primary search provider)
 ddgs             # DuckDuckGo search - web_tool.py (fallback search provider)
@@ -49,6 +50,7 @@ hvac             # HashiCorp Vault client - vault_client.py
 
 # == IMAGE PROCESSING ==
 Pillow>=10.0.0   # Image compression - two-tier compression for multimodal messages
+pypdf>=5.0.0     # Provider-neutral PDF text extraction for document uploads
 
 # == UTILITIES & HELPERS ==
 pydantic         # Data validation - widely used across API models and tools
@@ -57,6 +59,7 @@ pytz             # Timezone handling - timezone_utils.py
 colorama         # Terminal colors - logging_config.py
 rapidfuzz        # Fuzzy string matching - memory deduplication, entity normalization
 json-repair      # JSON repair for malformed LLM responses - memory_processor.py, subcortical.py
+jsonschema       # Validate provider-returned tool arguments against ToolDefinition schemas
 psutil           # Process management - playwright_service.py for forced browser shutdown
 
 # == TESTING DEPENDENCIES ==
