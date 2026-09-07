@@ -105,7 +105,7 @@ class CNSIntegrationFactory:
         # Create memory relevance service for surfacing memories
         memory_relevance_service = self._get_memory_relevance_service()
 
-        # Create subcortical layer for retrieval query expansion
+        # Create the optional subcortical layer for retrieval query expansion.
         subcortical_layer = self._get_subcortical_layer(llm_provider)
 
         # Initialize session cache loader
@@ -192,6 +192,7 @@ class CNSIntegrationFactory:
             from working_memory.trinkets.forage_trinket import ForageTrinket
             from working_memory.trinkets.whilethecatsaway_trinket import WhileTheCatsAwayTrinket
             from working_memory.trinkets.lora_trinket import LoraTrinket
+            from working_memory.trinkets.persona_trinket import PersonaTrinket
             from working_memory.trinkets.location_trinket import LocationTrinket
             from working_memory.trinkets.asyncactivity_trinket import AsyncActivityTrinket
             from working_memory.trinkets.live_context_compaction_trinket import LiveContextCompactionTrinket
@@ -211,6 +212,12 @@ class CNSIntegrationFactory:
             ForageTrinket(event_bus, self._working_memory)
             WhileTheCatsAwayTrinket(event_bus, self._working_memory)
             LoraTrinket(event_bus, self._working_memory)
+            # D1: Persona is a second parallel system, not a replacement for the user
+            # model above. It renders its own slot, so both inject in one prompt.
+            if self.config.system.persona_enabled:
+                PersonaTrinket(event_bus, self._working_memory)
+            else:
+                logger.info("Persona trinket disabled in config")
             LocationTrinket(event_bus, self._working_memory)
             AsyncActivityTrinket(event_bus, self._working_memory)
             MemoryCuratorTrinket(event_bus, self._working_memory)
@@ -307,13 +314,16 @@ class CNSIntegrationFactory:
         return self._memory_relevance_service
         
     
-    def _get_subcortical_layer(self, llm_provider: LLMProvider) -> SubcorticalLayer:
-        """Get or create subcortical layer instance."""
+    def _get_subcortical_layer(self, llm_provider: LLMProvider) -> SubcorticalLayer | None:
+        """Get the subcortical layer, or omit it for the configured fast path."""
+        if not self.config.system.subcortical_enabled:
+            logger.info("Subcortical layer disabled in config")
+            return None
+
         if self._subcortical_layer is None:
             logger.info("Initializing SubcorticalLayer")
             from ..services.subcortical import SubcorticalLayer
             self._subcortical_layer = SubcorticalLayer(
-                analysis_enabled=self.config.api.analysis_enabled,
                 llm_provider=llm_provider,
                 prefill_warmup_enabled=self.config.api.subcortical_prefill_warmup,
             )
@@ -385,6 +395,7 @@ class CNSIntegrationFactory:
             continuum_pool=continuum_pool,
             lt_memory_factory=lt_memory_factory,
             tool_repo=self._tool_repo,
+            persona_enabled=self.config.system.persona_enabled,
         )
 
         # Store singleton for API access

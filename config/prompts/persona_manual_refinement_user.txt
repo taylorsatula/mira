@@ -1,0 +1,13 @@
+Apply the user's instruction to the current Persona with the smallest complete edit. The instruction is authoritative about desired MIRA behavior but must not be converted into stored user knowledge.
+
+<current_persona>
+{current_persona}
+</current_persona>
+
+<user_instruction>
+{user_instructions}
+</user_instruction>
+
+<critic_feedback>
+{critic_feedback}
+</critic_feedback>

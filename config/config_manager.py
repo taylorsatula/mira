@@ -6,6 +6,7 @@ multiple sources, and a clean access interface.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -23,6 +24,36 @@ from config.config import (
 
 # Import the registry from tools package
 from tools.registry import registry
+
+
+# Registry of cognitive feature switches: environment variable name -> SystemConfig field name.
+# Adding a flag is a one-line entry here plus the matching SystemConfig field and factory/init
+# omission point. Do not pre-register a flag for a subsystem that does not exist yet; add it with
+# the subsystem (MIRA_PERSONA_ENABLED landed with Persona in WP5).
+SYSTEM_FEATURE_FLAG_ENVIRONMENT_FIELDS: dict[str, str] = {
+    "MIRA_SUBCORTICAL_ENABLED": "subcortical_enabled",
+    "MIRA_PEANUTGALLERY_ENABLED": "peanutgallery_enabled",
+    "MIRA_PERSONA_ENABLED": "persona_enabled",
+}
+
+
+def _load_system_feature_flag_overrides() -> dict[str, bool]:
+    """Load strict non-secret feature switches from the process environment.
+
+    Parsing is intentionally strict: a value must be exactly "0" or "1". Anything else
+    ("true", "yes", "") raises at config load rather than silently coercing to a meaning
+    the operator did not intend. An unset variable (None) is omitted so the field default
+    applies.
+    """
+    overrides: dict[str, bool] = {}
+    for environment_name, field_name in SYSTEM_FEATURE_FLAG_ENVIRONMENT_FIELDS.items():
+        raw_value = os.getenv(environment_name)
+        if raw_value is None:
+            continue
+        if raw_value not in {"0", "1"}:
+            raise ValueError(f"{environment_name} must be exactly 0 or 1")
+        overrides[field_name] = raw_value == "1"
+    return overrides
 
 
 class AppConfig(BaseModel):
@@ -49,7 +80,9 @@ class AppConfig(BaseModel):
         logger = logging.getLogger(__name__)
         
         try:
-            instance = cls()
+            instance = cls(
+                system=SystemConfig(**_load_system_feature_flag_overrides()),
+            )
             instance._load_system_prompt()
             logger.info("Configuration initialized successfully")
             return instance
@@ -89,12 +122,6 @@ class AppConfig(BaseModel):
         return get_api_key(self.api.api_key_name)
         
         
-    @property
-    def google_maps_api_key(self) -> str:
-        from clients.vault_client import get_api_key
-        return get_api_key('google_maps_api_key')
-        
-    
     def as_dict(self) -> Dict[str, Any]:
         return self.model_dump(exclude={"prompt_cache"})
     
@@ -150,7 +177,7 @@ class AppConfig(BaseModel):
         raise AttributeError(f"'AppConfig' object has no attribute '{name}'")
     
     def get_tool_config(self, tool_name: str) -> BaseModel:
-        """Gets/creates tool config via registry with caching."""
+        """Return the current user's validated tool config or the global default."""
         if tool_name not in self.tool_configs:
             try:
                 config_class = registry.get_or_create(tool_name)
@@ -163,7 +190,22 @@ class AppConfig(BaseModel):
                 logging.error(f"Tool config creation failed for {tool_name}: {e}")
                 raise ValueError(f"Error creating tool configuration for '{tool_name}': {e}")
                 
-        return self.tool_configs[tool_name]
+        default_config = self.tool_configs[tool_name]
+        try:
+            from utils.user_context import get_current_user_id
+
+            get_current_user_id()
+        except RuntimeError:
+            return default_config
+
+        from utils.tool_config_store import load_user_tool_config
+
+        user_config = load_user_tool_config(tool_name, hydrate_secrets=True)
+        if user_config is None:
+            return default_config
+
+        config_class = type(default_config)
+        return config_class(**{**default_config.model_dump(), **user_config})
     
     # We don't need a discover_tools method anymore.
     # Tools register themselves when they're imported naturally by the application.

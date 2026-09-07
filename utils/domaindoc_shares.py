@@ -127,9 +127,13 @@ def get_accepted_shares(user_id: UUID) -> list[AcceptedShare]:
     the collaborator sees, share.domaindoc_label for the owner's original label.
     """
     pg = _get_pg(user_id)
+    # active_user_identity() is a SECURITY DEFINER function over users: RLS on that
+    # table is unconditional, so a plain `JOIN users` here drops the whole share row
+    # for a counterparty the caller cannot see.
     shares = pg.execute_query(
-        "SELECT ds.owner_user_id, ds.domaindoc_label, u.first_name, u.email "
-        "FROM domaindoc_shares ds JOIN users u ON ds.owner_user_id = u.id "
+        "SELECT ds.owner_user_id, ds.domaindoc_label, ai.first_name, ai.email "
+        "FROM domaindoc_shares ds "
+        "JOIN LATERAL active_user_identity(ds.owner_user_id) ai ON TRUE "
         "WHERE ds.collaborator_user_id = %(uid)s AND ds.status = 'accepted'",
         {"uid": str(user_id)}
     )

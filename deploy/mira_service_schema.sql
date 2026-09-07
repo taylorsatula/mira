@@ -1,166 +1,89 @@
--- MIRA Service Database Schema
--- Unified schema combining all application and memory tables
--- Updated: 2026-03-24
+-- MIRA fresh-install database contract
 --
--- Run this to create a fresh mira_service database:
--- psql -U mira_admin -h localhost -f deploy/mira_service_schema.sql
+-- Preconditions:
+--   * Connect to an empty mira_service database as the schema owner.
+--   * Provision mira_admin and mira_dbuser, including credentials and BYPASSRLS
+--     for mira_admin, through Vault-backed deployment tooling before this file.
+--     deploy/postgresql.sh performs both steps.
 --
--- =====================================================================
--- INDEX STRATEGY WITH ROW LEVEL SECURITY (RLS)
--- =====================================================================
---
--- RLS policies function as additional WHERE clauses during query planning.
--- PostgreSQL can effectively use indexes with RLS when policies use
--- LEAKPROOF functions (like current_setting() and type casts).
---
--- INDEXING REQUIREMENTS FOR RLS TABLES:
---   1. ALWAYS index columns used in RLS policies (e.g., user_id)
---   2. Create specialized indexes for query patterns (vector, full-text)
---   3. PostgreSQL combines multiple indexes for optimal query plans
---
--- PERFORMANCE STRATEGY:
---   - Primary: Proper indexes on filtered columns (user_id, timestamps)
---   - Secondary: Specialized indexes (IVFFlat for vectors, GIN for full-text)
---   - Tertiary: Application caching to reduce database load
---
--- Vector indexes (IVFFlat, HNSW) CANNOT be composite with scalar columns,
--- so we use separate indexes that PostgreSQL combines during execution:
---   - B-tree index on user_id (for RLS filtering)
---   - IVFFlat index on embedding (for similarity search)
---   - BYPASSRLS required for admin operations that need to bypass Row Level Security
---   - Query planner uses both: vector index finds candidates, RLS filters them
+-- This is deliberately not a migration. It contains no compatibility DDL,
+-- embedded credentials, database creation, or default privileges.
+-- mira-OSS 2.0 is a fresh install: 1.x -> 2.0 is a reinstall, not an upgrade.
 
--- =====================================================================
--- CREATE ROLES
--- =====================================================================
-
--- Database owner role (schema management, migrations, backups)
--- NOT a superuser - can only manage mira_service database
-DO $$
+DO $schema_precondition$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_admin') THEN
-        CREATE ROLE mira_admin WITH
-            LOGIN
-            CREATEDB
-            NOCREATEROLE
-            NOREPLICATION
-            NOSUPERUSER
-            BYPASSRLS
-            PASSWORD 'changethisifdeployingpwd';
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_type = 'BASE TABLE'
+    ) THEN
+        RAISE EXCEPTION 'mira_service_schema.sql requires an empty target database';
     END IF;
 END
-$$;
+$schema_precondition$;
 
--- Ensure BYPASSRLS is set even if role already existed
--- (IF NOT EXISTS above won't update existing roles)
-ALTER ROLE mira_admin BYPASSRLS;
-
--- Application runtime role (data operations only)
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_dbuser') THEN
-        CREATE ROLE mira_dbuser WITH
-            LOGIN
-            NOCREATEDB
-            NOCREATEROLE
-            NOREPLICATION
-            NOSUPERUSER
-            PASSWORD 'changethisifdeployingpwd';
-    END IF;
-END
-$$;
-
--- =====================================================================
--- CREATE DATABASE
--- =====================================================================
-
-CREATE DATABASE mira_service OWNER mira_admin;
-
-\c mira_service
-
--- =====================================================================
--- EXTENSIONS
--- =====================================================================
-
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS pg_trgm;  -- Trigram fuzzy matching for typo-tolerant search
-
--- =====================================================================
--- SCHEMA PERMISSIONS
--- =====================================================================
+CREATE EXTENSION pgcrypto;
+CREATE EXTENSION vector;
+CREATE EXTENSION pg_trgm;
 
 GRANT USAGE ON SCHEMA public TO mira_dbuser;
-GRANT ALL ON SCHEMA public TO mira_admin;
 
--- =====================================================================
--- USERS & AUTH TABLES
--- =====================================================================
+CREATE FUNCTION set_updated_at()
+RETURNS TRIGGER AS $function$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END
+$function$ LANGUAGE plpgsql;
 
--- Conversation LLM table (user-selectable models for conversations)
--- Must be created before users table due to FK reference
-CREATE TABLE IF NOT EXISTS conversation_llm (
-    name VARCHAR(20) PRIMARY KEY,
-    model VARCHAR(100) NOT NULL,
-    thinking_budget INT NOT NULL DEFAULT 0,
-    description TEXT,
-    display_order INT NOT NULL DEFAULT 0,
-    dialect_name VARCHAR(20) NOT NULL CHECK (dialect_name IN ('anthropic', 'openai', 'openrouter', 'groq')),
-    endpoint_url TEXT DEFAULT NULL,
-    api_key_name VARCHAR(50) DEFAULT NULL,
-    hidden BOOLEAN NOT NULL DEFAULT FALSE
-);
+CREATE FUNCTION set_search_vector()
+RETURNS TRIGGER AS $function$
+BEGIN
+    NEW.search_vector = to_tsvector('english', NEW.text);
+    RETURN NEW;
+END
+$function$ LANGUAGE plpgsql;
 
-INSERT INTO conversation_llm (name, model, thinking_budget, description, display_order, dialect_name, endpoint_url, api_key_name, hidden) VALUES
-    ('primary', 'claude-sonnet-4-6', 0, 'Primary', 1, 'anthropic', NULL, NULL, FALSE)
-ON CONFLICT (name) DO NOTHING;
+-- ---------------------------------------------------------------------------
+-- Fixed model routing
+-- ---------------------------------------------------------------------------
 
--- Internal LLM configurations for system operations (not user-facing)
--- Contrasts with conversation_llm which handles user-facing model selection
--- Every config has two rows: 'free' (no card on file) and 'cof' (card on file)
--- For cheap models, both rows point to the same model
-CREATE TABLE IF NOT EXISTS internal_llm (
-    name VARCHAR(50) NOT NULL,
-    tier VARCHAR(10) NOT NULL CHECK (tier IN ('free', 'cof')),
-    model VARCHAR(200) NOT NULL,
+CREATE TABLE model_configs (
+    name TEXT PRIMARY KEY CHECK (name IN ('primary', 'fast', 'batch', 'assessment', 'other')),
+    model TEXT NOT NULL,
+    dialect_name TEXT NOT NULL CHECK (dialect_name IN ('anthropic', 'openai', 'openrouter', 'groq')),
     endpoint_url TEXT NOT NULL,
-    api_key_name VARCHAR(50),
-    description TEXT,
-    max_tokens INT NOT NULL,
-    effort VARCHAR(10) CHECK (effort IN ('low', 'medium', 'high', 'xhigh', 'max')),
-    dialect_name VARCHAR(20) NOT NULL CHECK (dialect_name IN ('anthropic', 'openai', 'openrouter', 'groq')),
-    PRIMARY KEY (name, tier)
+    api_key_name TEXT NOT NULL,
+    effort TEXT CHECK (effort IN ('none', 'low', 'medium', 'high', 'xhigh', 'max')),
+    max_tokens INTEGER NOT NULL CHECK (max_tokens > 0)
 );
 
-INSERT INTO internal_llm (name, tier, model, endpoint_url, api_key_name, description, max_tokens, effort, dialect_name) VALUES
-    -- COF configs: Anthropic models via direct API
-    ('summary', 'cof', 'google/gemma-4-31b-it', 'https://openrouter.ai/api/v1/chat/completions', 'provider_key', 'Segment summary generation', 10000, NULL, 'openrouter'),
-    ('assessment', 'cof', 'claude-opus-4-6', 'https://api.anthropic.com/v1/messages', 'anthropic_key', 'Assessment extraction', 10000, NULL, 'anthropic'),
-    ('synthesis', 'cof', 'claude-opus-4-6', 'https://api.anthropic.com/v1/messages', 'anthropic_key', 'User model synthesis', 10000, NULL, 'anthropic'),
-    ('extraction', 'cof', 'claude-sonnet-4-6', 'https://api.anthropic.com/v1/messages', 'anthropic_batch_key', 'Memory extraction', 16000, 'high', 'anthropic'),
-    ('tidyup', 'cof', 'claude-sonnet-4-6', 'https://api.anthropic.com/v1/messages', 'anthropic_batch_key', 'Context tidyup', 10000, NULL, 'anthropic'),
-    ('critic', 'cof', 'claude-sonnet-4-6', 'https://api.anthropic.com/v1/messages', 'anthropic_key', 'User model critic', 10000, NULL, 'anthropic'),
-    -- Subcortical: same model for both tiers via Groq
-    ('analysis', 'cof', 'qwen/qwen3.6-27b', 'https://api.groq.com/openai/v1/chat/completions', 'subcortical_key', 'Subcortical analysis', 3072, NULL, 'groq'),
-    -- Forage: COF gets Kimi K2 via OpenRouter, free gets OSS 120B via Groq
-    ('forage', 'cof', 'moonshotai/kimi-k2-thinking', 'https://openrouter.ai/api/v1/chat/completions', 'provider_key', 'Forage agent tool-calling loop', 4096, NULL, 'openrouter'),
-    -- Overwatch: passive agent iteration observer, same cheap model as subcortical
-    ('overwatch', 'cof', 'qwen/qwen3.6-27b', 'https://api.groq.com/openai/v1/chat/completions', 'subcortical_key', 'Passive agent iteration observer', 100, NULL, 'groq'),
-    -- Phone-a-friend: high-capability outside voices for synchronous subagent consultation
-    ('phoneafriend_claude', 'cof', 'claude-opus-4-7', 'https://api.anthropic.com/v1/messages', 'anthropic_key', 'Phone-a-friend level-headed thought partner', 10000, 'high', 'anthropic'),
-    ('phoneafriend_gemini', 'cof', 'google/gemini-3.1-pro-preview', 'https://openrouter.ai/api/v1/chat/completions', 'provider_key', 'Phone-a-friend outside voice with broad world knowledge', 10000, NULL, 'openrouter'),
-    -- Repulsion feedback rewriter: register-aware rewrite pass for captured AI-tells
-    ('rewriter', 'cof', 'openai/gpt-5.5', 'https://openrouter.ai/api/v1/chat/completions', 'provider_key', 'Repulsion feedback rewrite generation', 10000, 'high', 'openrouter')
-    -- memory_curator reuses the 'summary' internal_llm row (system summary model);
-    -- relationship / consolidation / entity_gc internal_llm rows were removed when
-    -- their batch-judgment handlers were deleted (curation moved to MemoryCuratorAgent).
-ON CONFLICT (name, tier) DO NOTHING;
+-- Seed values are the defaults an online install starts with. Every
+-- api_key_name is a key deploy/postgresql.sh already writes to Vault at
+-- secret/mira/api_keys; offline installs rewrite endpoint_url and model
+-- through the OFFLINE_SQL block in that same script.
+-- The batch route authenticates with its own Vault credential
+-- ('anthropic_batch_key') to isolate its rate limits from 'anthropic_key'
+-- (assessment). The name refers to the model route, not the Anthropic Batch
+-- API transport, which was removed in 2.0 (decision D10).
+INSERT INTO model_configs (name, model, dialect_name, endpoint_url, api_key_name, effort, max_tokens)
+VALUES
+    ('primary', 'openai/gpt-5.5', 'openrouter', 'https://openrouter.ai/api/v1/chat/completions', 'provider_key', 'high', 16000),
+    ('fast', 'qwen/qwen3.6-27b', 'groq', 'https://api.groq.com/openai/v1/chat/completions', 'subcortical_key', 'none', 4096),
+    ('batch', 'claude-sonnet-4-6', 'anthropic', 'https://api.anthropic.com/v1/messages', 'anthropic_batch_key', 'high', 16000),
+    ('assessment', 'claude-opus-4-6', 'anthropic', 'https://api.anthropic.com/v1/messages', 'anthropic_key', 'none', 10000),
+    ('other', 'google/gemini-3.1-pro-preview', 'openrouter', 'https://openrouter.ai/api/v1/chat/completions', 'provider_key', 'high', 10000);
 
-GRANT SELECT ON internal_llm TO mira_dbuser;
+-- ---------------------------------------------------------------------------
+-- Cost visibility
+-- ---------------------------------------------------------------------------
 
--- Usage pricing (keyed by tier name or internal config name, not model string)
--- NULL prices auto-resolve from OpenRouter on startup. NOT NULL = manual override.
-CREATE TABLE IF NOT EXISTS usage_pricing (
+-- Keyed by model_configs route name, not by model string. NULL prices
+-- auto-resolve from the published fallbacks in utils/cost_accumulator.py;
+-- NOT NULL is a manual override. __default__ is the reserved fallback key for
+-- any endpoint/model pair without an explicit row.
+CREATE TABLE usage_pricing (
     name VARCHAR(50) PRIMARY KEY,
     input_price_per_mtok DECIMAL(10,6),
     output_price_per_mtok DECIMAL(10,6),
@@ -169,142 +92,92 @@ CREATE TABLE IF NOT EXISTS usage_pricing (
     effective_date DATE NOT NULL DEFAULT CURRENT_DATE
 );
 
+INSERT INTO usage_pricing (name, input_price_per_mtok, output_price_per_mtok)
+VALUES ('__default__', 5.000000, 25.000000);
 INSERT INTO usage_pricing (name) VALUES
-    -- Conversation LLM
-    ('primary'),
-    -- Internal LLM configs (tier-qualified: different models per free/cof)
-    ('analysis:cof'), ('analysis:free'),
-    ('extraction:cof'), ('extraction:free'),
-    ('forage:cof'), ('forage:free'),
-    ('phoneafriend_claude:cof'), ('phoneafriend_claude:free'),
-    ('phoneafriend_gemini:cof'), ('phoneafriend_gemini:free'),
-    ('rewriter:cof'), ('rewriter:free'),
-    ('summary:cof'), ('summary:free'),
-    ('tidyup:cof'), ('tidyup:free')
-ON CONFLICT (name) DO NOTHING;
+    ('primary'), ('fast'), ('batch'), ('assessment'), ('other');
 
-UPDATE usage_pricing SET input_price_per_mtok = 5.000000, output_price_per_mtok = 25.000000 WHERE name = '__default__';
+-- ---------------------------------------------------------------------------
+-- Accounts and authentication-ready contracts
+-- ---------------------------------------------------------------------------
 
-GRANT SELECT ON usage_pricing TO mira_dbuser;
-
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,
     first_name VARCHAR(100),
     last_name VARCHAR(100),
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    last_login_at TIMESTAMP WITH TIME ZONE,
-    webauthn_credentials JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_login_at TIMESTAMPTZ,
+    webauthn_credentials JSONB NOT NULL DEFAULT '{}'::jsonb,
     memory_manipulation_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-    daily_manipulation_last_run TIMESTAMP WITH TIME ZONE,
+    daily_manipulation_last_run TIMESTAMPTZ,
     timezone VARCHAR(100) NOT NULL DEFAULT 'America/Chicago',
-    temperature_unit VARCHAR(20) NOT NULL DEFAULT 'fahrenheit' CHECK (temperature_unit IN ('fahrenheit', 'celsius')),
+    temperature_unit VARCHAR(20) NOT NULL DEFAULT 'fahrenheit'
+        CHECK (temperature_unit IN ('fahrenheit', 'celsius')),
 
-    -- Activity-based time tracking (vacation-proof scoring)
-    cumulative_activity_days INT DEFAULT 0,
+    subject_kind TEXT NOT NULL DEFAULT 'member' CHECK (subject_kind IN ('member', 'demo')),
+
+    cumulative_activity_days INTEGER NOT NULL DEFAULT 0 CHECK (cumulative_activity_days >= 0),
     last_activity_date DATE,
-
-    -- Conversation LLM preference
-    conversation_llm VARCHAR(20) DEFAULT 'primary' REFERENCES conversation_llm(name),
-
-    -- Balance in USD (OSS: seeded high since user brings own API key)
-    balance_usd DECIMAL(12,6) NOT NULL DEFAULT 0.00,
-
-    -- Stripe billing
-    stripe_customer_id VARCHAR(255),
-    stripe_payment_method_id VARCHAR(255),
-    auto_recharge_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-    auto_recharge_amount_usd DECIMAL(10,6) NOT NULL DEFAULT 10.00,
-    auto_recharge_acknowledged_at TIMESTAMP WITH TIME ZONE,
-    last_drip_applied_at DATE,
-
-    -- User portrait (synthesized from segment summaries every 14 activity days)
     portrait TEXT,
-    portrait_generated_at TIMESTAMP WITH TIME ZONE
+    portrait_generated_at TIMESTAMPTZ,
+
+    -- Account garbage collection. Replaces the 1.x users_trash table: a
+    -- soft-deleted user keeps its row, and the deadline drives the purge job.
+    deletion_requested_at TIMESTAMPTZ,
+    soft_deleted_at TIMESTAMPTZ,
+    purge_deadline TIMESTAMPTZ,
+
+    -- Reserved for a future demo subject. Nullable and unpoliced by design:
+    -- subject_kind admits 'demo' now so admitting it later is not a schema change.
+    demo_start_at TIMESTAMPTZ,
+    demo_expires_at TIMESTAMPTZ
 );
 
--- Grant SELECT on conversation_llm to application user
-GRANT SELECT ON conversation_llm TO mira_dbuser;
-
-COMMENT ON COLUMN users.cumulative_activity_days IS 'Total number of days user has sent at least one message (activity-based time metric)';
-COMMENT ON COLUMN users.last_activity_date IS 'Last date user sent a message (prevents double-counting same day)';
-
--- NOTE: Currently unused - reserved for future soft delete implementation
-CREATE TABLE IF NOT EXISTS users_trash (
-    id UUID PRIMARY KEY,
-    email VARCHAR(255),
-    first_name VARCHAR(100),
-    last_name VARCHAR(100),
-    is_active BOOLEAN,
-    created_at TIMESTAMP WITH TIME ZONE,
-    last_login_at TIMESTAMP WITH TIME ZONE,
-    webauthn_credentials JSONB,
-    memory_manipulation_enabled BOOLEAN,
-    daily_manipulation_last_run TIMESTAMP WITH TIME ZONE,
-    timezone VARCHAR(100),
-    cumulative_activity_days INT,
-    last_activity_date DATE,
-    deleted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-COMMENT ON TABLE users_trash IS 'Soft delete storage for deleted users (currently unused - users are hard-deleted via CASCADE)';
-
-CREATE TABLE IF NOT EXISTS magic_links (
+CREATE TABLE magic_links (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     email VARCHAR(255) NOT NULL,
     token_hash VARCHAR(255) NOT NULL UNIQUE,
-    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-    used_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON TABLE magic_links IS 'Passwordless authentication tokens for magic link login flow';
+CREATE INDEX idx_magic_links_user ON magic_links(user_id);
 
-CREATE TABLE IF NOT EXISTS api_tokens (
+CREATE TABLE api_tokens (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    token_hash VARCHAR(64) NOT NULL UNIQUE,  -- SHA256 hex = 64 chars
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
     name VARCHAR(100) NOT NULL DEFAULT 'API Token',
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    expires_at TIMESTAMP WITH TIME ZONE,  -- NULL = never expires
-    last_used_at TIMESTAMP WITH TIME ZONE,
-    revoked_at TIMESTAMP WITH TIME ZONE  -- soft delete for audit trail
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ
 );
 
--- Index for fast token validation (most common operation)
-CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash) WHERE revoked_at IS NULL;
+CREATE INDEX idx_api_tokens_hash_active ON api_tokens(token_hash)
+    WHERE revoked_at IS NULL;
+CREATE INDEX idx_api_tokens_user_active ON api_tokens(user_id)
+    WHERE revoked_at IS NULL;
+CREATE UNIQUE INDEX idx_api_tokens_user_name_active ON api_tokens(user_id, name)
+    WHERE revoked_at IS NULL;
 
--- Index for listing user's tokens
-CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id) WHERE revoked_at IS NULL;
-
--- Unique constraint on token name per user (only for non-revoked tokens)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_api_tokens_user_name_unique ON api_tokens(user_id, name) WHERE revoked_at IS NULL;
-
-COMMENT ON TABLE api_tokens IS 'Persistent API tokens for programmatic access (hashed, shown once at creation)';
-
--- =====================================================================
--- ACTIVITY TRACKING (for vacation-proof scoring)
--- =====================================================================
-
-CREATE TABLE IF NOT EXISTS user_activity_days (
+CREATE TABLE user_activity_days (
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     activity_date DATE NOT NULL,
-    first_message_at TIMESTAMP WITH TIME ZONE NOT NULL,
-    message_count INT DEFAULT 1,
+    first_message_at TIMESTAMPTZ NOT NULL,
+    message_count INTEGER NOT NULL DEFAULT 1 CHECK (message_count > 0),
     PRIMARY KEY (user_id, activity_date)
 );
 
-COMMENT ON TABLE user_activity_days IS 'Granular per-day activity tracking for users (one row per active day)';
-COMMENT ON COLUMN user_activity_days.first_message_at IS 'Timestamp of first message on this day';
-COMMENT ON COLUMN user_activity_days.message_count IS 'Number of messages sent by user on this day';
+-- ---------------------------------------------------------------------------
+-- Domain knowledge (Letta agent memory blocks)
+-- ---------------------------------------------------------------------------
 
--- =====================================================================
--- DOMAIN KNOWLEDGE (Letta agent memory blocks)
--- =====================================================================
-
-CREATE TABLE IF NOT EXISTS domain_knowledge_blocks (
+CREATE TABLE domain_knowledge_blocks (
     id SERIAL PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     domain_label VARCHAR(100) NOT NULL,
@@ -312,396 +185,338 @@ CREATE TABLE IF NOT EXISTS domain_knowledge_blocks (
     block_description TEXT NOT NULL,
     agent_id VARCHAR(255) NOT NULL,
     enabled BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON TABLE domain_knowledge_blocks IS 'Domain-specific knowledge blocks for Letta agent memory system';
-COMMENT ON COLUMN domain_knowledge_blocks.domain_label IS 'Short identifier for the domain (e.g., "customer_db")';
-COMMENT ON COLUMN domain_knowledge_blocks.domain_name IS 'Human-readable domain name';
-COMMENT ON COLUMN domain_knowledge_blocks.block_description IS 'Description of what knowledge this block provides';
-COMMENT ON COLUMN domain_knowledge_blocks.agent_id IS 'Letta agent ID this block is associated with';
+CREATE INDEX idx_domain_knowledge_blocks_user
+    ON domain_knowledge_blocks(user_id, domain_label);
 
-CREATE TABLE IF NOT EXISTS domain_knowledge_block_content (
+CREATE TABLE domain_knowledge_block_content (
     id SERIAL PRIMARY KEY,
     block_id INTEGER NOT NULL UNIQUE REFERENCES domain_knowledge_blocks(id) ON DELETE CASCADE,
     block_value TEXT NOT NULL,
     letta_block_id VARCHAR(255),
-    synced_at TIMESTAMP NOT NULL DEFAULT NOW()
+    synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON TABLE domain_knowledge_block_content IS 'Actual content/value of domain knowledge blocks';
-COMMENT ON COLUMN domain_knowledge_block_content.block_value IS 'The knowledge content text';
-COMMENT ON COLUMN domain_knowledge_block_content.letta_block_id IS 'External Letta block ID for sync tracking';
+-- ---------------------------------------------------------------------------
+-- Domain-document sharing and federation
+-- ---------------------------------------------------------------------------
 
--- =====================================================================
--- DOMAINDOC SHARING (cross-user domain document collaboration)
--- =====================================================================
-
-CREATE TABLE IF NOT EXISTS domaindoc_shares (
+CREATE TABLE domaindoc_shares (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     domaindoc_label TEXT NOT NULL,
     collaborator_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected', 'revoked')),
-    invited_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    accepted_at TIMESTAMP WITH TIME ZONE,
-    UNIQUE(owner_user_id, domaindoc_label, collaborator_user_id)
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'accepted', 'rejected', 'revoked')),
+    invited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    accepted_at TIMESTAMPTZ,
+    UNIQUE (owner_user_id, domaindoc_label, collaborator_user_id),
+    CHECK (owner_user_id <> collaborator_user_id)
 );
 
 CREATE INDEX idx_domaindoc_shares_collaborator ON domaindoc_shares(collaborator_user_id, status);
 CREATE INDEX idx_domaindoc_shares_owner ON domaindoc_shares(owner_user_id, status);
 CREATE INDEX idx_domaindoc_shares_label ON domaindoc_shares(domaindoc_label);
 
-COMMENT ON TABLE domaindoc_shares IS 'Cross-user domaindoc sharing with consent flow (pending→accepted)';
-COMMENT ON COLUMN domaindoc_shares.status IS 'pending: awaiting acceptance, accepted: collaborator has access, rejected: collaborator declined, revoked: owner revoked access';
+-- Cross-user identity for domaindoc sharing. RLS on users is unconditional, so a
+-- collaborator is not readable by the party sharing with them: the lookup by email
+-- returns nothing, and because the share listings inner-join users the whole share row
+-- disappears -- a share that reads as lost data rather than as a hidden profile.
+-- These two functions publish only the three columns needed to name a counterparty.
+-- portrait, webauthn_credentials and the soft-delete timestamps stay unreachable, and
+-- an inactive account resolves to zero rows. SECURITY DEFINER with its own predicate
+-- means the result does not depend on the caller's row-level-security context.
+CREATE FUNCTION resolve_active_user_identity(p_email text)
+RETURNS TABLE (id uuid, email varchar, first_name varchar)
+STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+LANGUAGE sql
+AS $function$
+    SELECT u.id, u.email, u.first_name
+    FROM public.users u
+    WHERE u.email = p_email
+      AND u.is_active = TRUE
+$function$;
 
--- =====================================================================
--- CONTINUUM & MESSAGES (conversation architecture)
--- =====================================================================
+CREATE FUNCTION active_user_identity(p_user_id uuid)
+RETURNS TABLE (id uuid, email varchar, first_name varchar)
+STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+LANGUAGE sql
+AS $function$
+    SELECT u.id, u.email, u.first_name
+    FROM public.users u
+    WHERE u.id = p_user_id
+      AND u.is_active = TRUE
+$function$;
 
-CREATE TABLE IF NOT EXISTS continuums (
+-- ---------------------------------------------------------------------------
+-- Continuum and messages
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE continuums (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (id, user_id)
 );
 
-COMMENT ON TABLE continuums IS 'Continuous timeline of user interactions (one per user, replaces discrete conversations)';
-COMMENT ON COLUMN continuums.metadata IS 'Flexible storage for continuum-level configuration and state';
-
-CREATE TABLE IF NOT EXISTS messages (
+CREATE TABLE messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    continuum_id UUID NOT NULL REFERENCES continuums(id) ON DELETE CASCADE,
+    continuum_id UUID NOT NULL,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     role VARCHAR(50) NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
-    content TEXT NOT NULL,
+    content TEXT COMPRESSION lz4 NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     tool_call_id TEXT,
-    is_error BOOLEAN NOT NULL DEFAULT FALSE
+    is_error BOOLEAN NOT NULL DEFAULT FALSE,
+    segment_embedding vector(768),
+    FOREIGN KEY (continuum_id, user_id)
+        REFERENCES continuums(id, user_id) ON DELETE CASCADE
 );
 
-COMMENT ON COLUMN messages.content IS 'Message content - text for simple messages, JSON for multimodal content blocks';
-COMMENT ON COLUMN messages.metadata IS 'Message metadata: has_tool_calls, tool_calls, is_summary, summary_type, etc.';
-COMMENT ON COLUMN messages.tool_call_id IS 'Tool call identifier for role=tool messages.';
-COMMENT ON COLUMN messages.is_error IS 'Whether this tool message reports an error.';
-
--- Set LZ4 compression for large text columns
-ALTER TABLE messages ALTER COLUMN content SET COMPRESSION lz4;
-
--- Add segment embedding column for segment sentinels
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS segment_embedding vector(768);
-
-COMMENT ON COLUMN messages.segment_embedding IS 'mdbr-leaf-ir-asym embedding (768-dim) for segment boundary sentinels (used for segment search)';
-
--- =====================================================================
--- MESSAGE INDEXES
--- =====================================================================
-
--- User ID index for RLS policy filtering
-CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);
-
--- Tool call ID index for joining tool results to tool calls
-CREATE INDEX IF NOT EXISTS idx_messages_tool_call_id
-    ON messages(tool_call_id)
-    WHERE tool_call_id IS NOT NULL;
-
--- Continuum ID index for conversation retrieval
-CREATE INDEX IF NOT EXISTS idx_messages_continuum_id ON messages(continuum_id);
-
--- Created timestamp index for temporal queries
-CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
-
--- Unique partial index: at most one active segment sentinel per continuum
--- Prevents TOCTOU race in _ensure_active_segment from creating duplicate sentinels
-CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_active_segment_unique ON messages (continuum_id)
+CREATE INDEX idx_messages_user ON messages(user_id);
+CREATE INDEX idx_messages_continuum_time ON messages(continuum_id, created_at);
+CREATE INDEX idx_messages_tool_call ON messages(tool_call_id) WHERE tool_call_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_messages_active_segment_unique ON messages(continuum_id)
     WHERE metadata->>'is_segment_boundary' = 'true'
       AND metadata->>'status' = 'active';
-
--- Composite index for active segment queries (continuum + temporal ordering)
-CREATE INDEX IF NOT EXISTS idx_messages_active_segments ON messages (continuum_id, created_at)
+CREATE INDEX idx_messages_active_segments ON messages(continuum_id, created_at)
     WHERE metadata->>'is_segment_boundary' = 'true'
-      AND metadata->>'status' = 'active';
-
--- GIN index on metadata for segment boundary queries
-CREATE INDEX IF NOT EXISTS idx_messages_segment_metadata ON messages USING gin (metadata)
+      AND metadata->>'status' IN ('active', 'paused');
+CREATE INDEX idx_messages_segment_metadata ON messages USING gin(metadata)
     WHERE metadata->>'is_segment_boundary' = 'true';
-
--- HNSW vector index for segment embedding similarity search
--- Partial index: only segment boundaries with embeddings
-CREATE INDEX IF NOT EXISTS idx_messages_segment_embedding ON messages
+CREATE INDEX idx_messages_segment_embedding ON messages
     USING hnsw (segment_embedding vector_cosine_ops)
     WHERE metadata->>'is_segment_boundary' = 'true'
       AND segment_embedding IS NOT NULL;
 
-COMMENT ON TABLE messages IS 'All conversation messages; segments implemented as sentinel messages with is_segment_boundary=true in metadata';
-COMMENT ON COLUMN messages.segment_embedding IS 'mdbr-leaf-ir-asym 768d embedding for segment sentinels. See docs/SEGMENT_SYSTEM.md for architecture details.';
+CREATE TRIGGER continuums_updated_at
+BEFORE UPDATE ON continuums
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- =====================================================================
--- MEMORIES TABLE (core long-term memory storage)
--- =====================================================================
+-- ---------------------------------------------------------------------------
+-- Long-term memory and entities
+-- ---------------------------------------------------------------------------
 
-CREATE TABLE IF NOT EXISTS memories (
+CREATE TABLE memories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    text TEXT NOT NULL,
-    embedding vector(768),  -- mdbr-leaf-ir-asym embeddings for memory search
-    search_vector tsvector,  -- Full-text search vector for BM25-style retrieval
-    importance_score NUMERIC(5,3) NOT NULL DEFAULT 0.5 CHECK (importance_score >= 0 AND importance_score <= 1),
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE,
-    expires_at TIMESTAMP WITH TIME ZONE,
+    text TEXT COMPRESSION lz4 NOT NULL,
+    embedding vector(768),
+    search_vector tsvector,
+    importance_score NUMERIC(5,3) NOT NULL DEFAULT 0.5
+        CHECK (importance_score BETWEEN 0 AND 1),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
     access_count INTEGER NOT NULL DEFAULT 0,
-    mention_count INTEGER NOT NULL DEFAULT 0,  -- Explicit LLM references (strongest importance signal)
-    last_accessed TIMESTAMP WITH TIME ZONE,
-    happens_at TIMESTAMP WITH TIME ZONE,
-
-    -- Link tracking arrays for efficient hub scoring
-    inbound_links JSONB DEFAULT '[]'::jsonb,  -- Array of {source_id, link_type, reasoning, created_at}
-    outbound_links JSONB DEFAULT '[]'::jsonb, -- Array of {target_id, link_type, reasoning, created_at}
-    entity_links JSONB DEFAULT '[]'::jsonb,   -- Array of {uuid, type, name}
-
-    -- Metadata
-    is_archived BOOLEAN DEFAULT FALSE,
-    archived_at TIMESTAMP WITH TIME ZONE,
-
-    -- Last tended by MemoryCuratorAgent (floor trigger samples unseen memories)
-    last_tended_at TIMESTAMP WITH TIME ZONE,
-
-    -- Activity day snapshots for vacation-proof scoring
-    activity_days_at_creation INT,
-    activity_days_at_last_access INT,
-
-    -- Annotations for contextual notes
-    annotations JSONB DEFAULT '[]'::jsonb,
-
-    -- Source segment for context exploration
-    source_segment_id UUID  -- Segment this memory was extracted from (enables context exploration via continuum_tool)
+    mention_count INTEGER NOT NULL DEFAULT 0,
+    last_accessed TIMESTAMPTZ,
+    happens_at TIMESTAMPTZ,
+    inbound_links JSONB NOT NULL DEFAULT '[]'::jsonb,
+    outbound_links JSONB NOT NULL DEFAULT '[]'::jsonb,
+    entity_links JSONB NOT NULL DEFAULT '[]'::jsonb,
+    is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+    archived_at TIMESTAMPTZ,
+    last_tended_at TIMESTAMPTZ,
+    activity_days_at_creation INTEGER,
+    activity_days_at_last_access INTEGER,
+    annotations JSONB NOT NULL DEFAULT '[]'::jsonb,
+    source_segment_id UUID
 );
 
-COMMENT ON TABLE memories IS 'Long-term memory storage with embeddings, links, and activity-based decay';
-COMMENT ON COLUMN memories.text IS 'Memory content text';
-COMMENT ON COLUMN memories.embedding IS 'mdbr-leaf-ir-asym 768-dimensional embedding for semantic similarity search';
-COMMENT ON COLUMN memories.search_vector IS 'Full-text search vector for BM25-style retrieval';
-COMMENT ON COLUMN memories.importance_score IS 'Memory importance (0.0-1.0) used for retrieval ranking';
-COMMENT ON COLUMN memories.happens_at IS 'When the memory event occurred (for temporal context)';
-COMMENT ON COLUMN memories.inbound_links IS 'JSONB array of memories that link TO this memory';
-COMMENT ON COLUMN memories.outbound_links IS 'JSONB array of memories this memory links TO';
-COMMENT ON COLUMN memories.entity_links IS 'JSONB array of entity references this memory mentions';
-COMMENT ON COLUMN memories.activity_days_at_creation IS 'User cumulative_activity_days when memory was created (snapshot for decay calculation)';
-COMMENT ON COLUMN memories.activity_days_at_last_access IS 'User cumulative_activity_days when memory was last accessed (snapshot for recency calculation)';
-COMMENT ON COLUMN memories.annotations IS 'Contextual notes: [{text, created_at, source}]';
-COMMENT ON COLUMN memories.source_segment_id IS 'Segment this memory was extracted from (enables context exploration via continuum_tool search_within_segment)';
-COMMENT ON COLUMN memories.last_tended_at IS 'Last timestamp the MemoryCuratorAgent tended this memory (linked/merged/archived/salvaged). NULL = never tended (integration not yet run). Backfilled to created_at for pre-curation memories via migration.';
-
--- Set LZ4 compression for large text columns
-ALTER TABLE memories ALTER COLUMN text SET COMPRESSION lz4;
-
--- =====================================================================
--- MEMORY INDEXES
--- =====================================================================
-
--- User ID index for RLS policy filtering (CRITICAL for performance)
-CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id);
-
--- Full-text search index for keyword-based retrieval
-CREATE INDEX IF NOT EXISTS idx_memories_search_vector ON memories USING gin (search_vector);
-
--- Vector similarity index for semantic search (IVFFlat algorithm)
--- lists=100 is optimal for ~1000-10000 rows (adjust if dataset grows significantly)
--- This index enables O(log n) similarity search instead of O(n) full table scans
-CREATE INDEX IF NOT EXISTS idx_memories_embedding_ivfflat
-    ON memories USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
-
--- Partial index on source_segment_id for segment-to-memory tracing
-CREATE INDEX IF NOT EXISTS idx_memories_source_segment_id
-    ON memories(source_segment_id)
+CREATE INDEX idx_memories_user ON memories(user_id);
+CREATE INDEX idx_memories_search_vector ON memories USING gin(search_vector);
+CREATE INDEX idx_memories_embedding_ivfflat ON memories
+    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX idx_memories_source_segment ON memories(source_segment_id)
     WHERE source_segment_id IS NOT NULL;
-
--- Partial index for floor-trigger candidate sampling: low-importance,
--- non-archived memories filtered by last_tended_at staleness.
-CREATE INDEX IF NOT EXISTS idx_memories_floor_candidates
-    ON memories (importance_score, last_tended_at)
+CREATE INDEX idx_memories_floor_candidates ON memories(importance_score, last_tended_at)
     WHERE is_archived = FALSE;
 
-COMMENT ON INDEX idx_memories_user_id IS 'B-tree index for RLS policy filtering - essential for multi-user performance';
-COMMENT ON INDEX idx_memories_search_vector IS 'GIN index for full-text search operations';
-COMMENT ON INDEX idx_memories_embedding_ivfflat IS 'IVFFlat index for fast cosine similarity search - prevents O(n) sequential scans during deduplication and retrieval';
-COMMENT ON INDEX idx_memories_source_segment_id IS 'Partial B-tree index for tracing memories back to source segments';
-COMMENT ON INDEX idx_memories_floor_candidates IS 'Partial btree index supporting the curator floor trigger random-among-unseen sample over (importance_score, last_tended_at)';
+CREATE TRIGGER memories_search_vector
+BEFORE INSERT OR UPDATE OF text ON memories
+FOR EACH ROW EXECUTE FUNCTION set_search_vector();
+CREATE TRIGGER memories_updated_at
+BEFORE UPDATE ON memories
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- Trigger function to maintain search vectors
-CREATE OR REPLACE FUNCTION update_memories_search_vector() RETURNS trigger AS $$
-BEGIN
-    NEW.search_vector := to_tsvector('english', NEW.text);
-    RETURN NEW;
-END
-$$ LANGUAGE plpgsql;
-
--- Create trigger to maintain search vectors on insert/update
-CREATE TRIGGER memories_search_vector_update
-BEFORE INSERT OR UPDATE OF text
-ON memories
-FOR EACH ROW
-EXECUTE FUNCTION update_memories_search_vector();
-
--- =====================================================================
--- GLOBAL MEMORIES TABLE (centralized, no RLS, no decay)
--- =====================================================================
--- Global memories are manually curated facts accessible to all users.
--- They surface through ProactiveService retrieval but cannot be queried,
--- linked to, or annotated via the memory_tool (which only sees personal memories).
--- Cross-table linking silently fails by design - global memory IDs return
--- "memory not found" when users attempt to link to them.
-
-CREATE TABLE IF NOT EXISTS global_memories (
+-- Administrator-curated shared memory. Deliberately has no RLS: isolation is
+-- enforced by the security-barrier view below, which is the only runtime read
+-- path. Direct DML is revoked from the application role in the grants section,
+-- so the shared table cannot be written from a request path.
+CREATE TABLE global_memories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    text TEXT NOT NULL,
-    embedding vector(768),  -- mdbr-leaf-ir-asym embeddings for memory search
-    search_vector tsvector,  -- Full-text search vector for BM25-style retrieval
-    importance_score NUMERIC(5,3) NOT NULL DEFAULT 1.0 CHECK (importance_score >= 0 AND importance_score <= 1),
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE,
-    happens_at TIMESTAMP WITH TIME ZONE,  -- Optional temporal context
-    entity_links JSONB DEFAULT '[]'::jsonb,  -- Array of {uuid, type, name}
-    -- Link arrays for global ↔ global relationships (manually curated)
-    inbound_links JSONB DEFAULT '[]'::jsonb,
-    outbound_links JSONB DEFAULT '[]'::jsonb,
-    is_archived BOOLEAN DEFAULT FALSE,
-    archived_at TIMESTAMP WITH TIME ZONE
+    text TEXT COMPRESSION lz4 NOT NULL,
+    embedding vector(768),
+    search_vector tsvector,
+    importance_score NUMERIC(5,3) NOT NULL DEFAULT 1.0
+        CHECK (importance_score BETWEEN 0 AND 1),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ,
+    happens_at TIMESTAMPTZ,
+    entity_links JSONB NOT NULL DEFAULT '[]'::jsonb,
+    inbound_links JSONB NOT NULL DEFAULT '[]'::jsonb,
+    outbound_links JSONB NOT NULL DEFAULT '[]'::jsonb,
+    is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+    archived_at TIMESTAMPTZ
 );
 
-COMMENT ON TABLE global_memories IS 'Centralized memories accessible to all users - no RLS, no decay. Manually curated via psql.';
-COMMENT ON COLUMN global_memories.importance_score IS 'Fixed at 1.0 for global memories (no decay applied)';
-COMMENT ON COLUMN global_memories.entity_links IS 'Entity references for potential future hub discovery integration';
-COMMENT ON COLUMN global_memories.inbound_links IS 'JSONB array of other global memories that link TO this memory';
-COMMENT ON COLUMN global_memories.outbound_links IS 'JSONB array of other global memories this memory links TO';
+CREATE FUNCTION can_read_global_memories()
+RETURNS BOOLEAN
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+LANGUAGE sql
+AS $function$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.users
+        WHERE id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+          AND is_active = TRUE
+    )
+$function$;
 
--- Set LZ4 compression for large text columns
-ALTER TABLE global_memories ALTER COLUMN text SET COMPRESSION lz4;
+CREATE VIEW global_memories_runtime
+WITH (security_barrier = true)
+AS
+SELECT *
+FROM global_memories
+WHERE can_read_global_memories();
 
--- =====================================================================
--- GLOBAL MEMORY INDEXES
--- =====================================================================
+CREATE INDEX idx_global_memories_search_vector ON global_memories USING gin(search_vector);
+CREATE INDEX idx_global_memories_embedding_ivfflat ON global_memories
+    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 
--- Full-text search index for keyword-based retrieval
-CREATE INDEX IF NOT EXISTS idx_global_memories_search_vector ON global_memories USING gin (search_vector);
+CREATE TRIGGER global_memories_search_vector
+BEFORE INSERT OR UPDATE OF text ON global_memories
+FOR EACH ROW EXECUTE FUNCTION set_search_vector();
+CREATE TRIGGER global_memories_updated_at
+BEFORE UPDATE ON global_memories
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- Vector similarity index for semantic search (IVFFlat algorithm)
-CREATE INDEX IF NOT EXISTS idx_global_memories_embedding_ivfflat
-    ON global_memories USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
-
-COMMENT ON INDEX idx_global_memories_search_vector IS 'GIN index for full-text search operations';
-COMMENT ON INDEX idx_global_memories_embedding_ivfflat IS 'IVFFlat index for fast cosine similarity search';
-
--- Trigger to maintain search vectors (reuses existing function)
-CREATE TRIGGER global_memories_search_vector_update
-BEFORE INSERT OR UPDATE OF text
-ON global_memories
-FOR EACH ROW
-EXECUTE FUNCTION update_memories_search_vector();
-
--- =====================================================================
--- GLOBAL MEMORY PERMISSIONS (NO RLS)
--- =====================================================================
--- Note: RLS is NOT enabled on this table - all users can read global memories.
--- Write access is intended for manual curation via psql only.
-
-GRANT SELECT, INSERT, UPDATE, DELETE ON global_memories TO mira_dbuser;
-GRANT ALL ON global_memories TO mira_admin;
-
--- =====================================================================
--- ENTITIES TABLE (knowledge graph nodes)
--- =====================================================================
-
-CREATE TABLE IF NOT EXISTS entities (
+CREATE TABLE entities (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    entity_type TEXT NOT NULL,  -- PERSON, ORG, GPE, PRODUCT, EVENT, WORK_OF_ART, LAW, LANGUAGE, NORP, FAC
-    embedding vector(300),  -- spaCy word vector for semantic similarity (300d from en_core_web_lg)
-    link_count INTEGER DEFAULT 0,
-    last_linked_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE,
-    is_archived BOOLEAN DEFAULT FALSE,
-    archived_at TIMESTAMP WITH TIME ZONE,
-
-    CONSTRAINT entities_user_name_type_unique UNIQUE (user_id, name, entity_type)
+    entity_type TEXT NOT NULL,
+    embedding vector(300),
+    link_count INTEGER NOT NULL DEFAULT 0,
+    last_linked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ,
+    is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+    archived_at TIMESTAMPTZ,
+    UNIQUE (user_id, name, entity_type)
 );
 
-COMMENT ON TABLE entities IS 'Persistent knowledge anchors (people, organizations, products, etc.) that memories link to';
-COMMENT ON COLUMN entities.name IS 'Canonical normalized entity name';
-COMMENT ON COLUMN entities.entity_type IS 'spaCy NER entity type (PERSON, ORG, GPE, PRODUCT, etc.)';
-COMMENT ON COLUMN entities.embedding IS 'spaCy word vector for semantic similarity (300d from en_core_web_lg)';
-COMMENT ON COLUMN entities.link_count IS 'Number of memories linking to this entity';
-COMMENT ON COLUMN entities.last_linked_at IS 'Timestamp of most recent memory link (for dormancy detection)';
+CREATE INDEX idx_entities_user ON entities(user_id);
+CREATE INDEX idx_entities_name_trgm ON entities USING gin(name gin_trgm_ops);
 
--- =====================================================================
--- EXTRACTION BATCHES (async memory extraction tracking)
--- =====================================================================
-
-CREATE TABLE IF NOT EXISTS extraction_batches (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    batch_id TEXT NOT NULL,  -- Anthropic batch API ID
-    custom_id TEXT NOT NULL,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    chunk_index INTEGER NOT NULL,
-    request_payload JSONB NOT NULL,
-    chunk_metadata JSONB,
-    memory_context JSONB,
-    status TEXT NOT NULL CHECK (status IN ('submitted', 'processing', 'result_processing', 'completed', 'failed', 'expired', 'cancelled')),
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    submitted_at TIMESTAMP WITH TIME ZONE NOT NULL,
-    completed_at TIMESTAMP WITH TIME ZONE,
-    expires_at TIMESTAMP WITH TIME ZONE,
-    result_url TEXT,
-    result_payload JSONB,
-    extracted_memories JSONB,
-    error_message TEXT,
-    retry_count INTEGER DEFAULT 0,
-    processing_time_ms INTEGER,
-    tokens_used INTEGER
-);
-
-COMMENT ON TABLE extraction_batches IS 'Batch extraction job tracking for async memory extraction via Anthropic batch API';
-COMMENT ON COLUMN extraction_batches.batch_id IS 'Anthropic batch API batch ID';
-COMMENT ON COLUMN extraction_batches.custom_id IS 'Custom ID for batch request tracking';
-COMMENT ON COLUMN extraction_batches.chunk_index IS 'Index of conversation chunk being processed';
-COMMENT ON COLUMN extraction_batches.status IS 'Batch processing status';
-COMMENT ON COLUMN extraction_batches.extracted_memories IS 'JSON array of extracted memories from batch response';
-
--- =====================================================================
--- TRIGGERS
--- =====================================================================
-
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
-
-DROP TRIGGER IF EXISTS update_memories_updated_at ON memories;
-CREATE TRIGGER update_memories_updated_at
-BEFORE UPDATE ON memories
-FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-DROP TRIGGER IF EXISTS update_entities_updated_at ON entities;
-CREATE TRIGGER update_entities_updated_at
+CREATE TRIGGER entities_updated_at
 BEFORE UPDATE ON entities
-FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- =====================================================================
--- FEEDBACK SIGNALS TABLE (DIY reinforcement loop)
--- =====================================================================
+-- ---------------------------------------------------------------------------
+-- Persona: immutable behavioral directives and evaluation evidence
+-- ---------------------------------------------------------------------------
 
-CREATE TABLE IF NOT EXISTS feedback_signals (
+CREATE TABLE persona_revisions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    revision_number INTEGER NOT NULL CHECK (revision_number > 0),
+    directives TEXT COMPRESSION lz4 NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('baseline', 'automatic', 'user', 'rollback')),
+    parent_revision_id UUID,
+    evidence_ids UUID[] NOT NULL DEFAULT '{}'::uuid[],
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, revision_number),
+    UNIQUE (id, user_id),
+    FOREIGN KEY (parent_revision_id, user_id)
+        REFERENCES persona_revisions(id, user_id) ON DELETE RESTRICT
+        DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE INDEX idx_persona_revisions_user_time ON persona_revisions(user_id, revision_number DESC);
+
+CREATE TABLE persona_state (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    current_revision_id UUID NOT NULL,
+    latest_evaluated_segment_id UUID,
+    refinement_checkpoint_activity_day INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (current_revision_id, user_id)
+        REFERENCES persona_revisions(id, user_id) ON DELETE RESTRICT
+);
+
+-- Persona evaluation evidence. Distinct from feedback_signals, which serves the
+-- user-model pipeline: the two tables share no columns beyond their keys.
+CREATE TABLE persona_signals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    continuum_id UUID NOT NULL,
+    segment_id UUID NOT NULL,
+    behavioral_section TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('alignment', 'misalignment', 'contextual_pass')),
+    strength TEXT NOT NULL CHECK (strength IN ('strong', 'moderate', 'mild')),
+    evidence TEXT NOT NULL,
+    evaluated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    consumed_by_revision_id UUID,
+    FOREIGN KEY (continuum_id, user_id)
+        REFERENCES continuums(id, user_id) ON DELETE CASCADE,
+    FOREIGN KEY (consumed_by_revision_id, user_id)
+        REFERENCES persona_revisions(id, user_id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_persona_signals_user ON persona_signals(user_id, evaluated_at);
+CREATE INDEX idx_persona_signals_unconsumed ON persona_signals(user_id, evaluated_at)
+    WHERE consumed_by_revision_id IS NULL;
+
+CREATE TRIGGER persona_state_updated_at
+BEFORE UPDATE ON persona_state
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Baseline provisioning is a DB trigger, not an application code path, so no
+-- user can exist without revision 1 -- including the row ensure_single_user()
+-- bootstraps in single-user mode.
+CREATE FUNCTION provision_baseline_persona()
+RETURNS TRIGGER AS $function$
+DECLARE
+    baseline_revision_id UUID;
+BEGIN
+    INSERT INTO persona_revisions (
+        user_id,
+        revision_number,
+        directives,
+        source
+    )
+    VALUES (NEW.id, 1, '', 'baseline')
+    RETURNING id INTO baseline_revision_id;
+
+    INSERT INTO persona_state (user_id, current_revision_id)
+    VALUES (NEW.id, baseline_revision_id);
+
+    RETURN NEW;
+END
+$function$ LANGUAGE plpgsql;
+
+CREATE TRIGGER users_provision_baseline_persona
+AFTER INSERT ON users
+FOR EACH ROW EXECUTE FUNCTION provision_baseline_persona();
+
+-- ---------------------------------------------------------------------------
+-- User model (DIY reinforcement loop)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE feedback_signals (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     segment_id UUID NOT NULL,
@@ -710,225 +525,250 @@ CREATE TABLE IF NOT EXISTS feedback_signals (
     section_id TEXT NOT NULL,
     strength TEXT NOT NULL CHECK (strength IN ('strong', 'moderate', 'mild')),
     evidence TEXT NOT NULL,
-    extracted_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    extracted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     synthesized BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON TABLE feedback_signals IS 'Assessment signals for the user model pipeline';
-COMMENT ON COLUMN feedback_signals.signal_type IS 'Type: alignment, misalignment, contextual_pass';
-COMMENT ON COLUMN feedback_signals.section_id IS 'System prompt section ID this signal references';
-COMMENT ON COLUMN feedback_signals.strength IS 'Signal strength: strong, moderate, mild';
-COMMENT ON COLUMN feedback_signals.synthesized IS 'True after user model synthesis has processed this signal';
+CREATE INDEX idx_feedback_signals_user_id ON feedback_signals(user_id);
+CREATE INDEX idx_feedback_signals_user_type ON feedback_signals(user_id, signal_type);
+CREATE INDEX idx_feedback_signals_unsynthesized ON feedback_signals(user_id)
+    WHERE NOT synthesized;
+CREATE INDEX idx_feedback_signals_section_id ON feedback_signals(user_id, section_id)
+    WHERE NOT synthesized;
 
-CREATE INDEX IF NOT EXISTS idx_feedback_signals_user_id ON feedback_signals(user_id);
-CREATE INDEX IF NOT EXISTS idx_feedback_signals_user_type ON feedback_signals(user_id, signal_type);
-CREATE INDEX IF NOT EXISTS idx_feedback_signals_unsynthesized ON feedback_signals(user_id) WHERE NOT synthesized;
-CREATE INDEX IF NOT EXISTS idx_feedback_signals_section_id ON feedback_signals(user_id, section_id) WHERE NOT synthesized;
-
--- =====================================================================
--- FEEDBACK SYNTHESIS TRACKING TABLE
--- =====================================================================
-
-CREATE TABLE IF NOT EXISTS feedback_synthesis_tracking (
+CREATE TABLE feedback_synthesis_tracking (
     user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     activity_days_at_last_synthesis INTEGER NOT NULL DEFAULT 0,
-    last_synthesis_at TIMESTAMP WITH TIME ZONE,
+    last_synthesis_at TIMESTAMPTZ,
     last_synthesis_output TEXT,
     needs_checkin BOOLEAN NOT NULL DEFAULT FALSE,
     checkin_response TEXT
 );
 
-COMMENT ON TABLE feedback_synthesis_tracking IS 'Tracks synthesis state for the user model pipeline (modular arithmetic on cumulative_activity_days)';
-COMMENT ON COLUMN feedback_synthesis_tracking.activity_days_at_last_synthesis IS 'Snapshot of users.cumulative_activity_days when synthesis last ran (modular arithmetic base)';
-COMMENT ON COLUMN feedback_synthesis_tracking.last_synthesis_output IS 'User model XML from previous synthesis for evolutionary refinement';
-COMMENT ON COLUMN feedback_synthesis_tracking.needs_checkin IS 'True when user model contains check-in topics for behavioral debrief';
-
--- =====================================================================
--- BILLING & STRIPE TABLES
--- =====================================================================
-
-CREATE TABLE IF NOT EXISTS billing_transactions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    transaction_type VARCHAR(20) NOT NULL,
-    amount_usd DECIMAL(12,6) NOT NULL,
-    balance_after DECIMAL(12,6) NOT NULL,
-    model_name VARCHAR(100),
-    input_tokens INTEGER,
-    output_tokens INTEGER,
-    cache_read_tokens INTEGER,
-    cache_write_tokens INTEGER,
-    stripe_payment_intent_id VARCHAR(255),
-    description TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-COMMENT ON TABLE billing_transactions IS 'Audit log of all billing events: usage charges, deposits, drips, refunds';
-
-CREATE INDEX IF NOT EXISTS idx_billing_txn_user_created ON billing_transactions(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_billing_txn_type ON billing_transactions(transaction_type)
-    WHERE transaction_type IN ('recharge_failed', 'deposit');
-CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_positive_stripe_deposit_once
-    ON billing_transactions(stripe_payment_intent_id)
-    WHERE transaction_type = 'deposit'
-      AND amount_usd > 0
-      AND stripe_payment_intent_id IS NOT NULL;
-
-CREATE TABLE IF NOT EXISTS stripe_webhook_events (
-    event_id VARCHAR(255) PRIMARY KEY,
-    event_type VARCHAR(100) NOT NULL,
-    processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    processed_successfully BOOLEAN NOT NULL DEFAULT FALSE,
-    processing_lock_token UUID,
-    processing_started_at TIMESTAMP WITH TIME ZONE,
-    processing_finished_at TIMESTAMP WITH TIME ZONE,
-    payload JSONB NOT NULL
-);
-
-COMMENT ON TABLE stripe_webhook_events IS 'Idempotency tracking for Stripe webhooks - prevents double-processing';
-
-CREATE INDEX IF NOT EXISTS idx_stripe_webhook_processed ON stripe_webhook_events(processed_at);
-CREATE INDEX IF NOT EXISTS idx_stripe_webhook_processing_lock
-    ON stripe_webhook_events(processing_lock_token)
-    WHERE processing_lock_token IS NOT NULL;
-
--- =====================================================================
--- PERMISSIONS
--- =====================================================================
-
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_dbuser') THEN
-        GRANT SELECT, INSERT, UPDATE, DELETE ON
-            users, users_trash, magic_links,
-            user_activity_days, domain_knowledge_blocks, domain_knowledge_block_content,
-            domaindoc_shares,
-            continuums, messages,
-            memories, entities, extraction_batches,
-            feedback_signals, feedback_synthesis_tracking,
-            billing_transactions
-        TO mira_dbuser;
-        GRANT SELECT, INSERT, UPDATE ON stripe_webhook_events TO mira_dbuser;
-        GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO mira_dbuser;
-    END IF;
-END
-$$;
-
--- Grant default privileges on future objects created by mira_admin
-ALTER DEFAULT PRIVILEGES FOR ROLE mira_admin IN SCHEMA public
-    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO mira_dbuser;
-
-ALTER DEFAULT PRIVILEGES FOR ROLE mira_admin IN SCHEMA public
-    GRANT USAGE, SELECT ON SEQUENCES TO mira_dbuser;
-
--- Grant mira_admin access to all existing tables for admin operations
--- (mira_admin has BYPASSRLS to perform cross-user queries)
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO mira_admin;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO mira_admin;
-
--- =====================================================================
--- ROW LEVEL SECURITY (user isolation)
--- =====================================================================
-
--- Note: Authentication tables (users, magic_links) do NOT have RLS
--- These are accessed during authentication flow before user context is established
--- Application code handles access control via token validation
---
--- Note: Sessions are stored in Valkey (not PostgreSQL) by auth/api.py
--- Note: User credentials are stored via UserDataManager (SQLite) by utils/user_credentials.py
-
-ALTER TABLE user_activity_days ENABLE ROW LEVEL SECURITY;
-CREATE POLICY user_activity_days_user_policy ON user_activity_days
-    FOR ALL TO PUBLIC
-    USING (user_id = current_setting('app.current_user_id')::uuid);
-
-ALTER TABLE domain_knowledge_blocks ENABLE ROW LEVEL SECURITY;
-CREATE POLICY domain_knowledge_blocks_user_policy ON domain_knowledge_blocks
-    FOR ALL TO PUBLIC
-    USING (user_id = current_setting('app.current_user_id')::uuid);
-
-ALTER TABLE domain_knowledge_block_content ENABLE ROW LEVEL SECURITY;
-CREATE POLICY domain_knowledge_block_content_user_policy ON domain_knowledge_block_content
-    FOR ALL TO PUBLIC
-    USING (block_id IN (SELECT id FROM domain_knowledge_blocks WHERE user_id = current_setting('app.current_user_id')::uuid));
-
-ALTER TABLE continuums ENABLE ROW LEVEL SECURITY;
-CREATE POLICY continuums_user_policy ON continuums
-    FOR ALL TO PUBLIC
-    USING (user_id = current_setting('app.current_user_id')::uuid);
-
-ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
-CREATE POLICY messages_user_policy ON messages
-    FOR ALL TO PUBLIC
-    USING (user_id = current_setting('app.current_user_id')::uuid);
-
-ALTER TABLE memories ENABLE ROW LEVEL SECURITY;
-CREATE POLICY memories_user_policy ON memories
-    FOR ALL TO PUBLIC
-    USING (user_id = current_setting('app.current_user_id')::uuid);
-
-ALTER TABLE entities ENABLE ROW LEVEL SECURITY;
-CREATE POLICY entities_user_policy ON entities
-    FOR ALL TO PUBLIC
-    USING (user_id = current_setting('app.current_user_id')::uuid);
-
-ALTER TABLE api_tokens ENABLE ROW LEVEL SECURITY;
-CREATE POLICY api_tokens_user_policy ON api_tokens
-    FOR ALL TO PUBLIC
-    USING (user_id = current_setting('app.current_user_id', true)::uuid);
-
-ALTER TABLE feedback_signals ENABLE ROW LEVEL SECURITY;
-CREATE POLICY feedback_signals_user_policy ON feedback_signals
-    FOR ALL TO PUBLIC
-    USING (user_id = current_setting('app.current_user_id')::uuid);
-
-ALTER TABLE feedback_synthesis_tracking ENABLE ROW LEVEL SECURITY;
-CREATE POLICY feedback_synthesis_tracking_user_policy ON feedback_synthesis_tracking
-    FOR ALL TO PUBLIC
-    USING (user_id = current_setting('app.current_user_id')::uuid);
-
-ALTER TABLE billing_transactions ENABLE ROW LEVEL SECURITY;
-CREATE POLICY billing_transactions_user_policy ON billing_transactions
-    FOR ALL TO PUBLIC
-    USING (user_id = current_setting('app.current_user_id', true)::uuid);
-
--- Domaindoc sharing: owner manages their own shares, collaborator views/accepts/rejects theirs
-ALTER TABLE domaindoc_shares ENABLE ROW LEVEL SECURITY;
-CREATE POLICY domaindoc_shares_owner_all ON domaindoc_shares
-    FOR ALL TO PUBLIC
-    USING (owner_user_id = current_setting('app.current_user_id')::uuid)
-    WITH CHECK (owner_user_id = current_setting('app.current_user_id')::uuid);
-CREATE POLICY domaindoc_shares_collaborator_select ON domaindoc_shares
-    FOR SELECT TO PUBLIC
-    USING (collaborator_user_id = current_setting('app.current_user_id')::uuid);
-CREATE POLICY domaindoc_shares_collaborator_update ON domaindoc_shares
-    FOR UPDATE TO PUBLIC
-    USING (collaborator_user_id = current_setting('app.current_user_id')::uuid)
-    WITH CHECK (collaborator_user_id = current_setting('app.current_user_id')::uuid);
-
--- Note: extraction_batches does NOT have RLS
--- This is a system tracking table accessed by admin polling jobs
--- It contains no user data, only batch job metadata
-
--- ============================================================
+-- ---------------------------------------------------------------------------
 -- Lattice federation: global username registry
--- ============================================================
--- Maps federated usernames to user_ids so the Lattice discovery daemon
--- can resolve inbound `username@server` addresses to a local recipient.
--- No RLS: this is a global routing/lookup table (same category as `users`),
--- queried contextlessly by the federation username resolver registered in
--- main.py (mira_resolve_username), which runs outside any user context.
+-- ---------------------------------------------------------------------------
+-- Maps federated usernames to user_ids so the Lattice discovery daemon can
+-- resolve inbound `username@server` addresses to a local recipient.
+-- No RLS: this is a global routing/lookup table, queried contextlessly by
+-- mira_resolve_username, which runs outside any user context. A trigger or
+-- policy requiring matching user context would break the federation resolver.
 -- Application logic in pager_tool._register_username only ever inserts the
--- current user's own row (via self.user_id), and the UNIQUE(username) constraint
--- prevents duplicate registrations.
+-- current user's own row, and the UNIQUE constraint prevents duplicate
+-- registrations.
 
-CREATE TABLE IF NOT EXISTS global_usernames (
-    username VARCHAR(20) UNIQUE NOT NULL,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+CREATE TABLE global_usernames (
+    username VARCHAR(20) PRIMARY KEY,
+    user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     active BOOLEAN NOT NULL DEFAULT TRUE
 );
 
-CREATE INDEX IF NOT EXISTS idx_global_usernames_username_active
-    ON global_usernames (username) WHERE active = TRUE;
+CREATE INDEX idx_global_usernames_active ON global_usernames(username) WHERE active = TRUE;
+
+-- ---------------------------------------------------------------------------
+-- User feedback (developer-facing friction signals)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE user_feedback (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    category TEXT NOT NULL CHECK (category IN ('feature_request', 'bug_report', 'confusion', 'praise', 'other')),
+    description TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_user_feedback_category_time ON user_feedback(category, created_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Row-level security. Missing user context resolves to NULL and sees no rows.
+-- Privileged pre-auth and scheduler repositories use mira_admin/BYPASSRLS.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+CREATE POLICY users_user_policy ON users
+    FOR ALL TO mira_dbuser
+    USING (id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE magic_links ENABLE ROW LEVEL SECURITY;
+CREATE POLICY magic_links_user_policy ON magic_links
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE api_tokens ENABLE ROW LEVEL SECURITY;
+CREATE POLICY api_tokens_user_policy ON api_tokens
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE user_activity_days ENABLE ROW LEVEL SECURITY;
+CREATE POLICY user_activity_days_user_policy ON user_activity_days
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE domain_knowledge_blocks ENABLE ROW LEVEL SECURITY;
+CREATE POLICY domain_knowledge_blocks_user_policy ON domain_knowledge_blocks
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE domain_knowledge_block_content ENABLE ROW LEVEL SECURITY;
+CREATE POLICY domain_knowledge_block_content_user_policy ON domain_knowledge_block_content
+    FOR ALL TO mira_dbuser
+    USING (block_id IN (
+        SELECT id FROM domain_knowledge_blocks
+        WHERE user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    ))
+    WITH CHECK (block_id IN (
+        SELECT id FROM domain_knowledge_blocks
+        WHERE user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    ));
+
+ALTER TABLE continuums ENABLE ROW LEVEL SECURITY;
+CREATE POLICY continuums_user_policy ON continuums
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY messages_user_policy ON messages
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE memories ENABLE ROW LEVEL SECURITY;
+CREATE POLICY memories_user_policy ON memories
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE entities ENABLE ROW LEVEL SECURITY;
+CREATE POLICY entities_user_policy ON entities
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE persona_revisions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY persona_revisions_user_policy ON persona_revisions
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE persona_state ENABLE ROW LEVEL SECURITY;
+CREATE POLICY persona_state_user_policy ON persona_state
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE persona_signals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY persona_signals_user_policy ON persona_signals
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE feedback_signals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY feedback_signals_user_policy ON feedback_signals
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE feedback_synthesis_tracking ENABLE ROW LEVEL SECURITY;
+CREATE POLICY feedback_synthesis_tracking_user_policy ON feedback_synthesis_tracking
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE user_feedback ENABLE ROW LEVEL SECURITY;
+CREATE POLICY user_feedback_user_policy ON user_feedback
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
+ALTER TABLE domaindoc_shares ENABLE ROW LEVEL SECURITY;
+CREATE POLICY domaindoc_shares_owner_policy ON domaindoc_shares
+    FOR ALL TO mira_dbuser
+    USING (
+        owner_user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    )
+    WITH CHECK (
+        owner_user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    );
+CREATE POLICY domaindoc_shares_collaborator_select_policy ON domaindoc_shares
+    FOR SELECT TO mira_dbuser
+    USING (
+        collaborator_user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    );
+CREATE POLICY domaindoc_shares_collaborator_update_policy ON domaindoc_shares
+    FOR UPDATE TO mira_dbuser
+    USING (
+        collaborator_user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    )
+    WITH CHECK (
+        collaborator_user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    );
+
+-- ---------------------------------------------------------------------------
+-- Explicit least-privilege runtime grants
+-- ---------------------------------------------------------------------------
+
+-- Deployment applies this schema as the PostgreSQL superuser while the
+-- privileged control plane connects as mira_admin with BYPASSRLS.
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO mira_admin;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO mira_admin;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO mira_admin;
+
+GRANT SELECT ON model_configs TO mira_dbuser;
+GRANT SELECT ON usage_pricing TO mira_dbuser;
+GRANT SELECT, UPDATE ON users TO mira_dbuser;
+GRANT SELECT, INSERT, UPDATE, DELETE ON magic_links, api_tokens TO mira_dbuser;
+GRANT SELECT, INSERT, UPDATE, DELETE ON user_activity_days TO mira_dbuser;
+GRANT SELECT, INSERT, UPDATE, DELETE ON continuums, messages, memories, entities TO mira_dbuser;
+GRANT SELECT, INSERT, UPDATE, DELETE ON domain_knowledge_blocks, domain_knowledge_block_content TO mira_dbuser;
+GRANT SELECT ON global_memories_runtime TO mira_dbuser;
+GRANT SELECT, INSERT ON persona_revisions TO mira_dbuser;
+GRANT SELECT, INSERT, UPDATE ON persona_state TO mira_dbuser;
+GRANT SELECT, INSERT ON persona_signals TO mira_dbuser;
+GRANT UPDATE (consumed_by_revision_id) ON persona_signals TO mira_dbuser;
+GRANT SELECT, INSERT, UPDATE ON feedback_signals TO mira_dbuser;
+GRANT SELECT, INSERT, UPDATE ON feedback_synthesis_tracking TO mira_dbuser;
+GRANT SELECT, INSERT, DELETE ON domaindoc_shares TO mira_dbuser;
+GRANT UPDATE (status, accepted_at) ON domaindoc_shares TO mira_dbuser;
+GRANT INSERT ON user_feedback TO mira_dbuser;
+GRANT SELECT, INSERT, UPDATE ON global_usernames TO mira_dbuser;
+GRANT EXECUTE ON FUNCTION can_read_global_memories() TO mira_dbuser;
+GRANT EXECUTE ON FUNCTION resolve_active_user_identity(text) TO mira_dbuser;
+GRANT EXECUTE ON FUNCTION active_user_identity(uuid) TO mira_dbuser;
+
+-- The shared curated table is read through global_memories_runtime only, and is
+-- curated out-of-band via psql as mira_admin. 1.x granted the runtime role full
+-- DML here, which at N>1 lets any authenticated request path write every other
+-- user's shared context.
+REVOKE ALL ON global_memories FROM mira_dbuser;
+
+REVOKE EXECUTE ON FUNCTION set_updated_at() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION set_search_vector() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION can_read_global_memories() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION provision_baseline_persona() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION resolve_active_user_identity(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION active_user_identity(uuid) FROM PUBLIC;
+
+-- ---------------------------------------------------------------------------
+-- Comments
+-- ---------------------------------------------------------------------------
+
+COMMENT ON TABLE model_configs IS 'Exactly five required MIRA routes, each owning dialect, model, endpoint, Vault key, default effort, and output ceiling: primary (main chat and the general-purpose cognitive services), fast (subcortical analysis and other latency-critical turns), batch (bulk background work: extraction, forage, while-the-cat-is-away), assessment (assessment extraction), other (a sidebar turn routed to an outside model, deliberately a different vendor from primary).';
+COMMENT ON TABLE usage_pricing IS 'Per-route cost lookup keyed by model_configs name; __default__ is the reserved fallback pair.';
+COMMENT ON TABLE users IS 'MIRA account. subject_kind admits member and demo; only member is provisioned today.';
+COMMENT ON TABLE persona_revisions IS 'Immutable Persona directive history.';
+COMMENT ON TABLE persona_state IS 'Current Persona pointer and automatic-refinement checkpoints.';
+COMMENT ON TABLE persona_signals IS 'Evidence about MIRA behavior consumed by Persona revisions.';
+COMMENT ON TABLE feedback_signals IS 'Assessment signals for the user-model pipeline.';
+COMMENT ON TABLE feedback_synthesis_tracking IS 'User-model synthesis state; last_synthesis_output holds the user-model XML.';
+COMMENT ON TABLE global_memories IS 'Administrator-curated global memory; runtime reads go through global_memories_runtime.';
+COMMENT ON TABLE domaindoc_shares IS 'Cross-user domaindoc sharing with consent flow (pending to accepted).';
+COMMENT ON TABLE user_feedback IS 'User-submitted friction signals captured proactively by Mira - developer queries this directly for rapid iteration.';
+COMMENT ON TABLE domain_knowledge_blocks IS 'Domain-specific knowledge blocks for the Letta agent memory system.';

@@ -1,0 +1,13 @@
+Evaluate MIRA's behavior in the conversation segment.
+
+<behavioral_contract>
+{behavioral_contract}
+</behavioral_contract>
+
+<current_persona>
+{current_persona}
+</current_persona>
+
+<conversation>
+{conversation}
+</conversation>

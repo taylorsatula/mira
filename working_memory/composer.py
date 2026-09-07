@@ -24,7 +24,12 @@ PLACEMENT_NOTIFICATION = "notification"
 SECTION_LAYOUT: Dict[str, List[str]] = {
     PLACEMENT_SYSTEM: [
         'base_prompt',
+        # Two separate slots, two separate subjects (D1): behavioral_directives is
+        # the user model's descriptive observations about the user; persona_directives
+        # is MIRA's prescriptive self-evaluation. They are not two versions of one
+        # feature and must not share a slot.
         'behavioral_directives',
+        'persona_directives',
         'tool_availability',
         'location_context',
         'conversation_manifest',
@@ -140,7 +145,7 @@ class SystemPromptComposer:
 
         Returns:
             Dictionary with:
-            - 'cached_content': Static system prompt content (base_prompt, behavioral_directives, tool_availability)
+            - 'cached_content': Static system prompt content (base_prompt, behavioral_directives, persona_directives, tool_availability)
             - 'non_cached_content': Non-cached system content
             - 'conversation_prefix_items': Pre-history assistant messages
             - 'post_history_items': Post-history assistant messages (domaindoc, BP4)

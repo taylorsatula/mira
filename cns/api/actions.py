@@ -45,6 +45,7 @@ class DomainType(str, Enum):
     DOMAIN_KNOWLEDGE = "domain_knowledge"
     CONTINUUM = "continuum"
     LORA = "lora"
+    PERSONA = "persona"
     FEEDBACK = "feedback"
     PORTRAIT = "portrait"
 
@@ -606,6 +607,23 @@ class UserDomainHandler(BaseDomainHandler):
             "types": {
                 "name": str
             }
+        },
+        "set_effort_override": {
+            "required": ["effort"],
+            "optional": [],
+            "types": {
+                "effort": str
+            }
+        },
+        "get_effort_override": {
+            "required": [],
+            "optional": [],
+            "types": {}
+        },
+        "clear_effort_override": {
+            "required": [],
+            "optional": [],
+            "types": {}
         }
     }
     
@@ -850,6 +868,58 @@ class UserDomainHandler(BaseDomainHandler):
                 "success": True,
                 "name": name,
                 "message": f"Credential '{name}' deleted"
+            }
+
+        elif action == "set_effort_override":
+            from clients.llm.types import EFFORT_LEVELS
+
+            effort_value = data["effort"]
+            if effort_value not in EFFORT_LEVELS:
+                raise ValidationError(
+                    f"Invalid effort level '{effort_value}'. Valid levels: {', '.join(sorted(EFFORT_LEVELS))}"
+                )
+
+            valkey = get_valkey_client()
+            key = f"effort_override:{self.user_id}"
+            valkey.setex(key, 3600, effort_value)
+
+            return {
+                "success": True,
+                "effort": effort_value,
+                "ttl_seconds": 3600,
+                "message": f"Effort override set to '{effort_value}' (expires in 1 hour)"
+            }
+
+        elif action == "get_effort_override":
+            valkey = get_valkey_client()
+            key = f"effort_override:{self.user_id}"
+            current = valkey.get(key)
+            ttl = valkey.ttl(key) if current is not None else None
+
+            if current is None:
+                return {
+                    "active": False,
+                    "effort": None,
+                    "ttl_seconds": None,
+                    "message": "No effort override active"
+                }
+
+            return {
+                "active": True,
+                "effort": current.decode() if isinstance(current, bytes) else current,
+                "ttl_seconds": ttl,
+                "message": f"Effort override active: '{current.decode() if isinstance(current, bytes) else current}'"
+            }
+
+        elif action == "clear_effort_override":
+            valkey = get_valkey_client()
+            key = f"effort_override:{self.user_id}"
+            deleted = valkey.delete(key)
+
+            return {
+                "success": True,
+                "cleared": bool(deleted),
+                "message": "Effort override cleared"
             }
 
         else:
@@ -1845,8 +1915,12 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         doc = self._get_domaindoc(db, label)
 
         pg = self._get_pg()
+        # RLS on users is unconditional, so reading the table directly by email returns
+        # zero rows for anyone but the caller and makes sharing impossible. These two
+        # SECURITY DEFINER functions expose exactly id/email/first_name for active
+        # users, which is all this lookup needs.
         target_user = pg.execute_single(
-            "SELECT id, first_name, email FROM users WHERE email = %(email)s AND is_active = TRUE",
+            "SELECT id, first_name, email FROM resolve_active_user_identity(%(email)s)",
             {"email": email}
         )
         if not target_user:
@@ -1887,7 +1961,7 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
 
         pg = self._get_pg()
         target_user = pg.execute_single(
-            "SELECT id FROM users WHERE email = %(email)s AND is_active = TRUE",
+            "SELECT id FROM resolve_active_user_identity(%(email)s)",
             {"email": email}
         )
         if not target_user:
@@ -1925,7 +1999,8 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         pg = self._get_pg()
         shares = pg.execute_query(
             "SELECT ds.id, ds.domaindoc_label, ds.status, ds.invited_at, ds.accepted_at, "
-            "u.email, u.first_name FROM domaindoc_shares ds JOIN users u ON ds.collaborator_user_id = u.id "
+            "ai.email, ai.first_name FROM domaindoc_shares ds "
+            "JOIN LATERAL active_user_identity(ds.collaborator_user_id) ai ON TRUE "
             "WHERE ds.owner_user_id = %(uid)s AND ds.domaindoc_label = %(label)s AND ds.status != 'rejected'",
             {"uid": self.user_id, "label": label}
         )
@@ -2005,7 +2080,8 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         pg = self._get_pg()
         shares = pg.execute_query(
             "SELECT ds.id, ds.domaindoc_label, ds.invited_at, "
-            "u.email, u.first_name FROM domaindoc_shares ds JOIN users u ON ds.owner_user_id = u.id "
+            "ai.email, ai.first_name FROM domaindoc_shares ds "
+            "JOIN LATERAL active_user_identity(ds.owner_user_id) ai ON TRUE "
             "WHERE ds.collaborator_user_id = %(uid)s AND ds.status = 'pending'",
             {"uid": self.user_id}
         )
@@ -2028,7 +2104,8 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         pg = self._get_pg()
         shares = pg.execute_query(
             "SELECT ds.id, ds.domaindoc_label, ds.accepted_at, "
-            "u.email, u.first_name FROM domaindoc_shares ds JOIN users u ON ds.owner_user_id = u.id "
+            "ai.email, ai.first_name FROM domaindoc_shares ds "
+            "JOIN LATERAL active_user_identity(ds.owner_user_id) ai ON TRUE "
             "WHERE ds.collaborator_user_id = %(uid)s AND ds.status = 'accepted'",
             {"uid": self.user_id}
         )
@@ -2050,7 +2127,6 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
     def _expand_description(self, label: str, description: str) -> str:
         """Use LLM to expand a brief description into comprehensive guidance."""
         from clients.llm_provider import LLMProvider
-        from utils.user_context import get_user_preferences, resolve_conversation_llm
 
         logger.debug(
             "_expand_description called with label length=%s and description length=%s",
@@ -2059,7 +2135,6 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         )
 
         try:
-            llm_config = resolve_conversation_llm(get_user_preferences().conversation_llm)
             llm = LLMProvider()
 
             prompt = f"""You are helping expand a brief description into comprehensive guidance for a knowledge document.
@@ -2080,7 +2155,7 @@ Example output: "Backyard garden management: current plantings with locations an
             logger.debug("Calling LLM generate_response...")
             response = llm.generate_response(
                 messages=[{"role": "user", "content": prompt}],
-                conversation_llm=llm_config.name,
+                model_config="primary",
             )
             logger.debug(f"LLM response received: stop_reason={response.stop_reason}")
 
@@ -2100,21 +2175,9 @@ Example output: "Backyard garden management: current plantings with locations an
 
 
 class ContinuumDomainHandler(BaseDomainHandler):
-    """Handler for continuum-level configuration actions (conversation LLM, segment collapse)."""
+    """Handler for continuum segment lifecycle actions."""
 
     ACTIONS = {
-        "get_conversation_llm": {
-            "required": [],
-            "optional": [],
-            "types": {}
-        },
-        "set_conversation_llm": {
-            "required": ["name"],
-            "optional": [],
-            "types": {
-                "name": str
-            }
-        },
         "collapse_segment": {
             "required": [],
             "optional": [],
@@ -2138,53 +2201,8 @@ class ContinuumDomainHandler(BaseDomainHandler):
     }
 
     def execute_action(self, action: str, data: dict[str, Any]) -> dict[str, Any]:
-        """Execute conversation LLM and segment actions."""
-        if action == "get_conversation_llm":
-            from utils.user_context import get_user_preferences, get_conversation_llms
-
-            prefs = get_user_preferences()
-            conversation_llms = get_conversation_llms()
-
-            # Return non-hidden LLMs sorted by display_order
-            llm_list = []
-            for llm in sorted(conversation_llms.values(), key=lambda t: t.display_order):
-                if not llm.hidden:
-                    llm_list.append({
-                        "name": llm.name,
-                        "model": llm.model,
-                        "description": llm.description,
-                    })
-
-            return {
-                "success": True,
-                "name": prefs.conversation_llm,
-                "available": llm_list
-            }
-
-        elif action == "set_conversation_llm":
-            from utils.user_context import update_user_preference, get_conversation_llms
-
-            name = data.get("name")
-            conversation_llms = get_conversation_llms()
-            if name not in conversation_llms:
-                raise ValidationError(
-                    f"Invalid conversation LLM. Must be one of: {list(conversation_llms.keys())}"
-                )
-
-            # Reject hidden LLMs (admin-hidden from selector)
-            if conversation_llms[name].hidden:
-                raise ValidationError(
-                    f"Conversation LLM '{name}' is not available."
-                )
-
-            update_user_preference('conversation_llm', name)
-            return {
-                "success": True,
-                "name": name,
-                "message": f"Conversation LLM set to {name}"
-            }
-
-        elif action == "collapse_segment":
+        """Execute segment lifecycle actions."""
+        if action == "collapse_segment":
             from cns.infrastructure.continuum_pool import get_continuum_pool
             from cns.infrastructure.continuum_repository import get_continuum_repository
             from cns.core.events import SegmentTimeoutEvent
@@ -2213,7 +2231,7 @@ class ContinuumDomainHandler(BaseDomainHandler):
 
             handler = get_segment_collapse_handler()
             try:
-                collapsed_sentinel = handler.collapse_segment(event, force_immediate=True)
+                collapsed_sentinel = handler.collapse_segment(event)
             except RuntimeError as e:
                 if "no committed messages" in str(e):
                     return {
@@ -2479,6 +2497,128 @@ class LoraDomainHandler(BaseDomainHandler):
         valkey.hdel_with_retry(hash_key, "behavioral_directives")
 
 
+class PersonaDomainHandler(BaseDomainHandler):
+    """Handler for immutable Persona revision workflows.
+
+    Persona evaluates MIRA against the behavioral contract and stores prescriptive
+    directives. It is a second system beside the user model, not a replacement for it
+    (D1), so it gets its own domain and its own action names: get, refine, accept,
+    decline, update and reset keep serving the settings page's user-model panel through
+    LoraDomainHandler, and reusing those names here would read as one feature
+    duplicated rather than two features that coexist.
+
+    Directives never round-trip through the client on save: `propose` stores the
+    validated candidate server-side in Valkey and returns an opaque preview_id, which
+    `approve` or `discard` consumes. `rollback` appends a new revision copying a
+    historical one, so the history stays append-only and the expected parent on every
+    write makes a concurrent edit fail loudly instead of losing one.
+    """
+
+    ACTIONS = {
+        "current": {
+            "required": [],
+            "optional": [],
+            "types": {}
+        },
+        "history": {
+            "required": [],
+            "optional": [],
+            "types": {}
+        },
+        "propose": {
+            "required": ["instructions"],
+            "optional": [],
+            "types": {"instructions": str},
+        },
+        "approve": {
+            "required": ["preview_id"],
+            "optional": [],
+            "types": {"preview_id": str},
+        },
+        "discard": {
+            "required": ["preview_id"],
+            "optional": [],
+            "types": {"preview_id": str},
+        },
+        "rollback": {
+            "required": ["revision_id"],
+            "optional": [],
+            "types": {"revision_id": "uuid"},
+        },
+    }
+
+    def execute_action(self, action: str, data: dict[str, Any]) -> dict[str, Any]:
+        from cns.services.persona_service import PersonaService
+
+        service = PersonaService()
+
+        if action == "current":
+            revision = service.get_current(self.user_id)
+            return {
+                "success": True,
+                "revision": self._serialize_revision(revision),
+                "has_directives": bool(revision.directives.strip()),
+            }
+
+        elif action == "history":
+            return {
+                "success": True,
+                "revisions": [
+                    self._serialize_revision(revision)
+                    for revision in service.get_history(self.user_id)
+                ],
+            }
+
+        elif action == "propose":
+            result = service.create_preview(self.user_id, data["instructions"])
+            return {
+                "success": True,
+                "preview_id": result["preview_id"],
+                "proposed": result["proposed"],
+            }
+
+        elif action == "approve":
+            revision = service.accept_preview(self.user_id, data["preview_id"])
+            return {
+                "success": True,
+                "approved": True,
+                "revision": self._serialize_revision(revision),
+                "message": "Persona updated",
+            }
+
+        elif action == "discard":
+            service.decline_preview(self.user_id, data["preview_id"])
+            return {
+                "success": True,
+                "discarded": True,
+                "message": "Persona preview discarded",
+            }
+
+        elif action == "rollback":
+            revision = service.rollback(self.user_id, UUID(data["revision_id"]))
+            return {
+                "success": True,
+                "revision": self._serialize_revision(revision),
+                "message": "Persona rollback revision created",
+            }
+
+        else:
+            raise ValidationError(f"Unknown action: {action}")
+
+    @staticmethod
+    def _serialize_revision(revision) -> dict[str, Any]:
+        return {
+            "id": str(revision.id),
+            "revision_number": revision.revision_number,
+            "directives": revision.directives,
+            "source": revision.source,
+            "parent_revision_id": (
+                str(revision.parent_revision_id) if revision.parent_revision_id else None
+            ),
+            "created_at": format_utc_iso(revision.created_at),
+        }
+
+
 _REPULSION_REWRITER_EXECUTOR = ThreadPoolExecutor(
     max_workers=4,
     thread_name_prefix="repulsion_rewriter",
@@ -2486,8 +2626,8 @@ _REPULSION_REWRITER_EXECUTOR = ThreadPoolExecutor(
 
 _REWRITER_SYSTEM_PROMPT_FILE = "repulsion_rewriter_system.txt"
 _REWRITER_USER_PROMPT_FILE = "repulsion_rewriter_user.txt"
-_REWRITER_INTERNAL_LLM_PURPOSE = "rewriter"
-_REWRITER_MODEL_LABEL = "openai/gpt-5.5"
+# D6: the repulsion rewriter runs on the chat substrate with effort='high'.
+_REWRITER_MODEL_CONFIG = "primary"
 
 
 class FeedbackDomainHandler(BaseDomainHandler):
@@ -2578,6 +2718,7 @@ class FeedbackDomainHandler(BaseDomainHandler):
         try:
             from clients.llm_provider import LLMProvider
             from config.prompts.loader import load_prompt
+            from utils.user_context import get_model_config
 
             system_prompt = load_prompt(_REWRITER_SYSTEM_PROMPT_FILE)
             user_template = load_prompt(_REWRITER_USER_PROMPT_FILE)
@@ -2592,9 +2733,8 @@ class FeedbackDomainHandler(BaseDomainHandler):
             response = llm.generate_response(
                 messages=[{"role": "user", "content": user_prompt}],
                 system_prompt=system_prompt,
-                internal_llm=_REWRITER_INTERNAL_LLM_PURPOSE,
+                model_config=_REWRITER_MODEL_CONFIG,
                 effort="high",
-                allow_provider_stall_fallback=False,
             )
             chosen_text = llm.extract_text_content(response).strip()
 
@@ -2608,7 +2748,7 @@ class FeedbackDomainHandler(BaseDomainHandler):
                 "id": record_id,
                 "timestamp": utc_now().isoformat(),
                 "kind": "rewrite_v1",
-                "rewriter_model": _REWRITER_MODEL_LABEL,
+                "rewriter_model": get_model_config(_REWRITER_MODEL_CONFIG).model,
                 "chosen": chosen_text,
             }
             FeedbackDomainHandler._append_record(output_file, rewrite_record)
@@ -2719,6 +2859,13 @@ class ActionsEndpoint(BaseHandler):
             DomainType.FEEDBACK: FeedbackDomainHandler,
             DomainType.PORTRAIT: PortraitDomainHandler,
         }
+        # MIRA_PERSONA_ENABLED=0 omits the domain at construction instead of branching
+        # inside the handler, so a disabled install rejects `persona/*` as an unknown
+        # domain rather than writing revisions nothing ever injects.
+        from config import config
+
+        if config.system.persona_enabled:
+            self.domain_handlers[DomainType.PERSONA] = PersonaDomainHandler
     
     def process_request(self, **params) -> dict[str, Any]:
         """Route request to appropriate domain handler."""

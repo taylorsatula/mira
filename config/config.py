@@ -16,30 +16,22 @@ class ApiConfig(BaseModel):
     """LLM API and provider dialect configuration."""
 
     # Feature flags
-    analysis_enabled: bool = Field(default=True, description="Enable subcortical layer for retrieval")
     subcortical_prefill_warmup: bool = Field(default=False, description="Pre-warm subcortical KV cache after each turn (vLLM prefix-cache deployments only — wastes billed tokens on cloud providers)")
     show_openai_compat_thinking: bool = Field(default=True, description="Show thinking blocks from OpenAI-compatible dialects to end user")
-    emergency_fallback_enabled: bool = Field(default=True, description="Enable automatic failover to emergency provider on Anthropic errors")
 
     # Infrastructure coordinates
     api_key_name: str = Field(default="anthropic_key", description="Vault key name for Anthropic API key")
-    emergency_fallback_endpoint: str = Field(default="http://localhost:11434/v1/chat/completions", description="OpenAI-compatible endpoint for emergency fallback")
-    emergency_fallback_api_key_name: str | None = Field(default=None, description="Vault key name for emergency fallback API key (None for local providers)")
-    emergency_fallback_model: str = Field(default="qwen3:1.7b", description="Model to use during emergency fallback")
 
     # Operational limits
-    timeout: int = Field(default=60, description="Request timeout in seconds")
-    provider_response_timeout: int = Field(default=60, description="Max seconds any LLM provider can accept the connection without producing output before it's killed.")
+    timeout: int = Field(default=180, description="Max seconds an LLM provider HTTP request may run before it is aborted.")
+    provider_response_timeout: int = Field(default=180, description="Max seconds an LLM provider call may run before the lifecycle aborts it.")
     async_work_barrier_timeout_seconds: float = Field(
         default=30.0,
         gt=0,
         description="Max seconds a new chat turn waits for previous-turn background cache work.",
     )
-    emergency_fallback_recovery_minutes: int = Field(default=5, description="Minutes to wait before testing Anthropic recovery")
 
-    # Generation settings
-    model: str = Field(default="claude-sonnet-4-6", description="Default model when no tier/override is specified")
-    max_tokens: int = Field(default=31999, description="Maximum tokens to generate in responses")
+    # Request sizing
     context_window_tokens: int = Field(default=200000, description="Total context window size in tokens")
     temperature: float = Field(default=1.0, description="Temperature for response generation (Anthropic default: 1.0)")
     compaction_trigger_tokens: int = Field(
@@ -51,13 +43,20 @@ class ApiConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_compaction_trigger_tokens(self) -> "ApiConfig":
-        available_input_tokens = self.context_window_tokens - self.max_tokens
-        if self.compaction_trigger_tokens > available_input_tokens:
+        if self.compaction_trigger_tokens >= self.context_window_tokens:
             raise ValueError(
-                "compaction_trigger_tokens must not exceed the provider input budget "
-                f"of {available_input_tokens} tokens"
+                "compaction_trigger_tokens must be lower than context_window_tokens"
             )
         return self
+
+    def validate_compaction_budget(self, primary_max_tokens: int) -> None:
+        """Validate compaction against the database-owned primary output reserve."""
+        available_input_tokens = self.context_window_tokens - primary_max_tokens
+        if self.compaction_trigger_tokens > available_input_tokens:
+            raise ValueError(
+                "compaction_trigger_tokens must not exceed the primary model input budget "
+                f"of {available_input_tokens} tokens"
+            )
 
 
 class ApiServerConfig(BaseModel):
@@ -85,7 +84,9 @@ class SystemConfig(BaseModel):
     """System-level settings and feature flags."""
 
     # Feature flags
+    subcortical_enabled: bool = Field(default=True, description="Enable subcortical memory surfacing and complexity assessment")
     peanutgallery_enabled: bool = Field(default=True, description="Enable peanut gallery metacognitive observer")
+    persona_enabled: bool = Field(default=True, description="Enable Persona evaluation, refinement, and prompt injection")
 
     # Operational
     log_level: str = Field(default="WARNING", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
@@ -100,13 +101,9 @@ class ScheduledJobsConfig(BaseModel):
         default=6,
         description="Hours between failed extraction retries"
     )
-    batch_poll_minutes: int = Field(
-        default=1,
-        description="Minutes between batch API polling (Anthropic recommends 1 minute)"
-    )
     job_timeout_seconds: int = Field(
         default=120,
-        description="Timeout for batch polling job monitors"
+        description="Timeout for scheduled job monitors (ScheduledTaskMonitor wrappers)"
     )
     temporal_score_recalc_use_days: int = Field(
         default=1,
@@ -115,10 +112,6 @@ class ScheduledJobsConfig(BaseModel):
     bulk_score_recalc_use_days: int = Field(
         default=1,
         description="Use-days between bulk score recalculations"
-    )
-    batch_cleanup_use_days: int = Field(
-        default=1,
-        description="Use-days between batch cleanup"
     )
     portrait_synthesis_use_days: int = Field(
         default=10,
@@ -182,7 +175,6 @@ class SidebarDispatcherConfig(BaseModel):
     enabled: bool = Field(default=True, description="Enable the sidebar dispatcher polling loop")
     poll_interval_minutes: int = Field(default=1, description="Minutes between dispatcher poll cycles")
     max_concurrent_agents: int = Field(default=3, ge=1, description="Maximum sidebar agent threads running simultaneously")
-    max_concurrent_batch_agents: int = Field(default=3, ge=1, description="Maximum batch sidebar agent threads running simultaneously")
 
 
 class InboxToolConfig(BaseModel):

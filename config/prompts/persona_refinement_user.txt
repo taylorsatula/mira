@@ -1,0 +1,13 @@
+Revise the current Persona from the behavioral evidence. Misalignment is more diagnostic than routine alignment. Do not change stable directives without evidence.
+
+<current_persona>
+{current_persona}
+</current_persona>
+
+<behavioral_evidence>
+{evidence}
+</behavioral_evidence>
+
+<critic_feedback>
+{critic_feedback}
+</critic_feedback>

@@ -1,0 +1,5 @@
+Validate this complete candidate Persona:
+
+<candidate_persona>
+{candidate_persona}
+</candidate_persona>
