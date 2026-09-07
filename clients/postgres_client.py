@@ -10,12 +10,60 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
 from pgvector.psycopg import register_vector
 import logging
+import re
 import threading
 from contextlib import contextmanager
-from typing import Dict, List, Any, Optional, TypedDict, Union, Tuple
+from typing import Dict, List, Any, Optional, Set, Tuple, TypedDict, Union
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Row-level-security canary
+# ---------------------------------------------------------------------------
+# RLS policies resolve a missing user context through
+# NULLIF(current_setting('app.current_user_id', true), '')::uuid, which yields
+# NULL. The query then succeeds and returns zero rows instead of raising
+# `invalid input syntax for type uuid: ""`. That is the correct fail-closed
+# security posture and a poor debugging posture: a forgotten user_id is
+# indistinguishable from genuinely empty data, which would mask regressions in
+# the user-context plumbing.
+#
+# The canary logs the first omission per (pool, table) so it is visible without
+# costing anything on the healthy path: an admin or user-scoped client returns
+# after a single boolean test, before any string work. There is no extra
+# round-trip; the GUC is already being set or cleared on this connection.
+#
+# Keep in sync with the ALTER TABLE ... ENABLE ROW LEVEL SECURITY statements in
+# deploy/mira_service_schema.sql.
+_RLS_COVERED_TABLES = (
+    "api_tokens",
+    "continuums",
+    "domain_knowledge_block_content",
+    "domain_knowledge_blocks",
+    "domaindoc_shares",
+    "entities",
+    "feedback_signals",
+    "feedback_synthesis_tracking",
+    "magic_links",
+    "memories",
+    "messages",
+    "persona_revisions",
+    "persona_signals",
+    "persona_state",
+    "user_activity_days",
+    "user_feedback",
+    "users",
+)
+
+_RLS_TABLE_RE = re.compile(
+    r"\b(" + "|".join(sorted(_RLS_COVERED_TABLES, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+
+_rls_canary_lock = threading.Lock()
+_rls_canary_warned: Set[Tuple[str, str]] = set()
+
 
 class PoolStats(TypedDict):
     """Stats for a single connection pool."""
@@ -47,6 +95,9 @@ class PostgresClient:
                 except Exception as e:
                     logger.warning(f"Error closing sync pool: {e}", exc_info=True)
             cls._connection_pools.clear()
+
+            with _rls_canary_lock:
+                _rls_canary_warned.clear()
 
             logger.debug("All PostgresClient connection pools reset")
 
@@ -113,11 +164,16 @@ class PostgresClient:
                     raise
 
     @contextmanager
-    def get_connection(self):
+    def get_connection(self, query: Optional[str] = None):
         """Gets pooled connection and sets app.current_user_id for Row Level Security.
 
         Admin connections (admin=True) bypass RLS entirely via the mira_admin role
         and never set user context. Used for cross-user billing/admin operations.
+
+        `query` is optional and only feeds the RLS canary: pass the statement the
+        caller is about to run to get a table-specific warning, omit it to get the
+        generic one. Callers that take the contextless path are the ones being
+        diagnosed, so the extra scan costs nothing on healthy connections.
         """
         # Ensure pool exists (thread-safe check)
         if self._pool_key not in self._connection_pools:
@@ -143,6 +199,7 @@ class PostgresClient:
                     else:
                         # Clear any previous user context to prevent data leaks
                         cur.execute("SELECT set_config('app.current_user_id', '', false)")
+                        self._rls_canary(query)
             yield conn
         except PoolTimeout as e:
             logger.error(f"Connection pool exhausted for {self._pool_key}: {e}", exc_info=True)
@@ -154,9 +211,43 @@ class PostgresClient:
 
 
 
+    def _rls_canary(self, query: Optional[str]) -> None:
+        """Log the first RLS-covered query this client runs without user context.
+
+        Called only from the branch that clears app.current_user_id, so by
+        construction there is no context. Never raises: a diagnostic must not
+        break a query.
+        """
+        try:
+            if self._admin or self.user_id:
+                return
+            if query:
+                tables = {m.group(1).lower() for m in _RLS_TABLE_RE.finditer(query)}
+            else:
+                tables = {"<unknown>"}
+            for table in sorted(tables):
+                key = (self._pool_key, table)
+                with _rls_canary_lock:
+                    if key in _rls_canary_warned:
+                        continue
+                    _rls_canary_warned.add(key)
+                logger.warning(
+                    "RLS canary: %s is querying %s with app.current_user_id "
+                    "unset. Row-level security fails closed, so this returns zero "
+                    "rows rather than raising. Pass user_id=... for user-scoped "
+                    "access or admin=True for privileged access.",
+                    self._pool_key,
+                    table,
+                )
+                logger.debug(
+                    "RLS canary query text: %s", query[:500] if query else None
+                )
+        except Exception:  # pragma: no cover - diagnostics must never break queries
+            logger.debug("RLS canary failed", exc_info=True)
+
     def execute_query(self, query: str, params: Optional[Union[Dict, Tuple]] = None) -> List[Dict]:
         """Execute a SELECT query and return rows as list of dictionaries."""
-        with self.get_connection() as conn:
+        with self.get_connection(query) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, params)
                 if cur.description:
@@ -164,7 +255,7 @@ class PostgresClient:
                 return []
 
     def execute_returning(self, query: str, params: Optional[Union[Dict, Tuple]] = None) -> List[Dict]:
-        with self.get_connection() as conn:
+        with self.get_connection(query) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, params)
                 return cur.fetchall()
@@ -176,7 +267,7 @@ class PostgresClient:
 
     def execute_scalar(self, query: str, params: Optional[Union[Dict, Tuple]] = None) -> Any:
         """Execute a query and return the first value of the first row."""
-        with self.get_connection() as conn:
+        with self.get_connection(query) as conn:
             with conn.cursor() as cur:
                 cur.execute(query, params)
                 result = cur.fetchone()
@@ -184,20 +275,20 @@ class PostgresClient:
 
     def execute_insert(self, query: str, params: Optional[Union[Dict, Tuple]] = None) -> None:
         """Execute a single INSERT query."""
-        with self.get_connection() as conn:
+        with self.get_connection(query) as conn:
             with conn.cursor() as cur:
                 cur.execute(query, params)
 
     def execute_update(self, query: str, params: Optional[Union[Dict, Tuple]] = None) -> int:
         """Execute an UPDATE query and return the number of affected rows."""
-        with self.get_connection() as conn:
+        with self.get_connection(query) as conn:
             with conn.cursor() as cur:
                 cur.execute(query, params)
                 return cur.rowcount
 
     def execute_transaction(self, operations: List[Tuple[str, Optional[Union[Dict, Tuple]]]]) -> List[Any]:
         """Executes multiple operations atomically - all succeed or all rollback."""
-        with self.get_connection() as conn:
+        with self.get_connection(" ".join(op[0] for op in operations)) as conn:
             with conn.transaction():
                 with conn.cursor(row_factory=dict_row) as cur:
                     results = []

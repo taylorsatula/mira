@@ -84,11 +84,23 @@ class VaultClient:
             logger.error(f"AppRole authentication failed: {e}", exc_info=True)
             raise PermissionError(f"AppRole authentication failed: {str(e)}")
     
+    def _read_secret_version(self, path: str) -> dict:
+        """Read a secret, re-authenticating once when the AppRole token expires."""
+        try:
+            return self.client.secrets.kv.v2.read_secret_version(
+                path=path, raise_on_deleted_version=True
+            )
+        except (Unauthorized, Forbidden):
+            logger.warning("Vault token expired or was revoked; re-authenticating AppRole")
+            self._authenticate_approle()
+            return self.client.secrets.kv.v2.read_secret_version(
+                path=path, raise_on_deleted_version=True
+            )
+
     def get_secret(self, path: str, field: str) -> str:
         """Retrieves single field from KV v2 API with structured error handling."""
         try:
-
-            response = self.client.secrets.kv.v2.read_secret_version(path=path, raise_on_deleted_version=True)
+            response = self._read_secret_version(path)
             secret_data = response['data']['data']
 
             if field not in secret_data:
@@ -214,10 +226,7 @@ def preload_secrets() -> None:
 
     for path, label in secret_groups:
         try:
-            response = vault_client.client.secrets.kv.v2.read_secret_version(
-                path=path,
-                raise_on_deleted_version=True
-            )
+            response = vault_client._read_secret_version(path)
             secrets = response['data']['data']
             for field, value in secrets.items():
                 _secret_cache[f"{path}/{field}"] = value

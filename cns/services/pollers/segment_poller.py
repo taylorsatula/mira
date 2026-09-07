@@ -162,6 +162,11 @@ class SegmentPoller(ABC):
 
             stop_event.wait(timeout=self.poll_interval_seconds)
 
+        with self._pollers_lock:
+            state = self._active_pollers.get(user_id)
+            if state is not None and state.stop_event is stop_event:
+                self._active_pollers.pop(user_id, None)
+
         logger.debug(
             f"{self.poller_name} poll loop exiting for user {user_id[:8]}"
         )
