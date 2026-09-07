@@ -255,9 +255,9 @@ if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
     echo -e "${BOLD}${BLUE}LLM Provider${RESET}"
     echo -e "  Provider:     ${CYAN}Local llama-server${RESET}"
     if [ "$CONFIG_LOCAL_MODEL_CHOICE" = "auto" ]; then
-        echo -e "  Main Model:   ${CYAN}Qwopus3.6-27B-v2-MTP-Q5_K_M${RESET} ${DIM}(port 3090)${RESET}"
-        echo -e "  Small Model:  ${CYAN}Qwen3.5-9B-UD-Q3_K_XL${RESET} ${DIM}(port 3092)${RESET}"
-        echo -e "  VRAM Target:  ${DIM}Dual RTX 3090 / 48GB total${RESET}"
+        echo -e "  Main Model:   ${CYAN}${CONFIG_LLAMA_MAIN_MODEL:-set CONFIG_LLAMA_MAIN_MODEL}${RESET} ${DIM}(port 3090)${RESET}"
+        echo -e "  Small Model:  ${CYAN}${CONFIG_LLAMA_SMALL_MODEL:-set CONFIG_LLAMA_SMALL_MODEL}${RESET} ${DIM}(port 3092)${RESET}"
+        echo -e "  VRAM Target:  ${DIM}~48GB across two cards${RESET}"
         echo ""
         print_info "Before first MIRA startup, download models & start servers:"
         print_info "  docs/OFFLINE_MODELS.md"

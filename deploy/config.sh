@@ -17,8 +17,8 @@ CONFIG_INSTALL_SYSTEMD=""
 CONFIG_START_MIRA_NOW=""
 CONFIG_OFFLINE_MODE=""
 CONFIG_LOCAL_MODEL_CHOICE=""       # auto / custom
-CONFIG_LLAMA_MAIN_MODEL="Qwopus3.6-27B-v2-MTP-Q5_K_M.gguf"
-CONFIG_LLAMA_SMALL_MODEL="Qwen3.5-9B-UD-Q3_K_XL.gguf"
+CONFIG_LLAMA_MAIN_MODEL=""            # GGUF served on port 3090; set per docs/OFFLINE_MODELS.md
+CONFIG_LLAMA_SMALL_MODEL=""           # GGUF served on port 3092; set per docs/OFFLINE_MODELS.md
 CONFIG_CHAT_PROVIDER_TYPE=""
 CONFIG_CHAT_ENDPOINT=""
 CONFIG_CHAT_API_KEY=""
@@ -252,18 +252,19 @@ if [[ "$USE_LOCAL_LLM_INPUT" =~ ^[Yy](es)?$ ]]; then
 
     echo ""
     echo -e "${BOLD}Local Model Configuration${RESET}"
-    echo -e "${DIM}   Two models are needed — a capable main model and a small fast model.${RESET}"
-    echo -e "${DIM}   The analysis/subcortical model runs on every message; no gains from${RESET}"
-    echo -e "${DIM}   using a larger slow model there — speed is the only thing that matters.${RESET}"
+    echo -e "${DIM}   Two llama-server instances are expected — a capable main model on${RESET}"
+    echo -e "${DIM}   port 3090 and a small fast model on port 3092. The fast model backs${RESET}"
+    echo -e "${DIM}   the analysis/subcortical route, which runs on every message, so speed${RESET}"
+    echo -e "${DIM}   matters more there than capability.${RESET}"
     echo ""
-    echo -e "${DIM}   Pre-configured pair (sized for dual RTX 3090 / 48GB VRAM):${RESET}"
-    echo -e "${DIM}     Main:      Qwopus3.6-27B-v2-MTP-Q5_K_M.gguf${RESET}"
-    echo -e "${DIM}     Small:     Qwen3.5-9B-UD-Q3_K_XL.gguf${RESET}"
+    echo -e "${DIM}   Supply the GGUF files yourself; docs/OFFLINE_MODELS.md covers where they${RESET}"
+    echo -e "${DIM}   go and how to start both servers. The recommended split assumes roughly${RESET}"
+    echo -e "${DIM}   48GB of VRAM across two cards.${RESET}"
     echo ""
     echo -e "${DIM}   If your hardware differs or lacks sufficient VRAM, choose custom${RESET}"
     echo -e "${DIM}   and download your own GGUF model after install completes.${RESET}"
     echo ""
-    echo "     1. Pre-configured pair (Qwopus3.6-27B + Qwen3.5-9B)"
+    echo "     1. Recommended split (main + small; see docs/OFFLINE_MODELS.md)"
     echo "     2. Custom (bring your own GGUF model)"
     read -p "$(echo -e ${CYAN}Model selection${RESET}) [1-2, default=1]: " LOCAL_MODEL_CHOICE
     if [[ "$LOCAL_MODEL_CHOICE" == "2" ]]; then
@@ -502,8 +503,8 @@ echo -e "${BOLD}Configuration Summary:${RESET}"
 if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
     if [ "$CONFIG_LOCAL_MODEL_CHOICE" = "auto" ]; then
         echo -e "  LLM Provider:    ${CYAN}Local llama-server${RESET}"
-        echo -e "  Main Model:      ${CYAN}Qwopus3.6-27B-v2-MTP-Q5_K_M${RESET}"
-        echo -e "  Small Model:     ${CYAN}Qwen3.5-9B-UD-Q3_K_XL${RESET}"
+        echo -e "  Main Model:      ${CYAN}${CONFIG_LLAMA_MAIN_MODEL:-configure per docs/OFFLINE_MODELS.md}${RESET}"
+        echo -e "  Small Model:     ${CYAN}${CONFIG_LLAMA_SMALL_MODEL:-configure per docs/OFFLINE_MODELS.md}${RESET}"
     else
         echo -e "  LLM Provider:    ${CYAN}Local llama-server (custom)${RESET}"
         echo -e "  Model:           ${CYAN}${CONFIG_CUSTOM_GGUF:-TBD}${RESET}"
