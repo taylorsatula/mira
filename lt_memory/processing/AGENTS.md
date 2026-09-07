@@ -2,34 +2,31 @@
 
 ## Rules
 
-- No direct `anthropic_client.beta.messages.batches.create()` calls outside `BatchCoordinator.submit_batch()` — it is the sole submission point for all batch types.
-- All LLM params for batch paths come from `build_batch_params('purpose', ...)`. Never construct batch param dicts inline.
-- All LLM params for immediate paths come from `internal_llm='purpose'` in `generate_response()`. Never pass model, endpoint, or API key explicitly.
-- Batch-vs-immediate routing uses `lt_memory.llm_routing.uses_anthropic_batch_dialect('purpose')`. Non-Anthropic dialect selections trigger immediate mode.
-- `store_and_tend_extraction()` in `execution_strategy.py` is the single source of truth for memory storage — called by both `ImmediateExecutionStrategy._process_and_store_memories()` and `ExtractionBatchResultHandler.process_result()`. It stores memories with embeddings, persists LLM-extracted entities, builds typeless candidate hints, and notifies the integration curator via `LTMemoryFactory.on_memories_stored`. Never duplicate this logic.
+- Memory extraction has exactly one execution path: `DirectExecutionStrategy.execute_extraction()` calls `LLMProvider.generate_response(model_config="batch")` synchronously per chunk and stores through `store_and_tend_extraction()`. Never reintroduce a deferred/remote batch submission layer.
+- All LLM routing comes from `model_config='<route>'` on `generate_response()`. Never pass model, endpoint, or API key explicitly.
+- `store_and_tend_extraction()` in `execution_strategy.py` is the single source of truth for memory storage — called by `DirectExecutionStrategy._process_and_store_memories()`. It stores memories with embeddings, persists LLM-extracted entities, builds typeless candidate hints, and notifies the integration curator via `LTMemoryFactory.on_memories_stored`. Never duplicate this logic.
 - No typed links are written by extraction/storage code. Extraction-time `related_memory_ids` + bonds flow to the `MemoryCuratorAgent` as `CandidateRef` hints (discovery_signal `"extraction"`), not as edges. Relationship typing is the agent's job.
 - `MemoryProcessor` has no side effects — pure data transformation. All DB writes happen in callers.
+- Model-supplied temporal fields (`happens_at`/`expires_at` on `ExtractedMemory`) are the **user's local wall time**, never UTC as-instant: `MemoryProcessor.process_extraction_response()` resolves the timezone once per response via `validate_timezone(get_user_preferences().timezone)` (broad-except → `"UTC"` — extraction is a background durability path, not a fail-loud path) and parses each field through `_parse_model_temporal_field()` → `ensure_utc(parse_time_string(value, tz_name=...))`. Never hand a raw naive string to `ExtractedMemory`: a naive datetime binds to `timestamptz` under whatever `TimeZone` Postgres happens to have, and a `ValidationError` raised at construction aborts every memory in the segment batch (no per-memory catch upstream). An unparseable value logs the raw value + timezone + parser reason and the memory is stored without that field; text is never lost. No daylight-saving strictness here — that belongs to the model-facing scheduling tools.
 - `ExtractionEngine` has no LLM calls — pure payload construction. LLM calls happen in strategies.
 
 ## Files
 
-- `orchestrator.py` — Owns the segment extraction lifecycle: load messages from `ContinuumRepository`, build `ProcessingChunk`, select strategy, mark `memories_extracted=true`. Two entry points: `submit_segment_extraction()` (per-segment) and `extract_unprocessed_segments()` (6-hour safety-net sweep).
-- `execution_strategy.py` — Owns the `ExecutionStrategy` ABC, `BatchExecutionStrategy`, `ImmediateExecutionStrategy`, the `create_execution_strategy()` factory, and the module-level `store_and_tend_extraction()` / `_persist_llm_entities()` / `_build_candidate_hints()` helpers. `execute_extraction()` returns `str` (batch ID or synthetic `bypass_<uuid>`) or raises `ValueError` — never `None`.
+- `orchestrator.py` — Owns the segment extraction lifecycle: load messages from `ContinuumRepository`, build `ProcessingChunk`, run the direct strategy, mark `memories_extracted=true`. Two entry points: `submit_segment_extraction()` (per-segment) and `extract_unprocessed_segments()` (6-hour safety-net sweep).
+- `execution_strategy.py` — Owns the `DirectExecutionStrategy` and the `create_execution_strategy()` factory, plus the module-level `store_and_tend_extraction()` / `_persist_llm_entities()` / `_build_candidate_hints()` helpers. `execute_extraction()` processes every chunk synchronously (LLM call on the `batch` route per chunk) and returns `str` (`direct_<uuid>`), or raises `ValueError` when no valid payload was built or any dependency fails.
 - `extraction_engine.py` — Owns `ExtractionPayload` construction: prompt loading, UUID shortening/mapping via `format_memory_id()`, memory context retrieval from `ProcessingChunk.memory_context_snapshot`, and message formatting via `preprocess_content_blocks()`. File-local types: `ExtractionMessage`, `ExtractionPayload`.
-- `memory_processor.py` — Owns LLM response parsing: JSON repair fallback, short→full UUID remapping, field validation/sanitization, and fuzzy+vector duplicate detection. File-local types: `DuplicateCheckResult`, `RawMemoryDict`.
-- `batch_coordinator.py` — Owns the Anthropic Batch API lifecycle: submission, polling, expiry, retry, and result dispatch via `BatchResultProcessor` ABC. `poll_extraction_batches()` is a convenience wrapper over generic `poll_batches()`.
+- `memory_processor.py` — Owns LLM response parsing: JSON repair fallback, short→full UUID remapping, field validation/sanitization, model-supplied temporal-field parsing in the user's timezone (see Rules), and fuzzy+vector duplicate detection. File-local types: `DuplicateCheckResult`, `RawMemoryDict`.
 - `consolidation_handler.py` — Owns memory merge execution: link bundle transfer (inbound, outbound, entity), outbound-link rewriting on source memories, and archival of old memories. Pure business logic — no routing decisions, no LLM calls. Called by `memory_tool.merge_memories` (agent-invoked).
 
 ## Wiring
 
-**Strategy selection at init vs. per-call:**
-`LTMemoryFactory` calls `create_execution_strategy()` once at startup, producing either `BatchExecutionStrategy` or `ImmediateExecutionStrategy` as `ExtractionOrchestrator.execution_strategy`. A separate `ImmediateExecutionStrategy` is always created as `ExtractionOrchestrator.immediate_strategy`. Per-call, `submit_segment_extraction()` overrides to `immediate_strategy` when `force_immediate=True` (manual segment collapse) or when the extraction endpoint is non-Anthropic.
+**One strategy, built at init:**
+`LTMemoryFactory` calls `create_execution_strategy()` once at startup, producing the single `DirectExecutionStrategy` as `ExtractionOrchestrator.execution_strategy`. Segment collapse calls `submit_segment_extraction()` and extraction completes inline — memories are available before the user's next conversation, which is why the path is synchronous.
 
 **`store_and_tend_extraction()` call sites:**
-- `ImmediateExecutionStrategy._process_and_store_memories()` — called inline after `generate_response()`, via the shared helper.
-- `ExtractionBatchResultHandler.process_result()` in `lt_memory/batch_result_handlers.py` — called from `BatchCoordinator.poll_batches()` after Anthropic returns results, via the shared helper.
+- `DirectExecutionStrategy._process_and_store_memories()` — called inline after each `generate_response()` chunk, via the shared helper.
 
-Both pass `segment_id` so the integration curator work-item can record the source segment. The helper's `on_memories_stored` callback (late-registered by `SegmentCollapseHandler`) spawns the `MemoryCuratorAgent` in integration mode; `lt_memory` never imports from `agents/`.
+It passes `segment_id` so the integration curator work-item can record the source segment. The helper's `on_memories_stored` callback (late-registered by `SegmentCollapseHandler`) spawns the `MemoryCuratorAgent` in integration mode; `lt_memory` never imports from `agents/`.
 
 **`chunk.segment_id` pipeline:**
-`BatchExecutionStrategy` stores `str(chunk.segment_id)` in `ExtractionBatch.chunk_metadata["segment_id"]`. `ExtractionBatchResultHandler.process_result()` reads it back and sets `memory.source_segment_id` before storage. Required for segment-scoped memory cleanup on session resume.
+`DirectExecutionStrategy` carries `str(chunk.segment_id)` from `ProcessingChunk` through storage so each memory gets `source_segment_id`. Required for segment-scoped memory cleanup on session resume.

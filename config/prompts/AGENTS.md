@@ -7,7 +7,7 @@
 - Wrap runtime data in descriptive XML tags within user templates: `<conversation>`, `<entity_groups>`, `<candidate_memories>`, etc. — not bare text.
 - All prompt loading must go through `config.prompts.loader.load_prompt(filename)` (importable as `from config.prompts import load_prompt`). Never roll your own `open()`/`read_text()` for prompt files. The loader guarantees UTF-8 encoding, existence checks with descriptive errors, and consistent `.strip()`. Use `load_prompt("file.txt", required=False)` for optional addendum prompts that may not exist.
 - `agents/` holds prompts for autonomous sidebar agents. `base_system.txt` is the shared loop-mechanics preamble; agent-specific rubrics are `{agent_id}_system.txt`. Loaded via `load_prompt("agents/{agent_id}_system.txt")`.
-- `variants/` holds experimental subcortical prompt variants for tuning. Nothing in `variants/` is loaded in production.
+- `variants/` is gone; unreferenced experimental extraction prompts (`memory_extraction_system_qwen_experimental.txt`, `memory_extraction_system_qwen_v2.txt`) sit at the top level and nothing loads them in production.
 
 ## Files
 
@@ -24,7 +24,13 @@
 - `subcortical_system.txt` / `subcortical_user.txt` — Pre-LLM IR stage: entity extraction, passage filtering, query expansion, complexity assessment. XML output. Consumer: `cns/services/subcortical.py`.
 - `domaindoc_summary_system.txt` / `domaindoc_summary_user.txt` — One-sentence section summaries (max 100 chars). Plain text output. Consumer: `cns/services/domaindoc_summary_service.py`.
 - `peanutgallery_system.txt` / `peanutgallery_user.txt` — Metacognitive observer: receives conversation + execution trace, emits noop/concern/coaching signal as out-of-band corrective guidance. Consumer: `cns/services/peanutgallery_model.py`.
-- `repulsion_rewriter_system.txt` / `repulsion_rewriter_user.txt` — Register-aware rewrite prompt for Repulsed feedback captures. Variables: `{user_message}`, `{ai_response}`, `{matched_tells}`. Consumer: `cns/api/actions.py:FeedbackDomainHandler`.
+- `repulsion_rewriter_system.txt` / `repulsion_rewriter_user.txt` — Register-aware rewrite prompt for Repulsed feedback captures. Variables: `{user_message}`, `{ai_response}`, `{matched_tells}`. Consumer: `cns/api/actions.py:FeedbackDomainHandler` (runs on `model_config="primary"`).
+- `persona_evaluation_system.txt` / `persona_evaluation_user.txt` — Persona pipeline: scores a collapsed segment against the behavioral contract, producing per-directive evaluation signals. Variables include `{current_persona}` and formatted conversation. Consumer: `cns/services/persona_service.py:evaluate_segment()`.
+- `persona_refinement_system.txt` / `persona_refinement_user.txt` — Persona pipeline: proposes a revised directive set from accumulated evaluation signals. Consumer: `cns/services/persona_service.py` (automatic cadence refinement).
+- `persona_manual_refinement_user.txt` — Persona pipeline: user-instruction-driven revision (`propose` action). No separate system template — reuses `persona_refinement_system.txt`. Consumer: `cns/services/persona_service.py:create_preview()`.
+- `persona_critic_system.txt` / `persona_critic_user.txt` — Quality critic for candidate Persona revisions: pass/fail gate before a preview or automatic revision is published. Consumer: `cns/services/persona_service.py` (`_validate_candidate`).
+- `lora_refinement_system.txt` — Refines the user model (LoRA) from user instructions; user message built inline. Consumer: `cns/services/lora_service.py`.
+- `tool_result_summarization_system.txt` — Hot-cache compaction prompt for oversized tool results. Consumer: `cns/services/tool_result_summarizer.py`.
 - `behavioral_primer.txt` — Static synthetic dialogue (4 turns, user/assistant/user/assistant) injected between collapsed segment summaries and continuity messages as ambient behavioral priming for authenticity directives. Role-delimited format: `[role]` header + content, `---` separator. No template variables. Consumer: `cns/core/segment_cache_loader.py`.
 - `agents/base_system.txt` — Shared agent loop preamble: identity, loop mechanics, complete_task requirement. Prepended to agent-specific prompts when `inherit_base_prompt=True`. Consumer: `agents/base.py`.
 - `agents/forage_system.txt` — Background research agent rubric: quality rubric, output format. Consumer: `agents/implementations/forage_agent.py`.

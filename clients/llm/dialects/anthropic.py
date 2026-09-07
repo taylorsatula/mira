@@ -33,6 +33,7 @@ from clients.llm.dialects.base import (
 from clients.llm.capabilities import Capabilities
 from clients.llm.thinking import TranslationNote, uses_adaptive_thinking
 from clients.llm.types import (
+    DeliberationLevel,
     EffortLevel,
     EFFORT_LEVEL_ORDER,
     ProviderMetadata,
@@ -88,11 +89,15 @@ class AnthropicDialect(Dialect):
     native_thinking_fields = ("effort", "budget")
     _accepted_round_trip_fields = frozenset({"thinking_signatures"})
 
-    # Documented budget_tokens per effort level for legacy thinking. Adaptive
-    # thinking on 4.6+ uses effort natively and does not consult this map for
-    # the forward direction; the inverse (budget->effort) is used when a caller
+    # budget_tokens per *deliberating* effort level for legacy extended thinking.
+    # "none" is absent by design: enabled thinking requires budget_tokens >= 1024,
+    # so there is no budget that means "no thinking" -- "none" is resolved to
+    # thinking.type "disabled" before this map is ever consulted. The annotation is
+    # DeliberationLevel, not EffortLevel, so the gap is visible to type checking.
+    # Adaptive thinking on 4.6+ uses effort natively and does not consult this map
+    # for the forward direction; the inverse (budget->effort) is used when a caller
     # passes only budget against an adaptive-thinking model.
-    _LEGACY_BUDGET_PER_EFFORT: dict[EffortLevel, int] = {
+    _LEGACY_BUDGET_PER_EFFORT: dict[DeliberationLevel, int] = {
         "low": 1024,
         "medium": 2048,
         "high": 8192,
@@ -103,7 +108,8 @@ class AnthropicDialect(Dialect):
     # Per-model effort ceilings. Models not listed here support all effort
     # levels. No entries today - Anthropic effort caps live inline in each
     # model's public docs. Add entries here when a model ships with a ceiling.
-    _MAX_EFFORT_PER_MODEL: dict[str, EffortLevel] = {}
+    # A ceiling is always a deliberating level; "none" is never clamped upward.
+    _MAX_EFFORT_PER_MODEL: dict[str, DeliberationLevel] = {}
 
     def __init__(
         self,
@@ -256,7 +262,12 @@ class AnthropicDialect(Dialect):
         }
         if request.thinking.active:
             params.update(thinking_params)
-        elif request.temperature is not None:
+        # Anthropic ignores temperature while a thinking block is in play, so it is
+        # sent only when thinking is off on the wire: either the caller expressed no
+        # thinking intent at all, or effort='none' resolved to an explicitly
+        # disabled thinking block.
+        thinking_on = thinking_params.get("thinking", {}).get("type") in {"adaptive", "enabled"}
+        if request.temperature is not None and not thinking_on:
             params["temperature"] = request.temperature
 
         system = self._system_param(request.system)
@@ -292,6 +303,10 @@ class AnthropicDialect(Dialect):
         heuristic, so no TranslationNote is emitted for the conversion path.
         Notes ARE emitted when (a) both effort and budget_tokens are set and
         one is discarded, or (b) effort is clamped to a model's ceiling.
+
+        effort="none" is not an effort level to Anthropic — output_config.effort
+        ranges low..max — so it is translated to the only request shape that
+        spends zero deliberation tokens: an explicitly disabled thinking block.
         """
         if not thinking.active:
             return {}, 0
@@ -312,6 +327,13 @@ class AnthropicDialect(Dialect):
                 ))
             if effort is None and budget is not None:
                 effort = self._budget_to_effort_canonical(budget)
+            if effort == "none":
+                # Sent explicitly rather than by omitting `thinking`: thinking is
+                # off by default on 4.6-4.8 but ON by default on the models after
+                # them, and omission would then deliberate on a route seeded never
+                # to. No output_config.effort: Anthropic has no "none" level, and
+                # "low" would be a substitution, not a translation.
+                return {"thinking": {"type": "disabled"}}, 0
             resolved_effort = self._clamp_effort(model, effort or "high", original=effort)
             return (
                 {
@@ -322,10 +344,19 @@ class AnthropicDialect(Dialect):
             )
 
         # Legacy thinking - native field is budget.
+        if effort == "none":
+            if budget is not None:
+                raise ValueError(
+                    f"Anthropic dialect cannot honour effort='none' alongside "
+                    f"budget_tokens={budget} for model {model!r}: a legacy "
+                    f"extended-thinking request either disables thinking or spends "
+                    f"a budget, not both. Drop one of the two ThinkingConfig fields."
+                )
+            return {"thinking": {"type": "disabled"}}, 0
         if budget is None:
             # Caller provided only effort; translate canonically.
             clamped = self._clamp_effort(model, effort or "high", original=effort)
-            budget = self._LEGACY_BUDGET_PER_EFFORT[clamped]
+            budget = self._legacy_budget_for_effort(clamped, model)
         elif effort is not None:
             # Both set; budget wins on legacy models. Note the discarded effort.
             self._log_translation(TranslationNote(
@@ -336,10 +367,28 @@ class AnthropicDialect(Dialect):
             ))
         return {"thinking": {"type": "enabled", "budget_tokens": budget}}, budget
 
+    def _legacy_budget_for_effort(self, effort: EffortLevel, model: str) -> int:
+        """Documented budget_tokens for a deliberating level. "none" has none: enabled
+        thinking requires budget_tokens >= 1024, so no budget means "no thinking".
+        """
+        if effort == "none":
+            raise ValueError(
+                f"Anthropic dialect has no legacy thinking budget for "
+                f"effort='none' on model {model!r}; it must resolve to thinking "
+                f"{{'type': 'disabled'}}, never to a token budget"
+            )
+        return self._LEGACY_BUDGET_PER_EFFORT[effort]
+
     def _budget_to_effort_canonical(self, budget_tokens: int) -> EffortLevel:
         """Invert the documented effort->budget map (closest documented level)."""
+        # A zero (or negative) budget is not a small amount of thinking, it is no
+        # thinking — and Anthropic rejects budget_tokens < 1024 when thinking is
+        # enabled, so mapping 0 to "low" would invent spend the caller excluded.
+        if budget_tokens <= 0:
+            return "none"
         # Pick the smallest documented level whose budget >= the requested budget.
-        # EFFORT_LEVEL_ORDER is the canonical low-to-max ranking.
+        # EFFORT_LEVEL_ORDER is the canonical low-to-max ranking of deliberating
+        # levels; every one of them is a key in _LEGACY_BUDGET_PER_EFFORT.
         for level in EFFORT_LEVEL_ORDER:
             if budget_tokens <= self._LEGACY_BUDGET_PER_EFFORT[level]:
                 return level
@@ -355,6 +404,10 @@ class AnthropicDialect(Dialect):
         """Clamp effort to per-model ceiling, logging a note when clamping occurs."""
         ceiling = self._MAX_EFFORT_PER_MODEL.get(model)
         if ceiling is None:
+            return requested
+        # A ceiling caps spend from above. "none" is below every ranked level and
+        # is absent from EFFORT_LEVEL_ORDER, so it can never need clamping.
+        if requested == "none":
             return requested
         ranking = EFFORT_LEVEL_ORDER
         if ranking.index(requested) <= ranking.index(ceiling):
@@ -777,10 +830,10 @@ def anthropic_thinking_params(
 ) -> tuple[dict[str, Any], int]:
     """Translate a ThinkingConfig into Anthropic API params.
 
-    Module-level entry point for code paths that don't construct a full
-    AnthropicDialect (build_batch_params and the Anthropic batch transport
-    in agents/batch.py). Translation logic is identical to the dialect's
-    _translate_thinking method.
+    Module-level entry point for code paths that must compute Anthropic
+    thinking parameters without constructing a full AnthropicDialect.
+    Translation logic is identical to the dialect's _translate_thinking
+    method.
     """
     dialect = object.__new__(AnthropicDialect)
     return AnthropicDialect._translate_thinking(dialect, model=model, thinking=thinking)

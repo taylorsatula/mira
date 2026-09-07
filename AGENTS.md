@@ -2,7 +2,7 @@
 
 **Complex problems require simple and clear solutions.**
 
-MIRA is a FastAPI application with event-driven architecture coordinating three core systems: CNS (conversation management via immutable Continuum aggregate), Working Memory (trinket-based system prompt composition), and LT_Memory (batch memory extraction/linking/refinement). PostgreSQL RLS with contextvars provides automatic user isolation - all user-scoped queries, tool access, and repository operations enforce `user_id` filtering at the database level.
+MIRA is a FastAPI application with event-driven architecture coordinating three core systems: CNS (conversation management via immutable Continuum aggregate), Working Memory (trinket-based system prompt composition), and LT_Memory (memory extraction/linking/refinement). PostgreSQL RLS with contextvars provides automatic user isolation - all user-scoped queries, tool access, and repository operations enforce `user_id` filtering at the database level.
 
 The User's name is Taylor.
 
@@ -115,22 +115,22 @@ MIRA uses **use-day scheduling** — periodic jobs fire based on user activity d
 2. Write a function that calls `get_users_due_for_job(interval)`, loops users with `set_current_user_id()` / `clear_user_context()`, does work
 3. Register with `scheduler_service.register_job()` using `IntervalTrigger(days=1)`
 
-**Current use-day jobs:** temporal score recalc (1d), bulk score recalc (1d), batch cleanup (1d), consolidation (7d, deadheaded), entity GC (7d, deadheaded). Portrait synthesis (10d) runs in the segment collapse chain, not as a scheduled job.
+**Current use-day jobs:** temporal score recalc (1d), bulk score recalc (1d), entity merge (7d). Portrait synthesis (10d) and the Persona refinement cadence run in the segment collapse chain, not as scheduled jobs.
 
 To get the current user's activity day count inline: `from utils.user_context import get_user_cumulative_activity_days`.
 
-### Provider Stall Detection & Fallback
-All live LLM transports run through `clients.llm.lifecycle.LLMLifecycle`, which wraps provider operations with `config.api.provider_response_timeout` (default 60s). It kills providers that accept the connection but produce no output:
+### Provider Stall Detection
+All live LLM transports run through `clients.llm.lifecycle.LLMLifecycle`, which wraps provider operations with `config.api.provider_response_timeout`:
 
 - **Non-streaming**: `LLMLifecycle` wraps the dialect `complete()` call and raises `ProviderStallError` if the call produces no completed response within the timeout.
 - **Streaming**: `LLMLifecycle` wraps each `next()` on the dialect stream iterator and raises `ProviderStallError` if no chunk/event arrives within the timeout.
 
-**Fallback**: `LLMLifecycle` catches `ProviderStallError` and retryable provider errors and retries once with `claude-high` selected by `ModelResolver`. In the streaming path, a `ProviderSwitchEvent` is yielded to the frontend (type=`provider_switch`) so it can clear partial output and display a persistent "generation hung, retrying…" alert. If the backup also stalls, the timeout fires normally — no double-failover.
+**No fallback**: a stall or provider failure raises. All five `model_configs` routes are critical and there is no backup route, so the lifecycle fails loudly instead of silently switching models.
 
-When adding new provider transports, implement a dialect under `clients/llm/dialects/` and let `LLMLifecycle` own timeout, fallback, tool execution, and explicit `clients.llm.accounting.UsageAccountingPolicy` finalization. Hosted billing failures are required lifecycle failures; only builds without the billing package disable billing policy.
+When adding new provider transports, implement a dialect under `clients/llm/dialects/` and let `LLMLifecycle` own timeout and tool execution. Completed results feed `utils.cost_accumulator` (keyed by `model_configs` route name) as a slim recording hook; billing machinery is out of scope for the OSS build.
 
 ### Power-On Self-Test
-MIRA uses POST checks in `utils/power_on_self_test.py`. The pre-server gate (`run_pre_server_post_gate`) runs before Hypercorn binds and launches checks in a subprocess so probe-side singletons cannot leak into the serving process. The in-process CLI remains operational: `python -m utils.power_on_self_test pre-server`. The post-server probe at `scripts/post_server_post.py` verifies the already-bound live service through HTTP diagnostics. `scripts/__init__.py` exists so operational scripts can run with `python -m scripts.<name>`. POST checks must exercise real infrastructure and must not use mocks.
+MIRA uses POST checks in `utils/power_on_self_test.py`. The pre-server gate (`run_pre_server_post_gate`) runs before Hypercorn binds and launches checks in a subprocess so probe-side singletons cannot leak into the serving process. The gate is bounded: `PRE_SERVER_GATE_ATTEMPTS` rounds with `PRE_SERVER_GATE_RETRY_SECONDS` between failures, then it parks (sleeps forever, server never binds) rather than exiting — a restart-on-exit supervisor would otherwise turn gate failure into an unbounded loop of real, billed LLM probes. Set `MIRA_POST_GATE_FAILURE_ACTION=exit` to exit instead under supervisors like systemd where restart backoff is already sane. The in-process CLI remains operational: `python -m utils.power_on_self_test pre-server`. The post-server probe at `scripts/post_server_post.py` verifies the already-bound live service through HTTP diagnostics. `scripts/__init__.py` exists so operational scripts can run with `python -m scripts.<name>`. POST checks must exercise real infrastructure and must not use mocks.
 
 ## ⚡ Performance & Tool Usage
 - **Synchronous Over Async**: Prefer synchronous unless genuine concurrency benefit exists. Only use `async/await` for truly asynchronous operations (network I/O, parallelizable file I/O, external APIs). Async overhead (context switching, event loop, complex calls) hurts performance without actual I/O concurrency. Sync is easier to debug, test, reason about.

@@ -106,7 +106,7 @@ You do NOT:
 
 class MyAgent(SidebarAgent):
     agent_id = "my_agent"
-    internal_llm_key = "my_agent"       # Row in internal_llm DB table
+    model_config_name = "batch"         # One of the five model_configs routes
     available_tools = ["my_domain_tool"] # sidebar_tool added automatically
     max_iterations = 5
     timeout_seconds = 60
@@ -125,7 +125,7 @@ class MyAgent(SidebarAgent):
 
 **Required attributes:**
 - `agent_id` -- unique string, used in traces and activity records
-- `internal_llm_key` -- key into the `internal_llm` DB table (determines model, endpoint, API key)
+- `model_config_name` -- one of the five `model_configs` routes (`primary`, `fast`, `batch`, `assessment`, `other`); determines model, endpoint, API key, default effort, and output ceiling
 - `available_tools` -- list of tool names from the registry. `sidebar_tool` is always included; don't list it here.
 
 **Required methods:**
@@ -229,12 +229,7 @@ class MyTriggerConfig(BaseModel):
 ```
 Add to `AppConfig` and `config_manager.py`.
 
-Add an `internal_llm` DB row for your agent's LLM config:
-
-```sql
-INSERT INTO internal_llm (name, model, endpoint_url, api_key_name, max_tokens)
-VALUES ('my_agent', 'claude-sonnet-4-6', NULL, 'anthropic', 4096);
-```
+Pick the agent's `model_config_name` from the five fixed `model_configs` routes — do not add a row to `model_configs`; the table is CHECK-constrained to exactly `primary`, `fast`, `batch`, `assessment`, `other`.
 
 ### Step 7: Update AGENTS.md
 
@@ -279,11 +274,11 @@ If `build_recovery_context` returns `None` (default), the retry starts with the 
 
 For agents triggered by periodic/speculative checks — where most evaluations result in "nothing to do" — the **sentry gate** prevents burning expensive main-loop tokens on idle polls. A cheap model (Haiku) makes a binary proceed/skip decision before the main loop runs.
 
-Set `sentry_llm_key` and override `build_sentry_message()`:
+Set `sentry_model_config_name` and override `build_sentry_message()`:
 
 ```python
 class MyAgent(SidebarAgent):
-    sentry_llm_key = "my_sentry"     # internal_llm row for cheap model
+    sentry_model_config_name = "fast"   # cheap pre-filter route
     sentry_max_tokens = 150          # Hard cap (default 150)
 
     def build_sentry_message(self, work_item: 'WorkItem') -> str:
@@ -312,13 +307,6 @@ class MyAgent(SidebarAgent):
 **When NOT to use:**
 - Discrete-event agents (email, webhook) where every item needs handling
 - Directly invoked agents (forage) where the user explicitly requested work
-
-**DB setup:** Add an `internal_llm` row for the sentry model:
-
-```sql
-INSERT INTO internal_llm (name, tier, model, endpoint_url, api_key_name, max_tokens)
-VALUES ('my_sentry', 'cof', 'claude-haiku-4-5-20251001', 'https://api.anthropic.com', 'anthropic', 200);
-```
 
 ## Alternative: Direct Invocation (No Dispatcher)
 
@@ -383,7 +371,7 @@ The strongest defense is giving the agent nothing worth stealing and no weapons 
 The base class `run()` loop (you should not override this):
 
 ```
-1. Resolve LLM config from internal_llm table
+1. Resolve LLM config from model_configs route (model_config_name)
 2. Build tool schemas (sidebar_tool + available_tools, with overrides)
 3. If sanitize_untrusted_input: run injection defense on raw_content
    - On rejection: log warning, write 'rejected' activity, exit (no LLM loop)
@@ -410,7 +398,7 @@ The base class `run()` loop (you should not override this):
 
 ## Complete Checklist
 
-- [ ] Agent class in `agents/implementations/` with `agent_id`, `internal_llm_key`, `available_tools`
+- [ ] Agent class in `agents/implementations/` with `agent_id`, `model_config_name`, `available_tools`
 - [ ] `get_agent_prompt()` with clear rubric, workflow, and escalation rules
 - [ ] `build_initial_message()` that assembles context from WorkItem
 - [ ] `tool_schema_overrides` if any domain tools need operation restriction
@@ -419,9 +407,8 @@ The base class `run()` loop (you should not override this):
 - [ ] `sanitize_untrusted_input = True` if agent handles external/untrusted content
 - [ ] Trigger registered in `utils/sidebar_jobs.py`
 - [ ] Config in `config/config.py` and `config_manager.py`
-- [ ] `internal_llm` DB row for the agent's LLM config
-- [ ] `sentry_llm_key` + `build_sentry_message()` if agent needs a cheap pre-filter (Step 9)
-- [ ] `internal_llm` DB row for the sentry model (if using sentry)
+- [ ] `model_config_name` selects an existing `model_configs` route (no new rows)
+- [ ] `sentry_model_config_name` + `build_sentry_message()` if agent needs a cheap pre-filter (Step 9)
 - [ ] `agents/AGENTS.md` updated with new files
 - [ ] `tools/implementations/AGENTS.md` updated if new tools were added
 

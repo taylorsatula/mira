@@ -23,10 +23,11 @@ logger = logging.getLogger(__name__)
 
 
 class HistoryResult(TypedDict):
-    """Return type for get_history() and search_continuums()."""
+    """Chronological keyset page returned by get_history()."""
     messages: list[dict[str, object]]
     has_more: bool
-    next_offset: int | None
+    next_before: tuple[datetime, UUID] | None
+
 
 
 class FailedSegment(TypedDict):
@@ -594,20 +595,32 @@ class ContinuumRepository:
             )
         return content
 
-    def get_history(self, user_id: str, offset: int = 0, limit: int = 50,
-                   start_date: datetime | None = None, end_date: datetime | None = None,
-                   message_type: str = "regular") -> HistoryResult:
+    def get_history(
+        self,
+        user_id: str,
+        limit: int = 50,
+        before: tuple[datetime, UUID] | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        message_type: str = "regular",
+    ) -> HistoryResult:
         """
-        Get continuum history with pagination and date filtering.
-        
+        Get one chronological history page by exclusive keyset cursor.
+
+        Offset pagination over `ORDER BY created_at DESC` is unstable under
+        concurrent inserts: rows shift across the page boundary, producing
+        duplicates and skips. `created_at` alone is not a total order either,
+        because one turn's messages carry microsecond offsets that can tie.
+        `(created_at, id)` is a proper keyset, so it is the boundary.
+
         Args:
             user_id: User ID for RLS
-            offset: Pagination offset
             limit: Maximum number of messages to return
+            before: Exclusive `(created_at, id)` keyset boundary
             start_date: Optional start date filter
             end_date: Optional end date filter
-            message_type: Type of messages to retrieve ("regular", "summaries", "all")
-            
+            message_type: Type of messages to retrieve ("regular" or "all")
+
         Returns:
             Dictionary with messages, pagination info, and metadata
         """
@@ -632,104 +645,51 @@ class ContinuumRepository:
         if end_date:
             where_conditions.append("created_at <= %s")
             params.append(end_date)
+
+        if before is not None:
+            before_created_at, before_id = before
+            where_conditions.append("(created_at, id) < (%s, %s)")
+            params.extend([before_created_at, before_id])
         
         # Get messages with pagination
         query = f"""
             SELECT * FROM messages 
             WHERE {' AND '.join(where_conditions)}
-            ORDER BY created_at DESC
-            OFFSET %s LIMIT %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT %s
         """
-        params.extend([offset, limit + 1])  # Get one extra to check for more results
+        params.append(limit + 1)  # Get one extra to check for more results
         
         message_rows = db.execute_query(query, tuple(params))
         
         # Check if there are more results
         has_more = len(message_rows) > limit
         if has_more:
-            message_rows = message_rows[:-1]  # Remove the extra row
+            message_rows = message_rows[:limit]  # Drop the lookahead row
+
+        next_before = None
+        if has_more and message_rows:
+            oldest = message_rows[-1]
+            next_before = (oldest["created_at"], UUID(str(oldest["id"])))
         
-        # Format messages for API
+        # Format messages for API - newest-first scan, chronological page out
         messages = []
-        for row in message_rows:
+        for row in reversed(message_rows):
             messages.append({
                 "id": str(row['id']),
                 "role": row['role'],
                 "content": row['content'],
                 "timestamp": format_utc_iso(row['created_at']),
-                "metadata": row.get('metadata', {})
+                "metadata": row.get('metadata', {}),
+                "tool_call_id": str(row['tool_call_id']) if row.get('tool_call_id') else None,
+                "is_error": bool(row.get('is_error', False)),
             })
         
         return {
             "messages": messages,
             "has_more": has_more,
-            "next_offset": offset + limit if has_more else None
+            "next_before": next_before,
         }
-    
-    def search_continuums(self, user_id: str, search_query: str, 
-                           offset: int = 0, limit: int = 50,
-                           message_type: str = "regular") -> HistoryResult:
-        """
-        Search continuums using full-text search.
-        
-        Args:
-            user_id: User ID for RLS
-            search_query: Text to search for in message content
-            offset: Pagination offset
-            limit: Maximum number of messages to return
-            message_type: Type of messages to retrieve ("regular", "summaries", "all")
-            
-        Returns:
-            Dictionary with matching messages, pagination info, and search metadata
-        """
-        db = self._get_client(user_id)
-        
-        # Build query with message type filtering
-        type_filter = ""
-        if message_type == "all":
-            # Include all messages, no filter
-            pass
-        else:
-            # Default to regular messages (exclude system notifications)
-            type_filter = "AND COALESCE(metadata->>'system_notification', 'false') != 'true'"
-        
-        # Use PostgreSQL full-text search
-        query = f"""
-            SELECT * FROM messages 
-            WHERE (content ILIKE %s OR metadata::text ILIKE %s)
-            {type_filter}
-            ORDER BY created_at DESC
-            OFFSET %s LIMIT %s
-        """
-        
-        search_pattern = f"%{search_query}%"
-        params = (search_pattern, search_pattern, offset, limit + 1)
-        
-        message_rows = db.execute_query(query, params)
-        
-        # Check if there are more results
-        has_more = len(message_rows) > limit
-        if has_more:
-            message_rows = message_rows[:-1]  # Remove the extra row
-        
-        # Format messages for API
-        messages = []
-        for row in message_rows:
-            messages.append({
-                "id": str(row['id']),
-                "role": row['role'],
-                "content": row['content'],
-                "timestamp": format_utc_iso(row['created_at']),
-                "metadata": row.get('metadata', {})
-            })
-        
-        return {
-            "messages": messages,
-            "has_more": has_more,
-            "next_offset": offset + limit if has_more else None,
-            "search_query": search_query
-        }
-    
     
     def update_continuum_metadata(self, continuum: Continuum) -> None:
         """
@@ -1052,6 +1012,12 @@ class ContinuumRepository:
         """
         Find all active segments across all users (admin query for timeout service).
 
+        Joined against `users` with `is_active = TRUE` (plan §6.3.8): the
+        sweep runs on the BYPASSRLS admin pool, so without the predicate it
+        would keep collapsing segments belonging to deactivated accounts.
+        Columns are qualified because the JOIN makes `id`/`user_id`/
+        `created_at` ambiguous.
+
         Returns:
             List of dicts with segment data (id, continuum_id, user_id, metadata, created_at)
         """
@@ -1062,15 +1028,17 @@ class ContinuumRepository:
         with session_manager.get_admin_session() as session:
             rows = session.execute_query("""
                 SELECT
-                    id,
-                    continuum_id,
-                    user_id,
-                    metadata,
-                    created_at
+                    messages.id,
+                    messages.continuum_id,
+                    messages.user_id,
+                    messages.metadata,
+                    messages.created_at
                 FROM messages
-                WHERE metadata->>'is_segment_boundary' = 'true'
-                    AND metadata->>'status' = 'active'
-                ORDER BY created_at ASC
+                JOIN users ON users.id = messages.user_id
+                WHERE messages.metadata->>'is_segment_boundary' = 'true'
+                    AND messages.metadata->>'status' = 'active'
+                    AND users.is_active = TRUE
+                ORDER BY messages.created_at ASC
             """)
 
             # Normalize UUID objects to strings at boundary (database driver returns UUID objects)
