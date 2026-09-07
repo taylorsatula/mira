@@ -37,16 +37,19 @@ class EventBus:
         """Register built-in event handlers for MIRA component integration."""
         logger.info("Registered built-in MIRA component integrations")
 
-    def publish(self, event: ContinuumEvent) -> None:
+    def publish(self, event: object) -> None:
         """
         Publish an event to all subscribers.
+
+        Dispatch is structural on the event's class name; events are typically
+        ContinuumEvents but any domain event object may be published.
 
         Handles both sync and async callbacks appropriately:
         - Sync callbacks are executed immediately
         - Async callbacks are queued for processing in the event loop
 
         Args:
-            event: ContinuumEvent to publish
+            event: Domain event object to publish
         """
         event_type = event.__class__.__name__
         logger.debug(f"Publishing event: {event_type} - {event}")

@@ -8,7 +8,6 @@ import argparse
 import asyncio
 import logging
 import sys
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -16,20 +15,24 @@ from utils.logging_config import setup_colored_root_logging, setup_anthropic_sdk
 setup_colored_root_logging(log_level=logging.WARNING, fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 setup_anthropic_sdk_logging(log_dir="/opt/mira/logs")
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
+from auth.dev_mode import development_mode_enabled
+from auth.mode import auth_mode
 from config.config_manager import config
 from config.announcement import load_announcement
 from cns.api import data, actions, health, websocket_chat, tool_config, trigger_rules, update, federation as federation_api
 from cns.api import chat as chat_api
 from cns.api import files as files_api
 from cns.api import location
+from auth import api as auth_api
 from cns.api.base import APIError, create_error_response, generate_request_id
+from auth.security_middleware import SecurityHeadersMiddleware
 from utils.scheduler_service import scheduler_service
 from utils.scheduled_tasks import initialize_all_scheduled_tasks
 
@@ -57,15 +60,43 @@ def ensure_single_user(app: FastAPI) -> None:
         result = session.execute_single("SELECT COUNT(*) as count FROM users")
         user_count = result['count']
 
-        # Detect offline tier (created by deploy when user chose offline mode)
-        offline_tier = session.execute_single(
-            "SELECT name FROM conversation_llm WHERE name = 'offline'"
-        )
-        oss_default_tier = 'offline' if offline_tier else 'primary'
-
         if user_count > 1:
+            # The guard stays hard — `single` means exactly one user, and
+            # auto-deleting a row is worse than refusing to boot. But this
+            # is the only help an operator gets after the damage is done,
+            # so name the rows and the recovery step instead of just the
+            # count. Extra rows are usually created by an unauthenticated
+            # POST /v0/auth/signup or GET /v0/auth/dev/session against an
+            # install still in `single` mode — the dev route is a WRITE that
+            # provisions developer@mira.local, so one link-click was enough
+            # (both endpoints are now refused there) — or left behind by an
+            # interrupted power-on self-test.
             print(f"\nERROR: Found {user_count} users")
             print("MIRA OSS operates in single-user mode only.")
+            try:
+                users = session.execute_query(
+                    "SELECT id, email, created_at, last_login_at FROM users ORDER BY created_at"
+                )
+                print("\nRows in `users`. Single mode requires exactly one user; the")
+                print("legitimate one is usually `user@localhost` or the account you")
+                print("signed in to first; an intruder row never appears in last_login_at:\n")
+                for row in users:
+                    seen = row['last_login_at'].isoformat() if row['last_login_at'] else "NEVER LOGGED IN"
+                    print(f"  id={row['id']}  email={row['email']}")
+                    print(f"    created={row['created_at'].isoformat()}  last_login={seen}")
+                    print(f"    DELETE FROM users WHERE id = '{row['id']}';")
+                print("\nRecovery: connect to the mira_service database as the admin role")
+                print("(Vault mira/database admin_url) and run the DELETE statements above")
+                print("for every row EXCEPT the one account you keep. Deleting a user")
+                print("cascades to its rows in every table that references it. Then")
+                print("restart MIRA.")
+            except Exception as detail:
+                # Enumeration is diagnosis, not gatekeeping: if the SELECT
+                # itself fails, fall back to the bare refusal rather than
+                # masking the exit-1 reason in a traceback.
+                print(f"(Could not enumerate the rows: {type(detail).__name__}: {detail})")
+                print("Inspect `SELECT id, email, created_at, last_login_at FROM users;`")
+                print("as the database admin and delete every unwanted row, then restart.")
             sys.exit(1)
 
         if user_count == 1:
@@ -73,13 +104,11 @@ def ensure_single_user(app: FastAPI) -> None:
             app.state.single_user_id = str(user['id'])
             app.state.user_email = user['email']
 
-            # OSS: user brings own API key, set balance high and default to correct tier
-            session.execute_update(
-                """UPDATE users SET balance_usd = 999999.00,
-                   conversation_llm = CASE WHEN conversation_llm NOT IN (SELECT name FROM conversation_llm) THEN %(tier)s ELSE conversation_llm END
-                   WHERE id = %(id)s""",
-                {'id': str(user['id']), 'tier': oss_default_tier}
-            )
+            # Model routing lives entirely in the model_configs table, seeded by
+            # deploy/mira_service_schema.sql and rewritten for offline installs by
+            # deploy/postgresql.sh. There is no per-user tier to repair here: 2.0
+            # retired the per-user model preference and users.balance_usd, so the
+            # only startup work left is loading the user's identity and API key.
 
             try:
                 from clients.vault_client import _ensure_vault_client
@@ -103,62 +132,34 @@ def ensure_single_user(app: FastAPI) -> None:
         user_id = str(uuid.uuid4())
 
         session.execute_update("""
-            INSERT INTO users (id, email, is_active, memory_manipulation_enabled, balance_usd, conversation_llm)
-            VALUES (%(id)s, %(email)s, true, true, 999999.00, %(tier)s)
-        """, {'id': user_id, 'email': default_email, 'tier': oss_default_tier})
-
-        # Create the continuum (normally done during signup flow)
-        continuum_id = str(uuid.uuid4())
-        session.execute_update("""
-            INSERT INTO continuums (id, user_id, metadata, created_at, updated_at)
-            VALUES (%(id)s, %(user_id)s, '{}'::jsonb, NOW(), NOW())
-        """, {'id': continuum_id, 'user_id': user_id})
-
-        # Prepopulate with starter messages (ported from auth.database.prepopulate_new_user)
-        import json
-        from utils.timezone_utils import utc_now
-
-        # Message 1: Beginning marker
-        msg1_id = str(uuid.uuid4())
-        session.execute_update("""
-            INSERT INTO messages (id, continuum_id, user_id, role, content, metadata, created_at)
-            VALUES (%(id)s, %(continuum_id)s, %(user_id)s, 'user', %(content)s, %(metadata)s, NOW())
+            INSERT INTO users (id, email, first_name, last_name, timezone, is_active, memory_manipulation_enabled)
+            VALUES (%(id)s, %(email)s, %(first_name)s, %(last_name)s, %(timezone)s, true, true)
         """, {
-            'id': msg1_id,
-            'continuum_id': continuum_id,
-            'user_id': user_id,
-            'content': '.. this is the beginning of the conversation. there are no messages older than this one ..',
-            'metadata': json.dumps({'system_generated': True})
+            'id': user_id,
+            'email': default_email,
+            # timezone is required, with no default, on the session data the
+            # multi-user work reads back, so seed it explicitly from the
+            # configured default rather than relying on the column default.
+            # Names stay nullable: the prompt layer already addresses an
+            # unnamed user, and the settings screen is where a real name goes.
+            'first_name': 'Friend',
+            'last_name': None,
+            'timezone': config.system.timezone,
         })
 
-        # Message 2: Active segment sentinel
-        segment_id = str(uuid.uuid4())
-        segment_metadata = {
-            'is_segment_boundary': True,
-            'status': 'active',
-            'segment_id': segment_id,
-            'segment_start_time': utc_now().isoformat(),
-            'segment_end_time': utc_now().isoformat(),
-            'segment_turn_count': 1,  # Required for increment_segment_turn()
-            'tools_used': [],
-            'memories_extracted': False,
-            'domain_blocks_updated': False
-        }
-        msg2_id = str(uuid.uuid4())
-        session.execute_update("""
-            INSERT INTO messages (id, continuum_id, user_id, role, content, metadata, created_at)
-            VALUES (%(id)s, %(continuum_id)s, %(user_id)s, 'assistant', %(content)s, %(metadata)s, NOW() + interval '100 milliseconds')
-        """, {
-            'id': msg2_id,
-            'continuum_id': continuum_id,
-            'user_id': user_id,
-            'content': '[Segment in progress]',
-            'metadata': json.dumps(segment_metadata)
-        })
-
-        logger.info(f"Created user {user_id} with continuum {continuum_id} and starter messages")
+        logger.info(f"Created user {user_id} ({default_email})")
 
     # Admin session committed — user row now visible to other connections
+    # Continuum + welcome content + segment sentinel go through the same
+    # account-initialization path the multi-user signup flow uses
+    # (auth/database.py:initialize_mira_account — plan §6.3.5), which
+    # establishes segment_turn_count on the active-segment sentinel that
+    # increment_segment_turn() depends on. The user row itself stays a raw
+    # INSERT above: `user@localhost` is intentionally not a routable email,
+    # and AuthDatabase.create_user validates its format for public signup.
+    from auth.database import AuthDatabase
+    AuthDatabase().initialize_mira_account(user_id, 'Friend', 'Get oriented with MIRA')
+
     # Initialize feedback tracking (uses its own session via get_session)
     from auth.seed_lora import seed_lora_postgres
     seed_lora_postgres(user_id)
@@ -199,8 +200,21 @@ async def lifespan(app: FastAPI):
     logger.info("  Starting MIRA...\n\n\n")
     logger.info("====================")
 
-    # Ensure single user exists and load credentials
-    ensure_single_user(app)
+    # Three-mode identity bootstrap (plan §6.3.4, decision D3).
+    #   single: one shared bearer key against one seeded user row — the 1.x
+    #           path, run verbatim.
+    #   dev:    the dev-session endpoint (GET /v0/auth/dev/session, gated by
+    #           MIRA_DEV) creates-or-reuses one local user on first visit and
+    #           every request then traverses the full multi-user stack.
+    #   multi:  signup/magic-link APIs are the bootstrap; there is nothing
+    #           to seed at boot and nothing to assume.
+    mode = auth_mode()
+    if mode == "single":
+        ensure_single_user(app)
+    elif mode == "dev":
+        logger.info("Auth mode 'dev': identity bootstraps via GET /v0/auth/dev/session")
+    else:
+        logger.info("Auth mode 'multi': accounts bootstrap via POST /v0/auth/signup")
 
 
     # Configure FastAPI thread pool for synchronous endpoints
@@ -228,27 +242,15 @@ async def lifespan(app: FastAPI):
     continuum_repo = get_continuum_repository()
     logger.info("Continuum repository initialized with connection pool")
 
-    # Load internal LLM configs from database (fail-fast at startup)
-    from utils.user_context import load_internal_llm_configs
-    load_internal_llm_configs()
-    logger.info("Internal LLM configs loaded from database")
+    # Load the fixed model_configs routes from database (fail-fast at startup)
+    from utils.user_context import load_model_configs
+    load_model_configs()
+    logger.info("model_configs routes loaded from database")
 
-    # Load billing pricing cache and validate prices (skipped in OSS mode)
-    try:
-        from billing.pricing import load_pricing_cache, build_config_lookup, ensure_pricing_keys
-
-        # 1. Seed: ensure every conversation_llm + internal_llm key has a usage_pricing row (NULL prices)
-        ensure_pricing_keys()
-        # 2. Load: read all pricing rows into memory
-        load_pricing_cache()
-        logger.info("Billing pricing cache loaded from database")
-        # 3. Resolve and validate: startup must fail if any pricing remains unresolved
-        from billing.price_validator import validate_prices_against_openrouter
-        validate_prices_against_openrouter()
-        # 4. Lookup: build reverse map for runtime pricing_key resolution
-        build_config_lookup()
-    except ImportError:
-        logger.info("Billing module not available (OSS mode)")
+    # The payments subsystem is not part of mira-OSS (decision D7): there
+    # is no paid-account pricing module in this tree, and cost visibility
+    # lives in utils/cost_accumulator.py against usage_pricing rows seeded
+    # by the greenfield schema.
 
     # Initialize lt_memory factory following MIRA's singleton pattern
     logger.info("Initializing lt_memory factory...")
@@ -279,12 +281,17 @@ async def lifespan(app: FastAPI):
     initialize_orchestrator(orchestrator)
     logger.info("CNS Orchestrator initialized as global singleton")
 
-    # Flush Valkey caches on startup except auth sessions and rate limiting
-    logger.info("Flushing Valkey caches (preserving sessions and rate limits)...")
+    # Flush Valkey caches on startup except auth sessions, CSRF tokens paired
+    # with them, and rate limiting. `csrf:` must be listed because
+    # auth/session.py writes `csrf:<digest>` alongside `session:<digest>` and
+    # the session revocation helpers delete both together — flushing CSRF
+    # while preserving sessions (O-10) would 403 the first
+    # cookie-authenticated write after every restart.
+    logger.info("Flushing Valkey caches (preserving sessions, CSRF tokens and rate limits)...")
     from clients.valkey_client import get_valkey_client
     valkey_client = get_valkey_client()
     flushed_count = valkey_client.flush_except_whitelist(
-        preserve_prefixes=["session:", "rate_limit:"]
+        preserve_prefixes=["session:", "csrf:", "rate_limit:"]
     )
     logger.info(f"Flushed {flushed_count} cache keys from Valkey")
 
@@ -312,14 +319,6 @@ async def lifespan(app: FastAPI):
     register_sidebar_dispatcher_job(
         scheduler_service, orchestrator.tool_repo, orchestrator.event_bus
     )
-
-    # Register billing daily drip job (skipped in OSS mode)
-    try:
-        from billing.drip import DailyDripService
-        drip_service = DailyDripService()
-        drip_service.register_jobs(scheduler_service)
-    except ImportError:
-        pass  # OSS mode - no billing
 
     scheduler_service.start()
 
@@ -531,6 +530,11 @@ def create_app() -> FastAPI:
     # Middleware stack (order matters — applied in reverse registration order)
     from utils.perf import PerfMiddleware
     app.add_middleware(PerfMiddleware)
+    # CSP posture is governed by MIRA_CSP=off|strict, parsed strictly when
+    # this constructor runs (auth/security_middleware.py). It takes no
+    # importmap hash: the CRM workspace import-map exception has no
+    # counterpart in the retained web UI.
+    app.add_middleware(SecurityHeadersMiddleware)
 
     if config.api_server.enable_cors:
         app.add_middleware(
@@ -544,6 +548,10 @@ def create_app() -> FastAPI:
     # API routes - v0 versioning (beta signal)
     app.include_router(health.router, prefix="/v0/api", tags=["health"])
     app.include_router(update.router, prefix="/v0/api", tags=["update"])  # Public update check
+    # The multi-user auth surface is mounted in all three modes (plan
+    # §6.3.4): `single` authenticates its callers through the union branch
+    # of get_current_user, and dev/multi through sessions and API tokens.
+    app.include_router(auth_api.router, prefix="/v0/auth", tags=["auth"])
     app.include_router(chat_api.router, prefix="/v0/api", tags=["chat"])
     app.include_router(data.router, prefix="/v0/api", tags=["data"])
     app.include_router(actions.router, prefix="/v0/api", tags=["actions"])
@@ -554,49 +562,61 @@ def create_app() -> FastAPI:
     app.include_router(websocket_chat.router, prefix="/v0", tags=["websocket"])  # /v0/ws/chat
     app.include_router(federation_api.router, prefix="/v0/api", tags=["federation"])
 
-    # OSS browser-auth + asset routes (always-on; /oss-auth/token feeds the web UI's Bearer-key login)
-    from cns.api import oss_ui
-    app.include_router(oss_ui.router, tags=["oss-ui"])
+    # OSS browser-auth + asset routes. `GET /oss-auth/token` is the identity
+    # source for the retained web UI in `single` mode only (plan §0
+    # invariant 1): it hands out the shared bearer key to any caller, which
+    # is acceptable on a single-user localhost install and unacceptable at
+    # N>1. The module reads its vendored assets at import time, so it is
+    # imported only when it will actually be mounted.
+    if auth_mode() == "single":
+        from cns.api import oss_ui
+        app.include_router(oss_ui.router, tags=["oss-ui"])
 
-    # Billing routes (skipped in OSS mode)
-    try:
-        from billing import api as billing_api
-        from billing import stripe_webhooks
-        app.include_router(billing_api.router, prefix="/v0/api", tags=["billing"])
-        app.include_router(stripe_webhooks.router, prefix="/v0/api", tags=["billing-webhooks"])
-    except ImportError:
-        pass  # OSS mode - no billing
+    # Payments routes are not part of mira-OSS (decision D7): there is no
+    # paid-account module in this tree, and account access is not a product
+    # surface here. Cost visibility lives in utils/cost_accumulator.py.
 
     # Performance monitoring (gated by mira.perf logger level)
     from utils.perf import register_perf_routes, install_db_instrumentation
     register_perf_routes(app)
     install_db_instrumentation()
 
-    # Full web UI — de-auth-gated page routes (OSS single-user: no session dependency).
-    # Serves the ported web/ bundle (chat, memories, domaindocs, settings) plus
-    # root meta files and the /assets static mount.
+    # Full web UI — page routes, plus root meta files and the /assets
+    # static mount. `single` serves them ungated, exactly as 1.x did: the
+    # pages are static shells and every data route behind them already
+    # requires the bearer key. `dev`/`multi` gate the app pages behind
+    # get_current_user_for_pages: in dev an unauthenticated visit
+    # round-trips through /v0/auth/dev/session and its cookie, and in multi
+    # it gets the standard 401 envelope until the deployment ships its own
+    # sign-in surface (mira-OSS has no /login/ page — D8). Root meta files
+    # and /assets carry no user data and stay public so a gated page can
+    # still load its own JS/CSS.
+    page_dependencies = (
+        [] if auth_mode() == "single"
+        else [Depends(auth_api.get_current_user_for_pages)]
+    )
     if Path("web").exists():
         @app.get("/", include_in_schema=False)
         async def serve_root():
             return RedirectResponse(url="/chat")
 
-        @app.get("/chat", include_in_schema=False)
-        @app.get("/chat/", include_in_schema=False)
+        @app.get("/chat", include_in_schema=False, dependencies=page_dependencies)
+        @app.get("/chat/", include_in_schema=False, dependencies=page_dependencies)
         async def serve_chat():
             return FileResponse("web/chat/index.html")
 
-        @app.get("/memories", include_in_schema=False)
-        @app.get("/memories/", include_in_schema=False)
+        @app.get("/memories", include_in_schema=False, dependencies=page_dependencies)
+        @app.get("/memories/", include_in_schema=False, dependencies=page_dependencies)
         async def serve_memories():
             return FileResponse("web/memories/index.html")
 
-        @app.get("/domaindocs", include_in_schema=False)
-        @app.get("/domaindocs/", include_in_schema=False)
+        @app.get("/domaindocs", include_in_schema=False, dependencies=page_dependencies)
+        @app.get("/domaindocs/", include_in_schema=False, dependencies=page_dependencies)
         async def serve_domaindocs():
             return FileResponse("web/domaindocs/index.html")
 
-        @app.get("/settings", include_in_schema=False)
-        @app.get("/settings/", include_in_schema=False)
+        @app.get("/settings", include_in_schema=False, dependencies=page_dependencies)
+        @app.get("/settings/", include_in_schema=False, dependencies=page_dependencies)
         async def serve_settings():
             return FileResponse("web/settings/index.html")
 
@@ -645,8 +665,11 @@ def main():
         
         logger.info("Starting with Hypercorn (HTTP/2 enabled)")
         
-        # Check for development mode
-        dev_mode = os.getenv("MIRA_DEV", "false").lower() in ["true", "1", "yes"]
+        # Check for development mode — the single reader is
+        # auth/dev_mode.development_mode_enabled (O-4): one env var, one
+        # parser, so the reloader/worker posture and the auth dev surface
+        # cannot disagree about what MIRA_DEV says.
+        dev_mode = development_mode_enabled()
         
         hypercorn_config = Config()
         hypercorn_config.bind = [f"{config.api_server.host}:{config.api_server.port}"]

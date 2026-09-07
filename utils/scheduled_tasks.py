@@ -16,12 +16,29 @@ logger = logging.getLogger(__name__)
 # Registry of modules with scheduled tasks
 # Format: (module_path, service_name, needs_init, init_args_factory)
 SCHEDULED_TASK_MODULES: List[Tuple[str, str, bool, callable]] = [
-    # Auth service - already has global instance
-    # auth.service removed for OSS (single-user mode)
-
     # Segment timeout detection - registered separately (needs event_bus)
     # See register_segment_timeout_job() below
 ]
+
+# The auth service's cleanup jobs (expired magic links hourly, account GC
+# nightly) maintain state that only exists once the multi-user auth stack
+# is live. In `single` mode nothing ever creates a magic link or a Valkey
+# session, so the entry is not registered — and auth.service is not even
+# imported — keeping the single-user boot free of any assumption that the
+# hosted-auth layer is constructed (92d768c re-added this registration
+# unconditionally; mode-gating it is plan §6.3.4's scheduler row).
+# needs_init=True routes through the lazy `get_auth_service()` factory
+# rather than a module-level singleton.
+AUTH_SERVICE_TASK = ("auth.service", "get_auth_service", True, lambda: {})
+
+
+def scheduled_task_modules() -> List[Tuple[str, str, bool, callable]]:
+    """The registry as it applies to this process's auth mode."""
+    from auth.mode import single_user_mode_enabled
+
+    if single_user_mode_enabled():
+        return list(SCHEDULED_TASK_MODULES)
+    return [*SCHEDULED_TASK_MODULES, AUTH_SERVICE_TASK]
 
 
 
@@ -41,7 +58,8 @@ def initialize_all_scheduled_tasks(scheduler_service):
     successful = 0
 
     # First register standard services from the registry
-    for module_path, service_name, needs_init, init_args_factory in SCHEDULED_TASK_MODULES:
+    registry = scheduled_task_modules()
+    for module_path, service_name, needs_init, init_args_factory in registry:
         try:
             # Dynamic import
             module = __import__(module_path, fromlist=[service_name])
@@ -91,7 +109,7 @@ def initialize_all_scheduled_tasks(scheduler_service):
         logger.error(f"Error registering LT_Memory scheduled tasks: {e}", exc_info=True)
         raise RuntimeError(f"Failed to register LT_Memory scheduled tasks: {e}") from e
 
-    total_services = len(SCHEDULED_TASK_MODULES) + 1  # +1 lt_memory
+    total_services = len(registry) + 1  # +1 lt_memory
     logger.info(f"Scheduled task initialization complete: {successful}/{total_services} services registered")
     return successful
 

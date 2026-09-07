@@ -32,6 +32,18 @@ from utils.timezone_utils import format_utc_iso, utc_now
 logger = logging.getLogger(__name__)
 
 PRE_SERVER_POST_DEADLINE_SECONDS = 300
+# Bounded startup gate policy (2f980ab): after this many failed gate rounds
+# the gate performs its failure action instead of looping forever. The action
+# defaults to parking (sleep forever, server never binds) rather than
+# exiting, because s6 restarts an exited service immediately and every
+# restart re-runs the provider reachability probes - real, billed LLM
+# requests - turning a failing gate into an unbounded probe loop that pins
+# inference GPUs at load. Operators supervised by systemd may prefer
+# exit-and-restart: set MIRA_POST_GATE_FAILURE_ACTION=exit.
+PRE_SERVER_GATE_ATTEMPTS = 3
+PRE_SERVER_GATE_RETRY_SECONDS = 10
+POST_GATE_FAILURE_ACTION_ENV = "MIRA_POST_GATE_FAILURE_ACTION"
+POST_GATE_FAILURE_ACTIONS = ("park", "exit")
 POST_SERVER_POST_DEADLINE_SECONDS = 60
 LLM_PROVIDER_PROBE_MAX_WORKERS = 4
 LLM_PROVIDER_PROBE_MAX_TOKENS = 32
@@ -91,12 +103,61 @@ class CheckSpec:
     probe: Callable[[], dict[str, Any]]
 
 
+def _post_gate_failure_action() -> str:
+    """Parse the configured final gate action. Strict: anything else raises."""
+    value = os.environ.get(POST_GATE_FAILURE_ACTION_ENV, "park")
+    if value not in POST_GATE_FAILURE_ACTIONS:
+        raise ValueError(
+            f"{POST_GATE_FAILURE_ACTION_ENV} must be one of "
+            f"{list(POST_GATE_FAILURE_ACTIONS)}; got {value!r}"
+        )
+    return value
+
+
 def run_pre_server_post_gate(deadline_seconds: int = PRE_SERVER_POST_DEADLINE_SECONDS) -> PostReport:
-    """Run the pre-server POST as a hard startup gate.
+    """Run the pre-server POST as a bounded hard startup gate.
+
+    Rounds retry in-process up to PRE_SERVER_GATE_ATTEMPTS times, sleeping
+    PRE_SERVER_GATE_RETRY_SECONDS between failures. On the final failure the
+    gate never returns: it parks (default) or exits per
+    MIRA_POST_GATE_FAILURE_ACTION, because returning/exiting to a
+    restart-on-exit supervisor re-runs the billed provider probes (see
+    PRE_SERVER_GATE_ATTEMPTS).
 
     Raises:
-        PostFailure: Required checks failed or the child probe exceeded the deadline.
+        PostFailure: a single round failed required checks (caught by the
+            bounded loop; it only escapes if a future caller opts into
+            single-round semantics).
     """
+    for attempt in range(1, PRE_SERVER_GATE_ATTEMPTS + 1):
+        try:
+            return _run_pre_server_post_round(deadline_seconds)
+        except PostFailure:
+            if attempt == PRE_SERVER_GATE_ATTEMPTS:
+                action = _post_gate_failure_action()
+                logger.critical(
+                    "Pre-server POST failed %d consecutive times; %s the process "
+                    "%s. Fix the failing configuration, then restart the mira "
+                    "service manually.",
+                    attempt,
+                    action,
+                    "(server never binds)" if action == "park" else "(supervisor may restart)",
+                )
+                if action == "exit":
+                    raise SystemExit(1)
+                while True:
+                    time.sleep(300)
+            logger.error(
+                "Pre-server POST attempt %d/%d failed; retrying in %ds",
+                attempt,
+                PRE_SERVER_GATE_ATTEMPTS,
+                PRE_SERVER_GATE_RETRY_SECONDS,
+            )
+            time.sleep(PRE_SERVER_GATE_RETRY_SECONDS)
+
+
+def _run_pre_server_post_round(deadline_seconds: int) -> PostReport:
+    """One gate round: run the checks in a child process and fail on required misses."""
     report = run_pre_server_post_subprocess(deadline_seconds=deadline_seconds)
     report_json = report.model_dump_json(indent=2)
 
@@ -454,7 +515,23 @@ def _check_vault() -> dict[str, Any]:
     preload_secrets()
     service_url = get_database_url("mira_service", admin=False)
     admin_url = get_database_url("mira_service", admin=True)
-    valkey_url = get_service_config("valkey_url")
+
+    # Shape ported from crm 92d768c (validate every required service-config
+    # field at boot rather than at first use), with the OSS field list —
+    # crm's demanded the email-gateway, CRM, Square and Stripe keys, none
+    # of which exist in this distribution (plan §6.3.8, §11).
+    required_service_fields = [
+        "valkey_url",
+        "app_url",
+        "userdata_encryption_key",
+    ]
+    service_values = {
+        field: get_service_config(field)
+        for field in required_service_fields
+    }
+    for field, value in service_values.items():
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"Vault mira/services {field} must be a non-empty string")
 
     for label, database_url in {
         "service_url": service_url,
@@ -466,15 +543,36 @@ def _check_vault() -> dict[str, Any]:
         if not parsed.hostname or not parsed.username:
             raise RuntimeError(f"Vault mira/database {label} is missing host or username")
 
-    parsed_valkey = urlparse(valkey_url)
+    parsed_valkey = urlparse(service_values["valkey_url"])
     if parsed_valkey.scheme not in {"redis", "rediss", "valkey", "valkeys"}:
         raise RuntimeError("Vault mira/services valkey_url is not a Valkey/Redis URL")
+
+    parsed_app_url = urlparse(service_values["app_url"])
+    if parsed_app_url.scheme not in {"http", "https"} or not parsed_app_url.hostname:
+        raise RuntimeError("Vault mira/services app_url is not an HTTP(S) URL")
+
+    # Magic-link delivery is the one email consumer, and it exists only in
+    # `multi` (plan §6.3.4). Fail at boot for a multi install that cannot
+    # mail — the alternative is discovering it at first signup — while
+    # single/dev boot untouched by mail configuration, which
+    # auth/email_service.py only reads when a send is attempted.
+    from auth.mode import auth_mode
+
+    if auth_mode() == "multi":
+        from auth.email_service import get_mail_sender
+
+        if get_mail_sender() is None:
+            raise RuntimeError(
+                "MIRA_AUTH_MODE=multi requires an email transport: set "
+                "MIRA_SMTP_HOST (and MIRA_SMTP_FROM) in the environment or "
+                "smtp_host/smtp_from in Vault mira/services"
+            )
 
     return {
         "vault_addr": vault_client.vault_addr,
         "namespace_configured": bool(vault_client.vault_namespace),
         "database_fields": ["service_url", "admin_url"],
-        "service_fields": ["valkey_url"],
+        "service_fields": required_service_fields,
     }
 
 
@@ -522,7 +620,12 @@ def _check_postgres_rls() -> dict[str, Any]:
         "api_tokens",
         "feedback_signals",
         "feedback_synthesis_tracking",
-        "billing_transactions",
+        "users",
+        "magic_links",
+        "persona_revisions",
+        "persona_state",
+        "persona_signals",
+        "user_feedback",
     ]
     policy_rows = admin_db.execute_query(
         """
@@ -544,7 +647,12 @@ def _check_postgres_rls() -> dict[str, Any]:
               'api_tokens',
               'feedback_signals',
               'feedback_synthesis_tracking',
-              'billing_transactions'
+              'users',
+              'magic_links',
+              'persona_revisions',
+              'persona_state',
+              'persona_signals',
+              'user_feedback'
           )
         GROUP BY c.relname, c.relrowsecurity
         """
@@ -581,6 +689,32 @@ def _run_postgres_rls_canary(admin_db: Any) -> dict[str, Any]:
     other_id = uuid4()
     continuum_id = uuid4()
     suffix = uuid4().hex
+
+    # Self-healing sweep: this child can be SIGKILLed by the parent's
+    # subprocess timeout between the INSERT below and the `finally` cleanup
+    # (and a failing cleanup DELETE is only logged), and `PostgresClient`
+    # runs autocommit, so an interrupted run leaves committed canary rows
+    # behind. In `single` mode the boot guard then counts them and refuses
+    # to start. Purge canary-shaped leftovers first, so every run repairs
+    # the last one. The prefixes are canary-only — the sole other product
+    # row on the @mira.local domain is `developer@mira.local`, which
+    # neither pattern matches, and `%`/`_` need no LIKE escaping here.
+    try:
+        swept = admin_db.execute_update(
+            "DELETE FROM users WHERE email LIKE %s OR email LIKE %s",
+            ("post-owner-%@mira.local", "post-other-%@mira.local"),
+        )
+        if swept:
+            logger.warning(
+                "Swept %d stale POST RLS canary user row(s) left by an interrupted run",
+                swept,
+            )
+    except Exception:
+        # Fail loud in the report, not silently: if the sweep cannot run,
+        # postgres_rls fails this round and the gate never reaches the
+        # boot guard with debris in place.
+        logger.exception("Failed to sweep stale POST RLS canary users")
+        raise
 
     try:
         admin_db.execute_insert(
@@ -691,82 +825,63 @@ def _check_embeddings() -> dict[str, Any]:
 def _check_llm_configuration() -> dict[str, Any]:
     from clients.llm.dialect_registry import get_registry
     from clients.llm.resolver import ModelSelection
-    from clients.llm.types import coerce_dialect_name, coerce_effort
+    from clients.llm.types import coerce_dialect_name
     from config.config_manager import config
 
     registry = get_registry()
     registry.discover()
     rows = _load_llm_config_rows()
-    if not rows:
-        raise RuntimeError("No LLM configuration rows found")
+    names = {row["name"] for row in rows}
+    if names != {"primary", "fast", "batch", "assessment", "other"} or len(rows) != 5:
+        raise RuntimeError(
+            "model_configs must contain exactly primary, fast, batch, assessment, "
+            f"and other; found {sorted(names)}"
+        )
 
-    visible_conversation = 0
     validated = []
     for row in rows:
         dialect_name = coerce_dialect_name(row["dialect_name"])
         registry.get(dialect_name)
-        effort = coerce_effort(row["effort"]) if row.get("effort") else None
-        max_tokens = row.get("max_tokens") or config.api.max_tokens
         ModelSelection(
             dialect_name=dialect_name,
             model=row["model"],
-            endpoint_url=row.get("endpoint_url"),
-            api_key_name=row.get("api_key_name"),
-            max_tokens=max_tokens,
-            effort=effort,
-            internal_llm_name=row["name"] if row["source"] == "internal_llm" else None,
-            conversation_llm_name=row["name"] if row["source"] == "conversation_llm" else None,
+            endpoint_url=row["endpoint_url"],
+            api_key_name=row["api_key_name"],
+            max_tokens=row["max_tokens"],
+            effort=row["effort"],
+            model_config_name=row["name"],
         )
-        if row["source"] == "conversation_llm" and not row.get("hidden"):
-            visible_conversation += 1
-        validated.append(f"{row['source']}:{row['name']}")
+        validated.append(row["name"])
 
-    if visible_conversation == 0:
-        raise RuntimeError("No visible conversation LLM configurations found")
+    primary_row = next(row for row in rows if row["name"] == "primary")
+    config.api.validate_compaction_budget(primary_row["max_tokens"])
 
     return {
-        "rows_validated": len(rows),
-        "visible_conversation_llms": visible_conversation,
+        "rows_validated": len(validated),
         "registered_dialects": sorted(registry._classes.keys()),
         "validated_configs": validated,
     }
 
 
 def _load_llm_config_rows() -> list[dict[str, Any]]:
+    from clients.llm.resolver import optional_api_key_name
     from clients.postgres_client import PostgresClient
 
     db = PostgresClient("mira_service")
-    conversation_rows = db.execute_query(
-        """
-        SELECT 'conversation_llm' AS source,
-               name,
-               NULL AS tier,
-               model,
-               endpoint_url,
-               api_key_name,
-               dialect_name,
-               NULL AS effort,
-               NULL AS max_tokens,
-               hidden
-        FROM conversation_llm
-        """
+    rows = db.execute_query(
+        "SELECT name, model, endpoint_url, api_key_name, dialect_name, effort, max_tokens FROM model_configs"
     )
-    internal_rows = db.execute_query(
-        """
-        SELECT 'internal_llm' AS source,
-               name,
-               tier,
-               model,
-               endpoint_url,
-               api_key_name,
-               dialect_name,
-               effort,
-               max_tokens,
-               FALSE AS hidden
-        FROM internal_llm
-        """
-    )
-    return [*conversation_rows, *internal_rows]
+    # The POST reads model_configs directly rather than through the runtime
+    # cache, so it owns the same normalisation load_model_configs() applies:
+    # api_key_name is NOT NULL on disk and '' means "no credential" (offline
+    # installs). Normalise once here so the selection check below and the probe
+    # targets both see None and never hand the sentinel to a Vault lookup.
+    for row in rows:
+        row["api_key_name"] = optional_api_key_name(
+            row["api_key_name"],
+            f"model_config '{row['name']}' api_key_name",
+        )
+    return rows
 
 
 def _check_tools() -> dict[str, Any]:
@@ -828,11 +943,11 @@ def _check_dependency_initialization() -> dict[str, Any]:
     from cns.services.orchestrator import get_orchestrator, initialize_orchestrator
     from lt_memory.factory import get_lt_memory_factory
     from utils.database_session_manager import get_shared_session_manager
-    from utils.user_context import load_internal_llm_configs
+    from utils.user_context import load_model_configs
 
     embeddings_provider = get_hybrid_embeddings_provider()
     continuum_repo = get_continuum_repository()
-    load_internal_llm_configs()
+    load_model_configs()
     lt_memory_factory = get_lt_memory_factory(
         session_manager=get_shared_session_manager(),
         embeddings_provider=embeddings_provider,
@@ -885,17 +1000,21 @@ def _check_scheduler_registration() -> dict[str, Any]:
         pass
 
     registered = set(scheduler._registered_jobs.keys())
+    from auth.mode import single_user_mode_enabled
+
     required = {
-        "auth_cleanup",
-        "account_garbage_collection",
         "lt_memory_extract_unprocessed_segments",
-        "lt_memory_extraction_batch_polling",
         "lt_memory_temporal_score_recalculation",
         "lt_memory_bulk_score_recalculation",
-        "lt_memory_batch_cleanup",
         "lt_memory_entity_merge",
         "segment_timeout_detection",
     }
+    # The auth cleanup jobs are registered only outside single mode
+    # (utils/scheduled_tasks.py mode gate, plan §6.3.4): single mode mints
+    # no magic links and no Valkey sessions to clean up, so requiring them
+    # here would fail the very boot this mode guarantees.
+    if not single_user_mode_enabled():
+        required |= {"auth_cleanup", "account_garbage_collection"}
     missing = sorted(required - registered)
     if missing:
         raise RuntimeError(f"Required scheduler jobs not registered: {missing}")
@@ -955,13 +1074,14 @@ def _check_http_diagnostics(base_url: str) -> dict[str, Any]:
         raise RuntimeError("Scheduler is not running in the live server")
 
     registered = set(scheduler.get("registered_jobs") or [])
+    from auth.mode import single_user_mode_enabled
+
     required = {
-        "auth_cleanup",
-        "account_garbage_collection",
         "lt_memory_extract_unprocessed_segments",
-        "lt_memory_extraction_batch_polling",
         "segment_timeout_detection",
     }
+    if not single_user_mode_enabled():
+        required |= {"auth_cleanup", "account_garbage_collection"}
     missing = sorted(required - registered)
     if missing:
         raise RuntimeError(f"Live scheduler missing required jobs: {missing}")
@@ -1019,13 +1139,30 @@ def _check_llm_provider_reachability() -> dict[str, Any]:
             except Exception as error:
                 failures.append(
                     {
+                        "routes": sorted(target["represented_configs"]),
                         "target": _llm_target_label(target),
                         "diagnostic": f"{type(error).__name__}: {error}",
                     }
                 )
 
     if failures:
-        raise RuntimeError(f"LLM provider probes failed: {failures}")
+        # All five routes are critical: OSS seeds every route at a cloud
+        # vendor, so there is no local fallback target to degrade onto and
+        # no route to excuse. Name each failed route with the vendor, model,
+        # and endpoint it is seeded to, so an operator staring at a parked
+        # process learns from this message alone which credential or
+        # endpoint to fix.
+        detail = "; ".join(
+            f"route(s) {', '.join(failure['routes'])} at {failure['target']} "
+            f"-> {failure['diagnostic']}"
+            for failure in failures
+        )
+        raise RuntimeError(
+            "MIRA requires every model route - primary, fast, batch, assessment, "
+            "other - to be reachable at startup; there are no fallback routes, so "
+            "startup is parked until each listed endpoint answers (check the "
+            f"vendor credentials in Vault and the model_configs seeding). Failed: {detail}"
+        )
 
     return {
         "targets_probed": len(successes),
@@ -1036,8 +1173,6 @@ def _check_llm_provider_reachability() -> dict[str, Any]:
 def _llm_probe_targets(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for row in rows:
-        if row["source"] == "conversation_llm" and row.get("hidden"):
-            continue
         key = (
             row["dialect_name"],
             row.get("endpoint_url") or "",
@@ -1046,9 +1181,9 @@ def _llm_probe_targets(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
         if key not in grouped:
             grouped[key] = dict(row)
-            grouped[key]["represented_configs"] = [f"{row['source']}:{row['name']}"]
+            grouped[key]["represented_configs"] = [row["name"]]
         else:
-            grouped[key]["represented_configs"].append(f"{row['source']}:{row['name']}")
+            grouped[key]["represented_configs"].append(row["name"])
     return list(grouped.values())
 
 
@@ -1060,10 +1195,7 @@ def _probe_llm_target(target: dict[str, Any]) -> dict[str, Any]:
     from config.config_manager import config
 
     dialect_name = coerce_dialect_name(target["dialect_name"])
-    max_tokens = min(
-        target.get("max_tokens") or config.api.max_tokens,
-        LLM_PROVIDER_PROBE_MAX_TOKENS,
-    )
+    max_tokens = min(target["max_tokens"], LLM_PROVIDER_PROBE_MAX_TOKENS)
     selection = ModelSelection(
         dialect_name=dialect_name,
         model=target["model"],
@@ -1071,8 +1203,7 @@ def _probe_llm_target(target: dict[str, Any]) -> dict[str, Any]:
         api_key_name=target.get("api_key_name"),
         max_tokens=max_tokens,
         effort=None,
-        internal_llm_name=target["name"] if target["source"] == "internal_llm" else None,
-        conversation_llm_name=target["name"] if target["source"] == "conversation_llm" else None,
+        model_config_name=target["name"],
     )
     timeout = min(config.api.provider_response_timeout, 15)
     dialect_class = get_registry().get(dialect_name)
@@ -1087,18 +1218,14 @@ def _probe_llm_target(target: dict[str, Any]) -> dict[str, Any]:
         system="MIRA POST provider reachability probe. Reply with OK.",
         model=selection.model,
         max_tokens=max_tokens,
-        temperature=0,
+        temperature=config.api.temperature,
         thinking=ThinkingConfig(),
         metadata=RequestMetadata(
             endpoint_url=selection.endpoint_url,
-            internal_llm_name=selection.internal_llm_name,
-            conversation_llm_name=selection.conversation_llm_name,
+            model_config_name=selection.model_config_name,
         ),
     )
-    result = LLMLifecycle(
-        accounting_policy=None,
-        response_timeout_seconds=timeout,
-    ).complete(request, dialect, fallback_factory=None)
+    result = LLMLifecycle(response_timeout_seconds=timeout).complete(request, dialect)
     reasoning_text = result.reasoning.text if result.reasoning is not None else ""
     if not result.text.strip() and not reasoning_text.strip() and not result.tool_calls:
         raise RuntimeError("Provider returned no text, reasoning, or tool calls")

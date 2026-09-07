@@ -166,7 +166,7 @@ class HybridSearcher:
                        NULL::uuid as source_segment_id,
                        ts_rank(gm.search_vector, plainto_tsquery('english', %(query)s)) as rank,
                        'global' as source
-                FROM global_memories gm
+                FROM global_memories_runtime gm
                 WHERE gm.search_vector @@ plainto_tsquery('english', %(query)s)
                   AND gm.is_archived = FALSE
             )

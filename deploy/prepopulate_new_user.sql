@@ -74,4 +74,4 @@ VALUES
 COMMIT;
 
 -- Example usage:
--- psql -U mira_admin -d mira_service -v user_id='550e8400-e29b-41d4-a716-446655440000' -v user_email='user@example.com' -v user_name='Taylor' -v user_timezone='America/New_York' -v current_focus='Building AI-powered productivity tools' -f prepopulate_new_user.sql
+-- psql -U mira_admin -d mira_service -v user_id='550e8400-e29b-41d4-a716-446655440000' -v user_email='user@example.com' -v user_name='Alex' -v user_timezone='America/New_York' -v current_focus='Building AI-powered productivity tools' -f prepopulate_new_user.sql

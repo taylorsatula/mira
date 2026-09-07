@@ -5,7 +5,7 @@ Provides consistent response patterns, error handling, and middleware.
 """
 import logging
 from dataclasses import dataclass, replace
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 from uuid import uuid4
 
 from utils.timezone_utils import utc_now, format_utc_iso
@@ -18,12 +18,14 @@ class ErrorDetail(TypedDict):
     code: str
     message: str
     details: dict[str, Any]
+    http_status: NotRequired[int]
 
 
 class ResponseMeta(TypedDict, total=False):
     """Response metadata — all fields optional."""
     timestamp: str
     request_id: str
+    http_status: int
 
 
 @dataclass(frozen=True)

@@ -62,14 +62,46 @@ echo -e "${CHECKMARK} ${DIM}(ready after ${i}s)${RESET}"
 
 print_header "Step 13: PostgreSQL Configuration"
 
-# Run schema file - single source of truth for database structure
-# Schema file creates: roles, database, extensions, tables, indexes, RLS policies
-echo -ne "${DIM}${ARROW}${RESET} Running database schema (roles, tables, indexes, RLS)... "
+# Roles, database ownership, and credentials are deployment concerns. The SQL
+# schema deliberately assumes these contracts already exist and targets an
+# empty database, so provision them before applying it.
+echo -ne "${DIM}${ARROW}${RESET} Provisioning database roles and database... "
+# Roles are created with the default sentinel password because pg_hba uses
+# scram-sha-256 for TCP connections on every supported platform: a role with
+# no password can never authenticate the postgresql://mira_dbuser:...
+# (and admin) URLs that Step 14 stores in Vault. The custom-password block
+# further down replaces the sentinel when CONFIG_DB_PASSWORD differs.
+ROLE_SQL="DO \$roles\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_admin') THEN CREATE ROLE mira_admin LOGIN PASSWORD 'changethisifdeployingpwd' BYPASSRLS; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_dbuser') THEN CREATE ROLE mira_dbuser LOGIN PASSWORD 'changethisifdeployingpwd'; END IF; END \$roles\$;"
+if [ "$OS" = "linux" ]; then
+    if ! sudo -u postgres psql -d postgres -v ON_ERROR_STOP=1 -c "$ROLE_SQL" > /dev/null 2>&1; then
+        echo -e "${ERROR}"
+        print_error "Failed to provision database roles"
+        exit 1
+    fi
+    if ! sudo -u postgres psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'mira_service'" | grep -q 1; then
+        sudo -u postgres createdb -O mira_admin mira_service || exit 1
+    fi
+elif [ "$OS" = "macos" ]; then
+    if ! psql -d postgres -v ON_ERROR_STOP=1 -c "$ROLE_SQL" > /dev/null 2>&1; then
+        echo -e "${ERROR}"
+        print_error "Failed to provision database roles"
+        exit 1
+    fi
+    if ! psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'mira_service'" | grep -q 1; then
+        createdb -O mira_admin mira_service || exit 1
+    fi
+fi
+echo -e "${CHECKMARK}"
+
+# Run the fresh-install schema as the database superuser so extension and
+# least-privilege grant setup can complete. The schema is a pure DDL contract:
+# it creates no roles, no database, and refuses to run against a non-empty
+# database, so it must target mira_service directly.
+echo -ne "${DIM}${ARROW}${RESET} Running fresh database schema (tables, indexes, RLS)... "
 SCHEMA_FILE="/opt/mira/app/deploy/mira_service_schema.sql"
 if [ -f "$SCHEMA_FILE" ]; then
     if [ "$OS" = "linux" ]; then
-        # Run as postgres superuser; schema handles CREATE DATABASE and \c
-        if sudo -u postgres psql -f "$SCHEMA_FILE" > /dev/null 2>&1; then
+        if sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 -f "$SCHEMA_FILE" > /dev/null 2>&1; then
             echo -e "${CHECKMARK}"
         else
             echo -e "${ERROR}"
@@ -77,7 +109,7 @@ if [ -f "$SCHEMA_FILE" ]; then
             exit 1
         fi
     elif [ "$OS" = "macos" ]; then
-        if psql postgres -f "$SCHEMA_FILE" > /dev/null 2>&1; then
+        if psql -d mira_service -v ON_ERROR_STOP=1 -f "$SCHEMA_FILE" > /dev/null 2>&1; then
             echo -e "${CHECKMARK}"
         else
             echo -e "${ERROR}"
@@ -91,25 +123,36 @@ else
     exit 1
 fi
 
-# Configure LLM endpoints for offline mode (local llama-server)
-# Main:   Qwopus3.6-27B on port 3090 (0.0.0.0, 256K ctx, MTP speculative)
-# Small:  Qwen3.5-9B on port 3092 (127.0.0.1, 4K ctx, speed-critical)
-# VRAM target: dual RTX 3090 / 48GB total, tensor split 12,12
-# Note: phoneafriend entries remain remote (Anthropic/OpenRouter) — will fail if air-gapped
+# Route every model_configs entry at local llama-server instances.
+# An offline install has no cloud provider, so all five routes are rewritten to
+# OpenAI-compatible local endpoints with api_key_name cleared to '' (the
+# resolver reads an empty key name as "no credential required").
+#
+# The main instance takes the capability-sensitive routes; the small,
+# speed-critical instance takes 'fast' (subcortical analysis) and 'other'.
+# Routing 'other' to a different served model keeps the "outside voice is not
+# the chat model" property true when no outside vendor is reachable; a fully
+# air-gapped install has no genuinely external perspective to consult.
+#
+# Set MIRA_LLAMA_MAIN_MODEL / MIRA_LLAMA_SMALL_MODEL (or CONFIG_LLAMA_MAIN_MODEL
+# and CONFIG_LLAMA_SMALL_MODEL from the installer) to the model names your
+# llama-server instances actually serve; the fallbacks are placeholders.
 if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
     echo -ne "${DIM}${ARROW}${RESET} Configuring LLM endpoints for offline mode (llama-server)... "
-    LLAMA_MAIN_URL="http://localhost:3090/v1/chat/completions"
-    LLAMA_SMALL_URL="http://localhost:3092/v1/chat/completions"
-    OFFLINE_SQL="INSERT INTO conversation_llm (name, model, thinking_budget, description, display_order, dialect_name, endpoint_url, api_key_name, hidden) VALUES ('qwopus', 'Qwopus3.6-27B-v2-MTP-Q5_K_M', 0, 'Local (llama-server)', 0, 'openai', '$LLAMA_MAIN_URL', NULL, FALSE) ON CONFLICT (name) DO UPDATE SET model = 'Qwopus3.6-27B-v2-MTP-Q5_K_M', dialect_name = 'openai', endpoint_url = '$LLAMA_MAIN_URL', api_key_name = NULL; UPDATE users SET conversation_llm = 'qwopus'; UPDATE internal_llm SET endpoint_url = '$LLAMA_MAIN_URL', model = 'Qwopus3.6-27B-v2-MTP-Q5_K_M', api_key_name = NULL WHERE endpoint_url LIKE 'https://%'; UPDATE internal_llm SET endpoint_url = '$LLAMA_SMALL_URL', model = 'Qwen3.5-9B-UD-Q3_K_XL', api_key_name = NULL WHERE name IN ('analysis', 'tidyup', 'overwatch'); UPDATE internal_llm SET endpoint_url = 'https://api.anthropic.com/v1/messages', model = 'claude-opus-4-6', api_key_name = 'anthropic_key' WHERE name = 'phoneafriend_claude'; UPDATE internal_llm SET endpoint_url = 'https://openrouter.ai/api/v1/chat/completions', model = 'openai/gpt-5.5', api_key_name = 'provider_key' WHERE name = 'phoneafriend_gemini';"
+    LLAMA_MAIN_URL="${MIRA_LLAMA_MAIN_URL:-http://localhost:3090/v1/chat/completions}"
+    LLAMA_SMALL_URL="${MIRA_LLAMA_SMALL_URL:-http://localhost:3092/v1/chat/completions}"
+    LLAMA_MAIN_MODEL="${MIRA_LLAMA_MAIN_MODEL:-${CONFIG_LLAMA_MAIN_MODEL:-local-main}}"
+    LLAMA_SMALL_MODEL="${MIRA_LLAMA_SMALL_MODEL:-${CONFIG_LLAMA_SMALL_MODEL:-local-small}}"
+    OFFLINE_SQL="UPDATE model_configs SET dialect_name = 'openai', endpoint_url = '$LLAMA_MAIN_URL', model = '$LLAMA_MAIN_MODEL', api_key_name = '' WHERE name IN ('primary', 'batch', 'assessment'); UPDATE model_configs SET dialect_name = 'openai', endpoint_url = '$LLAMA_SMALL_URL', model = '$LLAMA_SMALL_MODEL', api_key_name = '' WHERE name IN ('fast', 'other');"
     if [ "$OS" = "linux" ]; then
-        if sudo -u postgres psql -d mira_service -c "$OFFLINE_SQL" > /dev/null 2>&1; then
+        if sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 -c "$OFFLINE_SQL" > /dev/null 2>&1; then
             echo -e "${CHECKMARK}"
         else
             echo -e "${ERROR}"
             print_warning "Failed to configure offline mode - you may need to run manually"
         fi
     elif [ "$OS" = "macos" ]; then
-        if psql mira_service -c "$OFFLINE_SQL" > /dev/null 2>&1; then
+        if psql -d mira_service -v ON_ERROR_STOP=1 -c "$OFFLINE_SQL" > /dev/null 2>&1; then
             echo -e "${CHECKMARK}"
         else
             echo -e "${ERROR}"
@@ -163,11 +206,28 @@ vault_put_if_not_exists secret/mira/database \
 CONFIG_USERDATA_ENCRYPTION_KEY=$(openssl rand -base64 32)
 CONFIG_DIAGNOSTICS_TOKEN=$(openssl rand -base64 32)
 
-vault_put_if_not_exists secret/mira/services \
-    app_url="http://localhost:1993" \
-    valkey_url="valkey://localhost:6379" \
-    userdata_encryption_key="${CONFIG_USERDATA_ENCRYPTION_KEY}" \
-    diagnostics_token="${CONFIG_DIAGNOSTICS_TOKEN}"
+# Optional SMTP relay for multi-user mode (MIRA_AUTH_MODE=multi). The mail
+# sender reads MIRA_SMTP_* from the environment first and these Vault
+# fields second (auth/email_service.py), so exporting MIRA_SMTP_* while
+# running the deployer persists a relay for the systemd service, which only
+# receives VAULT_* Environment lines. Nothing here is required in the
+# default single-user mode: no send happens, and no boot check demands it.
+SMTP_ARGS=""
+if [ -n "${MIRA_SMTP_HOST:-}" ]; then
+    SMTP_ARGS="smtp_host=\"${MIRA_SMTP_HOST}\""
+    [ -n "${MIRA_SMTP_PORT:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_port=\"${MIRA_SMTP_PORT}\""
+    [ -n "${MIRA_SMTP_FROM:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_from=\"${MIRA_SMTP_FROM}\""
+    [ -n "${MIRA_SMTP_USER:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_user=\"${MIRA_SMTP_USER}\""
+    [ -n "${MIRA_SMTP_PASSWORD:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_password=\"${MIRA_SMTP_PASSWORD}\""
+    [ -n "${MIRA_SMTP_STARTTLS:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_starttls=\"${MIRA_SMTP_STARTTLS}\""
+fi
+
+eval vault_put_if_not_exists secret/mira/services \
+    app_url=\"http://localhost:1993\" \
+    valkey_url=\"valkey://localhost:6379\" \
+    userdata_encryption_key=\"\${CONFIG_USERDATA_ENCRYPTION_KEY}\" \
+    diagnostics_token=\"\${CONFIG_DIAGNOSTICS_TOKEN}\" \
+    $SMTP_ARGS
 
 if ! vault kv get -field=userdata_encryption_key secret/mira/services > /dev/null 2>&1; then
     vault kv patch secret/mira/services userdata_encryption_key="${CONFIG_USERDATA_ENCRYPTION_KEY}" > /dev/null
