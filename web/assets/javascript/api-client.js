@@ -89,7 +89,9 @@ class MiraAPIClient {
         // Message handling
         this.messageQueue = [];
         this.activeConversationId = null;
-        this.messageCallbacks = new Map(); // For tracking pending messages
+        this.messageCallbacks = new Map(); // message_id (UUID) -> pending turn
+        this.activeTurnId = null;          // server turn_id for the live turn
+        this.turnToMessage = new Map();    // turn_id -> message_id from turn_started
         
         // Event handlers
         this.eventHandlers = {
@@ -290,14 +292,16 @@ class MiraAPIClient {
                     await this.connect();
                 }
 
-                // Send message
+                // Send message. `message_id` is a real UUID because the strict
+                // protocol types it as one and echoes it back in turn_started,
+                // which is how the browser's optimistic row reconciles with the
+                // durable one. `stream` is gone: the server always streams, and
+                // an unknown field now rejects the whole frame.
                 const messageId = this._generateId();
                 const messageData = {
                     type: 'message',
+                    message_id: messageId,
                     content: message,
-                    // Always stream on server; ignore client flag
-                    stream: true,
-                    id: messageId,
                     include_thinking: true
                 };
 
@@ -315,7 +319,9 @@ class MiraAPIClient {
 
                 return new Promise((resolve, reject) => {
                     // Always treat as streaming for client-side handling
-                    this.messageCallbacks.set(messageId, { resolve, reject, stream: true });
+                    this.messageCallbacks.set(messageId, {
+                        resolve, reject, stream: true, chunks: [], turn_id: null
+                    });
 
                     if (this.connectionState === 'authenticated') {
                         console.log('[SEND] Calling _sendMessage for id:', messageId);
@@ -327,58 +333,6 @@ class MiraAPIClient {
                     }
                 });
             },
-            
-            streamChat: async (message, imageData = null) => {
-                // Returns an async generator for streaming responses
-                const messageId = this._generateId();
-                const chunks = [];
-                let resolver, rejecter;
-                
-                const streamPromise = new Promise((resolve, reject) => {
-                    resolver = resolve;
-                    rejecter = reject;
-                });
-                
-                // Set up streaming callback
-                this.messageCallbacks.set(messageId, {
-                    stream: true,
-                    chunks: chunks,
-                    resolve: resolver,
-                    reject: rejecter
-                });
-                
-                // Send message with optional image data
-                await this.chat.sendMessage(message, true, imageData);
-                
-                // Return async generator
-                return {
-                    chunks: chunks,
-                    promise: streamPromise,
-                    [Symbol.asyncIterator]: async function* () {
-                        let index = 0;
-                        while (true) {
-                            // Wait for new chunks
-                            while (index >= chunks.length) {
-                                // Check if stream is complete
-                                try {
-                                    const result = await Promise.race([
-                                        streamPromise,
-                                        new Promise(resolve => setTimeout(resolve, 100))
-                                    ]);
-                                    if (result) return; // Stream complete
-                                } catch (error) {
-                                    throw error;
-                                }
-                            }
-                            
-                            // Yield available chunks
-                            while (index < chunks.length) {
-                                yield chunks[index++];
-                            }
-                        }
-                    }
-                };
-            }
         };
         
         // Don't auto-connect - wait until actually needed
@@ -387,14 +341,28 @@ class MiraAPIClient {
         // History service (HTTP)
         this.history = {
             getHistory: async (params = {}) => {
+                // Ordered history is cursor-only: the endpoint raises on `offset`
+                // and on `search`, and continues with the opaque `before` token it
+                // hands back in meta.next_before. `date` becomes a real one-day
+                // window so the calendar keeps working without a bespoke param.
                 const queryParams = new URLSearchParams();
                 queryParams.append('type', 'history');
-                if (params.offset !== undefined) queryParams.append('offset', params.offset);
+                if (params.before) queryParams.append('before', params.before);
                 if (params.limit !== undefined) queryParams.append('limit', params.limit);
-                if (params.date) queryParams.append('date', params.date);
-                if (params.search) queryParams.append('search', params.search);
+                if (params.date) {
+                    queryParams.append('start_date', `${params.date}T00:00:00Z`);
+                    queryParams.append('end_date', `${params.date}T23:59:59.999Z`);
+                }
 
                 const response = await this._httpRequest(`/v0/api/data?${queryParams.toString()}`);
+                // The keyset endpoint returns each page oldest-to-newest so a
+                // page can be appended to a transcript. Every history renderer
+                // in this app was written against the old newest-first page, so
+                // the page is reversed here — one boundary, one convention —
+                // rather than in six call sites.
+                if (response && Array.isArray(response.messages)) {
+                    response.messages.reverse();
+                }
                 return response;
             }
         };
@@ -453,14 +421,23 @@ class MiraAPIClient {
             }
         };
 
-        // Billing service removed for OSS (endpoints are hosted-only; chat/settings
-        // billing UIs guard on window.miraAPI?.billing?.X and early-return when undefined)
+        // Billing service removed for OSS (endpoints are hosted-only; no billing
+        // UI ships in this repository)
     }
     
-    // Generation control
+    // Generation control. A halt names the turn it stops, so a stale click
+    // cannot stop a turn that already finished and a new one started.
     cancelGeneration() {
+        if (!this.activeTurnId) {
+            // turn_started has not arrived, so there is no turn to name. The
+            // server rejects an unbound halt with NO_MATCHING_ACTIVE_TURN, and
+            // silently dropping the click is how the old client stranded the
+            // stop button.
+            console.warn('Halt requested before turn_started; ignoring');
+            return;
+        }
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: 'cancel' }));
+            this.ws.send(JSON.stringify({ type: 'halt', turn_id: this.activeTurnId }));
         }
     }
 
@@ -547,47 +524,50 @@ class MiraAPIClient {
                 case 'auth_success':
                     this._handleAuthSuccess(data);
                     break;
-                    
-                case 'error':
-                    this._handleServerError(data);
+
+                case 'turn_started':
+                    this._handleTurnStarted(data);
                     break;
-                    
-                case 'text':
+
+                case 'assistant_delta':
                     this._handleTextChunk(data);
                     break;
-                    
+
                 case 'tool':
                     // Debug: surface incoming tool events in console
                     try { console.log('[WS] tool event received:', data); } catch (e) {}
                     this._handleToolEvent(data);
                     break;
-                    
-                case 'response':
-                    this._handleCompleteResponse(data);
+
+                case 'thinking':
+                case 'model_error':
+                    // Forwarded to onMessage listeners for progressive display
+                    // and the invalid-tool-call notice respectively.
                     break;
-                    
-                case 'complete':
+
+                case 'turn_complete':
                     this._handleMessageComplete(data);
                     break;
 
-                case 'cancelled':
-                    this._handleMessageComplete(data);
+                case 'turn_stopped':
+                    this._handleMessageStopped(data);
                     break;
 
-                case 'interrupted':
-                    this._handleMessageInterrupted(data);
+                case 'turn_error':
+                    this._handleTurnFailure(data);
+                    break;
+
+                case 'protocol_error':
+                    this._handleServerError(data);
+                    break;
+
+                case 'server_shutdown':
+                    console.warn('Server is shutting down');
+                    this._handleServerError({ code: data.code, message: data.message });
                     break;
 
                 case 'pong':
                     // Keepalive response
-                    break;
-
-                case 'thinking':
-                    // Thinking events forwarded to onMessage listeners for progressive display
-                    break;
-
-                case 'provider_switch':
-                    this._handleProviderSwitch(data);
                     break;
 
                 default:
@@ -615,31 +595,37 @@ class MiraAPIClient {
         this._startKeepalive();
     }
     
+    _handleTurnStarted(data) {
+        // turn_started is the only frame that carries both identities, so it is
+        // where the optimistic message_id and the server's turn_id get bound.
+        this.activeTurnId = data.turn_id;
+        this.turnToMessage.set(data.turn_id, data.message_id);
+        const callback = this.messageCallbacks.get(data.message_id);
+        if (callback) callback.turn_id = data.turn_id;
+    }
+
     _handleServerError(data) {
-        // Check if this is a USER authentication error (not LLM provider auth errors)
-        const message = (data.message || '');
-        // Only logout for specific user session authentication failures
-        if (message === 'Invalid or expired session' || 
-            message === 'Authentication timeout' ||
-            message.startsWith('Authentication failed:')) {
-            console.log('User authentication error:', data.message);
-            // Clear token and emit logout
+        // protocol_error / server_shutdown. Auth failures are terminal for this
+        // connection: the code says so, so no message-string matching is needed.
+        const message = data.message || 'Server error';
+        if (data.code === 'AUTH_FAILED' || data.code === 'AUTH_TIMEOUT') {
+            console.log('User authentication error:', message);
             this.auth.clearToken();
-            // Prevent reconnection attempts
             this.reconnectAttempts = this.maxReconnectAttempts;
         }
-        
+
         const activeCallback = this._getActiveMessageCallback();
         if (activeCallback) {
-            activeCallback.reject(new Error(data.message));
+            activeCallback.reject(new Error(message));
             this.messageCallbacks.delete(activeCallback.id);
+            this._forgetTurn(activeCallback);
         }
     }
     
     _handleTextChunk(data) {
-        const activeCallback = this._getActiveMessageCallback();
-        if (activeCallback && activeCallback.stream) {
-            activeCallback.chunks?.push(data);
+        const callback = this._callbackForTurn(data.turn_id);
+        if (callback && callback.stream) {
+            callback.chunks.push(data);
         }
     }
     
@@ -649,79 +635,87 @@ class MiraAPIClient {
         this._emit('onMessage', { ...data, type: 'tool_event' });
     }
 
-    _handleProviderSwitch(data) {
-        const activeCallback = this._getActiveMessageCallback();
-        if (activeCallback && activeCallback.stream) {
-            activeCallback.chunks = [];
+    _streamedText(callback) {
+        return callback.chunks
+            .filter(chunk => chunk.type === 'assistant_delta')
+            .map(chunk => chunk.content)
+            .join('');
+    }
+
+    _forgetTurn(callback) {
+        if (callback.turn_id) {
+            this.turnToMessage.delete(callback.turn_id);
+            if (this.activeTurnId === callback.turn_id) this.activeTurnId = null;
         }
     }
-    
-    _handleCompleteResponse(data) {
-        const activeCallback = this._getActiveMessageCallback();
-        if (activeCallback && !activeCallback.stream) {
-            activeCallback.resolve({ response: data.content });
-            this.messageCallbacks.delete(activeCallback.id);
-        }
-    }
-    
+
     _handleMessageComplete(data) {
         this.activeConversationId = data.continuum_id;
 
-        const activeCallback = this._getActiveMessageCallback();
-        if (activeCallback) {
-            const response = {
-                continuum_id: data.continuum_id,
-                metadata: data.metadata
-            };
-
-            if (activeCallback.stream) {
-                // Build response from streamed chunks for progressive rendering
-                response.response = activeCallback.chunks
-                    ?.filter(chunk => chunk.type === 'text')
-                    .map(chunk => chunk.content)
-                    .join('');
-
-                // Extract emotion from server's complete response (has preserved tags)
-                if (data.response && window.extractEmotionEmoji) {
-                    const emoji = window.extractEmotionEmoji(data.response);
-                    if (emoji && window.streamingState) {
-                        window.streamingState.currentEmotion = emoji;
-                    }
-                }
-            }
-
-            activeCallback.resolve(response);
-            this.messageCallbacks.delete(activeCallback.id);
-        }
-    }
-
-    _handleMessageInterrupted(data) {
-        this.activeConversationId = data.continuum_id;
-
-        const activeCallback = this._getActiveMessageCallback();
+        const activeCallback = this._callbackForTurn(data.turn_id);
         if (!activeCallback) {
             return;
         }
 
+        // The frame carries the authoritative text and the metadata the UI reads;
+        // the chunk tally is the fallback for a callback that never saw a delta.
         const response = {
-            response: data.response || '',
-            interrupted: true,
-            message: data.message,
-            error_type: data.error_type,
-            balance: data.balance,
-            next_drip_at: data.next_drip_at,
-            seconds_until_drip: data.seconds_until_drip
+            continuum_id: data.continuum_id,
+            response: data.response || this._streamedText(activeCallback),
+            metadata: {
+                tools_used: data.tools_used || [],
+                processing_time_ms: data.processing_time_ms,
+                emotion: data.emotion || null
+            }
+        };
+
+        if (data.response && window.extractEmotionEmoji) {
+            const emoji = window.extractEmotionEmoji(data.response);
+            if (emoji && window.streamingState) {
+                window.streamingState.currentEmotion = emoji;
+            }
+        }
+
+        activeCallback.resolve(response);
+        this.messageCallbacks.delete(activeCallback.id);
+        this._forgetTurn(activeCallback);
+    }
+
+    _handleMessageStopped(data) {
+        const activeCallback = this._callbackForTurn(data.turn_id);
+        if (!activeCallback) {
+            return;
+        }
+
+        // A halt still resolves the awaited send, or the send button would stay
+        // in stop-mode for the rest of the session.
+        const response = {
+            response: this._streamedText(activeCallback),
+            stopped: true,
+            stop_reason: data.reason
         };
 
         activeCallback.resolve(response);
         this.messageCallbacks.delete(activeCallback.id);
+        this._forgetTurn(activeCallback);
+    }
+
+    _handleTurnFailure(data) {
+        const activeCallback = this._callbackForTurn(data.turn_id);
+        if (!activeCallback) {
+            return;
+        }
+
+        activeCallback.reject(new Error(data.message || 'Generation failed'));
+        this.messageCallbacks.delete(activeCallback.id);
+        this._forgetTurn(activeCallback);
     }
     
     // Helper methods
     _sendMessage(messageData) {
         console.log('[SEND] _sendMessage called, ws exists:', !!this.ws, 'readyState:', this.ws?.readyState, 'OPEN:', WebSocket.OPEN);
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            console.log('[SEND] Sending message:', messageData.type, messageData.id);
+            console.log('[SEND] Sending message:', messageData.type, messageData.message_id);
             this.ws.send(JSON.stringify(messageData));
         } else {
             console.log('[SEND] WebSocket not ready, message NOT sent');
@@ -764,6 +758,20 @@ class MiraAPIClient {
             callback.reject(new Error(reason));
         }
         this.messageCallbacks.clear();
+        this.turnToMessage.clear();
+        this.activeTurnId = null;
+    }
+
+    _callbackForTurn(turnId) {
+        // Prefer the turn identity the server supplied. FIFO is only the
+        // fallback for a terminal frame that arrives before turn_started, which
+        // cannot happen over an ordered socket but keeps a rejected send from
+        // stranding its own promise.
+        const messageId = turnId ? this.turnToMessage.get(turnId) : null;
+        if (messageId && this.messageCallbacks.has(messageId)) {
+            return { ...this.messageCallbacks.get(messageId), id: messageId };
+        }
+        return this._getActiveMessageCallback();
     }
 
     _getActiveMessageCallback() {
@@ -771,9 +779,18 @@ class MiraAPIClient {
         const [id, callback] = this.messageCallbacks.entries().next().value || [];
         return callback ? { ...callback, id } : null;
     }
-    
+
     _generateId() {
-        return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        // The protocol types message_id as a UUID, so generate a real one.
+        if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+        const bytes = new Uint8Array(16);
+        (globalThis.crypto?.getRandomValues
+            ? globalThis.crypto.getRandomValues(bytes)
+            : bytes.forEach((_, i) => { bytes[i] = Math.floor(Math.random() * 256); }));
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+        return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
     }
 
     _getCookie(name) {

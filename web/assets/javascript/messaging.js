@@ -445,7 +445,7 @@ const streamingState = {
 	thinkingElement: null,       // reference to .thinking-stream-content DOM node
 	renderBlocked: false,        // true during transition sequence (text accumulates but doesn't render)
 	isGenerating: false,         // true while LLM is generating (controls stop button)
-	providerSwitchAlert: null    // reference to the persistent provider-switch alert element
+	modelErrorAlert: null        // reference to the persistent invalid-tool-call notice element
 };
 
 let loadingScreenTimer = null;
@@ -896,7 +896,7 @@ window.updateThinkingIndicator = function(isThinking, emotionOverride = null) {
 	const thinkingIndicator = document.getElementById('thinking-indicator');
 	if (!thinkingIndicator) return;
 
-	// Preserve the existing indicator-label (contains tier model name like "Balanced")
+	// Preserve the existing indicator-label span across the innerHTML rewrite below
 	const existingLabel = thinkingIndicator.querySelector('.indicator-label');
 	const labelText = existingLabel ? existingLabel.textContent : '';
 
@@ -913,7 +913,7 @@ window.updateThinkingIndicator = function(isThinking, emotionOverride = null) {
 		thinkingIndicator.innerHTML = `<span class="emotion-emoji" style="padding-left: 0">${emoji}</span>`;
 	}
 
-	// Restore the indicator-label span with tier model name
+	// Re-attach the indicator-label span that innerHTML discarded
 	if (labelText) {
 		const label = document.createElement('span');
 		label.className = 'indicator-label';
@@ -1488,36 +1488,26 @@ async function handleSendMessage(message, attachedFiles = []) {
 			);
 
 			const messageHandler = (data) => {
-				if (data.type === 'provider_switch') {
-					// Provider stalled — clear accumulated text and show persistent alert
-					console.warn(`Provider switch: ${data.reason}`);
-					streamingState.buffer = '';
-					streamingState.thinkingBuffer = '';
-					streamingState.renderedLength = 0;
-					streamingState.firstBlockRendered = false;
-					if (streamingState.thinkingElement) {
-						streamingState.thinkingElement.remove();
-						streamingState.thinkingElement = null;
-					}
-					// Remove any partial response content from the dead provider
-					if (elements.responseContent) {
-						elements.responseContent.textContent = '';
-					}
-					// Show persistent alert that fades when the new generation completes
-					if (streamingState.providerSwitchAlert) {
-						streamingState.providerSwitchAlert.remove();
-					}
+				if (data.type === 'model_error') {
+					// The model misused a tool and the turn is recovering. The
+					// provider-switch handler this replaces was unreachable once
+					// 2.0 removed provider fallback; model_error was simply
+					// dropped by the transport until R5 restored it.
+					console.warn(`Model tool error: ${data.message}`);
+					if (streamingState.modelErrorAlert) return;
 					const alertEl = document.createElement('div');
 					alertEl.className = 'system-alert alert';
 					alertEl.style.cssText = 'border-color: orange; margin: 8px 16px; padding: 8px 12px; border-radius: 6px; background: rgba(255,165,0,0.08); font-size: 13px; color: #e67e22;';
-					alertEl.textContent = `⚠ Generation stalled — retrying with ${data.backup_model || 'backup'}`;
+					alertEl.textContent = `⚠ ${data.message}`;
 					const nc = document.getElementById('notifications-center');
-					if (nc) nc.appendChild(alertEl);
-					streamingState.providerSwitchAlert = alertEl;
+					if (nc) {
+						nc.appendChild(alertEl);
+						streamingState.modelErrorAlert = alertEl;
+					}
 					return;
 				}
 
-				if (data.type === 'text') {
+				if (data.type === 'assistant_delta') {
 					if (streamingState.thinkingActive && streamingState.containerReady) {
 						transitionThinkingToText();
 					} else if (streamingState.thinkingActive) {
@@ -1583,10 +1573,10 @@ async function handleSendMessage(message, attachedFiles = []) {
 					AppState.apiClient.eventHandlers.onMessage.splice(index, 1);
 				}
 
-				// Remove provider-switch alert when generation completes
-				if (streamingState.providerSwitchAlert) {
-					streamingState.providerSwitchAlert.remove();
-					streamingState.providerSwitchAlert = null;
+				// Remove the tool-error notice when generation completes
+				if (streamingState.modelErrorAlert) {
+					streamingState.modelErrorAlert.remove();
+					streamingState.modelErrorAlert = null;
 				}
 
 				if (window._streamHandlers) {
@@ -1615,9 +1605,6 @@ async function handleSendMessage(message, attachedFiles = []) {
 							window.domainManager?.fetchDomains().catch(() => {});
 						}
 					}
-					if (response.metadata.workflow_detected) {
-						window.updateWorkflowBadge?.(response.metadata.workflow_detected);
-					}
 				}
 			} catch (error) {
 				setGenerating(false);
@@ -1627,10 +1614,10 @@ async function handleSendMessage(message, attachedFiles = []) {
 					AppState.apiClient.eventHandlers.onMessage.splice(index, 1);
 				}
 
-				// Remove provider-switch alert on error too
-				if (streamingState.providerSwitchAlert) {
-					streamingState.providerSwitchAlert.remove();
-					streamingState.providerSwitchAlert = null;
+				// Remove the tool-error notice on error too
+				if (streamingState.modelErrorAlert) {
+					streamingState.modelErrorAlert.remove();
+					streamingState.modelErrorAlert = null;
 				}
 
 				if (window._streamHandlers) {
