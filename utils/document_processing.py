@@ -1,23 +1,20 @@
 """
 Document processing for multi-turn context.
 
-Processes documents for LLM consumption:
-- PDF: Pass through as native document block (Claude handles natively)
-- DOCX/XLSX: Extract text using optional libraries with stdlib fallback
+Processes PDF, DOCX, XLSX, CSV, JSON, and TXT into provider-neutral text
+for any fixed model route.
 
 Optional dependencies (python-docx, openpyxl) provide richer extraction
 but are not required - falls back to stdlib XML parsing.
 """
-import base64
 import logging
 import zipfile
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Literal, Optional, TYPE_CHECKING
+from typing import Literal, Optional
 from xml.etree import ElementTree
 
-if TYPE_CHECKING:
-    from clients.files_manager import FilesManager
+from pypdf import PdfReader
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +43,7 @@ SUPPORTED_DOCUMENT_FORMATS = {
     "application/json",  # JSON
 }
 
-MAX_DOCUMENT_SIZE_MB = 32  # Claude's PDF limit
+MAX_DOCUMENT_SIZE_MB = 32
 MAX_ZIP_ENTRIES = 1000
 MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 20 * 1024 * 1024
 MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
@@ -60,37 +57,30 @@ class ProcessedDocument:
     Result of document processing.
 
     content_type values:
-    - "container_upload": Structured data uploaded to Files API (CSV, XLSX, JSON)
-    - "document": PDF as base64 (not code-executable)
-    - "text": Extracted text from DOCX
+    - "text": Extracted text from every supported format
     """
 
-    content_type: Literal["container_upload", "document", "text"]
+    content_type: Literal["text"]
     media_type: str     # Original MIME type
-    data: str           # file_id | base64 | extracted_text
+    data: str           # extracted_text
     original_filename: Optional[str] = None  # Filename for tracking
 
 
 def process_document(
     doc_bytes: bytes,
     media_type: str,
-    files_manager: Optional['FilesManager'] = None,
     filename: str = "document",
-    segment_id: Optional[str] = None
 ) -> ProcessedDocument:
-    """
-    Process document for LLM consumption with Files API support.
+    """Process a document into provider-neutral text for any fixed model route.
 
     Type-based routing:
-    - CSV/XLSX/JSON → Upload to Files API (code-executable)
-    - PDF → Base64 document block (display-only)
-    - DOCX → Extract text (Anthropic doesn't support native)
+    - CSV/XLSX/JSON → Extract text locally
+    - PDF/DOCX → Extract text locally
 
     Args:
         doc_bytes: Raw document bytes
         media_type: MIME type of the document
-        files_manager: Optional FilesManager for Files API uploads
-        filename: Original filename for Files API tracking
+        filename: Original filename retained for caller-facing metadata
 
     Returns:
         ProcessedDocument with appropriate content for LLM
@@ -98,50 +88,34 @@ def process_document(
     Raises:
         ValueError: If document type unsupported or processing fails
     """
-    # Structured data: Upload to Files API for code execution
+    # Structured data is extracted locally. Provider-specific remote file IDs
+    # cannot cross MIRA's provider-neutral request boundary.
     if media_type in ("text/csv", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/json"):
         if media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
             validate_office_zip(doc_bytes)
-        if files_manager is not None and segment_id is not None:
-            # Upload to Files API, return file_id
-            file_id = files_manager.upload_file(
-                file_bytes=doc_bytes,
-                filename=filename,
-                media_type=media_type,
-                segment_id=segment_id
-            )
-            return ProcessedDocument(
-                content_type="container_upload",
-                media_type=media_type,
-                data=file_id,
-                original_filename=filename
-            )
+        if media_type == "text/csv":
+            text = extract_text_file(doc_bytes)
+        elif media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+            text = extract_xlsx_text(doc_bytes)
         else:
-            # Fallback: extract text if no files_manager provided
-            if media_type == "text/csv":
-                text = extract_text_file(doc_bytes)
-            elif media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-                text = extract_xlsx_text(doc_bytes)
-            elif media_type == "application/json":
-                text = extract_text_file(doc_bytes)
-            else:
-                text = extract_text_file(doc_bytes)
-
-            return ProcessedDocument(
-                content_type="text",
-                media_type=media_type,
-                data=text
-            )
-
-    # PDF: Pass through as base64 document block (not code-executable)
-    elif media_type == "application/pdf":
+            text = extract_text_file(doc_bytes)
         return ProcessedDocument(
-            content_type="document",
+            content_type="text",
             media_type=media_type,
-            data=base64.b64encode(doc_bytes).decode('utf-8')
+            data=text,
+            original_filename=filename,
         )
 
-    # DOCX: Extract text (Anthropic doesn't support native DOCX)
+    # PDF: extract text locally for the provider-neutral request.
+    elif media_type == "application/pdf":
+        return ProcessedDocument(
+            content_type="text",
+            media_type=media_type,
+            data=extract_pdf_text(doc_bytes),
+            original_filename=filename,
+        )
+
+    # DOCX: Extract text locally.
     elif media_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
         text = extract_docx_text(doc_bytes)
         return ProcessedDocument(
@@ -173,6 +147,19 @@ def extract_text_file(doc_bytes: bytes) -> str:
         return doc_bytes.decode('utf-8')
     except UnicodeDecodeError:
         return doc_bytes.decode('latin-1')
+
+
+def extract_pdf_text(doc_bytes: bytes) -> str:
+    """Extract bounded text from a PDF or reject image-only documents."""
+    try:
+        reader = PdfReader(BytesIO(doc_bytes))
+        text = "\n\n".join((page.extract_text() or "").strip() for page in reader.pages)
+    except Exception as error:
+        raise ValueError(f"Failed to extract PDF text: {error}") from error
+    text = text.strip()
+    if not text:
+        raise ValueError("PDF contains no extractable text")
+    return _cap_extracted_text(text)
 
 
 def extract_docx_text(doc_bytes: bytes) -> str:

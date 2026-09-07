@@ -102,10 +102,31 @@ def log_response(
 
     _write(_RESPONSE_PATH, {
         "ts": time.time(),
+        "kind": "response",
         "provider": provider,
         "model": model,
         "endpoint": endpoint,
         "response": data,
+    })
+
+
+def log_stream_chunk(
+    *,
+    provider: str,
+    endpoint: str,
+    model: str,
+    chunk: Dict[str, Any],
+) -> None:
+    """Log one raw provider streaming chunk before dialect normalization."""
+    if not _active:
+        return
+    _write(_RESPONSE_PATH, {
+        "ts": time.time(),
+        "kind": "stream_chunk",
+        "provider": provider,
+        "model": model,
+        "endpoint": endpoint,
+        "chunk": chunk,
     })
 
 

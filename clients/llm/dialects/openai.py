@@ -10,6 +10,9 @@ When a caller passes `budget_tokens` without `effort`, this dialect applies
 the inherited heuristic mapping and emits a TranslationNote at WARNING level -
 neither OpenAI nor Groq publish per-effort token relationships, so the
 translation is necessarily lossy.
+
+`effort="none"` is forwarded as `reasoning_effort: "none"`, the explicit
+no-reasoning signal, and is never omitted from the payload.
 """
 
 from __future__ import annotations
@@ -20,7 +23,13 @@ from urllib.parse import urlparse
 
 from clients.llm.dialects.openai_chat_base import OpenAIChatBase
 from clients.llm.thinking import TranslationNote
-from clients.llm.types import EFFORT_LEVEL_ORDER, EffortLevel, Request, ThinkingConfig
+from clients.llm.types import (
+    EFFORT_LEVEL_ORDER,
+    DeliberationLevel,
+    EffortLevel,
+    Request,
+    ThinkingConfig,
+)
 
 
 class OpenAIDialect(OpenAIChatBase):
@@ -31,7 +40,8 @@ class OpenAIDialect(OpenAIChatBase):
     native_thinking_fields = ("effort",)
 
     # Per-model effort ceilings. Models not listed support all effort levels.
-    _MAX_EFFORT_PER_MODEL: dict[str, EffortLevel] = {
+    # A ceiling is always a deliberating level; "none" is never clamped upward.
+    _MAX_EFFORT_PER_MODEL: dict[str, DeliberationLevel] = {
         # Add entries when a model ships with a documented effort cap.
     }
 
@@ -64,6 +74,16 @@ class OpenAIDialect(OpenAIChatBase):
             return False
         return address.is_loopback or address.is_private
 
+    def _extract_reasoning_message(self, message) -> str:
+        """Override base to extract reasoning_content from OpenAI-compatible
+        providers (llama.cpp, local servers) that surface reasoning in the
+        `reasoning_content` field."""
+        return message.get("reasoning_content") or ""
+
+    def _extract_reasoning_delta(self, delta) -> str:
+        """Override base to extract reasoning_content from streaming deltas."""
+        return delta.get("reasoning_content") or ""
+
     def _serialize_thinking(self, payload: dict[str, Any], thinking: ThinkingConfig) -> None:
         effort = thinking.effort
         if effort is None and thinking.budget_tokens is not None:
@@ -91,6 +111,12 @@ class OpenAIDialect(OpenAIChatBase):
             return
 
         clamped = self._clamp_effort_for_model(payload.get("model"), effort, original=effort)
+        # "none" goes on the wire as reasoning_effort="none" rather than as an
+        # omitted parameter. Absent means "model default", and the default on this
+        # family is a deliberating level (medium on gpt-5.5; llama.cpp's server -
+        # the offline deployment target - documents reasoning_effort "none" as the
+        # switch that disables thinking). A model that rejects the literal fails with
+        # a provider 400, which is loud; omission would be silent.
         payload["reasoning_effort"] = clamped
 
     def _clamp_effort_for_model(
@@ -104,6 +130,11 @@ class OpenAIDialect(OpenAIChatBase):
             return requested
         ceiling = self._MAX_EFFORT_PER_MODEL.get(model)
         if ceiling is None:
+            return requested
+        # "none" sits below every ranked level, so no ceiling can apply to it -
+        # and it is deliberately absent from EFFORT_LEVEL_ORDER, where index()
+        # would raise.
+        if requested == "none":
             return requested
         ranking = EFFORT_LEVEL_ORDER
         if ranking.index(requested) <= ranking.index(ceiling):

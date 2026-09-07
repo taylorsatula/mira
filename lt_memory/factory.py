@@ -4,11 +4,9 @@ Factory for creating and managing LT_Memory service instances.
 Replaces global singleton pattern with explicit dependency management,
 enabling easier testing and clearer lifecycle control.
 """
-import anthropic
 import logging
 from typing import Optional
 
-from clients.vault_client import get_api_key
 from lt_memory.db_access import LTMemoryDB
 from lt_memory.vector_ops import VectorOps
 from lt_memory.linking import LinkingService
@@ -16,17 +14,12 @@ from lt_memory.proactive import ProactiveService
 from lt_memory.hub_discovery import HubDiscoveryService
 from lt_memory.processing.memory_processor import MemoryProcessor
 from lt_memory.processing.extraction_engine import ExtractionEngine
-from lt_memory.processing.execution_strategy import create_execution_strategy, ImmediateExecutionStrategy
+from lt_memory.processing.execution_strategy import create_execution_strategy
 from lt_memory.processing.orchestrator import ExtractionOrchestrator
-from lt_memory.processing.batch_coordinator import BatchCoordinator
 from lt_memory.processing.consolidation_handler import ConsolidationHandler
-from lt_memory.batch_result_handlers import ExtractionBatchResultHandler
 from utils.database_session_manager import LTMemorySessionManager, get_shared_session_manager
 
 logger = logging.getLogger(__name__)
-
-# Vault key name for Anthropic Batch API (separate from chat to isolate rate limits)
-BATCH_API_KEY_NAME = "anthropic_batch_key"
 
 # Singleton instance
 _lt_memory_factory_instance: Optional['LTMemoryFactory'] = None
@@ -40,8 +33,7 @@ class LTMemoryFactory:
     The factory wires infrastructure dependencies (DB, embeddings, LLM provider)
     and manages service lifecycle.
 
-    The Batch API client is created internally using BATCH_API_KEY_NAME to isolate
-    batch operations from interactive chat API rate limits and costs.
+    Memory extraction uses the fixed ``batch`` model config through LLMProvider.
     """
 
     def __init__(
@@ -64,18 +56,6 @@ class LTMemoryFactory:
         # mode. None until registered; store_and_tend_extraction is None-safe.
         # lt_memory never imports from agents/ — the callback is the seam.
         self.on_memories_stored = None
-
-        # Dedicated Anthropic client for Batch API (isolated rate limits and cost tracking)
-        batch_api_key = get_api_key(BATCH_API_KEY_NAME)
-        self._batch_anthropic_client = anthropic.Anthropic(
-            api_key=batch_api_key,
-            timeout=120.0
-        )
-        logger.info(f"Batch API client initialized with key '{BATCH_API_KEY_NAME}'")
-
-        # Instrument batch client for SDK log correlation and traffic tap
-        from utils.logging_config import instrument_anthropic_client
-        instrument_anthropic_client(self._batch_anthropic_client)
 
         # Track initialization order for reverse cleanup
         self._service_init_order = []
@@ -131,13 +111,6 @@ class LTMemoryFactory:
             )
             self._service_init_order.append(self.extraction_engine)
 
-            logger.debug("Initializing BatchCoordinator...")
-            self.batch_coordinator = BatchCoordinator(
-                db=self.db,
-                anthropic_client=self._batch_anthropic_client
-            )
-            self._service_init_order.append(self.batch_coordinator)
-
             logger.debug("Initializing ExecutionStrategy...")
             self.execution_strategy = create_execution_strategy(
                 extraction_engine=self.extraction_engine,
@@ -145,23 +118,9 @@ class LTMemoryFactory:
                 vector_ops=self.vector_ops,
                 db=self.db,
                 llm_provider=self._llm_provider,
-                batch_coordinator=self.batch_coordinator,
                 linking_service=self.linking
             )
             self._service_init_order.append(self.execution_strategy)
-
-            # Always create an ImmediateExecutionStrategy for manual collapse
-            # (bypasses batch so memories are ready before the user's next conversation)
-            logger.debug("Initializing ImmediateExecutionStrategy (for manual collapse)...")
-            self.immediate_strategy = ImmediateExecutionStrategy(
-                extraction_engine=self.extraction_engine,
-                memory_processor=self.memory_processor,
-                vector_ops=self.vector_ops,
-                db=self.db,
-                llm_provider=self._llm_provider,
-                linking_service=self.linking
-            )
-            self._service_init_order.append(self.immediate_strategy)
 
             logger.debug("Initializing ExtractionOrchestrator...")
             self.extraction_orchestrator = ExtractionOrchestrator(
@@ -169,7 +128,6 @@ class LTMemoryFactory:
                 execution_strategy=self.execution_strategy,
                 continuum_repo=self._conversation_repo,
                 db=self.db,
-                immediate_strategy=self.immediate_strategy
             )
             self._service_init_order.append(self.extraction_orchestrator)
 
@@ -185,18 +143,6 @@ class LTMemoryFactory:
                 db=self.db
             )
             self._service_init_order.append(self.hub_discovery)
-
-            logger.debug("Initializing result handlers...")
-            self.extraction_result_handler = ExtractionBatchResultHandler(
-                anthropic_client=self._batch_anthropic_client,
-                memory_processor=self.memory_processor,
-                vector_ops=self.vector_ops,
-                db=self.db,
-                linking_service=self.linking,
-                llm_provider=self._llm_provider,
-                batch_coordinator=self.batch_coordinator
-            )
-            self._service_init_order.append(self.extraction_result_handler)
 
         except Exception as e:
             raise RuntimeError(f"Failed to initialize processing components: {e}") from e
@@ -240,7 +186,7 @@ class LTMemoryFactory:
         return (
             f"LTMemoryFactory(services=[db, vector_ops, linking, "
             f"memory_processor, extraction_engine, execution_strategy, extraction_orchestrator, "
-            f"batch_coordinator, consolidation_handler, hub_discovery, proactive])"
+            f"consolidation_handler, hub_discovery, proactive])"
         )
 
 

@@ -31,6 +31,8 @@ from collections.abc import Mapping as MappingABC
 from typing import Any, NoReturn, TYPE_CHECKING
 
 import httpx
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 from clients.llm.artifacts import FileArtifactSink
 from clients.llm.events import CompleteEvent, StreamEvent, TextEvent, ThinkingEvent, ToolDetectedEvent
@@ -54,6 +56,7 @@ from clients.llm.types import (
     ToolDefinition,
     Usage,
 )
+from utils import http_client, llm_tap
 
 if TYPE_CHECKING:
     from clients.llm.resolver import ModelSelection
@@ -108,7 +111,10 @@ class OpenAIChatBase(Dialect):
         artifact_sink: FileArtifactSink | None,
     ) -> "OpenAIChatBase":
         # Shared construction for OpenAI-family dialects: pull endpoint from
-        # the selection, source API key from the argument or Vault.
+        # the selection, source API key from the argument or Vault. A selection
+        # with no api_key_name requires no credential, so the lookup is skipped
+        # and the request goes out without an Authorization header — this is the
+        # offline install's local llama-server route.
         if not selection.endpoint_url:
             raise ValueError(
                 f"{cls.__name__} requires endpoint_url on the ModelSelection"
@@ -172,6 +178,10 @@ class OpenAIChatBase(Dialect):
         so this is a documented guess. Dialects whose provider DOES publish
         thresholds should override this method with the documented values.
         """
+        # A zero budget is not "a little reasoning", it is no reasoning, and every
+        # provider on this family rejects reasoning_effort below its lowest tier.
+        if budget_tokens <= 0:
+            return "none"
         if budget_tokens <= 2048:
             return "low"
         if budget_tokens <= 8192:
@@ -214,15 +224,13 @@ class OpenAIChatBase(Dialect):
     # ------------------------------------------------------------------
 
     def stream(self, request: Request) -> Iterator[StreamEvent]:
-        from utils import http_client
-
         payload = self._build_payload(request, stream=True)
         headers = self._headers()
         self._log_request(request, payload)
 
         accumulated_text = ""
         accumulated_reasoning = ""
-        accumulated_reasoning_details: list[Any] = []
+        accumulated_reasoning_details: list[dict[str, Any]] = []
         accumulated_tool_calls: dict[int, dict[str, Any]] = {}
         finish_reason: str | None = None
         usage: Usage | None = None
@@ -263,6 +271,20 @@ class OpenAIChatBase(Dialect):
                         self.endpoint_url,
                         "streaming",
                         f"Malformed SSE JSON chunk: {line[:200]}",
+                    )
+                if not isinstance(chunk, dict):
+                    raise ProviderProtocolError(
+                        self.endpoint_url,
+                        "streaming",
+                        "SSE JSON chunk must be an object",
+                    )
+
+                if llm_tap.is_active():
+                    llm_tap.log_stream_chunk(
+                        provider=self.dialect_name,
+                        endpoint=self.endpoint_url,
+                        model=request.model,
+                        chunk=chunk,
                     )
 
                 if chunk.get("usage"):
@@ -324,7 +346,11 @@ class OpenAIChatBase(Dialect):
                             "streaming",
                             "SSE reasoning_details delta must be a list",
                         )
-                    accumulated_reasoning_details.extend(details)
+                    self._accumulate_reasoning_details(
+                        accumulated_reasoning_details,
+                        details,
+                        mode="streaming",
+                    )
                     if not saw_reasoning_delta:
                         details_text = self._reasoning_details_text(details)
                         reasoning_delta = self._new_reasoning_text(accumulated_reasoning, details_text)
@@ -682,7 +708,16 @@ class OpenAIChatBase(Dialect):
         # dialect accepts can be present.
         for field in self._accepted_round_trip_fields:
             if message.get(field):
-                converted[field] = list(message[field])
+                round_trip_value = list(message[field])
+                if field == "reasoning_details":
+                    coalesced: list[dict[str, Any]] = []
+                    self._accumulate_reasoning_details(
+                        coalesced,
+                        round_trip_value,
+                        mode="message-conversion",
+                    )
+                    round_trip_value = coalesced
+                converted[field] = round_trip_value
         return converted
 
     def _convert_tools(self, tools: tuple[ToolDefinition, ...]) -> list[dict[str, Any]]:
@@ -780,6 +815,50 @@ class OpenAIChatBase(Dialect):
                 parts.append(item)
         return "\n".join(parts)
 
+    def _accumulate_reasoning_details(
+        self,
+        accumulated: list[dict[str, Any]],
+        details: list[Any],
+        *,
+        mode: str,
+    ) -> None:
+        """Coalesce consecutive OpenRouter reasoning.text stream fragments."""
+        for index, item in enumerate(details):
+            if not isinstance(item, MappingABC):
+                raise ProviderProtocolError(
+                    self.endpoint_url,
+                    mode,
+                    f"reasoning_details[{index}] must be an object",
+                )
+            detail = dict(item)
+            previous = accumulated[-1] if accumulated else None
+            if (
+                detail.get("type") == "reasoning.text"
+                and previous is not None
+                and previous.get("type") == "reasoning.text"
+            ):
+                previous_text = previous.get("text")
+                detail_text = detail.get("text")
+                if previous_text is not None and not isinstance(previous_text, str):
+                    raise ProviderProtocolError(
+                        self.endpoint_url,
+                        mode,
+                        "reasoning.text text must be a string or null",
+                    )
+                if detail_text is not None and not isinstance(detail_text, str):
+                    raise ProviderProtocolError(
+                        self.endpoint_url,
+                        mode,
+                        "reasoning.text text must be a string or null",
+                    )
+                previous["text"] = (previous_text or "") + (detail_text or "")
+                if not previous.get("signature") and detail.get("signature"):
+                    previous["signature"] = detail["signature"]
+                if not previous.get("format") and detail.get("format"):
+                    previous["format"] = detail["format"]
+            else:
+                accumulated.append(detail)
+
     def _new_reasoning_text(self, accumulated_reasoning: str, candidate: str) -> str:
         if not candidate:
             return ""
@@ -869,6 +948,7 @@ class OpenAIChatBase(Dialect):
         request: Request,
         mode: str,
     ) -> dict[str, Any]:
+        tool = self._loaded_tool_definition(tool_name, request, mode=mode)
         required = self._required_tool_fields(tool_name, request, mode=mode)
         if value is None:
             if required:
@@ -893,6 +973,28 @@ class OpenAIChatBase(Dialect):
                 self.endpoint_url,
                 mode,
                 f"Tool call '{tool_id}' for '{tool_name}' missing required fields: {missing}",
+            )
+        try:
+            validator = Draft202012Validator(dict(tool.input_schema))
+        except SchemaError as error:
+            raise RuntimeError(
+                f"Tool '{tool_name}' has an invalid input schema: {error.message}"
+            ) from error
+
+        validation_errors = sorted(
+            validator.iter_errors(dict(value)),
+            key=lambda error: (
+                tuple(str(part) for part in error.absolute_path),
+                error.message,
+            ),
+        )
+        if validation_errors:
+            error = validation_errors[0]
+            location = ".".join(str(part) for part in error.absolute_path) or "input"
+            raise ProviderProtocolError(
+                self.endpoint_url,
+                mode,
+                f"Tool call '{tool_id}' for '{tool_name}' violates schema at {location}: {error.message}",
             )
         return dict(value)
 
@@ -924,16 +1026,23 @@ class OpenAIChatBase(Dialect):
             raise ProviderProtocolError(self.endpoint_url, "non-streaming", "Tool call missing id")
         if not isinstance(tool_name, str) or not tool_name.strip():
             raise ProviderProtocolError(self.endpoint_url, "non-streaming", "Tool call function missing name")
-        return ToolCall(
-            id=tool_id,
-            tool_name=tool_name,
-            input=self._parse_tool_arguments(
+        invalid_reason = None
+        try:
+            tool_input = self._parse_tool_arguments(
                 function.get("arguments") if "arguments" in function else None,
                 tool_name=tool_name,
                 tool_id=tool_id,
                 request=request,
                 mode="non-streaming",
-            ),
+            )
+        except ProviderProtocolError as error:
+            invalid_reason = str(error)
+            tool_input = {}
+        return ToolCall(
+            id=tool_id,
+            tool_name=tool_name,
+            input=tool_input,
+            invalid_reason=invalid_reason,
         )
 
     def _parse_stream_tool_calls(
@@ -950,17 +1059,24 @@ class OpenAIChatBase(Dialect):
                     "streaming",
                     f"Streamed tool call at index {index} ended without id and name",
                 )
+            invalid_reason = None
+            try:
+                tool_input = self._parse_tool_arguments(
+                    state["arguments"],
+                    tool_name=state["name"],
+                    tool_id=state["id"],
+                    request=request,
+                    mode="streaming",
+                )
+            except ProviderProtocolError as error:
+                invalid_reason = str(error)
+                tool_input = {}
             calls.append(
                 ToolCall(
                     id=state["id"],
                     tool_name=state["name"],
-                    input=self._parse_tool_arguments(
-                        state["arguments"],
-                        tool_name=state["name"],
-                        tool_id=state["id"],
-                        request=request,
-                        mode="streaming",
-                    ),
+                    input=tool_input,
+                    invalid_reason=invalid_reason,
                 )
             )
         return tuple(calls)

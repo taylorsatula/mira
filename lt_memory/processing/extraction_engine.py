@@ -7,13 +7,12 @@ Consolidates all prompt building, context loading, and message formatting:
 - Memory context retrieval and caching
 - Message formatting (conversation → XML-tagged turns)
 - Extraction prompt building with context
-- Anthropic message batch building
 
 This module handles WHAT to extract and HOW to ask the LLM.
 MemoryProcessor handles parsing the LLM's response.
 """
 import logging
-from typing import List, Dict, Any, Tuple, TypedDict
+from typing import List, Dict, Any, Tuple
 from uuid import UUID
 
 from cns.core.message import preprocess_content_blocks
@@ -24,19 +23,11 @@ from utils.tag_parser import format_memory_id
 logger = logging.getLogger(__name__)
 
 
-class ExtractionMessage(TypedDict):
-    """Single message in Anthropic batch request format."""
-    role: str
-    content: str
-
-
 class ExtractionPayload:
-    """
-    Complete extraction payload for batch or immediate execution.
+    """Complete input contract for one direct extraction call.
 
     Contains everything needed to make an extraction request:
     - Prompts (system + user)
-    - Messages (Anthropic format)
     - UUID mappings (for response parsing)
     - Memory context (for deduplication)
     """
@@ -45,14 +36,12 @@ class ExtractionPayload:
         self,
         system_prompt: str,
         user_prompt: str,
-        messages: List[ExtractionMessage],
         short_to_uuid: Dict[str, str],
         memory_context: MemoryContext,
         chunk_index: int
     ):
         self.system_prompt = system_prompt
         self.user_prompt = user_prompt
-        self.messages = messages
         self.short_to_uuid = short_to_uuid
         self.memory_context = memory_context
         self.chunk_index = chunk_index
@@ -87,7 +76,6 @@ class ExtractionEngine:
     def build_extraction_payload(
         self,
         chunk: ProcessingChunk,
-        for_batch: bool = True
     ) -> ExtractionPayload:
         """
         Build complete extraction payload for chunk.
@@ -100,8 +88,6 @@ class ExtractionEngine:
 
         Args:
             chunk: ProcessingChunk containing continuum messages
-            for_batch: Kept for caller compatibility (both paths produce same prompt)
-
         Returns:
             ExtractionPayload with all components
         """
@@ -122,24 +108,13 @@ class ExtractionEngine:
         )
         extraction_prompt = self._build_extraction_prompt(formatted_messages)
 
-        if for_batch:
-            return ExtractionPayload(
-                system_prompt=self.extraction_system_prompt,
-                user_prompt="",
-                messages=[{"role": "user", "content": extraction_prompt}],
-                short_to_uuid=short_to_uuid,
-                memory_context=memory_context,
-                chunk_index=chunk.chunk_index
-            )
-        else:
-            return ExtractionPayload(
-                system_prompt=self.extraction_system_prompt,
-                user_prompt=extraction_prompt,
-                messages=[],
-                short_to_uuid=short_to_uuid,
-                memory_context=memory_context,
-                chunk_index=chunk.chunk_index
-            )
+        return ExtractionPayload(
+            system_prompt=self.extraction_system_prompt,
+            user_prompt=extraction_prompt,
+            short_to_uuid=short_to_uuid,
+            memory_context=memory_context,
+            chunk_index=chunk.chunk_index,
+        )
 
     def _build_identifier_maps(
         self,
@@ -191,7 +166,7 @@ class ExtractionEngine:
         """
         Retrieve memory context for extraction chunk.
 
-        Memory texts are cached during chunk creation (before batch submission).
+        Memory texts are cached during chunk creation before the model call.
         This avoids redundant DB queries and ensures consistency - texts reflect
         memory state at chunk-creation time, not extraction time.
 
@@ -385,4 +360,3 @@ class ExtractionEngine:
         return self.extraction_user_template.format(
             formatted_messages=formatted_messages,
         )
-

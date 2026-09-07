@@ -3,7 +3,7 @@ Extraction orchestrator - high-level extraction workflows.
 
 Two entry points:
 - submit_segment_extraction(user_id, boundary_message_id): Self-contained segment
-  extraction. Loads messages, submits batch, marks boundary. Called by collapse handler
+  extraction. Loads messages, extracts directly, marks boundary. Called by collapse handler
   and extract_unprocessed_segments.
 - extract_unprocessed_segments(): Safety-net sweep for collapsed segments where
   extraction failed or was never attempted. Runs on a 6-hour schedule.
@@ -18,9 +18,8 @@ from uuid import UUID
 from cns.core.message import Message
 from lt_memory.models import ProcessingChunk, MemoryContextSnapshot
 from lt_memory.processing.extraction_engine import ExtractionEngine
-from lt_memory.processing.execution_strategy import ExecutionStrategy, ImmediateExecutionStrategy
+from lt_memory.processing.execution_strategy import DirectExecutionStrategy
 from lt_memory.db_access import LTMemoryDB
-from lt_memory.llm_routing import uses_anthropic_batch_dialect
 from utils.user_context import set_current_user_id, get_current_user_id, clear_user_context
 
 if TYPE_CHECKING:
@@ -38,7 +37,7 @@ class ExtractionOrchestrator:
 
     Delegates to:
     - ExtractionEngine: Build payloads
-    - ExecutionStrategy: Execute extraction (batch or immediate)
+    - DirectExecutionStrategy: Execute extraction through model_config=batch
     - ContinuumRepository: Load messages, find segments
     - LTMemoryDB: Safety valve checks, memory context loading
     """
@@ -46,22 +45,19 @@ class ExtractionOrchestrator:
     def __init__(
         self,
         extraction_engine: ExtractionEngine,
-        execution_strategy: ExecutionStrategy,
+        execution_strategy: DirectExecutionStrategy,
         continuum_repo: 'ContinuumRepository',
         db: LTMemoryDB,
-        immediate_strategy: ImmediateExecutionStrategy = None
     ):
         self.extraction_engine = extraction_engine
         self.execution_strategy = execution_strategy
         self.continuum_repo = continuum_repo
         self.db = db
-        self.immediate_strategy = immediate_strategy
 
     def submit_segment_extraction(
         self,
         user_id: str,
         boundary_message_id: str,
-        force_immediate: bool = False
     ) -> bool:
         """
         Self-contained segment extraction: load, submit, mark.
@@ -70,16 +66,12 @@ class ExtractionOrchestrator:
         1. Query boundary message to get segment_id and position
         2. Load messages between this boundary and the next
         3. Build single ProcessingChunk (no chunking - segments are natural units)
-        4. Submit to execution_strategy (or immediate_strategy if force_immediate)
+        4. Execute through the fixed background model route
         5. Mark memories_extracted=true on the boundary message
 
         Args:
             user_id: User ID
             boundary_message_id: UUID string of the segment boundary sentinel message
-            force_immediate: If True, bypass batch and execute extraction inline
-                via ImmediateExecutionStrategy. Used for manual segment collapse
-                so memories are ready before the user's next conversation.
-
         Returns:
             True if extraction was submitted successfully
 
@@ -148,21 +140,8 @@ class ExtractionOrchestrator:
         )
         chunk.memory_context_snapshot = self._build_memory_context(messages, user_id)
 
-        # Step 4: Submit via execution strategy (immediate when forced or batch dialect unavailable)
-        strategy = self.execution_strategy
-        if force_immediate and self.immediate_strategy is not None:
-            strategy = self.immediate_strategy
-            logger.info(
-                f"Using immediate extraction for segment {segment_id} "
-                f"(manual collapse — skipping batch)"
-            )
-        elif self.immediate_strategy is not None and not uses_anthropic_batch_dialect("extraction"):
-            strategy = self.immediate_strategy
-            logger.info(
-                f"Using immediate extraction for segment {segment_id} "
-                f"(batch dialect unavailable — skipping batch)"
-            )
-        batch_id = strategy.execute_extraction(user_id, [chunk])
+        # Step 4: Execute directly through model_config=batch.
+        extraction_id = self.execution_strategy.execute_extraction(user_id, [chunk])
 
         # Step 5: Mark boundary as extracted
         db_client.execute_query("""
@@ -172,8 +151,8 @@ class ExtractionOrchestrator:
         """, (boundary_message_id,))
 
         logger.info(
-            f"Submitted segment {segment_id} for extraction "
-            f"(batch: {batch_id}, {len(messages)} messages)"
+            f"Extracted segment {segment_id} "
+            f"(execution: {extraction_id}, {len(messages)} messages)"
         )
         return True
 
@@ -205,14 +184,6 @@ class ExtractionOrchestrator:
         for user in users:
             uid = str(user["id"])
             try:
-                # Safety valve: skip users with pending batches
-                pending_batches = self.db.get_pending_batches_for_user(uid)
-                if pending_batches:
-                    logger.info(
-                        f"Skipping user {uid}: {len(pending_batches)} pending extraction batches"
-                    )
-                    continue
-
                 # Find collapsed segments needing extraction
                 failed_segments = self.continuum_repo.find_failed_extraction_segments(uid)
                 if not failed_segments:

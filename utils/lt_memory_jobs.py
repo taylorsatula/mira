@@ -1,14 +1,12 @@
 """
 Scheduled task registration for LT_Memory system.
 
-Registers all periodic jobs with APScheduler for memory extraction,
-batch processing, and maintenance operations. Day-interval jobs use
+Registers periodic jobs for memory extraction and maintenance. Day-interval jobs use
 modular arithmetic on cumulative_activity_days for stateless, use-day-based
 scheduling via get_users_due_for_job().
 """
 import logging
 from apscheduler.triggers.interval import IntervalTrigger
-from utils.scheduled_task_monitor import ScheduledTaskMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +17,8 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> None:
 
     Jobs registered:
     - Extraction retry sweep (6-hour intervals, calendar-based)
-    - Extraction batch polling (1-minute intervals, calendar-based)
     - Temporal score recalculation (daily tick, use-day gated)
     - Bulk score recalculation (daily tick, use-day gated)
-    - Batch cleanup (daily tick, use-day gated)
 
     Args:
         scheduler_service: System scheduler service instance
@@ -33,7 +29,6 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> None:
     """
     from config import config
     extraction_orchestrator = lt_memory_factory.extraction_orchestrator
-    batch_coordinator = lt_memory_factory.batch_coordinator
     jobs_config = config.scheduled_jobs
 
     # ================================================================
@@ -49,28 +44,6 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> None:
         description=f"Extract unprocessed collapsed segments every {jobs_config.extraction_retry_hours} hours (safety net)"
     )
     logger.info("Registered extraction retry sweep (%dh interval)", jobs_config.extraction_retry_hours)
-
-    # Extraction batch polling (1-minute intervals)
-    def poll_extraction_batches_with_handler():
-        return batch_coordinator.poll_extraction_batches(
-            result_processor=lt_memory_factory.extraction_result_handler
-        )
-
-    monitored_extraction_poll = ScheduledTaskMonitor.wrap_scheduled_job(
-        job_id="lt_memory_extraction_batch_polling",
-        func=poll_extraction_batches_with_handler,
-        timeout_seconds=jobs_config.job_timeout_seconds,
-        kill_on_timeout=True
-    )
-
-    scheduler_service.register_job(
-        job_id="lt_memory_extraction_batch_polling",
-        func=monitored_extraction_poll,
-        trigger=IntervalTrigger(minutes=jobs_config.batch_poll_minutes),
-        component="lt_memory",
-        description=f"Poll Anthropic Batch API for extraction results every {jobs_config.batch_poll_minutes} minute(s)"
-    )
-    logger.info("Registered extraction batch polling (%dmin interval)", jobs_config.batch_poll_minutes)
 
     # ================================================================
     # Use-day-gated jobs (daily tick, filtered by modular arithmetic)
@@ -133,46 +106,6 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> None:
         description=f"Recalculate stale memory scores (every {jobs_config.bulk_score_recalc_use_days} use-days)"
     )
     logger.info("Registered bulk score recalculation (every %d use-days)", jobs_config.bulk_score_recalc_use_days)
-
-    # Batch cleanup
-    def run_batch_cleanup_for_due_users():
-        from utils.user_context import set_current_user_id, clear_user_context
-        from utils.scheduled_tasks import get_users_due_for_job
-
-        users = get_users_due_for_job(jobs_config.batch_cleanup_use_days)
-        retention_hours = lt_memory_factory.config.batching.batch_max_age_hours
-
-        total_extraction_deleted = 0
-
-        for user in users:
-            user_id = str(user["id"])
-            set_current_user_id(user_id)
-            try:
-                db = lt_memory_factory.db
-                extraction_deleted = db.cleanup_old_batches(
-                    retention_hours=retention_hours,
-                    user_id=user_id
-                )
-                total_extraction_deleted += extraction_deleted
-            finally:
-                clear_user_context()
-
-        logger.info(
-            "Batch cleanup: deleted %d extraction batches across %d due users (retention: %dh)",
-            total_extraction_deleted, len(users), retention_hours
-        )
-        return {
-            "extraction_deleted": total_extraction_deleted,
-        }
-
-    scheduler_service.register_job(
-        job_id="lt_memory_batch_cleanup",
-        func=run_batch_cleanup_for_due_users,
-        trigger=IntervalTrigger(days=1),
-        component="lt_memory",
-        description=f"Clean up old failed/expired/cancelled batches (every {jobs_config.batch_cleanup_use_days} use-days)"
-    )
-    logger.info("Registered batch cleanup (every %d use-days)", jobs_config.batch_cleanup_use_days)
 
     # Entity merge — background LLM-driven dedup of similar entity rows
     def run_entity_merge_for_due_users():

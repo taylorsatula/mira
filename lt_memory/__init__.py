@@ -16,10 +16,8 @@ from lt_memory.models import (
     MemoryLink,
     Entity,
     ProcessingChunk,
-    ExtractionBatch,
     # Type aliases and TypedDicts
     RelationshipType,
-    BatchStatus,
     MemoryLinkEntry,
     EntityLinkEntry,
     AnnotationEntry,
@@ -30,7 +28,6 @@ from lt_memory.models import (
     NamedEntity,
     MemoryContext,
     MemoryContextSnapshot,
-    ChunkMetadata,
     MemoryDict,
 )
 
@@ -53,5 +50,4 @@ __all__ = [
     'MemoryLink',
     'Entity',
     'ProcessingChunk',
-    'ExtractionBatch',
 ]

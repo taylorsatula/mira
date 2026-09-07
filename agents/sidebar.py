@@ -87,16 +87,13 @@ class SidebarDispatcher:
         tool_repo: 'ToolRepository',
         event_bus: 'EventBus',
         max_concurrent_agents: int = 3,
-        max_concurrent_batch_agents: int = 3,
     ):
         self.tool_repo = tool_repo
         self.event_bus = event_bus
         self.max_concurrent_agents = max_concurrent_agents
-        self.max_concurrent_batch_agents = max_concurrent_batch_agents
         self._triggers: list[SidebarTrigger] = []
         # Key: "interface_name:item_id", Value: Thread
         self._active_agents: dict[str, threading.Thread] = {}
-        self._active_batch_agents: dict[str, threading.Thread] = {}
         # Rate limiter for per-user cleanup (user_id → last cleanup timestamp)
         self._last_cleanup: dict[str, float] = {}
 
@@ -111,9 +108,6 @@ class SidebarDispatcher:
         # Prune finished agents
         self._active_agents = {
             key: t for key, t in self._active_agents.items() if t.is_alive()
-        }
-        self._active_batch_agents = {
-            key: t for key, t in self._active_batch_agents.items() if t.is_alive()
         }
 
         users = self._get_eligible_users()
@@ -158,8 +152,7 @@ class SidebarDispatcher:
 
                 dispatch_key = f"{item.interface_name}:{item.item_id}"
 
-                # In-flight check (covers both sync and batch)
-                if dispatch_key in self._active_agents or dispatch_key in self._active_batch_agents:
+                if dispatch_key in self._active_agents:
                     continue
 
                 # Prior-run lookup + dispatch decision
@@ -233,13 +226,8 @@ class SidebarDispatcher:
         """
         agent = trigger.agent_class(self.tool_repo)
 
-        # Per-type cap check
-        if agent.use_batch:
-            if len(self._active_batch_agents) >= self.max_concurrent_batch_agents:
-                return False
-        else:
-            if len(self._active_agents) >= self.max_concurrent_agents:
-                return False
+        if len(self._active_agents) >= self.max_concurrent_agents:
+            return False
 
         ctx = copy_context()
 
@@ -251,10 +239,7 @@ class SidebarDispatcher:
         )
         thread.start()
 
-        if agent.use_batch:
-            self._active_batch_agents[dispatch_key] = thread
-        else:
-            self._active_agents[dispatch_key] = thread
+        self._active_agents[dispatch_key] = thread
 
         run_count = item.context.get('run_count', 1)
         logger.info(

@@ -26,7 +26,6 @@ def register_sidebar_jobs(scheduler_service, tool_repo, event_bus) -> None:
         tool_repo=tool_repo,
         event_bus=event_bus,
         max_concurrent_agents=sidebar_config.max_concurrent_agents,
-        max_concurrent_batch_agents=sidebar_config.max_concurrent_batch_agents,
     )
 
     # Register sidebar triggers (pure discovery — the dispatcher owns dedup).

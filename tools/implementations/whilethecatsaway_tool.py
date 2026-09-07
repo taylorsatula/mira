@@ -44,7 +44,7 @@ class WhileTheCatsAwayTool(Tool):
 
     simple_description = """
     Dispatch a background agent to explore a topic you're curious about.
-    Runs asynchronously in batch mode — no rush, no cost pressure.
+    Runs asynchronously through the fixed background model route.
     Findings are stored as long-term memories that surface naturally later.
     Use when you want to learn more about something but the user isn't
     waiting for the answer right now.

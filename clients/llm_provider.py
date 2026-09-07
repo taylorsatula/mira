@@ -14,14 +14,12 @@ from clients.llm.events import (
     StreamEvent,
 )
 from clients.llm.dialects.base import Dialect, ProviderContextOverflowError
-from clients.llm.dialects.anthropic import AnthropicDialect, anthropic_thinking_params
+from clients.llm.dialects.anthropic import AnthropicDialect
 from clients.llm.dialect_registry import get_registry
-from clients.llm.accounting import UsageAccountingPolicy, UsageAccountingService
 from clients.llm.capabilities import Requirements
 from clients.llm.lifecycle import LLMLifecycle
 from clients.llm.resolver import ModelResolver, ModelSelection
 from clients.llm.types import (
-    DialectName,
     EffortLevel,
     Request,
     RequestMetadata,
@@ -29,7 +27,6 @@ from clients.llm.types import (
     ThinkingConfig,
     ToolCall,
     ToolDefinition,
-    coerce_effort,
 )
 
 from utils.llm_tap import toggle as _toggle_traffic_tap
@@ -51,41 +48,6 @@ class ContextOverflowError(Exception):
         )
 
 
-def build_batch_params(
-    purpose: str,
-    system_prompt: str,
-    messages: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Build Anthropic Batch API params from internal_llm config.
-
-    Anthropic-only: callers must select an internal_llm purpose whose
-    dialect_name is 'anthropic'. Routing a non-Anthropic purpose through the
-    batch path is rejected loudly here rather than left to surface as a
-    confusing wire error.
-    """
-    from utils.user_context import get_internal_llm
-
-    llm_cfg = get_internal_llm(purpose)
-    if llm_cfg.dialect_name != "anthropic":
-        raise AssertionError(
-            f"build_batch_params is Anthropic-only; resolved purpose "
-            f"'{purpose}' uses dialect '{llm_cfg.dialect_name}'"
-        )
-    params: dict[str, Any] = {
-        "model": llm_cfg.model,
-        "max_tokens": llm_cfg.max_tokens,
-        "system": [{"type": "text", "text": system_prompt}],
-        "messages": messages,
-    }
-    if llm_cfg.effort:
-        thinking_params, _ = anthropic_thinking_params(
-            model=llm_cfg.model,
-            thinking=ThinkingConfig(effort=coerce_effort(llm_cfg.effort)),
-        )
-        params.update(thinking_params)
-    return params
-
-
 class LLMProvider:
     """Public LLM API for application code."""
 
@@ -102,19 +64,13 @@ class LLMProvider:
         self.timeout = timeout
         self.api_key = api_key
         self.resolver = ModelResolver()
-        self.accounting_service = UsageAccountingService()
 
     def generate_response(
         self,
         messages: list[dict[str, Any]],
         tools: list[ToolDefinition | dict[str, Any]] | None = None,
         *,
-        internal_llm: str | None = None,
-        conversation_llm: str | None = None,
-        dialect_name: DialectName | None = None,
-        model: str | None = None,
-        endpoint_url: str | None = None,
-        api_key: str | None = None,
+        model_config: str,
         system_prompt: str | list[dict[str, Any]] | None = None,
         thinking: ThinkingConfig | None = None,
         effort: EffortLevel | None = None,
@@ -122,8 +78,6 @@ class LLMProvider:
         temperature: float | None = None,
         max_tokens: int | None = None,
         container_id: str | None = None,
-        allow_negative: bool = False,
-        allow_provider_stall_fallback: bool = True,
     ) -> Result:
         """Generate a blocking response from the selected provider.
 
@@ -137,11 +91,7 @@ class LLMProvider:
             thinking=thinking,
         )
         selection = self._resolve_selection(
-            internal_llm=internal_llm,
-            conversation_llm=conversation_llm,
-            dialect_name=dialect_name,
-            endpoint_url=endpoint_url,
-            model=model,
+            model_config=model_config,
             max_tokens=max_tokens,
             effort=resolved_thinking.effort or effort,
         )
@@ -154,29 +104,11 @@ class LLMProvider:
             temperature=temperature,
             container_id=container_id,
         )
-        dialect = self._dialect_for_selection(selection, api_key=api_key)
+        dialect = self._dialect_for_selection(selection)
         dialect.capabilities.validate(self._requirements_for_request(request), dialect.dialect_name)
-        lifecycle = LLMLifecycle(
-            accounting_policy=UsageAccountingPolicy.for_current_build(
-                allow_negative=allow_negative,
-            ),
-            accounting_service=self.accounting_service,
-        )
+        lifecycle = LLMLifecycle()
         try:
-            fallback_factory = (
-                lambda: self._fallback_dialect_and_request(
-                    messages,
-                    tools,
-                    system_prompt=system_prompt,
-                    temperature=temperature,
-                    container_id=container_id,
-                )
-            ) if allow_provider_stall_fallback else None
-            return lifecycle.complete(
-                request,
-                dialect,
-                fallback_factory=fallback_factory,
-            )
+            return lifecycle.complete(request, dialect)
         except ProviderContextOverflowError as error:
             raise ContextOverflowError(
                 error.estimated_tokens,
@@ -189,20 +121,14 @@ class LLMProvider:
         messages: list[dict[str, Any]],
         tools: list[ToolDefinition | dict[str, Any]] | None = None,
         *,
-        internal_llm: str | None = None,
-        conversation_llm: str | None = None,
-        dialect_name: DialectName | None = None,
+        model_config: str,
         effort: EffortLevel | None = None,
         thinking_tokens: int | None = None,
         thinking: ThinkingConfig | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
         container_id: str | None = None,
-        endpoint_url: str | None = None,
-        model: str | None = None,
-        api_key: str | None = None,
         system_prompt: str | list[dict[str, Any]] | None = None,
-        allow_negative: bool = False,
     ) -> Generator[StreamEvent, None, None]:
         """Stream normalized LLM events."""
         try:
@@ -213,11 +139,7 @@ class LLMProvider:
                 thinking=thinking,
             )
             selection = self._resolve_selection(
-                internal_llm=internal_llm,
-                conversation_llm=conversation_llm,
-                dialect_name=dialect_name,
-                endpoint_url=endpoint_url,
-                model=model,
+                model_config=model_config,
                 max_tokens=max_tokens,
                 effort=resolved_thinking.effort or effort,
             )
@@ -230,25 +152,10 @@ class LLMProvider:
                 temperature=temperature,
                 container_id=container_id,
             )
-            dialect = self._dialect_for_selection(selection, api_key=api_key)
+            dialect = self._dialect_for_selection(selection)
             dialect.capabilities.validate(self._requirements_for_request(request), dialect.dialect_name)
-            lifecycle = LLMLifecycle(
-                accounting_policy=UsageAccountingPolicy.for_current_build(
-                    allow_negative=allow_negative,
-                ),
-                accounting_service=self.accounting_service,
-            )
-            for event in lifecycle.stream(
-                request,
-                dialect,
-                fallback_factory=lambda: self._fallback_dialect_and_request(
-                    messages,
-                    tools,
-                    system_prompt=system_prompt,
-                    temperature=temperature,
-                    container_id=container_id,
-                ),
-            ):
+            lifecycle = LLMLifecycle()
+            for event in lifecycle.stream(request, dialect):
                 yield event
         except GenerationCancelled:
             raise
@@ -290,20 +197,12 @@ class LLMProvider:
     def _resolve_selection(
         self,
         *,
-        internal_llm: str | None,
-        conversation_llm: str | None,
-        dialect_name: DialectName | None,
-        endpoint_url: str | None,
-        model: str | None,
+        model_config: str,
         max_tokens: int | None,
         effort: EffortLevel | None,
     ) -> ModelSelection:
         return self.resolver.resolve(
-            internal_llm=internal_llm,
-            conversation_llm=conversation_llm,
-            dialect_name=dialect_name,
-            endpoint_url=endpoint_url,
-            model=model,
+            model_config=model_config,
             max_tokens=max_tokens,
             effort=effort,
         )
@@ -322,10 +221,10 @@ class LLMProvider:
         extracted_system, prepared_messages = self._prepare_messages(messages)
         request_system = system_prompt if system_prompt is not None else extracted_system
 
-        # Merge the resolver's per-internal-LLM effort default into the caller's
+        # Merge the resolver's per-route effort default into the caller's
         # thinking config when the caller didn't already specify effort. The
-        # selection.effort field carries values configured in the internal_llm
-        # DB table (e.g., 'extraction' purpose defaults to 'high').
+        # selection.effort field carries values configured in the model_configs
+        # row (e.g., the batch route defaults to 'high').
         merged_thinking = thinking
         if thinking.effort is None and selection.effort is not None:
             merged_thinking = ThinkingConfig(
@@ -344,8 +243,7 @@ class LLMProvider:
             container_id=container_id,
             metadata=RequestMetadata(
                 endpoint_url=selection.endpoint_url,
-                internal_llm_name=selection.internal_llm_name,
-                conversation_llm_name=selection.conversation_llm_name,
+                model_config_name=selection.model_config_name,
             ),
         )
 
@@ -358,32 +256,6 @@ class LLMProvider:
             definitions.append(tool if isinstance(tool, ToolDefinition) else ToolDefinition.from_mapping(tool))
         return definitions
 
-    def _fallback_dialect_and_request(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[ToolDefinition | dict[str, Any]] | None,
-        *,
-        system_prompt: str | list[dict[str, Any]] | None,
-        temperature: float | None,
-        container_id: str | None,
-    ) -> tuple[Dialect, Request]:
-        fallback_selection = self.resolver.fallback()
-        fallback_request = self._build_request(
-            messages,
-            tools,
-            selection=fallback_selection,
-            system_prompt=system_prompt,
-            thinking=ThinkingConfig(),
-            temperature=temperature,
-            container_id=container_id,
-        )
-        fallback_dialect = self._dialect_for_selection(fallback_selection, api_key=None)
-        fallback_dialect.capabilities.validate(
-            self._requirements_for_request(fallback_request),
-            fallback_dialect.dialect_name,
-        )
-        return fallback_dialect, fallback_request
-
     def _requirements_for_request(self, request: Request) -> Requirements:
         # container_upload blocks are not a hard files-capability requirement:
         # the Anthropic dialect consumes them natively, and the OpenAI-family
@@ -392,54 +264,26 @@ class LLMProvider:
             container_reuse=bool(request.container_id),
         )
 
-    def _dialect_for_selection(
-        self,
-        selection: ModelSelection,
-        *,
-        api_key: str | None,
-    ) -> Dialect:
-        resolved_api_key = self._select_api_key(selection, api_key=api_key)
+    def _dialect_for_selection(self, selection: ModelSelection) -> Dialect:
         cls = get_registry().get(selection.dialect_name)
         return cls.from_selection(
             selection,
-            api_key=resolved_api_key,
+            api_key=self._select_api_key(),
             timeout=self.timeout,
             artifact_sink=self._create_file_artifact_sink(),
         )
 
-    def _select_api_key(
-        self,
-        selection: ModelSelection,
-        *,
-        api_key: str | None,
-    ) -> str | None:
-        if api_key is not None:
-            return self._validate_api_key(api_key, "api_key (call kwarg)")
+    def _select_api_key(self) -> str | None:
         if self.api_key is not None:
             return self._validate_api_key(self.api_key, "api_key (LLMProvider default)")
-        return None  # dialect's from_selection resolves api_key_name via Vault
+        # No explicit key: the dialect sources it from the resolved selection's
+        # api_key_name via Vault, or goes unauthenticated when that is None.
+        return None
 
     def _validate_api_key(self, value: str, source: str) -> str:
         if not isinstance(value, str) or not value.strip():
             raise PermissionError(f"{source} resolved to an empty API key")
         return value
-
-    def create_files_manager(self):
-        """Create the Anthropic Files API manager for upload/cleanup workflows."""
-        from clients.files_manager import FilesManager
-        from clients.vault_client import get_api_key
-
-        api_key = (
-            self._validate_api_key(self.api_key, "api_key")
-            if self.api_key is not None
-            else self._validate_api_key(get_api_key(config.api.api_key_name), config.api.api_key_name)
-        )
-        dialect = AnthropicDialect(
-            api_key=api_key,
-            timeout=self.timeout,
-            artifact_sink=self._create_file_artifact_sink(),
-        )
-        return FilesManager(dialect.client)
 
     def _create_file_artifact_sink(self):
         from utils.artifact_store import UserArtifactStore

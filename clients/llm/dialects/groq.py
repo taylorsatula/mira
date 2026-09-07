@@ -12,6 +12,10 @@ Wire shape:
 When a caller passes only `budget_tokens`, the heuristic inherited from
 OpenAIChatBase maps it to the nearest effort level and emits a
 TranslationNote at WARNING.
+
+`effort="none"` is Groq's documented `reasoning_effort: "none"` for the Qwen3
+family - it disables reasoning, whereas omitting the parameter leaves the model
+at its default, which is reasoning enabled.
 """
 
 from __future__ import annotations
@@ -54,6 +58,16 @@ class GroqDialect(OpenAIChatBase):
             ))
 
         if effort is None:
+            return
+
+        if effort == "none":
+            # Groq documents reasoning_effort="none" as "Disable reasoning. The
+            # model will not use any reasoning tokens" for qwen/qwen3.6-27b and
+            # qwen/qwen3.8-27b - the `fast` route's model. Omitting the parameter
+            # is NOT equivalent: Groq's documented default for these models enables
+            # reasoning. No reasoning_format either, since there is no reasoning to
+            # parse back out.
+            payload["reasoning_effort"] = "none"
             return
 
         payload["reasoning_effort"] = effort

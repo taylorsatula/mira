@@ -85,7 +85,9 @@ class UserDataManager:
 
     @property
     def base_dir(self) -> Path:
-        user_dir = Path("data/users") / str(self.user_id)
+        # Anchor to the project root so the storage path is independent of cwd.
+        project_root = Path(__file__).resolve().parent.parent
+        user_dir = project_root / "data/users" / str(self.user_id)
         user_dir.mkdir(parents=True, exist_ok=True)
         return user_dir
     
@@ -124,9 +126,6 @@ class UserDataManager:
 
         # Initialize trigger rules schema (sidebar agent trigger filters)
         self._init_trigger_rules_schema()
-
-        # Initialize Files API upload tracking schema
-        self._init_files_api_schema()
 
         logger.info("Tool schemas initialized successfully")
     
@@ -449,25 +448,6 @@ class UserDataManager:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_trigger_rules_trigger "
             "ON trigger_rules(trigger_id, enabled)"
-        )
-        self.connection.commit()
-
-    def _init_files_api_schema(self):
-        """Initialize persistent Files API upload tracking."""
-        cursor = self.connection.cursor()
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS files_api_uploads (
-            file_id TEXT PRIMARY KEY,
-            user_id UUID NOT NULL,
-            segment_id TEXT NOT NULL,
-            filename TEXT NOT NULL,
-            media_type TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-        """)
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_files_api_uploads_segment "
-            "ON files_api_uploads(segment_id)"
         )
         self.connection.commit()
 

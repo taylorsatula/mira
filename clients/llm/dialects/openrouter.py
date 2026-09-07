@@ -12,6 +12,10 @@ Wire shape:
 OpenRouter's `reasoning_details` round-trips through the assistant message
 on the next request — the dialect preserves it on outbound serialization
 where OpenAI direct strips it.
+
+`effort="none"` is forwarded as `reasoning: {effort: "none"}`, which OpenRouter
+documents as "disables reasoning entirely". Omitting the block instead would
+leave the upstream model's default in place.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from collections.abc import Mapping as MappingABC
 from typing import Any
 
 from clients.llm.dialects.openai_chat_base import OpenAIChatBase
+from clients.llm.thinking import TranslationNote
 from clients.llm.types import ThinkingConfig
 
 
@@ -33,9 +38,27 @@ class OpenRouterDialect(OpenAIChatBase):
     def _serialize_thinking(self, payload: dict[str, Any], thinking: ThinkingConfig) -> None:
         block: dict[str, Any] = {}
         if thinking.effort is not None:
+            # "none" is the gateway's own disable-reasoning value and is forwarded
+            # unchanged. The gateway translates effort into the target model's
+            # vocabulary, and a target that cannot disable reasoning (Claude via
+            # OpenRouter rejects none) fails with a 400 rather than deliberating.
             block["effort"] = thinking.effort
         if thinking.budget_tokens is not None:
-            block["max_tokens"] = thinking.budget_tokens
+            if thinking.effort == "none":
+                # reasoning.effort and reasoning.max_tokens are documented as "one
+                # of the following (not both)", and a budget cannot coexist with
+                # disabled reasoning. effort wins; the discard is logged.
+                self._log_translation(TranslationNote(
+                    field="budget_tokens",
+                    requested=thinking.budget_tokens,
+                    applied=None,
+                    reason=(
+                        "reasoning.effort 'none' disables reasoning; a reasoning "
+                        "token budget cannot accompany it"
+                    ),
+                ))
+            else:
+                block["max_tokens"] = thinking.budget_tokens
         if block:
             payload["reasoning"] = block
 

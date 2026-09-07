@@ -1,9 +1,8 @@
 """
 Relationship discovery and link management for LT_Memory system.
 
-Handles finding semantically related memories, classifying relationship types,
-and creating bidirectional links in the memory graph. Supports both synchronous
-link creation and batch classification payload building.
+Handles finding semantically related memories and traversing bidirectional links
+in the memory graph. The Memory Curator agent owns relationship judgments.
 
 Discovery uses three axes:
 1. Vector similarity — embedding cosine distance
@@ -26,7 +25,6 @@ logger = logging.getLogger(__name__)
 SIMILARITY_THRESHOLD_FOR_LINKING = 0.75
 MAX_CANDIDATES_PER_MEMORY = 20
 MAX_LINK_TRAVERSAL_DEPTH = 3
-CLASSIFICATION_MAX_TOKENS = 500
 ENTITY_SIMILARITY_FLOOR = 0.55     # pg_trgm floor for entity co-occurrence candidates
 TFIDF_SIMILARITY_THRESHOLD = 0.20  # TF-IDF cosine floor for term-based discovery
 TFIDF_MAX_CANDIDATES = 10
@@ -56,7 +54,7 @@ class LinkingService:
 
     Provides:
     - Similarity-based candidate discovery
-    - Relationship classification (sync or batch payload building)
+    - Typeless relationship candidate discovery for Memory Curator
     - Bidirectional link creation and management
     - Link traversal for graph navigation
     """

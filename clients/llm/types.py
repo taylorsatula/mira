@@ -11,7 +11,16 @@ from typing import Any, Literal, Mapping, Sequence, cast, get_args
 DialectName = Literal["anthropic", "openai", "openrouter", "groq"]
 NativeField = Literal["effort", "budget"]
 CacheTTL = Literal["5m", "1h"]
-EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
+# Every effort value the typed boundary admits. "none" means no deliberation at
+# all — reasoning/thinking disabled — not merely a softer setting of it. Literal
+# order here is declaration order, NOT a ranking; anything that compares effort
+# uses EFFORT_LEVEL_ORDER.
+EffortLevel = Literal["none", "low", "medium", "high", "xhigh", "max"]
+# The levels that spend deliberation tokens, ascending low -> max. "none" is
+# excluded on purpose: it has no position in a ranking whose consumers compare,
+# clamp, or invert effort, and a per-model ceiling must never turn "none" into a
+# deliberating level.
+DeliberationLevel = Literal["low", "medium", "high", "xhigh", "max"]
 StopReason = Literal[
     "end_turn",
     "tool_use",
@@ -24,8 +33,18 @@ StopReason = Literal[
 STOP_REASONS = set(get_args(StopReason))
 DIALECT_NAMES = set(get_args(DialectName))
 NATIVE_FIELDS = set(get_args(NativeField))
-EFFORT_LEVEL_ORDER = cast(tuple[EffortLevel, ...], get_args(EffortLevel))
-EFFORT_LEVELS = set(EFFORT_LEVEL_ORDER)
+EFFORT_LEVEL_ORDER = cast(tuple[DeliberationLevel, ...], get_args(DeliberationLevel))
+EFFORT_LEVELS = set(get_args(EffortLevel))
+
+# Import-time invariant: the ranking must cover exactly the non-"none" members
+# of EffortLevel. Without this, a level added to one Literal and not the other
+# surfaces as a bare ValueError from tuple.index() inside a clamp.
+_UNRANKED_EFFORT_LEVELS = EFFORT_LEVELS - set(EFFORT_LEVEL_ORDER) - {"none"}
+if _UNRANKED_EFFORT_LEVELS:
+    raise RuntimeError(
+        "Effort levels absent from DeliberationLevel's low-to-max ranking: "
+        f"{sorted(_UNRANKED_EFFORT_LEVELS)}"
+    )
 
 
 def coerce_stop_reason(value: object) -> StopReason:
@@ -139,19 +158,17 @@ class RequestMetadata:
     """Provider-neutral request provenance used by lifecycle policy."""
 
     endpoint_url: str | None = None
-    internal_llm_name: str | None = None
-    conversation_llm_name: str | None = None
+    model_config_name: str | None = None
 
 
 @dataclass(frozen=True)
 class ProviderMetadata:
-    """Provider-neutral response provenance used by billing and diagnostics."""
+    """Provider-neutral response provenance used by diagnostics."""
 
     dialect_name: str | None = None
     model: str | None = None
     endpoint_url: str | None = None
-    internal_llm_name: str | None = None
-    conversation_llm_name: str | None = None
+    model_config_name: str | None = None
 
     def merged(self, override: "ProviderMetadata") -> "ProviderMetadata":
         return ProviderMetadata(
@@ -166,15 +183,10 @@ class ProviderMetadata:
                 if override.endpoint_url is not None
                 else self.endpoint_url
             ),
-            internal_llm_name=(
-                override.internal_llm_name
-                if override.internal_llm_name is not None
-                else self.internal_llm_name
-            ),
-            conversation_llm_name=(
-                override.conversation_llm_name
-                if override.conversation_llm_name is not None
-                else self.conversation_llm_name
+            model_config_name=(
+                override.model_config_name
+                if override.model_config_name is not None
+                else self.model_config_name
             ),
         )
 
@@ -273,6 +285,7 @@ class ToolCall:
     id: str
     tool_name: str
     input: Mapping[str, Any] = field(default_factory=dict)
+    invalid_reason: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _require_non_empty_str(self.id, "ToolCall.id"))
@@ -282,6 +295,12 @@ class ToolCall:
             _require_non_empty_str(self.tool_name, "ToolCall.tool_name"),
         )
         object.__setattr__(self, "input", _freeze_mapping(self.input, "ToolCall.input"))
+        if self.invalid_reason is not None:
+            object.__setattr__(
+                self,
+                "invalid_reason",
+                _require_non_empty_str(self.invalid_reason, "ToolCall.invalid_reason"),
+            )
 
     def to_message_block(self) -> dict[str, Any]:
         return {
