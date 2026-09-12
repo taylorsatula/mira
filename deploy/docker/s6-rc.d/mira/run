@@ -36,5 +36,6 @@ export VAULT_SECRET_ID=$(cat /opt/vault/secret-id.txt)
 # Set HOME and HF_HOME so sentence-transformers finds the cached model
 export HOME=/home/mira
 export HF_HOME=/home/mira/.cache/huggingface
+export MIRA_LOG_DIR=/opt/mira/logs
 cd /opt/mira/app
 exec s6-setuidgid mira /opt/mira/venv/bin/python3 main.py

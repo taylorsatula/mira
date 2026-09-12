@@ -53,6 +53,7 @@ WorkingDirectory=/opt/mira/app
 Environment="VAULT_ADDR=http://127.0.0.1:8200"
 Environment="VAULT_ROLE_ID=$VAULT_ROLE_ID"
 Environment="VAULT_SECRET_ID=$VAULT_SECRET_ID"
+Environment="MIRA_LOG_DIR=/opt/mira/logs"
 ExecStart=/opt/mira/app/venv/bin/python3 /opt/mira/app/main.py
 Restart=on-failure
 RestartSec=10
@@ -123,6 +124,7 @@ cd "$(dirname "$0")"
 export VAULT_ADDR=http://127.0.0.1:8200
 export VAULT_ROLE_ID=$(cat /opt/vault/role-id.txt)
 export VAULT_SECRET_ID=$(cat /opt/vault/secret-id.txt)
+export MIRA_LOG_DIR=/opt/mira/logs
 exec venv/bin/python3 main.py "$@"
 LAUNCHER
     chmod +x "$RUN_SH"
