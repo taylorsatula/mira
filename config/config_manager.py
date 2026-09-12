@@ -114,14 +114,7 @@ class AppConfig(BaseModel):
         if value is None:
             raise KeyError(f"Required configuration key not found: {key}")
         return value
-    
-    @property
-    def api_key(self) -> str:
-        """Gets Anthropic API key from Vault."""
-        from clients.vault_client import get_api_key
-        return get_api_key(self.api.api_key_name)
-        
-        
+
     def as_dict(self) -> Dict[str, Any]:
         return self.model_dump(exclude={"prompt_cache"})
     
