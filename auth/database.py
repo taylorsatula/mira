@@ -31,7 +31,7 @@ class AuthDatabase:
         self,
         email: str,
         first_name: str,
-        last_name: str,
+        last_name: Optional[str],
         timezone: str,
         current_focus: str,
         subject_kind: SubjectKind = "member",
@@ -41,10 +41,15 @@ class AuthDatabase:
         """
         Create a new user.
 
+        Caller-owned contracts: the public signup seam validates email format
+        and profile names; this repository method performs no input-policy
+        checks beyond existence — the single-mode local bootstrap depends on
+        being able to provision `user@localhost`, which is not routable.
+
         Args:
             email: User's email address
             first_name: User's first name
-            last_name: User's last name
+            last_name: User's last name (nullable)
             timezone: User's timezone (e.g., America/New_York)
             current_focus: User's current focus or goal
 
@@ -52,15 +57,8 @@ class AuthDatabase:
             User ID (UUID as string)
 
         Raises:
-            AuthError: If email is invalid or user already exists
+            AuthError: If user already exists
         """
-        # Validate email format
-        import re
-        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-        if not re.match(email_pattern, email):
-            from .exceptions import AuthError
-            raise AuthError("invalid_email", "Invalid email format")
-
         # Check if user exists
         existing = self.get_user_by_email(email)
         if existing:

@@ -69,16 +69,9 @@ class MiraAPIClient {
     constructor(config = {}) {
         this.baseURL = config.baseURL || window.location.origin;
         this.wsURL = this.baseURL.replace(/^http/, 'ws') + '/v0/ws/chat';
-        this.token = null; // OSS: single-user API key; hosted: httpOnly cookie (placeholder)
-        this.csrfToken = null; // Populated lazily for cookie-based writes (hosted only)
-        this.ossMode = false; // True when /oss-auth/token succeeds (OSS single-user build)
-        this._ossTokenPromise = null; // Memoized /oss-auth/token fetch
+        this.token = null; // Set once auth.validateToken() confirms a live session
+        this.csrfToken = null; // Populated lazily for cookie-based writes
 
-        // Eagerly fetch the OSS single-user API key (no-op in hosted builds where
-        // /oss-auth/token 404s). Populates this.token so isAuthenticated() is true
-        // by the time the user interacts, and onAuthChange fires for reactive UI.
-        this._ensureOssToken();
-        
         // Connection state
         this.ws = null;
         this.connectionState = 'disconnected'; // disconnected, connecting, connected, authenticated
@@ -445,9 +438,6 @@ class MiraAPIClient {
     async connect() {
         if (this.connectionState !== 'disconnected') return;
 
-        // Ensure OSS API key is loaded (no-op in hosted cookie mode)
-        await this._ensureOssToken();
-
         this.connectionState = 'connecting';
         
         try {
@@ -477,11 +467,9 @@ class MiraAPIClient {
         console.log('WebSocket connected, authenticating...');
         this.connectionState = 'connected';
 
-        // OSS sends the fetched API key; hosted sends empty (server validates cookie)
-        this.ws.send(JSON.stringify({
-            type: 'auth',
-            token: this.token || ''
-        }));
+        // Browsers send no frame token — the server validates the session cookie.
+        // Non-browser clients may present an issued API token here.
+        this.ws.send(JSON.stringify({ type: 'auth' }));
     }
     
     _handleClose(event) {
@@ -798,28 +786,6 @@ class MiraAPIClient {
         return match ? match[2] : null;
     }
 
-    async _ensureOssToken() {
-        // OSS single-user mode: fetch the API key from /oss-auth/token.
-        // Idempotent and memoized. In hosted builds the endpoint 404s and we
-        // stay in cookie-based mode (ossMode stays false).
-        if (this._ossTokenPromise) return this._ossTokenPromise;
-        this._ossTokenPromise = (async () => {
-            try {
-                const response = await fetch(`${this.baseURL}/oss-auth/token`);
-                if (!response.ok) return;
-                const data = await response.json();
-                if (data && data.token) {
-                    this.token = data.token;
-                    this.ossMode = true;
-                    this._emit('onAuthChange', { type: 'login', token: this.token });
-                }
-            } catch (e) {
-                // Hosted build or endpoint unavailable — fall back to cookie auth
-            }
-        })();
-        return this._ossTokenPromise;
-    }
-
     async _ensureCsrfToken() {
         if (this.csrfToken) return this.csrfToken;
         try {
@@ -853,9 +819,6 @@ class MiraAPIClient {
     
     // HTTP request helper for non-WebSocket endpoints
     async _httpRequest(endpoint, options = {}) {
-        // Ensure OSS API key is loaded (no-op in hosted cookie mode)
-        await this._ensureOssToken();
-
         const url = `${this.baseURL}${endpoint}`;
         const config = {
             method: options.method || 'GET',
@@ -863,29 +826,25 @@ class MiraAPIClient {
                 'Content-Type': 'application/json',
                 ...options.headers
             },
-            // Include cookies in requests (hosted cookie auth; harmless in OSS)
+            // Include cookies in requests (session auth)
             credentials: 'include'
         };
 
-        if (this.ossMode) {
-            // OSS single-user: authenticate via Bearer API key, no CSRF
-            config.headers['Authorization'] = `Bearer ${this.token}`;
-        } else {
-            // Hosted: httpOnly cookies sent automatically with credentials: 'include'.
-            // Attach CSRF token for cookie-based write operations to authenticated endpoints.
-            const method = (config.method || 'GET').toUpperCase();
-            const endpointPath = endpoint.split('?')[0];
-            const csrfProtectedEndpoint = (
-                endpointPath.startsWith('/v0/api') ||
-                (endpointPath.startsWith('/v0/auth') && endpointPath !== '/v0/auth/csrf')
-            );
-            if (csrfProtectedEndpoint && method !== 'GET' && method !== 'HEAD') {
-                try {
-                    const csrf = await this._ensureCsrfToken();
-                    config.headers['X-CSRF-Token'] = csrf;
-                } catch (e) {
-                    // Let the request fail with the error for visibility
-                }
+        // httpOnly cookies are sent automatically with credentials: 'include'.
+        // Attach the CSRF token for cookie-based write operations to
+        // authenticated endpoints.
+        const method = (config.method || 'GET').toUpperCase();
+        const endpointPath = endpoint.split('?')[0];
+        const csrfProtectedEndpoint = (
+            endpointPath.startsWith('/v0/api') ||
+            (endpointPath.startsWith('/v0/auth') && endpointPath !== '/v0/auth/csrf')
+        );
+        if (csrfProtectedEndpoint && method !== 'GET' && method !== 'HEAD') {
+            try {
+                const csrf = await this._ensureCsrfToken();
+                config.headers['X-CSRF-Token'] = csrf;
+            } catch (e) {
+                // Let the request fail with the error for visibility
             }
         }
 

@@ -10,8 +10,8 @@ mira-OSS (D7, D8, D12). Retained tests were minimally updated where the
 migration moved a collaborator (`crm_workspace_service.delete_account` →
 `provisioner.delete`, the dev identity → neutral placeholders, the dev
 redirect → `/chat`) or inverted an assertion that encoded CRM's topology
-rather than mira-OSS's (plan §0 invariant 1 keeps `oss_ui.py` and the
-`single`-mode bootstrap).
+rather than mira-OSS's two-mode identity model (`single` local-session
+bootstrap vs `multi` public signup).
 """
 
 from __future__ import annotations
@@ -152,10 +152,9 @@ def test_member_provisioning_failure_compensates_before_magic_link(auth_modules)
     assert events == ["teardown_account"]
 
 
-def test_development_session_creates_fully_provisioned_local_account(auth_modules, monkeypatch):
+def test_local_session_creates_fully_provisioned_local_account(auth_modules):
     from auth.service import AuthService
 
-    monkeypatch.setenv("MIRA_DEV", "1")
     member = _user(auth_modules, subject_kind="member")
     events: list[str] = []
     created: dict[str, str] = {}
@@ -175,12 +174,12 @@ def test_development_session_creates_fully_provisioned_local_account(auth_module
     service.SESSION_IDLE_TIMEOUT = 60
     service.SESSION_MAX_LIFETIME = 120
 
-    user, token = service.create_development_session()
+    user, token = service.create_local_session()
 
-    assert created["email"] == "developer@mira.local"
+    assert created["email"] == "user@localhost"
     assert token == "dev-session"
     assert events == [
-        "lookup:developer@mira.local",
+        "lookup:user@localhost",
         "create_user",
         "initialize_account",
         "login",
@@ -189,10 +188,9 @@ def test_development_session_creates_fully_provisioned_local_account(auth_module
     ]
 
 
-def test_development_session_repairs_an_existing_local_account(auth_modules, monkeypatch):
+def test_local_session_repairs_an_existing_local_account(auth_modules):
     from auth.service import AuthService
 
-    monkeypatch.setenv("MIRA_DEV", "1")
     member = _user(auth_modules, subject_kind="member")
     events: list[str] = []
     service = AuthService.__new__(AuthService)
@@ -210,12 +208,12 @@ def test_development_session_repairs_an_existing_local_account(auth_modules, mon
     service.SESSION_IDLE_TIMEOUT = 60
     service.SESSION_MAX_LIFETIME = 120
 
-    user, token = service.create_development_session()
+    user, token = service.create_local_session()
 
     assert user.id == member.id
     assert token == "dev-session"
     assert events == [
-        "lookup:developer@mira.local",
+        "lookup:user@localhost",
         f"ensure:{member.id}:America/Chicago",
         "login",
         "session",
@@ -223,40 +221,37 @@ def test_development_session_repairs_an_existing_local_account(auth_modules, mon
     ]
 
 
-def test_development_session_route_is_dev_only_and_sets_http_cookie(auth_modules, monkeypatch):
+def test_local_session_route_serves_under_single_and_refuses_elsewhere(auth_modules, monkeypatch):
     from fastapi import HTTPException
     import auth.api as auth_api
 
     auth_service = SimpleNamespace(
-        create_development_session=lambda: (_user(auth_modules, subject_kind="member"), "dev-session"),
+        create_local_session=lambda: (_user(auth_modules, subject_kind="member"), "local-session"),
         get_cookie_settings=lambda: auth_modules.types.CookieSettings(
             samesite="strict", httponly=True, secure=False, max_age=120
         ),
     )
-    monkeypatch.setenv("MIRA_DEV", "1")
-    # The route 404s under `single` (the default mode) regardless of MIRA_DEV:
-    # one unauthenticated GET would leave `users` with a second row and brick
-    # the single-user boot guard. This test exercises the dev-mode branch, so
-    # it must name the mode.
-    monkeypatch.setenv("MIRA_AUTH_MODE", "dev")
-    response = auth_api.create_development_session(auth_service)
+    # The route exists only under `single`: one unauthenticated GET on a
+    # multi install would provision a stray row alongside public signups.
+    monkeypatch.setenv("MIRA_AUTH_MODE", "single")
+    response = auth_api.create_local_session(auth_service)
     assert response.status_code == 303
     assert response.headers["location"] == "/chat"
-    assert "session=dev-session" in response.headers["set-cookie"]
+    assert "session=local-session" in response.headers["set-cookie"]
     assert "Secure" not in response.headers["set-cookie"]
 
-    monkeypatch.delenv("MIRA_DEV")
+    monkeypatch.setenv("MIRA_AUTH_MODE", "multi")
     with pytest.raises(HTTPException) as error:
-        auth_api.create_development_session(auth_service)
+        auth_api.create_local_session(auth_service)
     assert error.value.status_code == 404
 
 
 @pytest.mark.integration
 def test_fastapi_surface_mounts_multi_user_auth_and_single_mode_identity(auth_modules):
-    # Integration-classified because importing `main` writes
-    # /opt/mira/logs at module scope (setup_anthropic_sdk_logging) — a
-    # machine-level install path, not a pure-Python input. The rest of this
-    # file runs with no infrastructure.
+    # Integration-classified because importing `main` requires VAULT_ADDR —
+    # the Vault client raises at import time (see the macOS launcher note in
+    # deploy/finalize.sh), so the import is not a pure-Python input. The rest
+    # of this file runs with no infrastructure.
     import sys
 
     sys.modules.pop("main", None)
@@ -272,9 +267,11 @@ def test_fastapi_surface_mounts_multi_user_auth_and_single_mode_identity(auth_mo
     assert "/v0/ws/chat" in paths
     assert "/chat" in paths
     assert "/settings/" in paths
-    # The default mode is `single`, whose retained web UI authenticates via
-    # /oss-auth/token (plan §0 invariant 1) — mounting it is the contract.
-    assert "/oss-auth/token" in paths
+    # Both modes authenticate through the session stack; the bearer-key
+    # token endpoint was retired with the pre-backport single-user model,
+    # and its replacement mounts exactly once.
+    assert "/v0/auth/local/session" in paths
+    assert "/oss-auth/token" not in paths
     # No demo admission surface (D12), no OAuth (Square omitted, D-16).
     assert not any(str(path).startswith("/v0/api/demo") for path in paths)
     assert not any(str(path).startswith("/v0/auth/oauth") for path in paths)
@@ -330,24 +327,23 @@ async def test_websocket_cookie_session_establishes_typed_user_context(auth_modu
         clear_user_context()
 
 
-def test_single_mode_bootstrap_and_demo_gc_contracts():
-    """The contracts that make the union branch safe to ship.
+def test_local_bootstrap_and_demo_gc_contracts():
+    """The contracts that keep the two-mode split safe to ship.
 
     The crm original asserted the *removal* of the OSS single-user surface;
-    mira-OSS keeps it (D3: `single` is the default mode, plan §0 invariant
-    1), so those assertions are inverted to their OSS form. The
+    mira-OSS replaces the static shared key with the local-session bootstrap
+    rather than keeping it, so those assertions now check for absence. The
     `conversation_llm` negative assertion is retained — the column is gone
-    (D4) and `ensure_single_user` must not resurrect it.
+    (D4) and nothing may resurrect it.
     """
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    assert (root / "cns/api/oss_ui.py").exists()
     main_source = (root / "main.py").read_text()
     gc_source = (root / "auth/account_gc.py").read_text()
 
-    assert "ensure_single_user" in main_source
-    assert "oss_ui.router" in main_source
+    assert "ensure_single_user" not in main_source
+    assert "oss_ui" not in main_source
     assert "users.subject_kind = 'demo'" in gc_source
     assert "users.demo_expires_at <= NOW()" in gc_source
     assert "conversation_llm = 'demo'" not in gc_source

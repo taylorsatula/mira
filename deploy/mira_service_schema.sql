@@ -485,8 +485,8 @@ BEFORE UPDATE ON persona_state
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- Baseline provisioning is a DB trigger, not an application code path, so no
--- user can exist without revision 1 -- including the row ensure_single_user()
--- bootstraps in single-user mode.
+-- user can exist without revision 1 -- including the row the local-session
+-- bootstrap provisions in single mode.
 CREATE FUNCTION provision_baseline_persona()
 RETURNS TRIGGER AS $function$
 DECLARE

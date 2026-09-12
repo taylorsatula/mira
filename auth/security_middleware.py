@@ -30,8 +30,8 @@ What must change before strict can become the default
    attributes (`web/chat/index.html`, `web/domaindocs/index.html`) are what
    `script-src 'self'` actually rejects. Owner: the frontend session (plan §5 D-7).
    The vendored markdown and DOM-sanitizer libraries are not part of this problem —
-   `cns/api/oss_ui.py` serves them as `/oss-assets/*.js` and `web/chat/index.html` loads
-   them by `src`, so they are already external.
+   `web/chat/index.html` loads marked/purify from the static `/assets` mount,
+   so they are already external.
 2. A card-processor origin must never come back. mira-OSS has no payments subsystem, so
    nothing may widen `script-src`, `connect-src` or `frame-src` for one.
 3. `worker-src` is already present, so `web/sw.js` is admitted explicitly rather than by

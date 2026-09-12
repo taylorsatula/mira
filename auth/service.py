@@ -22,7 +22,6 @@ from utils.timezone_utils import utc_now
 from utils.user_context import get_current_user_id
 from utils.profile_validation import validate_profile_name
 from .config import config
-from .dev_mode import development_mode_enabled
 from .database import AuthDatabase
 from .email_service import MailSender, get_mail_sender
 from .provisioning import AccountProvisioner, NullProvisioner
@@ -33,15 +32,16 @@ from .types import UserRecord, UserProfile, SessionData, CookieSettings
 
 logger = logging.getLogger(__name__)
 
-# Neutral fixtures for the local development account. `MIRA_DEV` gates the
-# endpoint that mints them; nothing here may carry a real person or a
-# deployment-specific domain into a distributed artifact (plan §11). The
-# timezone is derived from this install's configured default, the same
-# source `ensure_single_user` seeds, rather than hardcoded.
-DEV_SESSION_EMAIL = "developer@mira.local"
-DEV_SESSION_FIRST_NAME = "Friend"
-DEV_SESSION_LAST_NAME = "Developer"
-DEV_SESSION_CURRENT_FOCUS = "Develop MIRA locally"
+# Fixture identity for the auto-provisioned local account under `single`
+# mode (`GET /v0/auth/local/session`). Nothing here may carry a real person
+# into a distributed artifact (plan §11); `user@localhost` matches the row
+# pre-multi-user installs seeded, so an upgraded install adopts its existing
+# data instead of provisioning a second identity. The timezone is derived
+# from this install's configured default rather than hardcoded.
+LOCAL_SESSION_EMAIL = "user@localhost"
+LOCAL_SESSION_FIRST_NAME = "Friend"
+LOCAL_SESSION_LAST_NAME: Optional[str] = None
+LOCAL_SESSION_CURRENT_FOCUS = "Get oriented with MIRA"
 
 
 class AuthService:
@@ -57,7 +57,7 @@ class AuthService:
         self.provisioner = provisioner
         self.security_logger = security_logger
 
-        # None means "resolve at send time", so a single/dev install never
+        # None means "resolve at send time", so a single-mode install never
         # reads mail configuration it does not need, and an operator can
         # inject any structural MailSender without touching this module.
         self.mailer = mailer
@@ -103,6 +103,14 @@ class AuthService:
         Returns:
             User ID (UUID as string)
         """
+        # Public account creation requires a routable deliverable address;
+        # the single-mode local bootstrap bypasses this method deliberately.
+        import re
+
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, email):
+            raise AuthError("invalid_email", "Invalid email format")
+
         try:
             first_name = validate_profile_name(first_name, "first_name")
             last_name = validate_profile_name(last_name, "last_name")
@@ -166,38 +174,35 @@ class AuthService:
 
         return user_id
 
-    def create_development_session(self) -> Tuple[UserProfile, str]:
-        """Create or reuse the local-only development account and issue a browser session."""
-        if not development_mode_enabled():
-            raise PermissionError("Development session bootstrap is disabled")
-
+    def create_local_session(self) -> Tuple[UserProfile, str]:
+        """Create or reuse the single-mode local account and issue a browser session."""
         from config.config_manager import config as system_config
 
         timezone = system_config.system.timezone
-        user = self.db.get_user_by_email(DEV_SESSION_EMAIL)
+        user = self.db.get_user_by_email(LOCAL_SESSION_EMAIL)
         if user is None:
             user_id = self.db.create_user(
-                email=DEV_SESSION_EMAIL,
-                first_name=DEV_SESSION_FIRST_NAME,
-                last_name=DEV_SESSION_LAST_NAME,
+                email=LOCAL_SESSION_EMAIL,
+                first_name=LOCAL_SESSION_FIRST_NAME,
+                last_name=LOCAL_SESSION_LAST_NAME,
                 timezone=timezone,
-                current_focus=DEV_SESSION_CURRENT_FOCUS,
+                current_focus=LOCAL_SESSION_CURRENT_FOCUS,
                 subject_kind="member",
             )
             self._initialize_account(
                 user_id=user_id,
-                first_name=DEV_SESSION_FIRST_NAME,
+                first_name=LOCAL_SESSION_FIRST_NAME,
                 timezone=timezone,
-                current_focus=DEV_SESSION_CURRENT_FOCUS,
+                current_focus=LOCAL_SESSION_CURRENT_FOCUS,
             )
             user = self.db.get_user_by_id(user_id)
             if user is None:
-                raise RuntimeError("Development account disappeared after initialization")
+                raise RuntimeError("Local account disappeared after initialization")
         else:
             self.provisioner.ensure(str(user.id), user.timezone)
 
         if not user.is_active:
-            raise RuntimeError("Development account is inactive")
+            raise RuntimeError("Local account is inactive")
 
         self.db.update_user_login(str(user.id))
         session_token = self.session_manager.create_session(
@@ -206,7 +211,7 @@ class AuthService:
             max_lifetime=self.SESSION_MAX_LIFETIME,
         )
         self.security_logger.log_event(
-            "auth.development_session",
+            "auth.local_session",
             success=True,
             user_id=str(user.id),
             email=user.email,
@@ -234,10 +239,15 @@ class AuthService:
         """Create every required resource for an account.
 
         `initialize_mira_account` is MIRA's own work (continuum + welcome
-        content). Anything a sidecar system owes the account goes through
-        the provisioner — in the OSS default, nothing.
+        content); feedback-tracking state comes from `seed_lora_postgres`,
+        which runs here so every provisioning path — signup, local-session
+        bootstrap — gets it. Anything a sidecar system owes the account goes
+        through the provisioner — in the OSS default, nothing.
         """
         self.db.initialize_mira_account(user_id, first_name, current_focus)
+
+        from auth.seed_lora import seed_lora_postgres
+        seed_lora_postgres(user_id)
 
         self.provisioner.provision(user_id, timezone)
 
@@ -648,11 +658,15 @@ class AuthService:
         """Get secure cookie settings."""
         # Lax (not Strict) so cross-site top-level GET navigations — magic-link
         # clicks from an email client — carry the session. Browser writes are
-        # guarded by explicit CSRF tokens, not SameSite.
+        # guarded by explicit CSRF tokens, not SameSite. The Secure flag follows
+        # the identity model: `single` mode serves plain HTTP on localhost where
+        # browsers reject Secure cookies; `multi` installs sit behind real TLS.
+        from .mode import auth_mode
+
         return CookieSettings(
             samesite="lax",
             httponly=True,
-            secure=not development_mode_enabled(),
+            secure=(auth_mode() == "multi"),
             max_age=config.SESSION_MAX_LIFETIME
         )
 

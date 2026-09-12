@@ -8,11 +8,11 @@ loop never awaits ``websocket.receive_json()`` anywhere else, which is what made
 main's second reader silently swallow frames (plan §6.4.1 defect 1).
 
 Frames are crm_mira's ``c1297b3`` vocabulary, with three deliberate mira-OSS
-changes recorded in plan §6.4.4: ``AuthFrame.token`` so ``MIRA_AUTH_MODE=single``
-can authenticate by bearer key (§6.4.5), ``ThinkingFrame``/``ModelErrorFrame`` so
-``thinking`` and ``model_error`` actually reach the browser (R5), and
-``TurnCompleteFrame`` carrying the fields the retained UI reads (R6). The
-prepaid-account access handshake crm wraps around all of this is not ported
+changes recorded in plan §6.4.4: ``AuthFrame.token`` so non-browser clients can
+authenticate the socket with an issued API token, ``ThinkingFrame``/
+``ModelErrorFrame`` so ``thinking`` and ``model_error`` actually reach the browser
+(R5), and ``TurnCompleteFrame`` carrying the fields the retained UI reads (R6).
+The prepaid-account access handshake crm wraps around all of this is not ported
 (plan 6.4.4 R8, decision D7).
 """
 
@@ -39,7 +39,6 @@ from pydantic import (
     model_validator,
 )
 
-from auth.mode import single_user_mode_enabled
 from auth.service import get_auth_service
 from auth.session import SessionManager
 from auth.types import APITokenContext
@@ -88,11 +87,10 @@ class ProtocolModel(BaseModel):
 class AuthFrame(ProtocolModel):
     """Handshake frame.
 
-    ``token`` exists because mira-OSS's default mode is ``single``, whose
-    identity source is the process-global bearer key read from
-    ``GET /oss-auth/token`` — not a session cookie (plan §6.4.5, §0 invariant
-    1). crm's cookie-only frame cannot express it. When present it wins over
-    the cookie; when absent the cookie ladder still runs.
+    ``token`` lets server-to-server clients present an issued API token on the
+    first frame instead of relying on a browser session cookie. Browsers send no
+    token and fall through to the cookie rung; there is no static shared key.
+    When present it wins over the cookie; when absent the cookie ladder runs.
     """
 
     type: Literal["auth"]
@@ -429,13 +427,10 @@ class WebSocketChatHandler:
     async def authenticate(self, websocket: WebSocket, token: str | None) -> str:
         """Resolve an identity for this socket and install the user context.
 
-        The credential ladder is a4df669's dual-protocol shape (plan §6.4.5),
-        not crm HEAD's cookie-only one: the auth-frame token wins, a browser
-        session cookie is the fallback, an issued API token is the second
-        rung, and — only under ``MIRA_AUTH_MODE=single`` — the process-global
-        bearer key resolves the single user. It is gated on the mode rather
-        than on the auth stack being importable, because in ``dev``/``multi``
-        the key must never authenticate.
+        Credential ladder: the auth-frame token wins, a browser session cookie
+        is the fallback, and an issued API token is the second rung. There is
+        no static shared key: every mode authenticates against the session/API-
+        token stack.
 
         Both the id and the full typed context are installed. The context is
         what lets WS-originated work call ``get_current_user()`` instead of
@@ -461,17 +456,6 @@ class WebSocketChatHandler:
                         if api_token_data["demo_expires_at"] is not None
                         else None
                     ),
-                )
-
-        if not session_data and single_user_mode_enabled():
-            api_key = getattr(websocket.app.state, "api_key", None)
-            single_user_id = getattr(websocket.app.state, "single_user_id", None)
-            if api_key and single_user_id and credential == api_key:
-                session_data = APITokenContext(
-                    user_id=str(single_user_id),
-                    token_type="api_key",
-                    token_id="oss_single_user",
-                    subject_kind="member",
                 )
 
         if not session_data:

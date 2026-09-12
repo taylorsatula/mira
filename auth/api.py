@@ -12,9 +12,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from .service import AuthService, get_auth_service
-from .dev_mode import development_mode_enabled
 from .exceptions import AuthError
-from .mode import auth_mode, single_user_mode_enabled
+from .mode import auth_mode
 from .types import UserProfile, SessionData, APITokenContext
 from .webauthn_service import WebAuthnService
 from utils.user_context import set_current_user_id, set_current_user_data
@@ -180,36 +179,16 @@ async def get_current_user(
     """
     Get current authenticated user from session token or API token.
 
-    In `single` mode (the default, `MIRA_AUTH_MODE` unset) this is the
-    one-key identity model the web UI authenticates against: the bearer
-    token must equal `app.state.api_key` and the user is
-    `app.state.single_user_id`. That branch is a *union* with crm's
-    session/API-token ladder, prepended so the ladder below stays live code
-    in `dev`/`multi` (plan §6.3.4); it preserves the pre-2.0 contract
-    exactly — same 401 strings, same `token_id`, same contextvar writes —
-    and supplies `subject_kind` explicitly because `types.APITokenContext`
-    requires it.
+    Browser clients present a Valkey session cookie (optionally paired with
+    a CSRF token for writes); server-to-server clients present an issued API
+    token in the Authorization header. There is no static process-global key:
+    under `single` mode the local account obtains its session through
+    `GET /v0/auth/local/session` exactly as multi-mode accounts do.
 
     Returns SessionData for session-based auth, APITokenContext for API tokens.
     Raises HTTPException with standard error format on failure.
     """
     try:
-        if single_user_mode_enabled():
-            if not credentials or not credentials.credentials:
-                raise HTTPException(status_code=401, detail="Missing authentication token")
-            if credentials.credentials != request.app.state.api_key:
-                raise HTTPException(status_code=401, detail="Invalid authentication token")
-
-            session_data = APITokenContext(
-                user_id=request.app.state.single_user_id,
-                token_type="api_key",
-                token_id="oss_single_user",
-                subject_kind="member",
-            )
-            set_current_user_id(session_data.user_id)
-            set_current_user_data(session_data.model_dump())
-            return session_data
-
         token: Optional[str] = None
         token_source: Optional[str] = None
 
@@ -403,29 +382,22 @@ async def revoke_api_token(
 
 
 # Endpoints
-@router.get("/dev/session", include_in_schema=False)
-def create_development_session(
+@router.get("/local/session", include_in_schema=False)
+def create_local_session(
     auth_service: AuthService = Depends(get_auth_service),
 ) -> RedirectResponse:
-    """Issue the local development session when `MIRA_DEV` is enabled.
+    """Bootstrap the single-mode local account and issue a browser session.
 
-    Refused in `single` mode with the same 404 as `/signup`, because this is
-    not a read: `AuthService.create_development_session` creates
-    `developer@mira.local` when it is absent, so one unauthenticated GET
-    would leave `users` holding two rows and `ensure_single_user`'s boot
-    guard would `sys.exit(1)` on every restart after it. `MIRA_DEV` and
-    `MIRA_AUTH_MODE` are independent variables (plan O-4 closed by unifying
-    the parser, not the semantics), and per plan §6.3.4 the dev-session
-    bootstrap *replaces* the single-user bootstrap rather than running
-    beside it — so `MIRA_DEV=true` with the mode unset is a contradictory
-    posture, and the mode wins.
+    The only identity surface under `single` mode: first visit auto-provisions
+    `user@localhost` (adopting that row verbatim when an upgraded install
+    already holds it), mints a session cookie, and redirects back to `/chat`.
+    Refused elsewhere with the same 404 as `/signup`: one unauthenticated GET
+    on a multi install would create a stray row alongside public signups.
     """
-    if single_user_mode_enabled():
-        raise HTTPException(status_code=404, detail="Not found")
-    if not development_mode_enabled():
+    if auth_mode() != "single":
         raise HTTPException(status_code=404, detail="Not found")
 
-    _, session_token = auth_service.create_development_session()
+    _, session_token = auth_service.create_local_session()
     cookie_settings = auth_service.get_cookie_settings()
     response = RedirectResponse("/chat", status_code=303)
     response.set_cookie(
@@ -449,13 +421,12 @@ def signup(
 ):
     """Create a new user account.
 
-    Refused in `single` mode: `ensure_single_user`'s boot guard exits the
-    process when `users` holds more than one row, so one unauthenticated
-    signup here permanently bricks the install on the next restart. The
-    404 (not 403) follows `create_development_session` below: a default
-    install must not advertise the surface to anonymous probes.
+    Refused in `single` mode: identity there is fixed to the local account,
+    and a stray second row would split data across identities. The 404 (not
+    403) matches `create_local_session`: installs without public signup must
+    not advertise the surface to anonymous probes.
     """
-    if single_user_mode_enabled():
+    if auth_mode() == "single":
         raise HTTPException(status_code=404, detail="Not found")
     request_id = generate_request_id()
     try:
@@ -509,10 +480,10 @@ def request_magic_link(
     """Request a magic link for passwordless authentication.
 
     Refused in `single` mode with the same 404 as `/signup`: no account can
-    exist beyond the seeded one there, and no mailer is configured, so the
-    lifecycle has nothing to deliver.
+    exist beyond the local account, and no mailer is configured, so the
+    lifecycle has nowhere to deliver.
     """
-    if single_user_mode_enabled():
+    if auth_mode() == "single":
         raise HTTPException(status_code=404, detail="Not found")
     request_id = generate_request_id()
     try:
@@ -557,10 +528,10 @@ def verify_magic_link(
     """Verify magic link and create session.
 
     Refused in `single` mode with the same 404 as `/signup`: it is the
-    completion half of the gated `/magic-link` flow, and a cookie session
-    it would mint is never honored by `get_current_user`'s single branch.
+    completion half of the gated `/magic-link` flow; magic links do not
+    exist outside `multi` mode.
     """
-    if single_user_mode_enabled():
+    if auth_mode() == "single":
         raise HTTPException(status_code=404, detail="Not found")
     request_id = generate_request_id()
     try:
@@ -1098,16 +1069,14 @@ def _page_auth_failure() -> HTTPException:
     """Where an unauthenticated page request goes, by mode.
 
     mira-OSS ships no `/login/` page (the CRM web redesign is omitted under
-    D8), so crm's 302 to `/login/` cannot be ported. In `dev` the auth
-    surface itself bootstraps the session: `/v0/auth/dev/session` mints a
-    cookie and bounces back to `/chat`. (`MIRA_AUTH_MODE=dev` without
-    `MIRA_DEV` 404s there — a visible misconfiguration, not a silent
-    bypass.) In `multi` there is nothing to redirect to yet, so the page
-    request fails with the standard 401 envelope and the operator's own
-    sign-in surface is the entry point.
+    D8). Under `single` the auth surface itself bootstraps the session:
+    `/v0/auth/local/session` provisions the local account, mints a cookie,
+    and bounces back to `/chat`. Under `multi` there is nothing to redirect
+    to yet, so the page request fails with the standard 401 envelope and the
+    operator's own sign-in surface is the entry point.
     """
-    if auth_mode() == "dev":
-        return HTTPException(status_code=302, headers={"Location": "/v0/auth/dev/session"})
+    if auth_mode() == "single":
+        return HTTPException(status_code=302, headers={"Location": "/v0/auth/local/session"})
     return _auth_http_exception(AuthError("UNAUTHORIZED", "Authentication required"), 401)
 
 
@@ -1119,8 +1088,8 @@ def get_current_user_for_pages(
     Get current authenticated user for HTML page requests.
 
     Checks both Authorization header and cookies.
-    For unauthenticated requests, redirects (dev) or fails 401 (multi) —
-    see `_page_auth_failure`; `single` mode does not gate its pages.
+    For unauthenticated requests, redirects under `single` (local bootstrap)
+    or fails 401 under `multi` — see `_page_auth_failure`.
     """
     # Try Authorization header first
     auth_header = request.headers.get("Authorization", "")

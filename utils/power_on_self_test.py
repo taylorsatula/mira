@@ -552,10 +552,10 @@ def _check_vault() -> dict[str, Any]:
         raise RuntimeError("Vault mira/services app_url is not an HTTP(S) URL")
 
     # Magic-link delivery is the one email consumer, and it exists only in
-    # `multi` (plan §6.3.4). Fail at boot for a multi install that cannot
-    # mail — the alternative is discovering it at first signup — while
-    # single/dev boot untouched by mail configuration, which
-    # auth/email_service.py only reads when a send is attempted.
+    # `multi`. Fail at boot for a multi install that cannot mail — the
+    # alternative is discovering it at first signup — while single-mode
+    # installs never configure mail, which auth/email_service.py only reads
+    # when a send is attempted.
     from auth.mode import auth_mode
 
     if auth_mode() == "multi":
@@ -694,11 +694,11 @@ def _run_postgres_rls_canary(admin_db: Any) -> dict[str, Any]:
     # subprocess timeout between the INSERT below and the `finally` cleanup
     # (and a failing cleanup DELETE is only logged), and `PostgresClient`
     # runs autocommit, so an interrupted run leaves committed canary rows
-    # behind. In `single` mode the boot guard then counts them and refuses
-    # to start. Purge canary-shaped leftovers first, so every run repairs
-    # the last one. The prefixes are canary-only — the sole other product
-    # row on the @mira.local domain is `developer@mira.local`, which
-    # neither pattern matches, and `%`/`_` need no LIKE escaping here.
+    # behind. Stray users rows also skew any probe that counts or lists
+    # accounts, so purge canary-shaped leftovers first and every run repairs
+    # the last one. The prefixes are canary-only — the single-mode local
+    # account (`user@localhost`) sits off the @mira.local domain entirely,
+    # and `%`/`_` need no LIKE escaping here.
     try:
         swept = admin_db.execute_update(
             "DELETE FROM users WHERE email LIKE %s OR email LIKE %s",
@@ -992,29 +992,20 @@ def _check_scheduler_registration() -> dict[str, Any]:
         orchestrator.event_bus,
     )
 
-    try:
-        from billing.drip import DailyDripService
-
-        DailyDripService().register_jobs(scheduler)
-    except ImportError:
-        pass
-
     registered = set(scheduler._registered_jobs.keys())
-    from auth.mode import single_user_mode_enabled
 
+    # Both modes authenticate through the session stack, so the auth cleanup
+    # jobs register unconditionally (utils/scheduled_tasks.py) and must be
+    # present everywhere.
     required = {
         "lt_memory_extract_unprocessed_segments",
         "lt_memory_temporal_score_recalculation",
-        "lt_memory_bulk_score_recalculation",
+        "lt_memory_bulk_score_recalcation",
         "lt_memory_entity_merge",
         "segment_timeout_detection",
+        "auth_cleanup",
+        "account_garbage_collection",
     }
-    # The auth cleanup jobs are registered only outside single mode
-    # (utils/scheduled_tasks.py mode gate, plan §6.3.4): single mode mints
-    # no magic links and no Valkey sessions to clean up, so requiring them
-    # here would fail the very boot this mode guarantees.
-    if not single_user_mode_enabled():
-        required |= {"auth_cleanup", "account_garbage_collection"}
     missing = sorted(required - registered)
     if missing:
         raise RuntimeError(f"Required scheduler jobs not registered: {missing}")
@@ -1074,14 +1065,13 @@ def _check_http_diagnostics(base_url: str) -> dict[str, Any]:
         raise RuntimeError("Scheduler is not running in the live server")
 
     registered = set(scheduler.get("registered_jobs") or [])
-    from auth.mode import single_user_mode_enabled
 
     required = {
         "lt_memory_extract_unprocessed_segments",
         "segment_timeout_detection",
+        "auth_cleanup",
+        "account_garbage_collection",
     }
-    if not single_user_mode_enabled():
-        required |= {"auth_cleanup", "account_garbage_collection"}
     missing = sorted(required - registered)
     if missing:
         raise RuntimeError(f"Live scheduler missing required jobs: {missing}")
