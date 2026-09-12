@@ -93,9 +93,9 @@ class DomaindocTrinket(EventAwareTrinket):
         try:
             from utils.domaindoc_shares import get_accepted_shares
             shares = get_accepted_shares(user_id)
-        except Exception:
-            logger.warning("Failed to query domaindoc shares", exc_info=True)
-            return []
+        except Exception as e:
+            logger.error(f"Failed to query domaindoc shares for user {user_id}: {e}")
+            raise
 
         sections = []
         for share in shares:

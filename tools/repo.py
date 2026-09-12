@@ -675,5 +675,5 @@ class ToolRepository:
                 if name not in self.enabled_tools:
                     self.enable_tool(name)
             except Exception:
-                self.logger.exception("Error enabling tool %s", name)
+                self.logger.exception("Error enabling tool %s during enable_all — it will be unavailable this session", name)
     

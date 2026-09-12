@@ -240,17 +240,17 @@ class ReminderTool(Tool):
 
             return None
         except Exception as e:
-            self.logger.warning(f"Duplicate check failed, proceeding with creation: {e}")
-            return None
+            raise ValueError(
+                f"Duplicate check failed for '{title}' — cannot verify uniqueness, refusing to create: {e}"
+            ) from e
 
     def _load_contacts(self) -> List[Dict[str, Any]]:
-        """Load user's contacts from SQLite database."""
+        """Load user's contacts from SQLite database. Raises on store failure."""
         try:
             # UserDataManager does not expose table_exists; attempt select directly
             return self.db.select('contacts')
         except Exception as e:
-            self.logger.warning(f"Failed to load contacts: {e}")
-            return []
+            raise ValueError(f"Failed to load contacts: {e}") from e
 
     def _get_contact_by_uuid(self, contact_uuid: str) -> Optional[Dict[str, Any]]:
         """Get a contact by UUID."""
@@ -394,8 +394,16 @@ class ReminderTool(Tool):
         # Check if contact name exists in user's contacts
         contact_info = None
         contact_uuid = None
+        contact_lookup_failed = False
         if contact_name:
-            contact_info = self._lookup_contact(contact_name)
+            try:
+                contact_info = self._lookup_contact(contact_name)
+            except Exception as e:
+                # Reminder creation proceeds, but the response must tell the
+                # model the link could not be verified (store failure) so it
+                # can inform the user instead of silently dropping the link.
+                self.logger.error(f"Contact lookup failed for {contact_name}: {e}")
+                contact_lookup_failed = True
             if contact_info:
                 contact_uuid = contact_info["contact"]["id"]
             
@@ -450,6 +458,13 @@ class ReminderTool(Tool):
             result["contact_found"] = True
             result["contact_info"] = contact_info.get("contact", {})
             result["message"] += f" linked to contact {contact_name}"
+        elif contact_name and contact_lookup_failed:
+            result["contact_found"] = False
+            result["contact_lookup_failed"] = True
+            result["message"] += (
+                f". Contact lookup failed (contacts store error), so the reminder"
+                f" was saved without a contact link for {contact_name}."
+            )
         elif contact_name:
             result["contact_found"] = False
             result["message"] += f". No contact record found for {contact_name}."
@@ -1183,6 +1198,7 @@ class ReminderTool(Tool):
             
             return None
             
-        except Exception as e:
-            self.logger.error(f"Contact lookup failed for {name}: {e}")
-            return None
+        except Exception:
+            # Store failures propagate so callers distinguish "lookup failed"
+            # from "contact not found" (None).
+            raise

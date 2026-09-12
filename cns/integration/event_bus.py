@@ -56,12 +56,16 @@ class EventBus:
         
         # Call subscribers
         if event_type in self._subscribers:
+            # Delivery is at-most-once by design: subscriber failures are
+            # logged with traceback and skipped — no retry, no re-queue. A
+            # failed subscriber shows up in the logs; the remaining
+            # subscribers still hear the event.
             for callback in self._subscribers[event_type]:
                 # Execute all callbacks synchronously
                 try:
                     callback(event)
-                except Exception as e:
-                    logger.error(f"Error in event subscriber for {event_type}: {e}")
+                except Exception:
+                    logger.exception(f"Error in event subscriber for {event_type}")
                     
         logger.debug(f"Event {event_type} published to {len(self._subscribers.get(event_type, []))} subscribers")
     

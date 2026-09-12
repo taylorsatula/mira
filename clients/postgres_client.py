@@ -72,6 +72,10 @@ class PoolStats(TypedDict):
     closed: bool
 
 
+class PostgresPoolError(RuntimeError):
+    """Raised when a pool hands back no connection (distinct from PoolTimeout exhaustion)."""
+
+
 class PostgresClient:
     """Raw SQL client with connection pooling, user isolation via RLS, and automatic JSON serialization."""
 
@@ -183,7 +187,7 @@ class PostgresClient:
         try:
             conn = pool.getconn()
             if conn is None:
-                raise Exception(f"Could not get connection from pool for {self._pool_key}")
+                raise PostgresPoolError(f"Could not get connection from pool for {self._pool_key}")
 
             conn.autocommit = True
 
@@ -203,7 +207,7 @@ class PostgresClient:
             yield conn
         except PoolTimeout as e:
             logger.error(f"Connection pool exhausted for {self._pool_key}: {e}", exc_info=True)
-            raise Exception(f"Database connection pool exhausted for {self._pool_key}")
+            raise PoolTimeout(f"Database connection pool exhausted for {self._pool_key}") from e
         finally:
             if conn:
                 pool.putconn(conn)

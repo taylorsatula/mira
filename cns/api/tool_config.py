@@ -388,7 +388,11 @@ def _call_tool_validation(tool_name: str, config: dict[str, Any]) -> dict[str, A
     # which has expensive side effects and requires working_memory for some tools
     try:
         module = importlib.import_module(f"tools.implementations.{tool_name}")
-    except ImportError:
+    except ImportError as e:
+        # Tools register loudly at boot; here empty config correctly answers
+        # "no such tool" for bad names. Log at this seam too so a genuinely
+        # broken module stays visible instead of silently indistinguishable.
+        logger.warning(f"Tool module tools.implementations.{tool_name} failed to import: {e}")
         return {}
 
     # Find the Tool subclass matching this tool_name

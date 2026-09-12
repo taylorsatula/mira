@@ -899,7 +899,7 @@ class EmailTool(Tool):
             return list(map(int, uids))
         except Exception as e:
             self.logger.error(f"Error searching messages with criteria '{criteria}': {e}")
-            return []
+            raise ValueError(f"IMAP search failed for criteria '{criteria}': {e}")
     
     def _fetch_message_headers(self, uids: List[int], limit: int = None, load_content: bool = True) -> List[Dict[str, Any]]:
         """

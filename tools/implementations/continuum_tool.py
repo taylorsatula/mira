@@ -1190,7 +1190,7 @@ class ContinuumSearchTool(Tool):
 
         except Exception as e:
             self.logger.error(f"Failed to find message by short ID {short_id}: {e}")
-            return None
+            raise ValueError(f"Cannot look up message {short_id}: search failed - {e}")
 
     def _fetch_context_messages(
         self,
