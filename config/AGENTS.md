@@ -4,7 +4,7 @@
 
 - `config.py` contains only **operational and infrastructure** settings — feature flags, infrastructure coordinates, scheduling cadences, deployment settings. Algorithm tuning constants live inline in their consumer modules as `UPPER_SNAKE_CASE` module-level constants.
 - All settings are Pydantic `BaseModel` schemas with hardcoded defaults. No required fields — the system must boot with zero external input.
-- Secrets (API keys, DB URLs) are never stored here. They are lazy Vault lookups via properties on `AppConfig` (e.g., `config.api_key` calls `get_api_key(self.api.api_key_name)`). No env-var fallbacks.
+- Secrets (API keys, DB URLs) are never stored here. They live in Vault and are resolved by their consumers (e.g., LLM dialects look up the route's `api_key_name` from `model_configs` via `get_api_key`). No env-var fallbacks.
 - The `config` singleton is module-level state created at import time: `config = initialize_config()` in `config_manager.py`. Import it as `from config import config`. Never instantiate `AppConfig` directly in application code.
 - `__init__.py` imports `tools.registry` before `config_manager` — this import order is load-bearing for circular dependency avoidance. Do not reorder.
 - `config.<tool_name>_tool` triggers `AppConfig.__getattr__` → `get_tool_config()` → `registry.get_or_create()`. With user context, it returns the validated per-user override merged over the global default; without user context, it returns the global default.
@@ -14,11 +14,11 @@
 ## Config Models
 
 - `ApiConfig` — LLM API: feature flags (`subcortical_prefill_warmup`, `show_openai_compat_thinking`), the Vault key name for the Anthropic dialect, request sizing (context window, temperature), the absolute live-compaction threshold (`compaction_trigger_tokens`, validated against the context window by a model validator), and provider timeouts (`timeout`, `provider_response_timeout`, `async_work_barrier_timeout_seconds`). Models, endpoints, per-route output ceilings and effort live in the `model_configs` table, not here; `validate_compaction_budget()` checks the threshold against the primary route's ceiling at startup.
-- `ApiServerConfig` — Server deployment: host/port/workers, CORS, uvicorn log level, extended thinking toggle.
+- `ApiServerConfig` — Server deployment: host/port/workers, `sync_endpoint_thread_limit` (per-worker FastAPI thread pool ceiling for sync endpoints), CORS, uvicorn log level, extended thinking toggle.
 - `SystemConfig` — System-level: `log_level`, `timezone`, and the cognitive feature flags `subcortical_enabled`, `peanutgallery_enabled`, `persona_enabled`.
 - `ScheduledJobsConfig` — Background job cadences: extraction retry sweep hours, scheduled-job monitor timeout, temporal/bulk score recalc use-days, portrait synthesis use-days, entity merge use-days. All operational knobs.
 - `MemoryCuratorConfig` — Memory-graph curation agent: `enabled` plus floor-mode knobs (`floor_threshold`, `floor_unseen_days`, `floor_sample_size`, `floor_use_days`).
-- `LatticeConfig` — Federation service coordinates (`service_url`, `timeout`).
+- `LatticeConfig` — Federation subsystem: `enabled` opt-in flag (default false; when true, missing lattice package aborts startup fail-fast instead of degrading silently) plus service coordinates (`service_url`, `timeout`).
 - `SidebarDispatcherConfig` — Sidebar agent: `enabled`, poll interval, max concurrent agents.
 - `InboxToolConfig` — Inbox poller tool defaults (`enabled`, `inbox_path`).
 

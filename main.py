@@ -4,9 +4,6 @@ MIRA - Main Application Entry Point
 FastAPI server that wires together the CNS architecture and handles startup/shutdown.
 """
 
-    #@model it seems like the main.py was modified iterarively over time and the order of code fell by the wayside. it should be shuffled around. even if functionalally it works the same it is good code hygene
-
-
 import argparse
 import asyncio
 import logging
@@ -20,7 +17,6 @@ setup_colored_root_logging(log_level=logging.WARNING, fmt='%(asctime)s - %(name)
 # Deployment installs set MIRA_LOG_DIR=/opt/mira/logs (systemd unit, macOS
 # launcher, s6 run script). Everywhere else the relative default keeps the
 # import pure-Python instead of touching a machine-level install path.
-# @model is this a comment worth keeping ^^^
 setup_anthropic_sdk_logging(log_dir=os.environ.get("MIRA_LOG_DIR", "logs"))
 
 from fastapi import Depends, FastAPI, Request
@@ -30,18 +26,16 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
+from auth import api as auth_api
 from auth.mode import auth_mode
+from auth.security_middleware import SecurityHeadersMiddleware
 from config.config_manager import config
 from config.announcement import load_announcement
 from cns.api import data, actions, health, websocket_chat, tool_config, trigger_rules, update, federation as federation_api
 from cns.api import chat as chat_api
 from cns.api import files as files_api
 from cns.api import location
-#@model the cns.api imports could be laid out cleaner
-from auth import api as auth_api
 from cns.api.base import APIError, create_error_response, generate_request_id
-#@model shouldt this go up a line to be with the other cns.api?
-from auth.security_middleware import SecurityHeadersMiddleware
 from utils.scheduler_service import scheduler_service
 from utils.scheduled_tasks import initialize_all_scheduled_tasks
 
@@ -49,7 +43,6 @@ from utils.scheduled_tasks import initialize_all_scheduled_tasks
 logging.getLogger('apscheduler.executors.default').setLevel(logging.WARNING)
 logging.getLogger('apscheduler.scheduler').setLevel(logging.WARNING)
 # logging.getLogger('tools.implementations.imagegen_tool').setLevel(logging.DEBUG)
-#@model was the imagegen tool removed?
 
 logger = logging.getLogger(__name__)
 
@@ -69,75 +62,97 @@ async def lifespan(app: FastAPI):
     logger.info(f"Auth mode: {auth_mode()}")
 
 
-    # Configure FastAPI thread pool for synchronous endpoints
+    # Configure FastAPI thread pool for synchronous endpoints (per-worker)
     from anyio import to_thread
-    to_thread.current_default_thread_limiter().total_tokens = 100
-    logger.info("FastAPI thread pool configured for 100 concurrent threads")
-   
-    #@model the thread count should be conditional based on if we're in one user or multi user mode'
-    
-     
+    thread_limit = config.api_server.sync_endpoint_thread_limit
+    to_thread.current_default_thread_limiter().total_tokens = thread_limit
+    logger.info(f"FastAPI thread pool configured for {thread_limit} concurrent threads")
+
     # Pre-initialize expensive singleton resources at startup
     logger.info("Pre-initializing singleton resources...")
 
     # Preload all Vault secrets into memory cache (prevents token expiration issues)
     from clients.vault_client import preload_secrets
-    preload_secrets()
+    try:
+        preload_secrets()
+    except Exception as e:
+        logger.critical(f"Failed to preload Vault secrets: {e}")
+        raise RuntimeError(f"vault initialization failed - cannot start MIRA: {e}") from e
 
     # Load announcement config (cached for lifetime of process)
-    load_announcement()
+    try:
+        load_announcement()
+    except Exception as e:
+        logger.critical(f"Failed to load announcement config: {e}")
+        raise RuntimeError(f"announcement loading failed - cannot start MIRA: {e}") from e
 
     # Initialize embeddings provider (loads mdbr-leaf-ir-asym 768d model)
     from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
-    embeddings_provider = get_hybrid_embeddings_provider()
+    try:
+        embeddings_provider = get_hybrid_embeddings_provider()
+    except Exception as e:
+        logger.critical(f"Failed to initialize embeddings provider: {e}")
+        raise RuntimeError(f"embeddings initialization failed - cannot start MIRA: {e}") from e
     logger.info(f"Embeddings provider initialized: {type(embeddings_provider).__name__}")
     
     # Initialize continuum repository (creates DB connection pool)
     from cns.infrastructure.continuum_repository import get_continuum_repository
-    continuum_repo = get_continuum_repository()
+    try:
+        continuum_repo = get_continuum_repository()
+    except Exception as e:
+        logger.critical(f"Failed to initialize continuum repository: {e}")
+        raise RuntimeError(f"continuum repository initialization failed - cannot start MIRA: {e}") from e
     logger.info("Continuum repository initialized with connection pool")
 
     # Load the fixed model_configs routes from database (fail-fast at startup)
     from utils.user_context import load_model_configs
-    load_model_configs()
+    try:
+        load_model_configs()
+    except Exception as e:
+        logger.critical(f"Failed to load model_configs routes: {e}")
+        raise RuntimeError(f"model_configs loading failed - cannot start MIRA: {e}") from e
     logger.info("model_configs routes loaded from database")
 
-    # The payments subsystem is not part of mira-OSS (decision D7): there
-    # is no paid-account pricing module in this tree, and cost visibility
-    # lives in utils/cost_accumulator.py against usage_pricing rows seeded
-    # by the greenfield schema.
-    
-    #@model good flag. this needs a proper finalized aporoach because mira is now OSS centric. 
+    # No payments surface in mira-OSS (D7); cost visibility lives in utils/cost_accumulator.py.
+
+    # LLMProvider is core infrastructure owned by main: Mira cannot operate
+    # without it, so it constructs here rather than nested inside whichever
+    # component happened to need it first.
+    from clients.llm_provider import LLMProvider
+    try:
+        shared_llm_provider = LLMProvider()
+    except Exception as e:
+        logger.critical(f"Failed to initialize LLMProvider: {e}")
+        raise RuntimeError(f"llm_provider initialization failed - cannot start MIRA: {e}") from e
 
     # Initialize lt_memory factory following MIRA's singleton pattern
     logger.info("Initializing lt_memory factory...")
     try:
-        from clients.llm_provider import LLMProvider
-        #@model why are we init llmprovider inside memory factory? what if factory is disabled? we'll still need llm provider globally in main and then reference it, no?
         from utils.database_session_manager import get_shared_session_manager
         from lt_memory.factory import get_lt_memory_factory
-
-        lt_memory_llm_provider = LLMProvider()
 
         lt_memory_factory = get_lt_memory_factory(
             session_manager=get_shared_session_manager(),
             embeddings_provider=embeddings_provider,
-            llm_provider=lt_memory_llm_provider,
+            llm_provider=shared_llm_provider,
             conversation_repo=continuum_repo
         )
         logger.info("lt_memory factory initialized as singleton")
     except Exception as e:
         logger.critical(f"Failed to initialize lt_memory factory: {e}")
         raise RuntimeError(f"lt_memory initialization failed - cannot start MIRA: {e}") from e
-        #@model we should standardize rhe cannot start messages across all crucial startup components
 
     # Initialize orchestrator as singleton
     logger.info("Initializing continuum orchestrator...")
     from cns.integration.factory import create_cns_orchestrator
     from cns.services.orchestrator import initialize_orchestrator
 
-    orchestrator = create_cns_orchestrator()
-    initialize_orchestrator(orchestrator)
+    try:
+        orchestrator = create_cns_orchestrator()
+        initialize_orchestrator(orchestrator)
+    except Exception as e:
+        logger.critical(f"Failed to initialize CNS orchestrator: {e}")
+        raise RuntimeError(f"cns_orchestrator initialization failed - cannot start MIRA: {e}") from e
     logger.info("CNS Orchestrator initialized as global singleton")
 
     # Flush Valkey caches on startup except auth sessions, CSRF tokens paired
@@ -148,10 +163,14 @@ async def lifespan(app: FastAPI):
     # cookie-authenticated write after every restart.
     logger.info("Flushing Valkey caches (preserving sessions, CSRF tokens and rate limits)...")
     from clients.valkey_client import get_valkey_client
-    valkey_client = get_valkey_client()
-    flushed_count = valkey_client.flush_except_whitelist(
-        preserve_prefixes=["session:", "csrf:", "rate_limit:"]
-    )
+    try:
+        valkey_client = get_valkey_client()
+        flushed_count = valkey_client.flush_except_whitelist(
+            preserve_prefixes=["session:", "csrf:", "rate_limit:"]
+        )
+    except Exception as e:
+        logger.critical(f"Failed to flush Valkey caches on startup: {e}")
+        raise RuntimeError(f"valkey initialization failed - cannot start MIRA: {e}") from e
     logger.info(f"Flushed {flushed_count} cache keys from Valkey")
 
     # PlaywrightService is lazy — Chromium launches on first web_tool fetch,
@@ -167,19 +186,23 @@ async def lifespan(app: FastAPI):
     # Event bus is synchronous
     logger.info("Event bus initialized (synchronous)")
 
-    # Initialize all scheduled tasks through central registry
-    initialize_all_scheduled_tasks(scheduler_service)
+    try:
+        # Initialize all scheduled tasks through central registry
+        initialize_all_scheduled_tasks(scheduler_service)
 
-    # Register segment timeout detection job (needs event_bus from orchestrator)
-    from utils.scheduled_tasks import register_segment_timeout_job, register_sidebar_dispatcher_job
-    register_segment_timeout_job(scheduler_service, orchestrator.event_bus)
+        # Register segment timeout detection job (needs event_bus from orchestrator)
+        from utils.scheduled_tasks import register_segment_timeout_job, register_sidebar_dispatcher_job
+        register_segment_timeout_job(scheduler_service, orchestrator.event_bus)
 
-    # Register sidebar dispatcher (needs tool_repo + event_bus)
-    register_sidebar_dispatcher_job(
-        scheduler_service, orchestrator.tool_repo, orchestrator.event_bus
-    )
+        # Register sidebar dispatcher (needs tool_repo + event_bus)
+        register_sidebar_dispatcher_job(
+            scheduler_service, orchestrator.tool_repo, orchestrator.event_bus
+        )
 
-    scheduler_service.start()
+        scheduler_service.start()
+    except Exception as e:
+        logger.critical(f"Failed to initialize scheduled task system: {e}")
+        raise RuntimeError(f"scheduled_task_system initialization failed - cannot start MIRA: {e}") from e
 
     # Collapse any segments stale during downtime through the existing event pipeline.
     # check_timeouts() publishes SegmentTimeoutEvent for stale segments, which the
@@ -187,7 +210,11 @@ async def lifespan(app: FastAPI):
     # sweep catches any that fail.
     from cns.services.segment_timeout_service import get_timeout_service
     timeout_service = get_timeout_service(orchestrator.event_bus)
-    timeout_service.check_timeouts()
+    try:
+        timeout_service.check_timeouts()
+    except Exception as e:
+        logger.critical(f"Startup stale-segment timeout check failed: {e}")
+        raise RuntimeError(f"segment_timeout_check failed - cannot start MIRA: {e}") from e
     logger.info("Startup timeout check complete (stale segments will collapse via event pipeline)")
 
     # Verify Vault connection (non-blocking)
@@ -196,29 +223,35 @@ async def lifespan(app: FastAPI):
     if vault_status["status"] != "success":
         logger.warning(f"Vault connection issue: {vault_status['message']}")
 
-    # Register Lattice username resolver for federation
-    # This allows Lattice to resolve usernames to user_ids for inbound message delivery
-    #@model during this transition to v2 we should make lattice a firsr class citizen even if its disabled for netoskr security reasons. its a useful functionality to bundle
-    try:
-        from lattice.username_resolver import set_username_resolver
-        from clients.postgres_client import PostgresClient
-        from typing import Optional
+    # Lattice federation is first-class but opt-in via config.lattice.enabled.
+    # When enabled it must work or the service aborts startup loudly; when
+    # disabled nothing is imported and the /v0/api/federation router stays unmounted.
+    if config.lattice.enabled:
+        logger.info("Initializing Lattice federation username resolver...")
+        try:
+            from lattice.username_resolver import set_username_resolver
+            from clients.postgres_client import PostgresClient
+            from typing import Optional
 
-        def mira_resolve_username(username: str) -> Optional[str]:
-            """Resolve username to user_id for Lattice federation."""
-            db = PostgresClient("mira_service")
-            result = db.execute_single(
-                "SELECT user_id FROM global_usernames WHERE username = %(username)s AND active = true",
-                {"username": username.lower()}
-            )
-            return str(result["user_id"]) if result else None
+            def mira_resolve_username(username: str) -> Optional[str]:
+                """Resolve username to user_id for Lattice federation."""
+                db = PostgresClient("mira_service")
+                result = db.execute_single(
+                    "SELECT user_id FROM global_usernames WHERE username = %(username)s AND active = true",
+                    {"username": username.lower()}
+                )
+                return str(result["user_id"]) if result else None
 
-        set_username_resolver(mira_resolve_username)
+            set_username_resolver(mira_resolve_username)
+        except ImportError as e:
+            logger.critical(f"Lattice package unavailable but federation is enabled: {e}")
+            raise RuntimeError(f"lattice initialization failed - cannot start MIRA: {e}") from e
+        except Exception as e:
+            logger.critical(f"Failed to register Lattice username resolver: {e}")
+            raise RuntimeError(f"lattice initialization failed - cannot start MIRA: {e}") from e
         logger.info("Lattice username resolver registered")
-    except ImportError:
-        logger.warning("Lattice package not available - federation disabled")
-    except Exception as e:
-        logger.warning(f"Failed to register Lattice username resolver: {e}")
+    else:
+        logger.info("Lattice federation disabled (enable via config.lattice.enabled=true)")
 
 
     logger.info("MIRA startup complete")
@@ -302,8 +335,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="MIRA",
         description="A lil Brain-in-a-Box",
-        version="2026.03.07-major",
-        #@model this needs to be updated or better yet tied to the VERSION
+        version=(Path(__file__).resolve().parent / "VERSION").read_text().strip(),
         lifespan=lifespan
     )
     
@@ -362,9 +394,7 @@ def create_app() -> FastAPI:
         """Handle custom API errors."""
         request_id = generate_request_id()
         response = create_error_response(exc, request_id)
-        
-        # Determine status code based on error code
-        #@model some of the commenrs do not add much value... they add to the noise. of course this code determines status codes.
+
         status_code = 400  # Default to bad request
         if exc.code == "NOT_FOUND":
             status_code = 404
@@ -423,10 +453,9 @@ def create_app() -> FastAPI:
     # API routes - v0 versioning (beta signal)
     app.include_router(health.router, prefix="/v0/api", tags=["health"])
     app.include_router(update.router, prefix="/v0/api", tags=["update"])  # Public update check
-    # The multi-user auth surface is mounted in all three modes (plan
-    # §6.3.4): `single` authenticates its callers through the union branch
-    # of get_current_user, and dev/multi through sessions and API tokens.
-    #@model same thing down here. standardixing on single (rename dev mode) and multi. remove v1 holdover. 
+    # The auth surface mounts unconditionally in both modes; every caller
+    # authenticates through the shared credential ladder (session cookie →
+    # issued API token).
     app.include_router(auth_api.router, prefix="/v0/auth", tags=["auth"])
     app.include_router(chat_api.router, prefix="/v0/api", tags=["chat"])
     app.include_router(data.router, prefix="/v0/api", tags=["data"])
@@ -434,15 +463,12 @@ def create_app() -> FastAPI:
     app.include_router(tool_config.router, prefix="/v0/api", tags=["tool_config"])
     app.include_router(trigger_rules.router, prefix="/v0/api", tags=["trigger_rules"])
     app.include_router(files_api.router, prefix="/v0/api", tags=["files"])
-    #@model iirc files api support was removed
     app.include_router(location.router, prefix="/v0/api", tags=["location"])
     app.include_router(websocket_chat.router, prefix="/v0", tags=["websocket"])  # /v0/ws/chat
-    app.include_router(federation_api.router, prefix="/v0/api", tags=["federation"])
+    if config.lattice.enabled:
+        app.include_router(federation_api.router, prefix="/v0/api", tags=["federation"])
 
-    # Payments routes are not part of mira-OSS (decision D7): there is no
-    # paid-account module in this tree, and account access is not a product
-    # surface here. Cost visibility lives in utils/cost_accumulator.py.
-    #@model handle this as per above too
+    # No payments routes in mira-OSS (D7); cost visibility lives in utils/cost_accumulator.py.
 
     # Performance monitoring (gated by mira.perf logger level)
     from utils.perf import register_perf_routes, install_db_instrumentation

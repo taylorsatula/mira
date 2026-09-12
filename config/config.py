@@ -19,9 +19,6 @@ class ApiConfig(BaseModel):
     subcortical_prefill_warmup: bool = Field(default=False, description="Pre-warm subcortical KV cache after each turn (vLLM prefix-cache deployments only — wastes billed tokens on cloud providers)")
     show_openai_compat_thinking: bool = Field(default=True, description="Show thinking blocks from OpenAI-compatible dialects to end user")
 
-    # Infrastructure coordinates
-    api_key_name: str = Field(default="anthropic_key", description="Vault key name for Anthropic API key")
-
     # Operational limits
     timeout: int = Field(default=180, description="Max seconds an LLM provider HTTP request may run before it is aborted.")
     provider_response_timeout: int = Field(default=180, description="Max seconds an LLM provider call may run before the lifecycle aborts it.")
@@ -66,6 +63,10 @@ class ApiServerConfig(BaseModel):
     host: str = Field(default="0.0.0.0", description="Host address for the FastAPI server")
     port: int = Field(default=1993, description="Port for the FastAPI server")
     workers: int = Field(default=1, description="Number of uvicorn workers")
+    sync_endpoint_thread_limit: int = Field(
+        default=100, ge=1,
+        description="Max concurrent threads FastAPI uses for synchronous endpoints (per worker process). Lower it on single-user installs; raise it for high-concurrency multi-user deployments"
+    )
 
     # CORS
     enable_cors: bool = Field(default=True, description="Enable CORS middleware")
@@ -165,6 +166,10 @@ class MemoryCuratorConfig(BaseModel):
 class LatticeConfig(BaseModel):
     """Lattice federation service configuration."""
 
+    enabled: bool = Field(
+        default=False,
+        description="Enable Lattice federation (cross-server pager messaging). Requires the optional lattice package; startup fails fast when enabled and unavailable"
+    )
     service_url: str = Field(default="http://localhost:1113", description="URL of the Lattice discovery service")
     timeout: int = Field(default=30, description="HTTP request timeout in seconds")
 
