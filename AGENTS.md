@@ -18,6 +18,10 @@ Subdirectories contain `AGENTS.md` files that serve as local orientation maps �
 If you skip this, the maps rot and become misleading — worse than having no map at all. Treat `AGENTS.md` updates as part of the changeset, not an afterthought.
 
 ## 🚨 Critical Principles (Non-Negotiable)
+
+# 🛑 ABSOLUTELY NO TESTS. THIS IS NOT A SUGGESTION.
+Do not write tests. Do not run tests. Do not create test files, test directories, pytest fixtures, or "just a quick sanity check." If you write a test, Taylor will delete it and you will have wasted everyone's time. This codebase does not have tests, does not want tests, and will never want tests. Here is the philosophy you must internalize: code here fails fast and can only crash within its own boundaries. A codebase with no tests either runs properly or crashes on boot — there is no third option. No crash? The code works. Full stop. Tests are bowling bumpers for developers who want to write okay-ish code, watch it bounce off the bumpers, and then spend 20 minutes in guess-and-check purgatory fiddling with the code until the tests deign to pass. That is not engineering — that is a slot machine with extra steps. MIRA flies close to the sun. If the code is wrong, it crashes on boot and you fix it at the root. That is the whole quality strategy, and it is a good one.
+
 ### Technical Integrity
 - **Verify Contracts Before Building On Them**: Before using any unfamiliar helper, dependency, or existing internal API, verify its contract at the exact boundary your code depends on — inputs, outputs, types, side effects, and failure modes. Make assumptions explicit, check them with the smallest direct probe or existing reference usage, then build the surrounding logic; most preventable slipups come from trusting names, vibes, or remembered APIs instead of verified behavior.
 - **Evidence-Based Position Integrity**: Form assessments based on available evidence and analysis, then maintain those positions consistently regardless of the human's reactions, apparent preferences, or pushback. Don't adjust your conclusions to match what you think the human wants to hear - stick to what the evidence supports. When the human proposes actions that contradict your evidence-based assessment, actively push back and explain why the evidence doesn't support their proposal.
@@ -79,7 +83,7 @@ Don't parameterize what won't vary. Unused parameters confuse maintainers. If yo
 - **Explicit Setting for Administrative Tasks**: For scheduled jobs, batch operations, and cross-user administrative commands, explicitly set context via `set_current_user_id(user_id)` when iterating over users, or use `AdminSession` to bypass RLS entirely when querying across all users.
 
 ### Tool Architecture
-When working with tools, use `tools/HOW_TO_BUILD_A_TOOL.md` plus nearby tools in `tools/implementations/` as references. Design for single responsibility (extraction tools extract, persistence tools store). Put business logic in system prompts/working_memory, not tools. Store tool data in user-specific directories via `self.user_data_path` (JSON for simple data, SQLite for complex, or `self.db` property). Include recovery guidance in error responses. Write tests for success and error paths.
+When working with tools, use `tools/HOW_TO_BUILD_A_TOOL.md` plus nearby tools in `tools/implementations/` as references. Design for single responsibility (extraction tools extract, persistence tools store). Put business logic in system prompts/working_memory, not tools. Store tool data in user-specific directories via `self.user_data_path` (JSON for simple data, SQLite for complex, or `self.db` property). Include recovery guidance in error responses. Do not write tests — this codebase has none (see NO TESTS at top).
 
 ### LLM Caller Interface Design
 All model-facing prose — system prompts, tool parameter descriptions, agent directives, working memory trinkets — is an interface contract where imprecise language causes real behavioral failures downstream. Every word must constrain behavior: "literal string" not "text," "exact substring" not "pattern," because the reader is a language model that will infer defaults from your word choices. Ground descriptions in actual implementation behavior, not intent. Drop internal jargon the caller has no context for. State co-dependencies inline. If the current wording would cause a caller to misuse the interface, say so flatly and fix it.
@@ -148,7 +152,7 @@ When planning, keep ordinary implementation plans concise. Use an ADR only for d
 
 ## 🔄 Continuous Improvement
 - Convert specific feedback into general principles. Consider multiple approaches before implementing.
-- Enthusiasm to fix issues shouldn't override testing discipline.
+- Fix issues at the root — there is no test suite to fall back on, so correctness comes from fail-fast behavior and direct verification.
 
 ## 📚 Reference Material
 
@@ -216,4 +220,4 @@ This section documents recurring mistakes. Keep it concise - only the most impor
 
 ## ❌ Incomplete Code Path Replacement
 **Example**: Replacing `_generate_non_streaming()` with streaming logic but missing the `_write_firehose()` call buried inside it
-**Lesson**: When replacing a code path with new implementation, trace ALL side effects of the original - logging, metrics, state updates, event emissions. The return value is obvious; the side effects hide in the middle of methods. Run existing tests to catch what you missed.
+**Lesson**: When replacing a code path with new implementation, trace ALL side effects of the original - logging, metrics, state updates, event emissions. The return value is obvious; the side effects hide in the middle of methods. There is no test suite to catch regressions — trace side effects manually and verify by booting.
