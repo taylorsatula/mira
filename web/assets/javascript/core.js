@@ -118,7 +118,6 @@ const elements = {
 
 	// Tool indicators from toolbar
 	toolBadge: document.querySelector('[data-indicator="toolcall_btn"]'),
-	workflowBadge: null,
 	attachmentButton: document.querySelector('[data-indicator="attachment_btn"]'),
 	toolbarRight: document.querySelector('#toolbar .rightside'),
 

@@ -81,10 +81,6 @@ function updateToolBadge(toolName) {
 	}
 }
 
-function activateWorkflowBadge(workflowInfo) {
-	console.log('Workflow badge not available, workflow info:', workflowInfo);
-}
-
 function resetBadges() {
 	if (elements.toolBadge) {
 		clearToolIndicatorTimers();
@@ -101,7 +97,6 @@ function resetBadges() {
 }
 
 window.updateToolBadge = updateToolBadge;
-window.activateWorkflowBadge = activateWorkflowBadge;
 window.resetBadges = resetBadges;
 
 // Tool indicator state
