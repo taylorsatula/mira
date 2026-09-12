@@ -176,7 +176,8 @@ class DataEndpoint(BaseHandler):
         memory_data = lt_db.get_memories_paginated(
             limit=limit,
             offset=offset,
-            user_id=user_id
+            user_id=user_id,
+            search=search_query
         )
 
         return jsonable_encoder({

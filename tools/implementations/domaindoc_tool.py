@@ -604,7 +604,8 @@ class DomaindocTool(Tool):
         """
         resolved = resolve_domaindoc(self.user_id, label, require_enabled=False)
         db = resolved.db
-        domaindoc_id = resolved.doc["id"]
+        doc = resolved.doc
+        domaindoc_id = doc["id"]
 
         # Get all sections with parent relationships
         all_sections = db.fetchall(

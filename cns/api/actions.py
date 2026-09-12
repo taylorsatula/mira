@@ -565,16 +565,6 @@ class UserDomainHandler(BaseDomainHandler):
                 "temperature_unit": str
             }
         },
-        "update_preferences": {
-            "required": [],
-            "optional": ["theme", "timezone", "language", "calendar_url"],
-            "types": {
-                "theme": str,
-                "timezone": str,
-                "language": str,
-                "calendar_url": str
-            }
-        },
         "store_calendar_config": {
             "required": ["calendar_url"],
             "optional": [],
@@ -712,57 +702,6 @@ class UserDomainHandler(BaseDomainHandler):
                 "success": True,
                 "updated_fields": list(data.keys()),
                 "message": "Profile updated successfully"
-            }
-
-        elif action == "update_preferences":
-            # Validate theme if provided
-            if "theme" in data:
-                valid_themes = ["light", "dark", "auto"]
-                if data["theme"] not in valid_themes:
-                    raise ValidationError(
-                        f"Invalid theme '{data['theme']}'. "
-                        f"Valid themes: {', '.join(valid_themes)}"
-                    )
-            
-            # Validate timezone if provided
-            if "timezone" in data:
-                from utils.timezone_utils import validate_timezone
-                try:
-                    validate_timezone(data["timezone"])
-                except Exception:
-                    raise ValidationError(f"Invalid timezone: {data['timezone']}")
-            
-            # Validate language if provided
-            if "language" in data:
-                valid_languages = ["en", "es", "fr", "de", "ja", "zh"]
-                if data["language"] not in valid_languages:
-                    raise ValidationError(
-                        f"Invalid language '{data['language']}'. "
-                        f"Valid languages: {', '.join(valid_languages)}"
-                    )
-            
-            # Validate calendar URL if provided
-            if "calendar_url" in data:
-                calendar_url = data["calendar_url"]
-                if not calendar_url or not isinstance(calendar_url, str):
-                    raise ValidationError("Calendar URL must be a non-empty string")
-                # Basic URL validation
-                if not (calendar_url.startswith("http://") or calendar_url.startswith("https://")):
-                    raise ValidationError("Calendar URL must start with http:// or https://")
-            
-            # For now, return dummy success response
-            # In the future, this would update a user_preferences table
-            updated_prefs = {
-                "theme": data.get("theme", "light"),
-                "timezone": data.get("timezone", "UTC"),
-                "language": data.get("language", "en"),
-                "calendar_url": data.get("calendar_url")
-            }
-            
-            return {
-                "updated": True,
-                "preferences": updated_prefs,
-                "message": "Preferences updated successfully (placeholder implementation)"
             }
 
         elif action == "store_calendar_config":

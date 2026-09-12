@@ -87,6 +87,7 @@ class MemoryPageResult(TypedDict):
     memories: list[dict[str, Any]]
     has_more: bool
     next_offset: int | None
+    search_query: str | None
 
 
 class NamedEntity(TypedDict):

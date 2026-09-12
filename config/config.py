@@ -103,8 +103,8 @@ class ScheduledJobsConfig(BaseModel):
         description="Hours between failed extraction retries"
     )
     job_timeout_seconds: int = Field(
-        default=120,
-        description="Timeout for scheduled job monitors (ScheduledTaskMonitor wrappers)"
+        default=240,
+        description="Timeout in seconds for ScheduledTaskMonitor-wrapped jobs (segment timeout detection kills at this ceiling; keep below its 5-minute interval)"
     )
     temporal_score_recalc_use_days: int = Field(
         default=1,

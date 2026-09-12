@@ -570,7 +570,8 @@ class LTMemoryDB:
         limit: int,
         offset: int = 0,
         include_archived: bool = False,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        search: Optional[str] = None
     ) -> MemoryPageResult:
         """
         Fetch memories with pagination.
@@ -580,28 +581,27 @@ class LTMemoryDB:
             offset: Number of records to skip
             include_archived: Whether to include archived memories
             user_id: User ID (uses ambient context if None)
+            search: Optional full-text query matched against search_vector
 
         Returns:
-            MemoryPageResult with memories, has_more, next_offset
+            MemoryPageResult with memories, has_more, next_offset, search_query
         """
         resolved_user_id = self._resolve_user_id(user_id)
 
         with self.session_manager.get_session(resolved_user_id) as session:
-            if include_archived:
-                base_query = "SELECT * FROM memories ORDER BY created_at DESC"
-            else:
-                base_query = """
-                SELECT * FROM memories
-                WHERE is_archived = FALSE
-                ORDER BY created_at DESC
-                """
+            conditions = [] if include_archived else ["is_archived = FALSE"]
+            if search:
+                conditions.append(
+                    "search_vector @@ plainto_tsquery('english', %(search)s)"
+                )
+            where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
             # Fetch limit + 1 to check if more results exist
-            query = f"{base_query} LIMIT %(limit)s OFFSET %(offset)s"
-            results = session.execute_query(query, {
-                'limit': limit + 1,
-                'offset': offset
-            })
+            query = f"SELECT * FROM memories{where} ORDER BY created_at DESC LIMIT %(limit)s OFFSET %(offset)s"
+            params: dict = {'limit': limit + 1, 'offset': offset}
+            if search:
+                params['search'] = search
+            results = session.execute_query(query, params)
 
             has_more = len(results) > limit
             memories = [Memory(**row) for row in results[:limit]]
@@ -609,7 +609,8 @@ class LTMemoryDB:
             return {
                 'memories': [m.model_dump() for m in memories],
                 'has_more': has_more,
-                'next_offset': offset + limit if has_more else None
+                'next_offset': offset + limit if has_more else None,
+                'search_query': search
             }
 
     # ==================== SCORING OPERATIONS ====================

@@ -68,7 +68,7 @@ class SegmentCacheLoader:
         When a session expires (after 1 hour idle), this loads:
         1. Collapse marker (indicates older messages available through search)
         2. Collapsed segment summaries (past conversations)
-        3. Last 5 user/assistant turns from before the active segment (continuity)
+        3. Last 2 user/assistant turns from before the active segment (continuity)
         4. Session boundary (marks where the break occurred)
         5. Active segment messages (unconsolidated current conversation)
 
@@ -87,7 +87,7 @@ class SegmentCacheLoader:
         # Uses complexity-based selection for optimal information density
         segment_summaries = self._load_segment_summaries(continuum_id)
 
-        # Step 2: Load continuity messages (last 5 turns before active sentinel)
+        # Step 2: Load continuity messages (last 2 turns before active sentinel)
         continuity_messages = self._load_continuity_messages(continuum_id, turn_count=2)
 
         # Step 3: Create collapse marker to indicate older searchable content

@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
 
 from .base import BaseHandler, ErrorResponse, SuccessResponse, create_success_response, create_error_response
+from .update import get_latest_version
 from clients.postgres_client import PostgresClient
 from utils.timezone_utils import utc_now, format_utc_iso
 from utils.thread_monitor import ThreadMonitor
@@ -23,6 +24,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 DIAGNOSTICS_TOKEN_HEADER = "X-MIRA-Diagnostics-Token"
+
+# Captured at import, which happens during app assembly — the effective
+# process start for uptime reporting.
+_PROCESS_START = time.time()
 
 
 class HealthEndpoint(BaseHandler):
@@ -46,8 +51,8 @@ class HealthEndpoint(BaseHandler):
         # Basic system info
         components["system"] = {
             "status": "healthy",
-            "uptime_seconds": int(time.time()),  # Placeholder - actual uptime would need process start tracking
-            "version": "1.0.0"
+            "uptime_seconds": int(time.time() - _PROCESS_START),
+            "version": get_latest_version()
         }
 
         total_time = round((time.time() - start_time) * 1000, 1)

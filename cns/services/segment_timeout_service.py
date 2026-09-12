@@ -334,11 +334,13 @@ def register_timeout_job(scheduler_service, event_bus: EventBus) -> None:
 
     timeout_service = get_timeout_service(event_bus)
 
-    # Wrap with monitoring and timeout (4 minutes for a 5-minute interval job)
+    # Wrap with monitoring and timeout. The ceiling comes from
+    # config.scheduled_jobs.job_timeout_seconds so operators can tune it per
+    # deployment; keep it below the 5-minute interval to avoid overlapping runs.
     monitored_check_timeouts = ScheduledTaskMonitor.wrap_scheduled_job(
         job_id="segment_timeout_detection",
         func=timeout_service.check_timeouts,
-        timeout_seconds=240,  # Kill if running longer than 4 minutes
+        timeout_seconds=config.scheduled_jobs.job_timeout_seconds,
         kill_on_timeout=True
     )
 

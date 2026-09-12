@@ -439,6 +439,8 @@ class ContactsTool(Tool):
             'id = :id',
             {'id': contact['id']}
         )
+        if rows_deleted == 0:
+            raise ValueError(f"Contact not found or already deleted: {contact['id']}")
 
         return {
             "success": True,
@@ -541,6 +543,8 @@ class ContactsTool(Tool):
             'id = :id',
             {'id': contact['id']}
         )
+        if rows_updated == 0:
+            raise ValueError(f"Contact not found: {contact['id']}")
         
         # Get updated contact
         updated_contacts = self.db.select(

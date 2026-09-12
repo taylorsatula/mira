@@ -792,6 +792,8 @@ class ReminderTool(Tool):
                 'id = :id',
                 {'id': reminder_id}
             )
+            if rows_updated == 0:
+                raise ValueError(f"Reminder not found: {reminder_id}")
         
         # Get updated reminder
         updated_reminders = self.db.select('reminders', 'id = :id', {'id': reminder_id})
@@ -841,6 +843,8 @@ class ReminderTool(Tool):
             'id = :id',
             {'id': reminder_id}
         )
+        if rows_deleted == 0:
+            raise ValueError(f"Reminder not found or already deleted: {reminder_id}")
         
         return {
             "id": reminder_id,
@@ -894,8 +898,6 @@ class ReminderTool(Tool):
             if not reminders:
                 not_found.append(rid)
                 continue
-
-            reminder = reminders[0]
 
             new_date = utc_now() + snooze_delta
 
