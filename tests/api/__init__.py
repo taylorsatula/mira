@@ -1,1 +1,0 @@
-"""API endpoint integration tests."""
