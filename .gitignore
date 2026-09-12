@@ -52,3 +52,6 @@ tools/implementations/crm_billing_tool.py
 
 # Local scratch / staging area (not shipped)
 scratch/
+
+# Session working documents (plans, handoffs, registers - local only)
+.pi/plans/
