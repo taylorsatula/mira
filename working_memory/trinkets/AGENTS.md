@@ -8,7 +8,7 @@
 - Per-user state is a plain dict keyed by `get_current_user_id()` (`_user_results`, `_user_guidance`, `_inbox_snapshots`, `base.py:_turn_counts`). Trinket instances are process-global singletons registered once and shared across users — never store user state on instance attributes without the user-id key, and never assume a trinket serves one user.
 - Escape user-controlled text before embedding in prompt XML: `email_trinket.py:_xml_attr_escape()` for attribute values, `html.escape` in `asyncactivity_trinket.py`. Result-feed trinkets (`forage`, `whilethecatsaway`, `memory_curator`) currently interpolate `query`/`topic`/`error` into XML attributes unescaped — a known gap, not a license to skip escaping in new trinkets.
 - Do not subscribe a trinket to events that mutate turn-scoped state on collapse; `StatefulTrinket` already subscribes `TurnCompletedEvent` in `base.py`, and segment collapse is handled centrally by `WorkingMemory._flush_stateful_trinkets()` calling `_clear_all_state()`.
-- `HOW_TO_BUILD_A_TRINKET.md` is stale — do not follow it as-is. It teaches a nonexistent `_get_variable_name()` method (the real contract is the `variable_name` class attribute validated in `base.py.__init__`), references deleted files (`user_info_trinket.py`, `punchclock_trinket.py`), recommends `try/except`-and-return-`""` error handling (Pattern 7) that violates the root propagate-infrastructure-failures doctrine, and teaches `=== HEADER ===` formatting while every live trinket renders XML.
+- `HOW_TO_BUILD_A_TRINKET.md` is the authoring walkthrough and is kept aligned with `base.py`: it teaches the `variable_name` class attribute (never a `_get_variable_name()` method), the `EventAwareTrinket` vs `StatefulTrinket` choice, per-user-dict state, XML rendering with escaping, propagate-infrastructure-failures error handling, and the two-file registration (`cns/integration/factory.py` instantiation + `composer.py:SECTION_LAYOUT` placement). Change a contract in `base.py` and this guide in the same commit.
 
 ## Files
 
@@ -29,7 +29,7 @@
 - `location_trinket.py` — location/weather context (`location_context`, `cache_policy=True`). Reads the `location:{user_id}` Valkey key populated by the POST /location endpoint on frontend page load; renders forecast, sunrise/sunset, UV warning, and recent-daily weather. `Consumers: cns/api/location.py` (writes the cache key).
 - `time_manager.py` — current local datetime (`datetime_section`, plain `EventAwareTrinket`). Stateless; renders a fresh `<current_datetime>` line each compose using `get_user_preferences().timezone`.
 - `__init__.py` — docstring only, no re-exports; trinkets are instantiated by the CNS factory (`cns/integration/factory.py:_get_working_memory()`), whose constructions self-register via `working_memory.register_trinket()`.
-- `HOW_TO_BUILD_A_TRINKET.md` — tutorial for building trinkets; STALE (see Rules). Trust its trinket-vs-tool framing and registration step only; verify every API reference against `base.py` instead.
+- `HOW_TO_BUILD_A_TRINKET.md` — tutorial for building trinkets; CURRENT. Owns the step-by-step walkthrough (base-class choice, patterns 0-10, a complete result-feed example, the two-file registration, live verification, and a symptom→cause→fix table). Doctrine and per-trinket behavior stay in this map; the guide cites them rather than restating them.
 
 ## Wiring
 
