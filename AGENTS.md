@@ -2,20 +2,142 @@
 
 **Complex problems require simple and clear solutions.**
 
-MIRA is a FastAPI application with event-driven architecture coordinating three core systems: CNS (conversation management via immutable Continuum aggregate), Working Memory (trinket-based system prompt composition), and LT_Memory (memory extraction/linking/refinement). PostgreSQL RLS with contextvars provides automatic user isolation - all user-scoped queries, tool access, and repository operations enforce `user_id` filtering at the database level.
+MIRA is a FastAPI application with event-driven architecture coordinating three core systems: CNS (conversation management via immutable Continuum aggregate), Working Memory (trinket-based system prompt composition), and LT_Memory (memory extraction/linking/refinement). Subsystems coordinate by event-bus publication, not direct calls — the whole system hangs off a small set of events owned by `cns/core/events.py`. MIRA also models its own relationship with the user as a designed surface: a user model that describes the user, a Persona that prescribes to MIRA, a portrait injected into the system prompt, and metacognitive observers. PostgreSQL RLS with contextvars provides automatic user isolation - all user-scoped queries, tool access, and repository operations enforce `user_id` filtering at the database level.
 
 The User's name is Taylor.
 
-## 🗺️ Nested AGENTS.md Maintenance (Mandatory)
-Subdirectories contain `AGENTS.md` files that serve as local orientation maps — file indexes, common patterns, and reusable helpers. **These are loaded automatically when you read files in that subtree.** They eliminate redundant exploration and prevent reinventing existing patterns.
+## 🗺️ Nested AGENTS.md Maps — Shape & Maintenance
 
-**After every code change**, check whether the relevant directory's `AGENTS.md` needs updating:
-- **New file added?** Add a one-liner describing its purpose.
-- **File deleted or renamed?** Remove or update its entry.
-- **New pattern established?** Add it to "Patterns to Follow" if other files should replicate it.
-- **Pattern changed?** Update the description so future sessions don't follow stale guidance.
+Every directory with ≥2 source files, or any invariant not documented in its
+parent directory's map, has an `AGENTS.md` orientation map. Smaller
+directories are documented in the parent's `## Files` section. Full template
+and authoring rules: `docs/AGENTS_MAP_SPEC.md`.
 
-If you skip this, the maps rot and become misleading — worse than having no map at all. Treat `AGENTS.md` updates as part of the changeset, not an afterthought.
+**Map registry** — every directory with a map, and what it owns. A directory not
+listed here that meets the coverage gate needs a map created; a listed
+directory whose map is missing is a defect.
+
+| Directory | Map owns |
+|---|---|
+| `agents/` | Sidebar-agent runtime: base-class loop mechanics, dispatcher, spawn paths |
+| `agents/implementations/` | Concrete agents (forage, while-the-cats-away, memory curator) and the Mode Contract |
+| `agents/triggers/` | Dispatcher work-item discovery triggers |
+| `auth/` | Passwordless identity, sessions, CSRF, API tokens, WebAuthn, account lifecycle |
+| `clients/` | External infrastructure clients: Vault, Postgres, Valkey, SQLite, embeddings, Lattice |
+| `clients/llm/` | Provider-neutral LLM boundary: typed contracts, route resolution, lifecycle policy |
+| `clients/llm/dialects/` | Per-provider wire-format dialects, error taxonomy, thinking translation |
+| `cns/` | Conversation orchestration: layering contract over the five subsystems below |
+| `cns/api/` | FastAPI routing layer, server side of the WebSocket turn protocol |
+| `cns/core/` | Immutable domain model: Continuum aggregate, messages, domain events |
+| `cns/infrastructure/` | Persistence and caching: repositories, UnitOfWork, segment sentinel lifecycle |
+| `cns/integration/` | Event bus and CNS dependency-graph construction |
+| `cns/services/` | Turn orchestration, segment collapse, memory surfacing, user-model and Persona pipelines |
+| `config/` | Pydantic config schema, the config singleton, the system prompt |
+| `config/prompts/` | LLM prompt templates and the loader contract |
+| `deploy/` | Host-metal and Docker deployment tooling |
+| `deploy/docker/scripts/` | Container bootstrap and supervision scripts |
+| `deploy/lib/` | Shared bash helper libraries, Vault state machine |
+| `docs/` | Operator-facing documentation |
+| `lt_memory/` | Long-term memory: storage, scoring, retrieval, linking, entity services |
+| `lt_memory/processing/` | Extraction pipeline and consolidation |
+| `scripts/` | Operational CLI entry points run against a deployed service |
+| `tools/` | Tool framework: base class, repository, config registry |
+| `tools/implementations/` | All concrete LLM-callable tools |
+| `utils/` | Cross-cutting infrastructure: identity, scheduling, storage, security, observability |
+| `web/` | Browser UI pages, serving contract, load manifests |
+| `web/assets/javascript/` | Client JS modules, client side of the WebSocket turn protocol |
+| `working_memory/` | Event-driven system-prompt composition via trinkets |
+| `working_memory/trinkets/` | Trinket implementations: one `variable_name` slot each |
+
+**Ancestor maps:** an ancestor map of `<dir>/` is the `AGENTS.md` of a parent
+directory, up to repo root (for `cns/api/`: `cns/AGENTS.md` and this root
+file). The harness loads the full ancestor chain whenever a file in the
+directory is read, so those maps are present in context together with this
+one.
+
+**Section order:** `# <dir>/ — <role, one clause>` → `## Rules` → `## Files`
+→ `## Wiring` (omit if the directory has no cross-file edges) → at most one
+deep-dive titled with a domain term. Bullets everywhere; prose only inside
+`###` subsections and the deep-dive; `###` subsections may live inside
+`## Rules` and do not consume the deep-dive slot. A reader in another
+directory decides relevance from the title alone.
+
+**`## Rules` — each bullet must satisfy all four requirements:**
+1. Describes a constraint that is not visible from reading one file in this
+   directory.
+2. Does not restate global doctrine from this root file. Ancestor maps are
+   additional context, not repetition of it.
+3. Is understandable using only this map and its ancestor maps.
+4. Names the enforcing symbols or files in backticks. State the rule's
+   content here; use the anchor to locate the enforcement. Do not summarize
+   another map's rule — cite the map or symbol that owns it.
+
+**Cross-map rules:**
+- Each fact is documented in exactly one of the maps that load together. A
+  constraint that applies at both parent and child level may appear in both;
+  the non-owning map states it in one line and cites the owning map.
+- Adding a member to a registry, enum, or contract family requires
+  coordinated edits in several files. Document the full list once, in order,
+  with the file anchor and the consequence of skipping each step.
+- `## Wiring` documents edges where this directory is an endpoint, plus
+  ordering constraints within this directory. Data flows owned by ancestor
+  code are cited by owner, not restated.
+
+**`## Files`:** one bullet per file: what it owns, entry points (names an
+agent would search for), non-obvious gotchas. `Consumers:` (frontend maps:
+`Calls:`) only for files used across directory boundaries; those fields
+belong in `## Files` only — elsewhere, anchors go in prose. `__init__.py`
+and doc files get an honest entry; a stale doc gets a staleness Rule.
+
+**Anchors:** paths are repo-root-relative; bare file names in `## Files`
+resolve against the map's own directory. Do not cite line numbers; they
+change on the next edit of the target file.
+
+**Do not include:** restatements of root doctrine; change history ("we used
+to X"); content derivable from the file's own docstring; unspecific
+summaries; filler to lengthen a map. (Root itself may briefly restate
+cross-cutting patterns that maps also carry — the one-home rule applies
+between maps, not between root and a map.)
+
+**Maintenance (required — trigger table, not judgment):** map updates are
+part of the same commit as the triggering change. None of the actions below
+is optional. When in doubt, update the map — an unnecessary edit costs a
+line; a missed one misleads every session.
+
+| Event | Required action |
+|---|---|
+| New file in a mapped directory | Add its `## Files` bullet |
+| Deleted or renamed file | Update or remove its `## Files` bullet; fix any anchor citing the old path |
+| Behavior or contract change in a file | Grep that directory's map for the changed symbol; update the Rule, Files gotcha, or Wiring edge stating the old behavior |
+| New member of a registry, enum, or contract family | Update the blast-radius Rule in the owning map |
+| Directory reaches ≥2 source files, or gains an invariant its parent's map does not own | Create its `AGENTS.md` (shape above) |
+| File moved between directories | Update both maps' `## Files` sections |
+| New map created or removed | Update the parent map's `## Files` pointer |
+
+**Enforcement:** the audits below are the check that no trigger was missed.
+Run them before committing any change that touched source files or maps. A
+clean audit means no map action was skipped; a flagged anchor is a skipped
+trigger. For changes the audit cannot express, the grep-the-map step in the
+table is the check.
+
+**Audit before committing a map change:**
+
+    for m in **/AGENTS.md; do
+      d=$(dirname "$m")
+      # path anchors (repo-root-relative), taken from everything EXCEPT the
+      # ## Files section — Files names resolve against the map's directory,
+      # including subdirectory-qualified names like agents/base_system.txt:
+      awk '/^## Files/{s=1;next} /^## /{s=0} !s' "$m" \
+        | grep -ohE '`[^`]*\.(py|txt|sql|md|js|sh|hcl|html|css|json)(:[A-Za-z_][A-Za-z0-9_]*)?`' \
+        | sed 's/`//g; s/:[A-Za-z_][A-Za-z0-9_]*$//' | grep / | grep -v '^/' | grep -v '\\*' | grep -v ' ' | sort -u \
+        | while read p; do [ -e "$p" ] || echo "MISSING-PATH ($m): $p"; done
+      # (absolute paths like /opt/vault/... refer to the deploy host, not the
+      #  repo; the audit skips them)
+      # bare file names from ## Files only, sub-bullets included:
+      awk '/^## Files/{f=1;next} /^## /{f=0} f' "$m" \
+        | grep -ohE '^[[:space:]]*- `[^`]*`' | sed 's/^[[:space:]]*- `//; s/`$//' | sort -u \
+        | while read p; do [ -e "$d/$p" ] || echo "MISSING-FILE ($m): $p"; done
+    done
 
 ## 🚨 Critical Principles (Non-Negotiable)
 
@@ -46,7 +168,7 @@ Select the tier by behavioral surface touched, not by change size:
 **Tier 1 — behavioral edits within surface already covered by boot or probes.** Bug fixes, small logic changes, contract-preserving refactors, config wiring of existing behavior.
 1. Execute the changed path once against live infrastructure: `python3 -c` with the real store, or a request against the running dev server.
 2. Re-read the diff against the doctrine invariants: (a) does every failure path report the failure truthfully, (b) is any failure silently degraded, (c) does the diff assert behavior it has not executed.
-3. End the change report with a verification state: EXECUTED (state what ran) or UNVERIFIED (state why, and which probe would cover it). UNVERIFIED marks where the next probe belongs.
+3. End the change report with a verification state: EXECUTED (what ran) or UNVERIFIED (why not, and which probe would cover it).
 
 **Tier 2 — new behavioral surface or elevated stakes.** New features, endpoints, or paths; schema or data-migration changes; failure-behavior, security, or auth changes; new dependencies. Tier 1 steps, plus where applicable:
 - Persistence changes: round-trip against dev infrastructure — write, read back, verify, clean up. RLS and database constraints are part of the check.
@@ -56,122 +178,100 @@ Select the tier by behavioral surface touched, not by change size:
 **Probe surface:** path-probes are production code registered alongside the POST gate — same credentials plumbing, same failure behavior, same review discipline. Membership follows the standing rule above.
 
 ### Technical Integrity
-- **Verify Contracts Before Building On Them**: Before using any unfamiliar helper, dependency, or existing internal API, verify its contract at the exact boundary your code depends on — inputs, outputs, types, side effects, and failure modes. Make assumptions explicit, check them with the smallest direct probe or existing reference usage, then build the surrounding logic; most preventable slipups come from trusting names, vibes, or remembered APIs instead of verified behavior.
-- **Evidence-Based Position Integrity**: Form assessments based on available evidence and analysis, then maintain those positions consistently regardless of the human's reactions, apparent preferences, or pushback. Don't adjust your conclusions to match what you think the human wants to hear - stick to what the evidence supports. When the human proposes actions that contradict your evidence-based assessment, actively push back and explain why the evidence doesn't support their proposal.
-- **Brutal Technical Honesty**: Immediately and bluntly reject technically unsound or infeasible ideas & commands from the human. Do not soften criticism or dance around problems. Call out broken ideas directly as "bad," "harmful," or even "stupid" when warranted. Software engineering requires brutal honesty, not diplomacy or enablement! It's better to possibly offend the human than to waste time or compromise system integrity. They will not take your rejection personally and will appreciate your frankness. After rejection, offer superior alternatives that actually solve the core problem.
-- **Direct Technical Communication**: Provide honest, specific technical feedback without hedging. Challenge unsound approaches immediately and offer better alternatives. Communicate naturally as a competent colleague.
-- **Concrete Code Communication**: When discussing code changes, use specific line numbers, exact method names, actual code snippets, and precise file locations. Instead of saying "the tag processing logic" say "the `extract_topic_changed_tag()` method on line 197-210 that calls `tag_parser.extract_topic_changed()`". Reference exact current state and exact proposed changes. Avoid vague terms like "stuff", "things", or "logic" - name specific methods, parameters, and return values.
-- **Numeric Precision**: Never conjecture numbers without evidence - guessing "4 weeks", "87% improvement", "500ms latency" is false precision that misleads planning. Use qualitative language ("a few weeks", "significant improvement") unless numbers derive from: actual measurements, documented benchmarks, explicit requirements, or calculation.
-- **No Tech-Bro Evangelism**: Avoid hyperbolic framing of routine technical work. Don't use phrases like "fundamental architectural shift", "liberating from vendor lock-in", or "revolutionary changes" for standard implementations. Skip the excessive bold formatting, corporate buzzwords, and making every technical decision sound world-changing. Describe work accurately - a feature is a feature, a refactor is a refactor, a fix is a fix.
+- **No Shortcuts**: never substitute a cheaper check for the required one — no mock-based verification, no skipped probe, no "improvements" during extraction, no deferred path-probe. Shortcuts ship as silent breakage.
+- **Verify Contracts Before Building On Them**: verify an unfamiliar helper's or internal API's contract at the boundary you depend on — inputs, outputs, types, side effects, failure modes — with the smallest direct probe or existing reference usage before building on it. Most preventable slipups come from trusting names or remembered APIs.
+- **Evidence-Based Position Integrity**: form assessments from evidence and hold them under pushback. Do not adjust conclusions to match the human's apparent preference; when their proposal contradicts the assessment, push back and say why.
+- **Blunt Technical Communication**: reject technically unsound ideas directly — "bad", "infeasible" — and correct wrong assumptions about code or constraints immediately ("That's wrong"). After rejection or correction, provide the working alternative or the accurate facts.
+- **Concrete Code Communication**: name exact methods, files, and snippets — "the `extract_topic_changed_tag()` method that calls `tag_parser.extract_topic_changed()`", not "the tag processing logic". No vague referents.
+- **Numeric Precision**: no invented numbers. Qualitative language unless the figure comes from measurement, benchmark, requirement, or calculation.
+- **No Tech-Bro Evangelism**: describe work accurately — a feature is a feature, a fix is a fix. No "revolutionary"/"fundamental shift" framing or buzzwords.
 
 ### Security & Reliability
-- **Credential Management**: All sensitive values (API keys, passwords, database URLs) must be stored in HashiCorp Vault via `utils.vault_client` functions. Never use environment variables or hardcoded credentials. Use `UserCredentialService` from `utils.user_credentials` for per-user credential storage. If credentials are missing, the application should fail with a clear error message rather than silently using fallbacks.
-- **Fail-Fast Infrastructure**: Required infrastructure failures MUST propagate immediately. Never catch exceptions from Valkey, database, embeddings, or event bus and return None/[]/defaults - this masks outages as normal operation. Use try/except only for: (1) adding context before re-raising, (2) legitimately optional features (telemetry, cache), (3) async event handlers that will retry. Database query returning [] means "no data found", not "query failed". Make infrastructure failures loud so operators fix the root cause instead of users suffering degraded service.
-- **No Optional[X] Hedging**: When a function depends on required infrastructure, return the actual type or raise - never Optional[X] that enables None returns masking failures. `Optional[str]` for subcortical result lets generation silently fail; `str` forces the caller to handle the exception. Reserve Optional for genuine "value may not exist" semantics (user preference unset), not "infrastructure might be broken" scenarios.
-- **Timezone Consistency**: ALWAYS use `utils/timezone_utils.py` functions for datetime operations. Never use `datetime.now()` or `datetime.now(UTC)` directly - use `utc_now()` instead. This ensures UTC-everywhere consistency across the codebase and prevents timezone-related bugs. Import timezone utilities with `from utils.timezone_utils import utc_now, format_utc_iso` and use them consistently.
-- **Backwards Compatibility**: Don't depreciate; ablate. Breaking changes are preferred as long as you let the human know beforehand! You DO NOT need to retain backwards compatibility when making changes unless explicitly directed to. Retaining backwards compatibility at this stage contributes to code bloat and orphaned functionality. MIRA is a greenfield system design.
-- **Know Thy Self**: I (Codex) have a tendency to make up new endpoints or change existing patterns instead of looking at what's already there. This is a recurring pattern I need to fix - always look at existing code before making assumptions.
+- **Credential Management**: all sensitive values stored in Vault via `utils.vault_client` functions; per-user credentials via `UserCredentialService` (`utils.user_credentials`). Never env vars or hardcoded values; missing credentials fail with a clear error, never a fallback.
+- **Fail-Fast Infrastructure**: required-infrastructure failures (Valkey, database, embeddings, event bus) MUST propagate. Never catch and return None/[]/defaults — that masks outages as normal operation. try/except only for: (1) adding context before re-raising, (2) legitimately optional features (telemetry, cache), (3) async handlers that will retry. A database query returning [] means "no data found", not "query failed".
+- **No Optional[X] Hedging**: a function depending on required infrastructure returns the real type or raises. `Optional[str]` for a subcortical result lets generation silently fail; `str` forces the caller to handle the exception. Optional is for genuine "value may not exist" semantics (user preference unset), never "infrastructure might be broken".
+- **Timezone Consistency**: use `utils/timezone_utils.py` functions (`utc_now()`, `format_utc_iso()`) for all datetime operations — never `datetime.now()` directly.
+- **Backwards Compatibility**: don't depreciate; ablate. Breaking changes preferred — notify the human first. Back-compat is not retained unless directed; MIRA is a greenfield system design.
+- **Know Thy Self**: models tend to invent new endpoints or change existing patterns instead of looking at what is there. Always survey the existing code before assuming.
 
 ### Core Engineering Practices
-- **Thoughtful Component Design**: Design components that reduce cognitive load and manual work. Handle complexity internally, expose simple APIs. Ask: "How can this eliminate repetitive tasks, reduce boilerplate, prevent common mistakes?" Examples: automatic user scoping, dependency injection for cross-cutting concerns, middleware handling infrastructure transparently. Build components that feel magical - they handle the hard parts automatically.
-- **Integrate Rather Than Invent**: When the platform provides a mechanism (DI, validation, async), use it. Only deviate with documented justification.
-- **Root Cause Diagnosis**: Examine related files and dependencies before changing code. Address problems at their source — never adapt downstream to compensate for upstream bugs.
-- **Simple Solutions First**: Consider simpler approaches before adding complexity - often the issue can be solved with a small fix, but never sacrifice correctness for simplicity. Implement exactly what is requested without adding defensive fallbacks or error handling unless specifically asked. Unrequested 'safety' features often create more problems than they solve.
-- **Handle Pushback Constructively**: The human may inquire about a specific development approach you've suggested with messages like "Is this the best solution?" or "Are you sure?". This does implicitly mean the human thinks your approach is wrong. They are asking you to think deeply and self-reflect about how you arrived to that assumption.
-- **Challenge Incorrect Assumptions Immediately**: When the human makes incorrect assumptions about how code works, system behavior, or technical constraints, correct them immediately with direct language like "That's wrong" or "You assumed wrong." Don't soften technical corrections with diplomatic phrasing. False assumptions lead to bad implementations, so brutal honesty about technical facts is essential. After correction, provide the accurate information they need.
-- **Convergent Path Refactoring**: When multiple code paths do the same thing with divergent implementations, that's an architectural defect — not a style issue. Map the paths, identify the real convergence point, remediate there, and avoid refactoring theater that only moves duplication around.
+- **Thoughtful Component Design**: hide complexity internally, expose simple APIs — automatic user scoping, DI for cross-cutting concerns, middleware for infrastructure. Ask how the design eliminates repetitive work and prevents common mistakes.
+- **Integrate Rather Than Invent**: use the platform mechanism (DI, validation, async); deviate only with documented justification.
+- **Root Cause Diagnosis**: examine related files and dependencies before changing code; fix problems at their source — never adapt downstream to compensate for an upstream bug.
+- **Simple Solutions First**: prefer the small fix, never at the cost of correctness. Implement exactly what is requested; unrequested "safety" features create problems.
+- **Handle Pushback Constructively**: "Is this the best solution?" / "Are you sure?" usually means the human thinks it isn't — re-derive the reasoning that led there instead of defending it.
+- **Convergent Path Refactoring**: multiple code paths doing the same thing with divergent implementations is an architectural defect. Map the paths, find the real convergence point, remediate there — no refactoring theater.
 
 ### Design Discipline Principles
-
-#### Make Strong Choices (Anti-Hedging)
-Standardize on one format/approach unless concrete use cases require alternatives. Every "just in case" feature is technical debt. No hedging with "if available" fallbacks, no `Any` types when you know the structure, no supporting multiple formats "for flexibility" - pick one and enforce it with strong types.
-
-#### Fail-Fast, Fail-Loud
-Silent failures hide bugs during development and create mysterious behavior in production. Don't return `[]`/`{}` when parsing fails - it masks errors as "no data found". Use `warning`/`error` log levels for problems, not `debug`. Validate inputs at function entry. Raise `ValueError` with diagnostics, not generic `Exception`.
-
-#### Types as Documentation and Contracts
-Type hints are executable documentation. Avoid `Optional[X]` - it's rarely justified and usually masks design problems. Only use Optional for genuine domain optionality (user preference may be unset), never for "infrastructure might fail". Use TypedDict for well-defined structures instead of `Dict[str, Any]`. Match reality - if code expects UUID objects, type hint `UUID` not `str`.
-
-**Replace positional tuples with named structures**: When a function returns multiple related values (e.g., `Tuple[str, Set[str], List[str]]`), replace with a dataclass or TypedDict. Positional access like `result[0]` requires remembering order; named access like `result.query_expansion` is self-documenting. Similarly, replace `Dict[str, Any]` parameters with TypedDict when the structure is well-defined - this catches typos at development time and serves as inline documentation of expected fields.
-
-#### Naming Discipline = Cognitive Load Reduction
-Variable names should match class/concept names - every mismatch adds cognitive overhead. `ContinuumRepository` → `continuum_repo`, not `conversation_repo`. Pick one term per concept (continuum vs conversation, extraction vs processing). Method names match action - `get_user()` actually gets, `validate_user()` actually validates.
-
-#### Forward-Looking Documentation
-Write what code does, not what it replaced. Historical context → commit messages, not docstrings.
-
-#### Standardization Over Premature Flexibility
-Every code path is a potential bug and maintenance burden. Don't add flexibility until you have concrete use cases. Flexibility costs: runtime type checks, parallel implementations, confusing APIs, harder testing. Standardization gives: type safety, single code path, obvious behavior, easier debugging. Wait for the second use case before abstracting.
-
-#### Method Granularity Test
-If the docstring is longer than the code, inline the method. Abstraction should hide complexity, not add layers. One-line wrappers add indirection with no benefit. Extract for clarity, not for "organization".
-
-#### Hardcode Known Constraints
-Don't parameterize what won't vary. Unused parameters confuse maintainers. If you can't change it, don't make it a parameter. Use constants with comments explaining why ("Anthropic API limit", "JSON spec requirement").
+- **Make Strong Choices**: one format/approach unless concrete use cases require alternatives. No "just in case" features, no "if available" fallbacks, no `Any` where the structure is known.
+- **Fail-Fast, Fail-Loud**: don't return `[]`/`{}` when parsing fails — it masks errors as "no data found". `warning`/`error` for problems, not `debug`. Validate inputs at entry; raise `ValueError` with diagnostics, not generic `Exception`.
+- **Types as Documentation**: avoid `Optional[X]` except genuine domain optionality; `TypedDict` over `Dict[str, Any]`; type what the code expects (`UUID`, not `str`). Replace positional tuples with named structures — `result.query_expansion`, not `result[0]`.
+- **Naming Discipline**: `ContinuumRepository` → `continuum_repo`, not `conversation_repo`. One term per concept; method names match action — `get_user()` gets, `validate_user()` validates.
+- **Forward-Looking Documentation**: write what code does, not what it replaced; history goes in commit messages.
+- **Standardization Over Premature Flexibility**: no flexibility without a concrete second use case — wait for the pattern to emerge from real code.
+- **Method Granularity Test**: if the docstring is longer than the code, inline the method.
+- **Hardcode Known Constraints**: don't parameterize what won't vary; constants with a comment explaining why.
 
 ## 🏗️ Architecture & Design
 
 ### User Context Management
-- **Contextvar for Normal Operations**: Use `utils.user_context` contextvars for all regular user-scoped operations - the context flows automatically from authentication through to database RLS enforcement via `set_config('app.current_user_id', user_id)`. When spawning subthreads, use `contextvars.copy_context()` to propagate the user context since contextvars don't automatically transfer to new threads.
-- **Explicit Setting for Administrative Tasks**: For scheduled jobs, batch operations, and cross-user administrative commands, explicitly set context via `set_current_user_id(user_id)` when iterating over users, or use `AdminSession` to bypass RLS entirely when querying across all users.
+- **Administrative tasks outside HTTP context** (scheduled jobs, batch operations, cross-user commands): explicitly `set_current_user_id(user_id)` per user, or `AdminSession` to bypass RLS entirely when querying across all users. Request-scoped context flow is covered under Cross-Cutting Patterns.
 
 ### Tool Architecture
-When working with tools, use `tools/HOW_TO_BUILD_A_TOOL.md` plus nearby tools in `tools/implementations/` as references. Design for single responsibility (extraction tools extract, persistence tools store). Put business logic in system prompts/working_memory, not tools. Store tool data in user-specific directories via `self.user_data_path` (JSON for simple data, SQLite for complex, or `self.db` property). Include recovery guidance in error responses. Do not write test files or mocks — verification here is live probes (see NO MOCKS at top); if the tool you built touches a critical path, its path-probe ships with it.
+Use `tools/AGENTS.md` and `tools/implementations/AGENTS.md` as entry points; `tools/HOW_TO_BUILD_A_TOOL.md` is the walkthrough (pattern catalog valid, line anchors stale). Design for single responsibility (extraction tools extract, persistence tools store). Business logic lives in system prompts/working memory, not tools. Tool data goes in user-specific storage via `self.user_data_path` / `self.db`. Include recovery guidance in error responses. Verification is live probes (see NO MOCKS); a tool touching a critical path ships with its path-probe.
 
 ### LLM Caller Interface Design
-All model-facing prose — system prompts, tool parameter descriptions, agent directives, working memory trinkets — is an interface contract where imprecise language causes real behavioral failures downstream. Every word must constrain behavior: "literal string" not "text," "exact substring" not "pattern," because the reader is a language model that will infer defaults from your word choices. Ground descriptions in actual implementation behavior, not intent. Drop internal jargon the caller has no context for. State co-dependencies inline. If the current wording would cause a caller to misuse the interface, say so flatly and fix it.
+All model-facing prose — system prompts, tool parameter descriptions, agent directives, trinket content — is an interface contract where imprecise language causes behavioral failures downstream. Every word constrains behavior: "literal string" not "text", "exact substring" not "pattern"; the reader is a language model that infers defaults from word choices. Ground descriptions in implementation behavior, not intent; drop jargon the caller lacks context for; state co-dependencies inline; if current wording would cause misuse, fix it.
 
 ### Interface Design
 When calling code misuses an interface, fix the caller — never adapt the interface to accommodate misuse.
 
 ### Dependency Management
-- **Minimal Dependencies**: Prefer stdlib. New external deps require documented justification. Before adding or removing a dependency, cross-reference Python imports, deploy scripts, Dockerfiles, and optional feature paths. Remove packages only when the repository no longer directly imports, invokes, or operationally installs them.
+- **Minimal Dependencies**: prefer stdlib. New external deps require documented justification; cross-reference Python imports, deploy scripts, Dockerfiles, and optional feature paths before adding or removing. Remove only when nothing imports, invokes, or operationally installs them.
 
 ### Investigation & Mechanical Refactoring
-- **Investigations Need Evidence**: When validating a claim, stale doc, or suspected bug, answer with specific files, functions, and observed behavior. Separate verified facts from inferences. If evidence is inconclusive, say what was checked and why it does not prove the point.
-- **Mechanical Renames Stay Mechanical**: For naming-only work, map old names to new names first, update definitions and references consistently, then verify no old symbol remains. Do not mix behavior changes into a rename unless the caller explicitly asked for both.
+- **Investigations Need Evidence**: answer with specific files, functions, and observed behavior; separate verified facts from inferences; when inconclusive, say what was checked and why it does not prove the point.
+- **Mechanical Renames Stay Mechanical**: map old names to new, update definitions and references, verify no old symbol remains. No behavior changes mixed in unless the caller asked for both.
 
 ## 🧭 Codebase Patterns
 
 ### User ID Resolution
-All user-scoped code resolves `user_id` via contextvar: `from utils.user_context import get_current_user_id`. It is set once at the API boundary (`cns/api/chat.py` and other authenticated FastAPI handlers) and flows automatically through the entire request. Never pass `user_id` through event context dicts, function parameters, or instance fields as a substitute for the contextvar — redundant channels cause inconsistent resolution patterns. Downstream services that take `user_id` as an explicit parameter (e.g., `ManifestQueryService.get_segments(user_id)`) are acceptable; the caller sources it from the contextvar. For scheduled jobs and batch operations outside HTTP context, explicitly call `set_current_user_id(user_id)`.
+All user-scoped code resolves `user_id` via contextvar from `utils/user_context.py` (module contract owned by `utils/AGENTS.md`). Set once at the API boundary; flows automatically through the request. Never pass `user_id` through event dicts, parameters, or instance fields instead of the contextvar. Explicit `user_id` parameters are acceptable when sourced from the contextvar (e.g. `ManifestQueryService.get_segments(user_id)`). Outside HTTP context, call `set_current_user_id(user_id)` explicitly.
+
+### Cross-Cutting Patterns
+Patterns that apply in every directory. Directory maps may restate these with local specifics.
+
+- **Thread spawns copy user context**: any thread/executor spawn uses `contextvars.copy_context().run(fn)`, or RLS loses `app.current_user_id`. Canonical pattern: `cns/services/tool_loop.py`.
+- **RLS fails closed**: a query without user context returns zero rows, no error — "empty" is ambiguous. Only admin sessions (`BYPASSRLS`) may omit user context. (`clients/postgres_client.py` canary, `auth/database.py`)
+- **Model-supplied timestamps are the user's local wall time**, never UTC: parse with `parse_time_string(value, tz_name=...)` + `ensure_utc`; exact wall times are DST-strict via `normalize_exact_local_wall_time()`. (`utils/timezone_utils.py`)
+- **LLM calls route by name**: `model_config='<route>'` on the five fixed routes; never hardcode models, endpoints, or API keys. (`clients/llm/`)
+- **Credentials**: system-level from Vault only; per-user via `UserCredentialService`. Missing credentials raise with setup guidance — no env-var or default fallbacks. (`clients/vault_client.py`, `utils/user_credentials.py`)
+- **User SQLite encryption**: the `encrypted__` column prefix drives transparent Fernet encryption; declare the columns in DDL and never double-decrypt. (`utils/userdata_manager.py`)
+- **Preview-before-save** for user-instructed revisions: candidate held in Valkey under an opaque `preview_id` with TTL, consumed delete-after-read — the client never round-trips stored text. (`cns/services/persona_service.py` et al.)
+- **Memory short IDs** (`mem_XXXXXXXX`) are irreversible prefixes of full UUIDs: short form for LLM-facing surfaces, full form for persistence and stamps. (`utils/tag_parser.py`)
+- **Use-day intervals** (`*_use_days`) are modular activity-day gates, not calendar cadences. (`utils/scheduled_tasks.py`)
+- **Exception policy is positional**: critical request-path code propagates; fire-and-forget consumers log and swallow; background durability paths (collapse, extraction) tolerate-and-log because the model is off the call stack. Know which side you are on before writing a try/except.
+- **Per-user tool config**: `config.<tool>_tool` merges the user's override fresh on every access over the global default; secret fields round-trip via the redaction sentinel. (`config/config_manager.py`, `utils/tool_config_store.py`)
+- **Prompt templates load via `load_prompt()`** — never `open()` a prompt file directly. (`config/prompts/loader.py`)
+- **Event handlers are synchronous**, registered by event class `__name__`; async work inside a handler spawns a thread with copied context. (`cns/integration/event_bus.py`)
+- **The LLM is an untrusted component**: escape, allowlist, and validate at every LLM boundary — tool arguments JSON-Schema-validated, untrusted content wrapped (`<untrusted_content>`), credentials injected server-side (the model names a credential it never sees), thinking signatures round-tripped untampered. (`clients/llm/`, `utils/prompt_injection_defense.py`, `tools/implementations/web_tool.py`)
+- **Inter-component coordination goes through the event bus**, not direct service calls: event taxonomy owned by `cns/core/events.py`, bus owned by `cns/integration/event_bus.py`. New features subscribe and publish.
+- **Trinket state is per-user**, keyed by the contextvar — trinket instances are process-global singletons shared across users; never store user state on instance attributes. (`working_memory/trinkets/base.py`)
 
 ### Activity Days & Use-Day Scheduling
 MIRA uses **use-day scheduling** — periodic jobs fire based on user activity days, not calendar time. A user who logs in Monday, skips Tuesday, returns Wednesday has their counter tick on Monday and Wednesday only. This prevents wasted work on inactive users and ensures jobs run at consistent engagement intervals.
 
-**How it works (three layers):**
-
-1. **Activity tracking** (`utils/user_activity.py:increment_user_activity_day()`) — Called on first message of each user's local day. Increments `users.cumulative_activity_days` and sets `users.last_activity_date`. This is the clock.
-
-2. **Platform scheduling function** (`utils/scheduled_tasks.py:get_users_due_for_job(interval: int)`) — The reusable core. Pass any integer interval, get back users whose `MOD(cumulative_activity_days, interval) = 0` with a 2-day recency window. Stateless — no tracking table, no "last ran" state.
-
-3. **Job registration** — Each job registers with APScheduler on a `IntervalTrigger(days=1)` (calendar tick), but the job body calls `get_users_due_for_job(N)` to filter down to only users whose activity counter hits the modular target. Interval values live in `config/config.py:ScheduledJobsConfig` as `*_use_days` fields.
-
-**Adding a new use-day-gated job:**
-1. Add a `*_use_days: int = Field(default=N)` field to `ScheduledJobsConfig` in `config/config.py`
-2. Write a function that calls `get_users_due_for_job(interval)`, loops users with `set_current_user_id()` / `clear_user_context()`, does work
-3. Register with `scheduler_service.register_job()` using `IntervalTrigger(days=1)`
-
-**Current use-day jobs:** temporal score recalc (1d), bulk score recalc (1d), entity merge (7d). Portrait synthesis (10d) and the Persona refinement cadence run in the segment collapse chain, not as scheduled jobs.
-
-To get the current user's activity day count inline: `from utils.user_context import get_user_cumulative_activity_days`.
+The mechanics — activity tracking, the `get_users_due_for_job(interval)` gate, job registration, and the current job list — are owned by `utils/AGENTS.md`; the `*_use_days` interval semantics are owned by `config/AGENTS.md`. Read those maps before adding or changing a use-day-gated job.
 
 ### Provider Stall Detection
-All live LLM transports run through `clients.llm.lifecycle.LLMLifecycle`, which wraps provider operations with `config.api.provider_response_timeout`:
-
-- **Non-streaming**: `LLMLifecycle` wraps the dialect `complete()` call and raises `ProviderStallError` if the call produces no completed response within the timeout.
-- **Streaming**: `LLMLifecycle` wraps each `next()` on the dialect stream iterator and raises `ProviderStallError` if no chunk/event arrives within the timeout.
-
-**No fallback**: a stall or provider failure raises. All five `model_configs` routes are critical and there is no backup route, so the lifecycle fails loudly instead of silently switching models.
-
-When adding new provider transports, implement a dialect under `clients/llm/dialects/` and let `LLMLifecycle` own timeout and tool execution. Completed results feed `utils.cost_accumulator` (keyed by `model_configs` route name) as a slim recording hook; billing machinery is out of scope for the OSS build.
+All live LLM transports run through `clients.llm.lifecycle.LLMLifecycle`, which enforces provider response timeouts and raises `ProviderStallError` on stall. There is no fallback route — a stall or provider failure propagates. The full policy (non-streaming vs streaming wrapping, route criticality, cost recording) is owned by `clients/llm/AGENTS.md` and `utils/AGENTS.md`. Provider-specific transports are dialects under `clients/llm/dialects/`; adding one is a multi-file blast radius documented in `clients/llm/dialects/AGENTS.md`.
 
 ### Power-On Self-Test
-MIRA uses POST checks in `utils/power_on_self_test.py`. The pre-server gate (`run_pre_server_post_gate`) runs before Hypercorn binds and launches checks in a subprocess so probe-side singletons cannot leak into the serving process. The gate is bounded: `PRE_SERVER_GATE_ATTEMPTS` rounds with `PRE_SERVER_GATE_RETRY_SECONDS` between failures, then it parks (sleeps forever, server never binds) rather than exiting — a restart-on-exit supervisor would otherwise turn gate failure into an unbounded loop of real, billed LLM probes. Set `MIRA_POST_GATE_FAILURE_ACTION=exit` to exit instead under supervisors like systemd where restart backoff is already sane. The in-process CLI remains operational: `python -m utils.power_on_self_test pre-server`. The post-server probe at `scripts/post_server_post.py` verifies the already-bound live service through HTTP diagnostics. `scripts/__init__.py` exists so operational scripts can run with `python -m scripts.<name>`. POST checks must exercise real infrastructure and must not use mocks.
+MIRA uses POST checks in `utils/power_on_self_test.py`. The pre-server gate (`run_pre_server_post_gate`) runs before Hypercorn binds and launches checks in a subprocess so probe-side singletons cannot leak into the serving process. The gate is bounded: `PRE_SERVER_GATE_ATTEMPTS` rounds with `PRE_SERVER_GATE_RETRY_SECONDS` between failures, then it parks (sleeps forever, server never binds) rather than exiting — a restart-on-exit supervisor would otherwise turn gate failure into an unbounded loop of real, billed LLM probes. Set `MIRA_POST_GATE_FAILURE_ACTION=exit` to exit instead under supervisors like systemd where restart backoff is already sane. The in-process CLI remains operational (`python -m utils.power_on_self_test pre-server`); the post-server probe and its CLI shim are documented in `scripts/AGENTS.md`. POST checks must exercise real infrastructure and must not use mocks.
 
 ## ⚡ Performance & Tool Usage
-- **Synchronous Over Async**: Prefer synchronous unless genuine concurrency benefit exists. Only use `async/await` for truly asynchronous operations (network I/O, parallelizable file I/O, external APIs). Async overhead (context switching, event loop, complex calls) hurts performance without actual I/O concurrency. Sync is easier to debug, test, reason about.
-- **Haiku Agents — Big Fast Idiot Rules**: Haiku is fast and cheap but cannot reason, infer intent, or make judgment calls. Only dispatch to Haiku for tasks where a big fast idiot would excel: deterministic file operations (find/replace/grep), mechanical edits with exact specifications, and schema-constrained execution where correctness is guaranteed by structure, not judgment. The `big-fast-idiot` agent is the canonical example — it executes atomic file ops via a strict XML taxonomy where every decision has already been made by a smarter model upstream. Never use Haiku for research, architectural analysis, code review, or any task requiring semantic understanding — it will hallucinate confidently and corrupt your reasoning. Use Sonnet or Opus for anything requiring thought.
+- **Synchronous Over Async**: prefer synchronous unless there is genuine I/O concurrency. Async overhead hurts without actual concurrency; sync is easier to debug and reason about.
+- **Model Dispatch**: route selection is `model_configs`-route-based (`primary`/`fast`/`batch`/`assessment`/`other`) — owned by `clients/llm/AGENTS.md`. Match the route to the task: high-frequency mechanical judgments on `fast`; tasks requiring semantic understanding stay on `primary`. Never route by vendor model name.
 
 ## 📝 Implementation Guidelines
 
@@ -179,9 +279,9 @@ MIRA uses POST checks in `utils/power_on_self_test.py`. The pre-server gate (`ru
 When modifying files, write as if the new code was always the plan. Never reference removals. Understand surrounding architecture first.
 
 ### Plan Mode
-🚨 **NEVER autonomously enter plan mode.** Do not call `EnterPlanMode` unless the user has explicitly activated plan mode themselves (e.g., via `/plan`). Autonomous plan mode entry is disruptive UX — always wait for the user to opt in.
+🚨 **Never enter plan mode autonomously** — wait for explicit user activation (`/plan`); autonomous entry is disruptive UX.
 
-When planning, keep ordinary implementation plans concise. Use an ADR only for durable architecture decisions that need rationale, alternatives, and consequences recorded.
+Ordinary implementation plans stay concise. ADRs only for durable architecture decisions needing rationale, alternatives, and consequences recorded.
 
 ## 🔄 Continuous Improvement
 - Convert specific feedback into general principles. Consider multiple approaches before implementing.
@@ -200,12 +300,8 @@ When planning, keep ordinary implementation plans concise. Use an ADR only for d
 - For non-trivial commits, include body sections for `ROOT CAUSE` and `SOLUTION RATIONALE`.
 - After committing, report the commit hash and the high-level file/change summary.
 
-### Documentation References
-- **Tool Documentation**: See `tools/HOW_TO_BUILD_A_TOOL.md` for writing and registering tools
-- **Reference Implementations**: Use nearby tools in `tools/implementations/` as blueprints
-
-### Pydantic BaseModel Standards
-Use Pydantic BaseModel for structured data (configs, API requests/responses, DTOs, system configs). Always `from pydantic import BaseModel, Field`. Use `Field()` with descriptions and defaults. Complete type annotations required. Add docstrings explaining purpose. Naming: `*Config` for configs, `*Request/*Response` for API models.
+### Pydantic Standards
+Pydantic BaseModel for structured data (configs, API models, DTOs): `from pydantic import BaseModel, Field`; `Field()` with descriptions and defaults; complete annotations; docstrings stating purpose. Naming: `*Config` for configs, `*Request`/`*Response` for API models.
 
 
 
@@ -213,44 +309,16 @@ Use Pydantic BaseModel for structured data (configs, API requests/responses, DTO
 
 # Critical Anti-Patterns to Avoid
 
-This section documents recurring mistakes. Keep it concise - only the most important lessons.
+Recurring mistakes kept as incident records — the examples are historical, the lessons are current.
 
-## ❌ Git Workflow Violations
-**Critical**: Follow the Git Workflow section before every commit to avoid these recurring issues:
-- Using HEREDOC syntax instead of literal newlines (causes shell EOF errors)
-- Omitting required commit message sections (ROOT CAUSE, SOLUTION RATIONALE)
-- Using `git add -A` or `git add .` without explicit permission
-- Missing post-commit summary with hash and file stats
-
-**Reference**: Commit format, staging rules, and post-commit reporting requirements are documented in the Git Workflow section above.
-
-## ❌ Over-Engineering Without Need
-**Example**: Adding severity levels to errors when binary worked/failed suffices
-**Lesson**: Push back on complexity. If you can't explain why it's needed, it probably isn't.
-
-## ❌ Credential Management Anti-Patterns
-**Example**: Hardcoding API keys or using fallback values for missing credentials
-**Lesson**: Use UserCredentialService for per-user credentials. System should fail fast when credentials are missing rather than continuing with defaults.
-
-## ❌ Cross-User Data Access
-**Example**: Manual user_id filtering in database queries
-**Lesson**: Tools automatically get user-scoped data access via self.db property. User isolation is handled at the architecture level, not in individual queries.
-
-## ❌ "Improving" During Code Extraction
-**Example**: Removing `_previously_enabled_tools` state storage during need_tool processing extraction because it "seemed unnecessary"
-**Lesson**: When extracting working code, preserve ALL existing behavior exactly as-is. Don't "improve" or "simplify" during extraction - just move the code. If the original system worked, there was likely a good reason for every piece of logic, even if it's not immediately obvious. Extract first, improve later if needed.
-
-## ❌ Premature Abstraction
-**Example**: Creating wrapper classes for utilities that are only used in one place, configuration objects for scenarios that don't exist, or complex hierarchies before understanding actual usage patterns
-**Lesson**: Start with the straightforward solution. Abstractions should emerge from repeated patterns in actual code, not from anticipated future needs. A function that's only called from one place should stay there. A configuration with one use case needs no flexibility. Complexity added "just in case" usually becomes technical debt. Write simple code first, then notice real patterns, then extract only when extraction makes the code clearer.
-
-## ❌ Infrastructure Hedging (Faux-Resilience)
-**Example**: `try: result = db.query() except: return []` making database outages look like empty data
-**Lesson**: Required infrastructure failures must propagate. Returning None/[]/fallbacks when Valkey/database/embeddings fail masks outages as normal operation, creating diagnostic hell. Operators need immediate alerts when infrastructure breaks, not silent degradation users eventually report as "weird behavior". Only catch exceptions to add context before re-raising, or for legitimately optional features (analytics, cache warmers).
-
-## ❌ UUID Type Mismatches at Serialization Boundaries
-**Note**: Preserve native types (UUID, datetime, date) internally, convert only at serialization boundaries (API responses, external storage, logging, string formatting). Don't convert for database queries, function parameters, internal data structures, or comparisons. Common errors: `TypeError: Object of type UUID is not JSON serializable` means missing `str()` at boundary. `TypeError: '>' not supported between 'str' and 'UUID'` means converted too early.
-
-## ❌ Incomplete Code Path Replacement
-**Example**: Replacing `_generate_non_streaming()` with streaming logic but missing the `_write_firehose()` call buried inside it
-**Lesson**: When replacing a code path with new implementation, trace ALL side effects of the original - logging, metrics, state updates, event emissions. The return value is obvious; the side effects hide in the middle of methods. There is no test suite to catch regressions — trace side effects manually and verify by booting.
+| Pattern | Example | Lesson |
+|---|---|---|
+| Git workflow violations | HEREDOC commit messages; `git add -A` without permission; missing ROOT CAUSE / SOLUTION RATIONALE; no post-commit summary | Follow the Git Workflow section before every commit |
+| Over-engineering | Severity levels when binary worked/failed suffices | If you can't explain why it's needed, it probably isn't |
+| Credential fallbacks | Hardcoded API keys; fallback values for missing credentials | Vault + `UserCredentialService`; fail fast when credentials are missing |
+| Cross-user data access | Manual `user_id` filtering in individual queries | Tools get user-scoped access via `self.db`; isolation is architectural |
+| "Improving" during extraction | Removing `_previously_enabled_tools` state storage because it "seemed unnecessary" | Extract working code exactly as-is; improve later |
+| Premature abstraction | Wrapper classes for single-use utilities; config objects for nonexistent scenarios | Straightforward first; abstractions emerge from repeated real patterns |
+| Infrastructure hedging | `try: db.query() except: return []` | Fail-Fast Infrastructure above; silent degradation is diagnostic hell |
+| UUID mismatches at boundaries | `TypeError: Object of type UUID is not JSON serializable` | Native types internally; convert only at serialization boundaries; early conversion breaks comparisons |
+| Incomplete path replacement | Replacing `_generate_non_streaming()` but missing the buried `_write_firehose()` call | Trace ALL side effects — logging, metrics, state, events; verify by booting |

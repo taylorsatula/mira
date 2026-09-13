@@ -1,54 +1,62 @@
-# config/ — Application configuration and system prompt template
+# config/ — Pydantic config schema, the config singleton, and the system prompt
 
 ## Rules
 
-- `config.py` contains only **operational and infrastructure** settings — feature flags, infrastructure coordinates, scheduling cadences, deployment settings. Algorithm tuning constants live inline in their consumer modules as `UPPER_SNAKE_CASE` module-level constants.
-- All settings are Pydantic `BaseModel` schemas with hardcoded defaults. No required fields — the system must boot with zero external input.
-- Secrets (API keys, DB URLs) are never stored here. They live in Vault and are resolved by their consumers (e.g., LLM dialects look up the route's `api_key_name` from `model_configs` via `get_api_key`). No env-var fallbacks.
-- The `config` singleton is module-level state created at import time: `config = initialize_config()` in `config_manager.py`. Import it as `from config import config`. Never instantiate `AppConfig` directly in application code.
-- `__init__.py` imports `tools.registry` before `config_manager` — this import order is load-bearing for circular dependency avoidance. Do not reorder.
-- `config.<tool_name>_tool` triggers `AppConfig.__getattr__` → `get_tool_config()` → `registry.get_or_create()`. With user context, it returns the validated per-user override merged over the global default; without user context, it returns the global default.
-- `ScheduledJobsConfig` fields ending in `_use_days` are modular activity-day intervals, not calendar intervals. `floor_use_days=7` means "run when `MOD(cumulative_activity_days, 7) = 0`", not "run every 7 calendar days".
-- `system_prompt.txt` is loaded once at startup by `AppConfig._load_system_prompt()`. Template variables `{first_name}`, `{user_context}`, and `{relative time since account creation}` are substituted by `working_memory/core.py`, not by config.
+- `config.py` holds only **operational and infrastructure** settings — feature flags, infrastructure coordinates, scheduling cadences, deployment settings. Algorithm tuning constants live inline in their consumer modules as `UPPER_SNAKE_CASE` module-level constants (see the Algorithm Constants deep-dive). Do not add tuning knobs here.
+- Secrets (API keys, DB URLs) are never stored here. Consumers resolve them from Vault (e.g. LLM dialects look up the route's `api_key_name` from `model_configs` via `get_api_key`). No env-var fallbacks for secrets.
+- The `config` singleton is created at import time (`config = initialize_config()` in `config_manager.py`). Import it as `from config import config`; never instantiate `AppConfig` directly in application code.
+- `config.<tool_name>_tool` triggers `AppConfig.__getattr__` (only names ending in `_tool` or already in the `tool_configs` cache) → `get_tool_config()` → `tools.registry:registry.get_or_create()`. The cache stores the **global default** instance; per-user overrides are loaded fresh from `utils/tool_config_store.py:load_user_tool_config` on every access and merged over the default — they are never cached, so edits to a user's tool config take effect on the next attribute access.
+- Three cognitive feature flags can be overridden by environment variables listed in `SYSTEM_FEATURE_FLAG_ENVIRONMENT_FIELDS` (`config_manager.py`): `MIRA_SUBCORTICAL_ENABLED`, `MIRA_PEANUTGALLERY_ENABLED`, `MIRA_PERSONA_ENABLED`. Values must be exactly `0` or `1`; anything else raises at config load instead of coercing. An unset variable leaves the `SystemConfig` default. Adding a flag means one registry entry plus the matching `SystemConfig` field — do not pre-register flags for subsystems that do not exist yet.
+- `ScheduledJobsConfig` and `MemoryCuratorConfig` fields ending in `_use_days` are modular activity-day intervals, not calendar intervals: `floor_use_days=7` means "run when `MOD(cumulative_activity_days, 7) = 0`", enforced by `utils/scheduled_tasks.py:get_users_due_for_job(interval)` — see the `utils/` map for the scheduling doctrine. Fields without the suffix (`extraction_retry_hours`, `job_timeout_seconds`, `poll_interval_minutes`) are ordinary wall-clock values.
+- `system_prompt.txt` is loaded once at startup by `AppConfig._load_system_prompt()` (path-validated, UTF-8, non-empty, or boot fails). Its template variables are substituted by `working_memory/core.py` (substitution contract owned by `working_memory/AGENTS.md`, deep-dive). `cns/services/system_prompt_parser.py:anonymize_prompt()` replaces the same variables with generic strings before the prompt is sent to assessment pipelines.
+- `system_prompt.txt` section order is semantics: identity (`<identity>`, `<user>`) precedes behavioral directives because earlier tokens condition interpretation of later ones. The closing `<mira:system_prompt>` wrapper and the `════` divider are parsed structurally by the system-prompt parser; reordering or dropping sections is a behavioral change, not a cosmetic one.
+- `announcement.json` is read once into a module-level cache at startup (`main.py` calls `load_announcement()`); editing it requires an app restart to take effect.
 
-## Config Models
+### Config models
 
-- `ApiConfig` — LLM API: feature flags (`subcortical_prefill_warmup`, `show_openai_compat_thinking`), the Vault key name for the Anthropic dialect, request sizing (context window, temperature), the absolute live-compaction threshold (`compaction_trigger_tokens`, validated against the context window by a model validator), and provider timeouts (`timeout`, `provider_response_timeout`, `async_work_barrier_timeout_seconds`). Models, endpoints, per-route output ceilings and effort live in the `model_configs` table, not here; `validate_compaction_budget()` checks the threshold against the primary route's ceiling at startup.
-- `ApiServerConfig` — Server deployment: host/port/workers, `sync_endpoint_thread_limit` (per-worker FastAPI thread pool ceiling for sync endpoints), CORS, uvicorn log level, extended thinking toggle.
-- `AuthConfig` — Authentication policy limits: `max_api_tokens_per_user`.
-- `CacheConfig` — Valkey connection settings: `max_connections`.
-- `DatabaseConfig` — Postgres pool sizing and query guards: mira_service pool min/max, LTMemory session-manager pool min/max, `statement_timeout_ms`.
+- `ApiConfig` — LLM API: feature flags (`subcortical_prefill_warmup`, `show_openai_compat_thinking`), request sizing (`context_window_tokens`, `temperature`, `compaction_trigger_tokens`, `compaction_raw_user_turns_to_preserve`), and provider timeouts (`timeout` bounds the HTTP request; `provider_response_timeout` bounds no-progress stall detection via `clients/llm/lifecycle.py:LLMLifecycle`; `async_work_barrier_timeout_seconds` bounds cross-turn cache-work waits). Models, endpoints, and per-route output ceilings live in the `model_configs` database table, not here.
+- `ApiServerConfig` — Server deployment: host/port/workers, `sync_endpoint_thread_limit` (per-worker FastAPI thread-pool ceiling for sync endpoints), CORS, uvicorn log level, extended-thinking toggle and budget.
+- `AuthConfig` — `max_api_tokens_per_user`.
+- `CacheConfig` — Valkey `max_connections`.
+- `DatabaseConfig` — Postgres pool sizing (mira_service `pool_min/max`, LTMemory session `session_pool_min/max`) and `statement_timeout_ms`.
 - `WorkerPoolsConfig` — Background executor thread-pool sizes: peanutgallery, tool-result summarizer, orchestrator encode, repulsion rewriter.
-- `SystemConfig` — System-level: `log_level`, `timezone`, and the cognitive feature flags `subcortical_enabled`, `peanutgallery_enabled`, `persona_enabled`.
-- `ScheduledJobsConfig` — Background job cadences: extraction retry sweep hours, scheduled-job monitor timeout, temporal/bulk score recalc use-days, portrait synthesis use-days, entity merge use-days. All operational knobs.
+- `SystemConfig` — `log_level`, `timezone`, cognitive feature flags (`subcortical_enabled`, `peanutgallery_enabled`, `persona_enabled`), and segment-collapse timeouts: `segment_timeout` plus optional time-of-day window overrides `segment_timeout_morning` (06:00–09:00) and `segment_timeout_late_night` (23:00–06:00), evaluated in the segment owner's local time (`cns/services/segment_timeout_service.py`).
+- `ScheduledJobsConfig` — Background job cadences: `extraction_retry_hours`, `job_timeout_seconds` (ScheduledTaskMonitor ceiling; keep below the 5-minute monitor interval), and the `_use_days` fields (`temporal_score_recalc`, `bulk_score_recalc`, `portrait_synthesis`, `entity_merge`).
 - `MemoryCuratorConfig` — Memory-graph curation agent: `enabled` plus floor-mode knobs (`floor_threshold`, `floor_unseen_days`, `floor_sample_size`, `floor_use_days`).
-- `LatticeConfig` — Federation subsystem: `enabled` opt-in flag (default false; when true, missing lattice package aborts startup fail-fast instead of degrading silently) plus service coordinates (`service_url`, `timeout`).
-- `SidebarDispatcherConfig` — Sidebar agent: `enabled`, poll interval, max concurrent agents, plus wall-clock agent timeouts (`agent_timeout_seconds`, `agent_iteration_timeout_seconds`, and per-agent `agent_timeout_overrides` keyed by lowercased class name with the 'Agent' suffix stripped).
-- `InboxToolConfig` — Inbox poller tool defaults (`enabled`, `inbox_path`).
-- `LtMemoryConfig` — LT_Memory ML-tuning knobs: SentenceTransformer `embeddings_batch_size`, spaCy `ner_batch_size`, `proactive_search_workers`, and `entity_merge_candidate_limit` (pg_trgm duplicate-candidate pairs per merge sweep).
-
-## Where Algorithm Constants Live
-
-Algorithm tuning constants were moved from config.py to their consumer modules:
-- `lt_memory/proactive.py` — surfacing thresholds, link weights, debut boost, context window caps (operational search worker count and pool/thread sizes moved INTO `config.lt_memory`/`config.worker_pools`)
-- `lt_memory/hybrid_search.py` — intent weights, RRF k, search defaults
-- `lt_memory/linking.py` — link discovery thresholds, TF-IDF settings
-- `lt_memory/processing/memory_processor.py` — dedup thresholds
-- `cns/services/orchestrator.py` — context overflow, topic drift, tool result limits
-- `cns/services/peanutgallery_service.py` — trigger interval, seed count, TTL
-- `cns/services/peanutgallery_model.py` — prerunner tokens, message window
-- `cns/core/segment_cache_loader.py` — session cache tier settings
-- `cns/services/manifest_query_service.py` — manifest depth, cache TTL
-- `cns/services/segment_timeout_service.py` — segment timeout minutes
+- `LatticeConfig` — Federation subsystem: `enabled` (default false; when true, missing lattice package aborts startup fail-fast instead of degrading silently) plus `service_url`, `timeout`.
+- `SidebarDispatcherConfig` — Sidebar agent dispatcher: `enabled`, `poll_interval_minutes`, `max_concurrent_agents`, wall-clock timeouts (`agent_timeout_seconds`, `agent_iteration_timeout_seconds`, and `agent_timeout_overrides` keyed by lowercased class name with the `Agent` suffix stripped — e.g. `ForageAgent` → `"forage"`).
+- `InboxToolConfig` — Inbox poller tool defaults (`enabled`, `inbox_path` with absolute-path validator, `archive_subdir`, read-size limits).
+- `LtMemoryConfig` — LT_Memory ML knobs: SentenceTransformer `embeddings_batch_size`, spaCy `ner_batch_size`, `proactive_search_workers`, `entity_merge_candidate_limit`.
 
 ## Files
 
-- `config.py` — Pydantic schema definitions for the 13 config models. No logic, no side effects.
-- `config_manager.py` — `AppConfig` (root aggregate), `initialize_config()`, and the `config` singleton. Owns Vault property lookups plus context-aware per-user tool-config resolution.
-- `__init__.py` — Re-exports `config` and `AppConfig`; enforces registry-before-config import order.
-- `system_prompt.txt` — Mira's core identity prompt. Section order is semantics: foundational identity appears before behavioral directives because earlier tokens condition interpretation of later ones.
-- `announcement.py` — Module-level cache for `announcement.json`. `load_announcement()` called once at startup lifespan; `get_cached_announcement()` used by `cns/api/data.py`.
-- `announcement.json` — Active announcement state. Set `id` + `message` to show banner; set both to `null` to suppress. Requires app restart to take effect.
+- `config.py` — Pydantic schema definitions for the 13 config models (see the Config models subsection under Rules). No logic, no side effects; every field has a hardcoded default so the system boots with zero external input. Two validators: `ApiConfig.validate_compaction_trigger_tokens` (model validator) and `ApiConfig.validate_compaction_budget(primary_max_tokens)` (checks the compaction threshold against the primary route's database-owned output reserve; called by `utils/user_context.py` and `utils/power_on_self_test.py`), plus `InboxToolConfig.validate_inbox_path` (must be absolute).
+- `config_manager.py` — `AppConfig` (root aggregate composing all 13 models), `SYSTEM_FEATURE_FLAG_ENVIRONMENT_FIELDS` + `_load_system_feature_flag_overrides()`, `initialize_config()`, and the module-level `config` singleton. Also owns `get()`/`require()` dot-path access, the `system_prompt` property, and the tool-config resolution chain (`__getattr__` → `get_tool_config`). `initialize_config()` also sets `logging.basicConfig` from `system.log_level`.
+- `__init__.py` — Imports `tools.registry` **before** `config_manager`, then re-exports `config`, `AppConfig`, and `registry`. The import order is load-bearing (registry has no dependencies and must exist before config init logs its contents); do not reorder.
+- `announcement.py` — Module-level cache for `announcement.json`. `load_announcement()` (called once at startup from `main.py`); `get_cached_announcement()` (consumer: `cns/api/data.py` announcement endpoint). Missing/malformed file degrades to "no announcement" by design — it is a UI banner, not required infrastructure.
+- `announcement.json` — Active announcement state. Set `id` + `message` to show the banner; set both to `null` to suppress. Requires app restart (see Rules).
 - `announcement.sample.json` — Reference format for `announcement.json`.
-- `vault.hcl` — Local dev Vault server config (file storage, `127.0.0.1:8200`, no TLS). Consumed by the Vault binary, not Python.
-- `prompts/` — LLM prompt templates for all subsystems. See `prompts/AGENTS.md`.
+- `system_prompt.txt` — Mira's core identity prompt (the live one; loaded by `AppConfig._load_system_prompt()`). Consumers: `working_memory/core.py` (variable substitution) and `cns/services/system_prompt_parser.py` (section parsing/anonymization).
+- `system_prompt_original.txt`, `system_prompt_proverbial.txt` — archived prompt variants; unreferenced by any loader. Not part of the live contract — do not build on them.
+- `vault.hcl` — Local dev Vault server config (file storage at `./vault_data`, `127.0.0.1:8200`, TLS disabled, `disable_mlock`). Consumed by the Vault binary, not Python.
+- `prompts/` — LLM prompt templates for all subsystems (loader contract, template inventory, variables, consumers). See `prompts/AGENTS.md`.
+
+## Wiring
+
+- Import order is fixed in two places: `__init__.py` imports `tools.registry` before `config_manager` (registry must exist before `initialize_config()` logs its contents), and `config_manager.py` itself imports `config.config` schemas before `tools.registry`. Reordering breaks the boot.
+- The `config` singleton is the read boundary for nearly every subsystem: `config.api` feeds `clients/llm/lifecycle.py` (stall timeouts) and live compaction; `config.system` feeds `cns/services/segment_timeout_service.py` and feature-flag checks; `config.scheduled_jobs`/`config.memory_curator` `_use_days` fields feed `utils/scheduled_tasks.py:get_users_due_for_job` at job registration; `config.database`/`config.cache` feed pool construction. Adding a field here without a consumer is dead config; adding a consumer constant that operators should tune belongs here instead.
+
+## Where Algorithm Constants Live
+
+Algorithm tuning constants live inline in their consumer modules as module-level `UPPER_SNAKE_CASE` constants, not in `config.py`. Verified locations:
+
+- `lt_memory/proactive.py` — surfacing thresholds (`PROACTIVE_SIMILARITY_THRESHOLD`, `MAX_SURFACED_MEMORIES`), link traversal depth, importance floors
+- `lt_memory/hybrid_search.py` — intent weights (`INTENT_RECALL_VECTOR`, `INTENT_EXPLORE_VECTOR`), RRF/oversample multipliers, search defaults
+- `lt_memory/linking.py` — link discovery thresholds, TF-IDF settings (`TFIDF_SIMILARITY_THRESHOLD`, ...)
+- `lt_memory/processing/memory_processor.py` — dedup threshold (`DEDUP_SIMILARITY_THRESHOLD`), default importance
+- `cns/services/orchestrator.py` — context overflow limits, tool-result size caps (`TOOL_RESULT_MAX_CHARS`), per-turn tool-call ceiling
+- `cns/services/peanutgallery_service.py` — trigger interval (`PG_TRIGGER_INTERVAL`), guidance TTL (`PG_GUIDANCE_TTL_TURNS`)
+- `cns/core/segment_cache_loader.py` — session cache tier settings (`SESSION_SUMMARY_COMPLEXITY_LIMIT`, tier counts, query window)
+- `cns/services/manifest_query_service.py` — manifest depth and cache TTL (`MANIFEST_DEPTH`, `MANIFEST_CACHE_TTL`)
+
+Operational counterparts (worker counts, pool sizes, timeouts) that pair with these constants moved into `config.lt_memory` and `config.worker_pools`. Segment timeout constants also moved into config (`config.system.segment_timeout*`); `cns/services/segment_timeout_service.py` reads them from config rather than defining its own.

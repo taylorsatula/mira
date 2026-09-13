@@ -1,44 +1,44 @@
 # working_memory/ — Event-driven system prompt composition via trinkets
 
+Trinkets live in `trinkets/` and are documented in `working_memory/trinkets/AGENTS.md` (base classes, per-trinket behavior, persistence, result-feed state machine). This map owns composition, event routing, and collapse flush.
+
 ## Rules
 
-All trinkets extend `EventAwareTrinket` and must define `variable_name: str` as a class attribute — omitting it raises `TypeError` at init. Trinkets with turn-scoped state extend `StatefulTrinket` instead and implement `_expire_items() -> bool` and `_clear_all_state()`. Never subscribe a trinket to `SegmentCollapsedEvent` directly — `WorkingMemory._flush_stateful_trinkets()` handles all stateful trinket cleanup centrally on collapse.
-
-Trinket placement in the composed prompt is controlled exclusively by `SECTION_LAYOUT` in `composer.py`. Sections not listed there default to `system` placement with a warning. To place a new trinket, add its `variable_name` to the appropriate placement list in `SECTION_LAYOUT` — do not route placement inside `generate_content()`.
-
-Infrastructure failures (DB, Valkey) must propagate out of `generate_content()` — the isolation boundary is `WorkingMemory._handle_update_trinket()`, not inside the trinket. No `try/except` around infrastructure calls in trinket implementations.
-
-Portrait injection (`{user_context}`) and `{first_name}` / `{relative time since account creation}` substitutions happen in `core.py:_handle_compose_prompt()`, not in any trinket.
+- Placement is controlled exclusively by `SECTION_LAYOUT` in `composer.py`. Sections not listed there default to `system` placement at the end, with a warning — a new trinket works immediately but lands in the wrong slot until its `variable_name` is added to the appropriate layout list. Do not route placement inside `generate_content()` or a trinket's render path.
+- Trinket registration happens outside this directory: trinkets self-register via `working_memory.register_trinket()` (`working_memory/trinkets/base.py`) and are instantiated by the CNS factory — `cns/integration/AGENTS.md` owns the factory/trinket-registration ordering. Do not instantiate trinkets elsewhere.
+- `WorkingMemory._handle_update_trinket()` is the sole isolation boundary: it catches every exception from `handle_update_request()` so one failing trinket cannot break the compose broadcast. It classifies failures by exception type name (`Database` / `Valkey` / `Connection` substrings → `infrastructure` category, everything else `logic`) — an infrastructure exception class whose name matches none of those substrings is misclassified as `logic`. Trinkets must still propagate infrastructure failures; never catch inside a trinket.
+- `invalidate_trinket(trinket_name, user_id)` temporarily swaps the user contextvar (`set_current_user_id(user_id)`) around `trinket._clear_from_valkey()` because that method reads the user from context. External services calling it must pass the correct user explicitly; the swap is restored in a `finally`.
+- Trinket state persists in the Valkey hash `trinkets:{user_id}` — key prefix contract owned by `working_memory/trinkets/AGENTS.md` (`working_memory/trinkets/base.py:TRINKET_KEY_PREFIX`). The read side here (`get_trinket_state()` / `get_all_trinket_states()`) builds the same key; changing one side without the other silently reads empty state.
 
 ## Files
 
-- `types.py` — `ComposedPrompt`, `TrinketState`, `TrinketStatesMeta`, `AllTrinketStates` TypedDicts shared across composer and core
-- `composer.py` — `SystemPromptComposer`: owns section routing via `SECTION_LAYOUT` and prompt assembly into `ComposedPrompt`; sections not in `SECTION_LAYOUT` land in `system` with a warning
-- `core.py` — `WorkingMemory`: owns trinket registration, event subscriptions, portrait cache (`_portrait_cache`), and `TrinketState` retrieval from Valkey
-- `trinkets/base.py` — `EventAwareTrinket` (ABC) and `StatefulTrinket`; owns Valkey persistence (`TRINKET_KEY_PREFIX`) and `_clear_from_valkey()`
-- `trinkets/domaindoc_trinket.py` — domain knowledge document injection with per-document collapse/expand state. Supports shared domaindocs via `utils.domaindoc_shares.get_accepted_shares()`, reads shared docs from owner's `UserDataManager`, renders with `shared_by` attribute
-- `trinkets/asyncactivity_trinket.py` — sidebar agent activity feed (`EventAwareTrinket`); SQLite-backed, reads from `sidebar_activity` on each render; items persist until dismissed via `sidebaragents_tool`
-- `trinkets/live_context_compaction_trinket.py` — conversation-prefix `StatefulTrinket` for the Valkey-only active-context continuation brief. Renders `brief_text` from `live_context_compaction:{user_id}` when it matches the current continuum; `_clear_all_state()` deletes the custom artifact on segment collapse. Variable name: `context_compaction`.
-- `trinkets/forage_trinket.py` — background forage agent results (`StatefulTrinket`, TTL-scoped errors, dismiss support). Lifecycle: `pending → in_progress (stacked) → success|timeout|failed`. `in_progress` summaries from overwatch accumulate per-iteration so the primary LLM sees the full research arc; cleared when terminal state arrives.
-- `trinkets/whilethecatsaway_trinket.py` — curiosity research results (`StatefulTrinket`, all results auto-expire after `RESULT_TTL_TURNS=8`); surfaces what the agent learned and which memories were stored
-- `trinkets/location_trinket.py` — user location + weather from Valkey cache (`cache_policy=True`)
-- `trinkets/lora_trinket.py` — user model observations from the feedback synthesis pipeline (`behavioral_directives`)
-- `trinkets/persona_trinket.py` — current immutable Persona revision's directives in its own prompt slot (`persona_directives`); reads via `PersonaRepository.get_current_revision()`. Shares the `behavioral_directives` Valkey hash with `lora_trinket`, so the two `variable_name`s must stay distinct — Persona is a parallel system, not a replacement.
-- `trinkets/memory_curator_trinket.py` — `MemoryCuratorTrinket` (`StatefulTrinket`): displays MemoryCuratorAgent results (linked/merged/archived) keyed by `task_id`; integration and floor runs are tracked independently, successes persist until segment collapse, failures/timeout auto-expire after 5 turns
-- `trinkets/manifest_trinket.py` — conversation segment manifest (stable, cached content)
-- `trinkets/email_trinket.py` — unread email headers in HUD (`StatefulTrinket`). Thin renderer — receives inbox data from `InboxPollerService` via `UpdateTrinketEvent`, renders `<inbox_status>` XML with nudge instruction. Zero I/O.
-- `trinkets/peanutgallery_trinket.py` — high-salience metacognitive directives with TTL expiry (`StatefulTrinket`). Preserves per-guidance `critical` severity and renders standard vs. critical guidance in separate HUD sections so fourth-wall repair instructions apply only to critical items.
-- `trinkets/proactive_memory_trinket.py` — surfaced long-term memories; exposes `get_cached_memories()` for orchestrator retention evaluation; globally dedups linked-memory context so a memory already shown as a primary or linked under another primary is not repeated
-- `trinkets/reminder_manager.py` — active reminders fetched and formatted for notification center
-- `trinkets/time_manager.py` — current datetime injection into notification center
-- `trinkets/__init__.py` — package init, no logic
+- `types.py` — `ComposedPrompt`, `TrinketState`, `TrinketStatesMeta`, `AllTrinketStates` TypedDicts for the dict shapes produced by `composer.py` and `core.py`
+- `composer.py` — `SystemPromptComposer`: section collection via `add_section()` / `set_base_prompt()`, and placement/ordering authority `SECTION_LAYOUT` + `compose()` routing into `ComposedPrompt` fields (`cached_content`, `non_cached_content`, `conversation_prefix_items`, `post_history_items`, `notification_center`). `set_base_prompt()` appends the `═`-delimiter scaffolding note; `_build_notification_center()` wraps notification parts in `<mira:hud>`.
+- `core.py` — `WorkingMemory`: event subscriptions (`ComposeSystemPromptEvent` → `_handle_compose_prompt()`, `UpdateTrinketEvent` → `_handle_update_trinket()`, `TrinketContentEvent` → `_handle_trinket_content()`, `SegmentCollapsedEvent` → `_flush_stateful_trinkets()`), trinket registry (`register_trinket()`), external entry points (`publish_trinket_update()`, `invalidate_trinket()`, `invalidate_portrait()`, `get_trinket()`), Valkey state reads (`get_trinket_state()`, `get_all_trinket_states()`), and `_portrait_cache`. Gotcha: `_handle_compose_prompt()` also performs template substitution on the base prompt — see the deep-dive.
+- `__init__.py` — re-exports `WorkingMemory` only; registration happens via the CNS factory (`cns/integration/AGENTS.md`).
+- `trinkets/` — self-registering prompt-section components; one `variable_name` slot each. See `trinkets/AGENTS.md`.
 
 ## Wiring
 
-Composition flow (all synchronous, single request):
+Composition flow (all synchronous, single request; owned here):
 
-`ComposeSystemPromptEvent` → `WorkingMemory._handle_compose_prompt()` broadcasts `UpdateTrinketEvent` per trinket → each trinket's `handle_update_request()` calls `generate_content()`, persists to Valkey, publishes `TrinketContentEvent` → `WorkingMemory._handle_trinket_content()` calls `composer.add_section()` → `composer.compose()` routes by `SECTION_LAYOUT` → `SystemPromptComposedEvent`
+`ComposeSystemPromptEvent` → `WorkingMemory._handle_compose_prompt()` substitutes base-prompt templates, calls `composer.set_base_prompt()` + `clear_sections(preserve_base=True)`, broadcasts `UpdateTrinketEvent` per registered trinket → each trinket's `handle_update_request()` renders and publishes `TrinketContentEvent` → `_handle_trinket_content()` calls `composer.add_section()` → `composer.compose()` routes by `SECTION_LAYOUT` → `SystemPromptComposedEvent`
 
-`SegmentCollapsedEvent` → `WorkingMemory._flush_stateful_trinkets()` calls `_clear_all_state()` + `_clear_from_valkey()` on every registered `StatefulTrinket`.
+Ordering invariants in this flow: `clear_sections()` must run before the trinket broadcast (stale sections would otherwise persist into the new prompt); the broadcast completes synchronously before `compose()`, so every trinket's content is present at composition time; `publish_trinket_update()` is a no-op with a warning until `_handle_compose_prompt()` sets `_current_continuum_id` — external callers cannot trigger trinket updates before the first compose of the process.
 
-`TurnCompletedEvent` → each `StatefulTrinket._on_turn_completed()` increments turn counter, calls `_expire_items()`, and if items were removed triggers `publish_trinket_update()` for a mid-turn refresh.
+Collapse flow: `SegmentCollapsedEvent` → `WorkingMemory._flush_stateful_trinkets()` calls `_clear_all_state()` + `clear_user_turn()` + `_clear_from_valkey()` on every registered `StatefulTrinket`, then `invalidate_portrait(user_id)`. Per-trinket expiry behavior is owned by `working_memory/trinkets/AGENTS.md` (`base.py`).
+
+External update flow: services that mutate trinket inputs publish `UpdateTrinketEvent` (or call `publish_trinket_update()`) with a `target_trinket` class name; `cns/services/AGENTS.md` owns the producer side of those events. The trinket must be registered by class name or the update is dropped with a warning.
+
+## Base-prompt template substitution
+
+`_handle_compose_prompt()` replaces template variables in the event's base prompt before composition. The contract is split: the template strings live in the base-prompt source (`config/system_prompt.txt` and related prompt files in `config/`), the substitution values are sourced here:
+
+| Template | Substituted with | Source |
+|---|---|---|
+| `{first_name}` | user's first name, falling back to `"friend"` when unset/blank | `get_user_preferences().first_name` |
+| `{user_context}` | portrait text prefixed with a newline, or empty string | `cns/services/portrait_service.read_portrait()`, cached in `_portrait_cache` per user until `invalidate_portrait()` |
+| `{relative time since account creation}` | humanized duration, or `"some time"` when `created_at` is unset | `format_relationship_duration(prefs.created_at)` |
+| `{model_id}` / `{model_name}` | primary route's model id and name | `get_model_config("primary")` — fixed for the process lifetime; per-user model switching is not a feature |
+
+A portrait is cached per user in `_portrait_cache` and only invalidated by `invalidate_portrait()` (called from `_flush_stateful_trinkets()` and external callers). Editing a portrait's source data does not appear in prompts until something calls `invalidate_portrait()`.

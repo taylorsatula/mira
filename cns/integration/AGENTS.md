@@ -1,20 +1,24 @@
-# cns/integration/ — Event bus and CNS dependency wiring
+# cns/integration/ — Event bus and the CNS dependency graph construction
 
 ## Rules
 
-`CNSIntegrationFactory` is the sole entry point for constructing the CNS graph. Never instantiate `ContinuumOrchestrator`, `WorkingMemory`, `ToolRepository`, live context compaction services, or peripheral services directly outside this factory — the initialization order encodes hard dependency constraints.
-
-The factory initializes `AsyncWorkBarrier` before the retrieval-backed tool-result summarizer. The summarizer receives the pool's existing `ValkeyMessageCache`; do not resolve the pool again from its worker thread.
-
-Event handlers registered via `event_bus.subscribe()` must be synchronous. Exceptions in handlers are caught and logged by the bus; non-critical handlers must not let errors propagate. For async work inside a handler, spawn a thread with `contextvars.copy_context()`.
-
-`event_type` strings passed to `subscribe()` must match the class `__name__` exactly (`'TurnCompletedEvent'`, not `'turn_completed'`).
-
-Trinkets self-register: constructing `TimeManager(event_bus, working_memory)` is the registration. Add new trinkets in `_get_working_memory()`, after `tool_repo` if they depend on tools. `LiveContextCompactionTrinket` and `LiveContextCompactionService` each instantiate their own `LiveContextCompactionStore` locally; there is no shared store instance.
-
-Peripheral services (`SegmentCollapseHandler`, `ManifestQueryService`, `PeanutGalleryService`, `InboxPollerService`) are initialized via `_initialize_*()` methods that subscribe to events internally — do not subscribe to their event types from outside the factory.
+- `CNSIntegrationFactory.create_orchestrator()` is the sole construction path for the CNS graph; the public wrapper `create_cns_orchestrator()` (`factory.py`) is what callers (`main.py`, `utils/power_on_self_test.py`) use. Never instantiate `ContinuumOrchestrator`, `WorkingMemory`, `ToolRepository`, compaction services, or peripheral services directly outside this factory — the body of `create_orchestrator()` is the dependency order, and reordering it breaks initialization.
+- Initialization order is load-bearing: `_initialize_session_cache()` must run before `_initialize_segment_collapse_handler()` (the handler calls `get_continuum_pool()`, which only exists after `initialize_continuum_pool()` in the cache loader step), and both must precede `initialize_tool_result_summarizer()`, which also resolves `get_continuum_pool()`. `initialize_async_work_barrier()` runs immediately before the summarizer and must not be moved after it.
+- Event handlers registered via `EventBus.subscribe()` must be synchronous; the bus invokes each callback inline inside `publish()`. For async work inside a handler, spawn a thread with `contextvars.copy_context()` (general copy-context rule owned by `cns/AGENTS.md`).
+- `event_type` strings passed to `subscribe()` must match the event class `__name__` exactly (`'TurnCompletedEvent'`, not `'turn_completed'`); `EventBus.publish()` dispatches on `event.__class__.__name__`. Misspelled keys fail silently — the event is published to zero subscribers with no error.
+- Trinkets self-register: constructing `TimeManager(event_bus, working_memory)` is the registration. Add new trinkets in `_get_working_memory()` (`factory.py`); the list is deliberately manual — no auto-registration. Trinkets that need the tool repo cannot live there (it does not exist yet); construct them later, as `_initialize_peanutgallery_service()` and `_initialize_inbox_poller()` do.
+- Peripheral services (`SegmentCollapseHandler`, `ManifestQueryService`, `PeanutGalleryService`, `InboxPollerService`, `UserDataManagerCleanupHandler`) are initialized via `_initialize_*()` methods and subscribe to their event types internally, in their own constructors — do not subscribe to their event types from outside the factory.
+- Config gates in the factory are authoritative: `PersonaTrinket`, `SubcorticalLayer`, and `PeanutGalleryService` are constructed only when their `config.system.*_enabled` flags are set; consumers must tolerate their absence (`_get_subcortical_layer()` returns `None` and the orchestrator accepts it).
+- `LiveContextCompactionTrinket` and `LiveContextCompactionService` each instantiate their own `LiveContextCompactionStore` locally (the trinket in `working_memory/trinkets/live_context_compaction_trinket.py`, the service in `_get_live_context_compaction_service()`); there is no shared store instance, and state in one is invisible to the other.
 
 ## Files
 
-- `event_bus.py` — Owns pub/sub routing. Keyed by event class name string; callbacks execute synchronously in `publish()` order; exceptions are caught per-callback.
-- `factory.py` — Owns the full CNS dependency graph. `create_orchestrator()` is the authoritative construction path; `create_cns_orchestrator()` is the public convenience wrapper. Wires the live-context compaction service and trinket; each creates its own `LiveContextCompactionStore` internally.
+- `factory.py` — Owns the full CNS dependency graph: singleton accessors (`_get_*`) for the core services, `_initialize_*()` methods for event-subscribing peripherals, and `create_orchestrator()` as the authoritative assembly sequence. `create_cns_orchestrator()` is the public convenience wrapper. `SummaryGenerator` is built with `llm_provider=None` and creates its own summary-specific provider; `_register_gated_tools()` is an empty vestige kept for future gated tools. Consumers: called from `main.py` and `utils/power_on_self_test.py` via `create_cns_orchestrator()`.
+- `event_bus.py` — Owns pub/sub routing: `subscribe()`/`publish()`/`unsubscribe()`, keyed by event class name string. Delivery is at-most-once by design — per-callback exceptions are logged with traceback and skipped, no retry or re-queue; remaining subscribers still receive the event. `shutdown()` signals the shutdown event and clears all subscribers.
+- `__init__.py` — Empty file, no re-exports; all imports go through `cns.integration.factory` directly.
+
+## Wiring
+
+- Events in: subscribes to `TurnCompletedEvent` (ephemeral tool cleanup lambda) and, via the peripherals above, `SegmentTimeoutEvent`, `SegmentCollapsedEvent`, `ManifestUpdatedEvent`, turn-completed events for Peanut Gallery and inbox polling. Event classes are owned by `cns/core/AGENTS.md` (`events.py`); the bus only carries them.
+- Component contracts this factory wires are owned by their maps: `WorkingMemory` and trinket registration by `working_memory/trinkets/AGENTS.md`, `ToolRepository`/tools by `tools/implementations/AGENTS.md`, LLM transport by `clients/llm/AGENTS.md`, and `SegmentCacheLoader` construction (repository injected, no direct infrastructure import) by `cns/core/AGENTS.md`.
+- Downstream services referenced by path: `cns/services/` (orchestrator, summary generator, subcortical, live context compaction, manifest query, peanut gallery, pollers, async work barrier, tool result summarizer) — `cns/services/AGENTS.md`; `cns/infrastructure/` (continuum repository, continuum pool, valkey message cache) — `cns/infrastructure/AGENTS.md`; `lt_memory/factory.py` — `lt_memory/AGENTS.md`; `utils/userdata_manager.py` — `utils/AGENTS.md`.

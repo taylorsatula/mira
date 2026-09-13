@@ -1,16 +1,12 @@
-# scripts — Operational utilities
+# scripts/ — operational entry points run against a live, deployed service
 
-Small, runnable helpers that operate outside the normal request lifecycle.
-They run against a deployed environment (bare-metal systemd or the container),
-where Vault and the `mira_service` database are reachable — not against the
-unit-test harness.
+## Rules
+
+- Every script here is a thin CLI shim: argument parsing and output formatting live in the owning module (e.g. `utils/power_on_self_test.py:post_server_cli`), not in this directory. Fix behavior there; never fork logic into a script.
+- When run outside the service environment, Vault-required scripts must export `VAULT_ROLE_ID` and `VAULT_SECRET_ID` from `/opt/vault/role-id.txt` and `/opt/vault/secret-id.txt` (populated by `deploy/lib/vault.sh`); `clients/vault_client.py` reads exactly those env vars and raises if missing.
+- Scripts touching the database must respect RLS for app-level paths; `PostgresClient(..., admin=True)` is only for cross-user lookups or administrative fixes (root AGENTS.md user-context doctrine applies here too).
 
 ## Files
 
-- `post_server_post.py` — Runs the post-server power-on self-test probe against a live MIRA service via HTTP diagnostics.
-- `__init__.py` — Package marker only; it exists so operational scripts run with `python -m scripts.<name>`.
-
-## Patterns
-
-- Scripts that touch the database should respect RLS when exercising app code and use `PostgresClient(..., admin=True)` only for cross-user lookups or administrative fixes.
-- Vault-required scripts must set `VAULT_ROLE_ID` and `VAULT_SECRET_ID` from `/opt/vault/role-id.txt` and `/opt/vault/secret-id.txt` when run outside the service environment.
+- `post_server_post.py` — CLI shim that runs the post-server power-on self-test against the already-bound live MIRA service via HTTP diagnostics. Delegates entirely to `post_server_cli()` in `utils/power_on_self_test.py` (flags: `--base-url`, `--deadline-seconds`, `--json`); exits 0 only if `report.required_passed`. Run as `python -m scripts.post_server_post`. Gate mechanics and probe ownership belong to `utils/power_on_self_test.py` — see root AGENTS.md POST section, do not restate here. Consumers: invoked by operators and `deploy/` service startup; anchor `utils/power_on_self_test.py:post_server_cli` documents it as this script's CLI.
+- `__init__.py` — Docstring only, no re-exports; exists so operational scripts run with `python -m scripts.<name>`.
