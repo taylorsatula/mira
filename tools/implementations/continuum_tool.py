@@ -18,7 +18,7 @@ from typing import Dict, Any, Optional, List
 
 from pydantic import BaseModel, Field
 
-from tools.repo import Tool, coerce_to_int
+from tools.repo import Tool
 from tools.registry import registry
 from cns.infrastructure.continuum_repository import get_continuum_repository
 from utils.timezone_utils import (
@@ -312,7 +312,7 @@ class ContinuumSearchTool(Tool):
         self._config = config.get_tool_config("continuum_tool")
 
         # Get continuum repository for database access
-        self._conversation_repo = get_continuum_repository()
+        self._continuum_repo = get_continuum_repository()
 
         # Get embeddings provider for query embeddings
         self._embeddings_provider = get_hybrid_embeddings_provider()
@@ -378,7 +378,7 @@ class ContinuumSearchTool(Tool):
         if not session_id:
             raise ValueError("No active conversation session for tool result lookup")
 
-        content = self._conversation_repo.load_tool_result_by_id(
+        content = self._continuum_repo.load_tool_result_by_id(
             user_id=self.user_id,
             session_id=session_id,
             tool_result_id=tool_result_id,
@@ -425,9 +425,7 @@ class ContinuumSearchTool(Tool):
         query = query.strip()
         entities = entities or []
 
-        # Validate numeric parameters - LLM sometimes sends lists instead of scalars
-        max_results = coerce_to_int(max_results, "max_results")
-        page = coerce_to_int(page, "page") or 1
+        page = page or 1
 
         # Validate search mode
         if search_mode not in ["summaries", "precis", "messages"]:
@@ -530,7 +528,7 @@ class ContinuumSearchTool(Tool):
                 temporal_clause = "AND m.created_at BETWEEN %s AND %s"
                 temporal_params = [start_time, end_time]
 
-        db = self._conversation_repo._get_client(self.user_id)
+        db = self._continuum_repo.get_user_db_client(self.user_id)
 
         # Hybrid search query - temporal_clause is SQL structure, not data
         search_sql = f"""
@@ -872,7 +870,7 @@ class ContinuumSearchTool(Tool):
         limit = max_results or 20  # More messages for detail search
         offset = (page - 1) * limit
 
-        db = self._conversation_repo._get_client(self.user_id)
+        db = self._continuum_repo.get_user_db_client(self.user_id)
 
         # Hybrid BM25 + trigram ranking within time boundaries
         # No hard text filter - time scope from segment search is sufficient
@@ -1002,11 +1000,8 @@ class ContinuumSearchTool(Tool):
         if not query or not query.strip():
             raise ValueError("Query is required for search_within_segment operation")
 
-        # Validate numeric parameter
-        max_results = coerce_to_int(max_results, "max_results")
-
         # Find the full segment sentinel
-        db = self._conversation_repo._get_client(self.user_id)
+        db = self._continuum_repo.get_user_db_client(self.user_id)
 
         # Find segment by short ID
         segment_sql = """
@@ -1099,7 +1094,6 @@ class ContinuumSearchTool(Tool):
             raise ValueError(f"direction must be 'before', 'after', or 'both', got: {direction}")
 
         # Validate and set context count
-        context_count = coerce_to_int(context_count, "context_count")
         if context_count is None:
             context_count = self._config.default_context_window
         context_count = max(0, min(context_count, 10))
@@ -1162,7 +1156,7 @@ class ContinuumSearchTool(Tool):
             Message data or None if not found
         """
         try:
-            db = self._conversation_repo._get_client(self.user_id)
+            db = self._continuum_repo.get_user_db_client(self.user_id)
 
             # Use LIKE to match UUID prefix (PostgreSQL UUID is stored as string in query)
             query = """
@@ -1212,7 +1206,7 @@ class ContinuumSearchTool(Tool):
             List of context messages with relation indicators
         """
         try:
-            db = self._conversation_repo._get_client(self.user_id)
+            db = self._continuum_repo.get_user_db_client(self.user_id)
 
             origin_time = origin_message["created_at"]
             continuum_id = origin_message["continuum_id"]

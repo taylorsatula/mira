@@ -6,7 +6,7 @@ All data structures for memories, links, and processing chunks.
 import logging
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Literal, NamedTuple, NotRequired, Optional, TypedDict
+from typing import List, Dict, Any, Literal, NotRequired, Optional, TypedDict
 from uuid import UUID
 
 logger = logging.getLogger(__name__)

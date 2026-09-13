@@ -15,17 +15,22 @@
 
 - `ApiConfig` — LLM API: feature flags (`subcortical_prefill_warmup`, `show_openai_compat_thinking`), the Vault key name for the Anthropic dialect, request sizing (context window, temperature), the absolute live-compaction threshold (`compaction_trigger_tokens`, validated against the context window by a model validator), and provider timeouts (`timeout`, `provider_response_timeout`, `async_work_barrier_timeout_seconds`). Models, endpoints, per-route output ceilings and effort live in the `model_configs` table, not here; `validate_compaction_budget()` checks the threshold against the primary route's ceiling at startup.
 - `ApiServerConfig` — Server deployment: host/port/workers, `sync_endpoint_thread_limit` (per-worker FastAPI thread pool ceiling for sync endpoints), CORS, uvicorn log level, extended thinking toggle.
+- `AuthConfig` — Authentication policy limits: `max_api_tokens_per_user`.
+- `CacheConfig` — Valkey connection settings: `max_connections`.
+- `DatabaseConfig` — Postgres pool sizing and query guards: mira_service pool min/max, LTMemory session-manager pool min/max, `statement_timeout_ms`.
+- `WorkerPoolsConfig` — Background executor thread-pool sizes: peanutgallery, tool-result summarizer, orchestrator encode, repulsion rewriter.
 - `SystemConfig` — System-level: `log_level`, `timezone`, and the cognitive feature flags `subcortical_enabled`, `peanutgallery_enabled`, `persona_enabled`.
 - `ScheduledJobsConfig` — Background job cadences: extraction retry sweep hours, scheduled-job monitor timeout, temporal/bulk score recalc use-days, portrait synthesis use-days, entity merge use-days. All operational knobs.
 - `MemoryCuratorConfig` — Memory-graph curation agent: `enabled` plus floor-mode knobs (`floor_threshold`, `floor_unseen_days`, `floor_sample_size`, `floor_use_days`).
 - `LatticeConfig` — Federation subsystem: `enabled` opt-in flag (default false; when true, missing lattice package aborts startup fail-fast instead of degrading silently) plus service coordinates (`service_url`, `timeout`).
-- `SidebarDispatcherConfig` — Sidebar agent: `enabled`, poll interval, max concurrent agents.
+- `SidebarDispatcherConfig` — Sidebar agent: `enabled`, poll interval, max concurrent agents, plus wall-clock agent timeouts (`agent_timeout_seconds`, `agent_iteration_timeout_seconds`, and per-agent `agent_timeout_overrides` keyed by lowercased class name with the 'Agent' suffix stripped).
 - `InboxToolConfig` — Inbox poller tool defaults (`enabled`, `inbox_path`).
+- `LtMemoryConfig` — LT_Memory ML-tuning knobs: SentenceTransformer `embeddings_batch_size`, spaCy `ner_batch_size`, `proactive_search_workers`, and `entity_merge_candidate_limit` (pg_trgm duplicate-candidate pairs per merge sweep).
 
 ## Where Algorithm Constants Live
 
 Algorithm tuning constants were moved from config.py to their consumer modules:
-- `lt_memory/proactive.py` — surfacing thresholds, link weights, debut boost, context window caps
+- `lt_memory/proactive.py` — surfacing thresholds, link weights, debut boost, context window caps (operational search worker count and pool/thread sizes moved INTO `config.lt_memory`/`config.worker_pools`)
 - `lt_memory/hybrid_search.py` — intent weights, RRF k, search defaults
 - `lt_memory/linking.py` — link discovery thresholds, TF-IDF settings
 - `lt_memory/processing/memory_processor.py` — dedup thresholds
@@ -38,7 +43,7 @@ Algorithm tuning constants were moved from config.py to their consumer modules:
 
 ## Files
 
-- `config.py` — Pydantic schema definitions for the 8 config models. No logic, no side effects.
+- `config.py` — Pydantic schema definitions for the 13 config models. No logic, no side effects.
 - `config_manager.py` — `AppConfig` (root aggregate), `initialize_config()`, and the `config` singleton. Owns Vault property lookups plus context-aware per-user tool-config resolution.
 - `__init__.py` — Re-exports `config` and `AppConfig`; enforces registry-before-config import order.
 - `system_prompt.txt` — Mira's core identity prompt. Section order is semantics: foundational identity appears before behavioral directives because earlier tokens condition interpretation of later ones.

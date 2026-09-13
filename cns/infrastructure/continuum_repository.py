@@ -70,7 +70,7 @@ def get_continuum_repository() -> 'ContinuumRepository':
     """
     Get or create singleton ContinuumRepository instance.
 
-    Following the pattern from clients/valkey_client.py and utils/bge_embeddings.py,
+    Following the same module-singleton pattern as clients/valkey_client.py,
     this ensures we reuse the same repository instance and its database connection pool.
 
     Returns:
@@ -95,7 +95,7 @@ class ContinuumRepository:
         """Initialize repository."""
         self._db_cache = {}
         
-    def _get_client(self, user_id: str) -> PostgresClient:
+    def get_user_db_client(self, user_id: str) -> PostgresClient:
         """Get or create database client for user."""
         if user_id not in self._db_cache:
             self._db_cache[user_id] = PostgresClient("mira_service", user_id=user_id)
@@ -112,7 +112,7 @@ class ContinuumRepository:
             Most recent continuum or None if no continuums exist
         """
         try:
-            db = self._get_client(user_id)
+            db = self.get_user_db_client(user_id)
             
             # Get most recent continuum
             existing = db.execute_query(
@@ -163,7 +163,7 @@ class ContinuumRepository:
             
             # Persist to database
             now = utc_now()
-            db = self._get_client(user_id)
+            db = self.get_user_db_client(user_id)
             db.execute_query(
                 """
                 INSERT INTO continuums (id, user_id, created_at, updated_at, metadata)
@@ -202,7 +202,7 @@ class ContinuumRepository:
                 logger.error(f"Blocking empty {message.role} message for continuum {continuum_id}")
                 raise ValueError(f"Cannot save empty {message.role} message to database")
 
-            db = self._get_client(user_id)
+            db = self.get_user_db_client(user_id)
 
             # Convert continuum_id to UUID if it's a string
             if isinstance(continuum_id, str):
@@ -382,7 +382,7 @@ class ContinuumRepository:
                     logger.error(f"Blocking empty {message.role} message for continuum {continuum_id}")
                     raise ValueError(f"Cannot save empty {message.role} message to database")
 
-            db = self._get_client(user_id)
+            db = self.get_user_db_client(user_id)
 
             # Convert continuum_id to UUID if it's a string
             if isinstance(continuum_id, str):
@@ -525,7 +525,7 @@ class ContinuumRepository:
                 'system_notification': 'true'
             }, limit=3)
         """
-        db = self._get_client(user_id)
+        db = self.get_user_db_client(user_id)
         
         # Build query with metadata filters
         where_conditions = ["continuum_id = %s"]
@@ -569,7 +569,7 @@ class ContinuumRepository:
         except (IndexError, ValueError) as exc:
             raise ValueError("Malformed tool result identifier") from exc
 
-        db = self._get_client(user_id)
+        db = self.get_user_db_client(user_id)
         rows = db.execute_query(
             """
             SELECT content
@@ -624,7 +624,7 @@ class ContinuumRepository:
         Returns:
             Dictionary with messages, pagination info, and metadata
         """
-        db = self._get_client(user_id)
+        db = self.get_user_db_client(user_id)
         
         # Build query with optional date filtering
         where_conditions = ["user_id = %s"]
@@ -698,7 +698,7 @@ class ContinuumRepository:
         Args:
             continuum: Continuum with updated metadata
         """
-        db = self._get_client(continuum.user_id)
+        db = self.get_user_db_client(continuum.user_id)
 
         db.execute_query(
             """
@@ -729,7 +729,7 @@ class ContinuumRepository:
         Returns:
             Active or paused segment sentinel, or None
         """
-        db = self._get_client(user_id)
+        db = self.get_user_db_client(user_id)
 
         query = """
             SELECT * FROM messages
@@ -769,7 +769,7 @@ class ContinuumRepository:
         Returns:
             IncrementSegmentTurnResult with turn_number and segment_id.
         """
-        db = self._get_client(user_id)
+        db = self.get_user_db_client(user_id)
 
         # Atomically increment turn count, ensure status is 'active', and stamp
         # last_turn_at. Matches both 'active' and 'paused' segments — a paused
@@ -823,7 +823,7 @@ class ContinuumRepository:
         Returns:
             True if segment was paused, False if no active segment found
         """
-        db = self._get_client(user_id)
+        db = self.get_user_db_client(user_id)
 
         query = """
             UPDATE messages
@@ -854,7 +854,7 @@ class ContinuumRepository:
         Returns:
             True if segment was unpaused, False if no paused segment found
         """
-        db = self._get_client(user_id)
+        db = self.get_user_db_client(user_id)
 
         query = """
             UPDATE messages
@@ -885,7 +885,7 @@ class ContinuumRepository:
         Returns:
             List of collapsed segment sentinels in chronological order (oldest first)
         """
-        db = self._get_client(user_id)
+        db = self.get_user_db_client(user_id)
 
         query = """
             SELECT * FROM messages
@@ -921,7 +921,7 @@ class ContinuumRepository:
         Returns:
             Segment sentinel or None
         """
-        db = self._get_client(user_id)
+        db = self.get_user_db_client(user_id)
 
         query = """
             SELECT * FROM messages
@@ -947,7 +947,7 @@ class ContinuumRepository:
         Returns:
             List of segment sentinels ordered by creation time (newest first)
         """
-        db = self._get_client(user_id)
+        db = self.get_user_db_client(user_id)
 
         query = """
             SELECT
@@ -978,7 +978,7 @@ class ContinuumRepository:
         Returns:
             List of dicts with segment_id, message_id, and extraction_attempts
         """
-        db = self._get_client(user_id)
+        db = self.get_user_db_client(user_id)
 
         query = """
             SELECT id, metadata
@@ -1012,9 +1012,9 @@ class ContinuumRepository:
         """
         Find all active segments across all users (admin query for timeout service).
 
-        Joined against `users` with `is_active = TRUE` (plan §6.3.8): the
-        sweep runs on the BYPASSRLS admin pool, so without the predicate it
-        would keep collapsing segments belonging to deactivated accounts.
+        Joined against `users` with `is_active = TRUE`: the sweep runs on
+        the BYPASSRLS admin pool, so without the predicate it would keep
+        collapsing segments belonging to deactivated accounts.
         Columns are qualified because the JOIN makes `id`/`user_id`/
         `created_at` ambiguous.
 
@@ -1065,7 +1065,7 @@ class ContinuumRepository:
         Returns:
             List of messages in chronological order (excludes boundaries and system notifications)
         """
-        db = self._get_client(user_id)
+        db = self.get_user_db_client(user_id)
 
         query = """
             SELECT * FROM messages
@@ -1093,7 +1093,7 @@ class ContinuumRepository:
         notifications, and any compaction synopsis scaffolding. It returns the
         raw persisted messages in chronological order.
         """
-        db = self._get_client(user_id)
+        db = self.get_user_db_client(user_id)
 
         query = """
             SELECT *
@@ -1134,7 +1134,7 @@ class ContinuumRepository:
         Returns:
             Last N user/assistant message pairs in chronological order
         """
-        db = self._get_client(user_id)
+        db = self.get_user_db_client(user_id)
 
         # Get messages before the most recent collapsed segment's end time
         # Request 4x turn_count to ensure we have enough messages to find complete pairs

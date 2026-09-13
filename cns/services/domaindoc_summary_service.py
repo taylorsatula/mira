@@ -10,7 +10,7 @@ stored summaries - no separate index storage needed.
 import logging
 from typing import Optional
 
-from clients.llm_provider import LLMProvider
+from clients.llm_provider import LLMProvider, get_llm_provider
 from utils.userdata_manager import UserDataManager
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ def _get_llm_provider() -> LLMProvider:
     """Get or create the LLM provider singleton."""
     global _llm_provider
     if _llm_provider is None:
-        _llm_provider = LLMProvider()
+        _llm_provider = get_llm_provider()
     return _llm_provider
 
 

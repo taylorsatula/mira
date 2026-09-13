@@ -12,7 +12,7 @@ Core principles:
 import json
 import os
 import logging
-from typing import Optional, Dict, Any, TypedDict
+from typing import Optional, Dict, TypedDict
 import hvac
 from hvac.exceptions import VaultError, InvalidPath, Unauthorized, Forbidden
 

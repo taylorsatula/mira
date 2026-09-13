@@ -15,7 +15,6 @@ different trinket), and exits.
 import json
 import logging
 import re
-import sqlite3
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Literal, TYPE_CHECKING
@@ -25,9 +24,11 @@ from clients.llm.tool_messages import (
     append_tool_result_messages,
     assistant_message_from_result,
 )
-from clients.llm.types import Result, ToolCall, ToolResult
-from clients.llm_provider import LLMProvider
+from clients.llm.types import ToolCall, ToolResult
+from clients.llm_provider import LLMProvider, get_llm_provider
 from utils.timezone_utils import utc_now, format_utc_iso
+
+from config import config
 
 _OVERWATCH_SYSTEM_PROMPT = (
     "You produce one-sentence research progress log entries. "
@@ -79,14 +80,6 @@ ACTIVITY_INDEX_DDL = """\
 CREATE INDEX IF NOT EXISTS idx_activity_interface
 ON sidebar_activity(interface_name)"""
 
-# Migration for sidebar_activity tables created before 2026-04-05 (commit
-# c375367f added run_count to the DDL above). Retire when: (a) the schema-
-# version table TODO in utils/userdata_manager.py:110 lands, OR (b) all
-# userdata.db files in production have been audited to confirm run_count
-# exists.
-_ACTIVITY_MIGRATION_RUN_COUNT = """\
-ALTER TABLE sidebar_activity ADD COLUMN run_count INTEGER NOT NULL DEFAULT 1"""
-
 # Scratchpad schema -- used by sidebar_tool for working notes between agent
 # iterations, and cleaned up by SidebarDispatcher._maybe_cleanup().
 SCRATCHPAD_TABLE_DDL = """\
@@ -103,19 +96,14 @@ ON scratchpad(thread_id)"""
 
 
 def ensure_activity_schema(db) -> None:
-    """Create sidebar_activity + scratchpad tables and apply pending migrations.
+    """Create sidebar_activity + scratchpad tables.
 
-    Safe to call repeatedly -- CREATE IF NOT EXISTS handles existing
-    tables, and the ALTER is caught only for "column already exists".
+    Safe to call repeatedly -- CREATE IF NOT EXISTS handles existing tables.
     """
     db.execute(ACTIVITY_TABLE_DDL)
     db.execute(ACTIVITY_INDEX_DDL)
     db.execute(SCRATCHPAD_TABLE_DDL)
     db.execute(SCRATCHPAD_INDEX_DDL)
-    try:
-        db.execute(_ACTIVITY_MIGRATION_RUN_COUNT)
-    except sqlite3.OperationalError:
-        pass  # Column already exists
 
 
 # -----------------------------------------------------------------------
@@ -199,11 +187,18 @@ class SidebarAgent(ABC):
         self._work_item: 'WorkItem | None' = None
         self._event_bus: 'EventBus | None' = None
 
+        # Wall-clock timeouts resolved from config: per-agent override keyed by
+        # class name (ForageAgent -> 'forage'), falling back to the shared default.
+        dispatcher_config = config.sidebar_dispatcher
+        agent_key = type(self).__name__.removesuffix("Agent").lower()
+        self.timeout_seconds = dispatcher_config.agent_timeout_overrides.get(
+            agent_key, dispatcher_config.agent_timeout_seconds
+        )
+        self.iteration_timeout_seconds = dispatcher_config.agent_iteration_timeout_seconds
+
     # Optional -- subclasses override as needed
     inherit_base_prompt: bool = True
     max_iterations: int = 5
-    timeout_seconds: int = 120
-    iteration_timeout_seconds: int = 45
     sanitize_untrusted_input: bool = False
     max_retries: int = 0  # 0 = fire-and-forget, no retry on failure
 
@@ -318,7 +313,7 @@ class SidebarAgent(ABC):
         """Overwatch thread body — one-shot LLM call, then publish summary."""
         try:
             assert self.overwatch_model_config_name is not None
-            llm = LLMProvider()
+            llm = get_llm_provider()
             task_context = self.get_overwatch_context(work_item)
             prompt = _build_overwatch_prompt(
                 task_context, iteration, self.max_iterations,
@@ -422,7 +417,7 @@ class SidebarAgent(ABC):
 
             assert self.sentry_model_config_name is not None
             sentry_cfg = get_model_config(self.sentry_model_config_name)
-            llm = LLMProvider()
+            llm = get_llm_provider()
             message = self.build_sentry_message(work_item)
             response = llm.generate_response(
                 messages=[{"role": "user", "content": message}],
@@ -672,7 +667,7 @@ class SidebarAgent(ABC):
 
         assert self._trace is not None
         llm_cfg = get_model_config(self.model_config_name)
-        llm = LLMProvider()
+        llm = get_llm_provider()
         self._trace['model'] = llm_cfg.model
         return llm, llm_cfg
 

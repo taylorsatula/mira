@@ -116,11 +116,10 @@ class WorkingMemory:
             "{relative time since account creation}", duration
         )
 
-        # Resolve the fixed chat substrate. 2.0 removed per-user model
-        # switching, so this is stable for the lifetime of the route table.
-        # {model_name} carries the route label rather than a tier description:
-        # ModelConfig has no description field, and the route is the
-        # operator-facing name the tier used to be.
+        # Resolve the fixed chat substrate; per-user model switching is not a
+        # feature, so this is stable for the lifetime of the route table.
+        # {model_name} carries the route label: ModelConfig has no
+        # description field, and the route name is the operator-facing label.
         from utils.user_context import get_model_config
         llm_config = get_model_config("primary")
         personalized_prompt = personalized_prompt.replace("{model_id}", llm_config.model)

@@ -7,7 +7,6 @@ for type safety. Uses raw SQL for performance and clarity.
 import logging
 import json
 from contextlib import contextmanager
-from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from uuid import UUID
@@ -20,12 +19,15 @@ from lt_memory.models import (
     UserMemorySettings,
     MemoryPageResult,
     EntityPairRow,
+    Entity,
 )
 
 from utils.timezone_utils import utc_now, format_utc_iso
 from utils.user_context import get_current_user_id
 from utils.tag_parser import parse_memory_id
 from utils.database_session_manager import LTMemorySessionManager, LTMemorySession
+
+from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -450,10 +452,9 @@ class LTMemoryDB:
 
     # ==================== SEARCH & RETRIEVAL ====================
 
-    # TODO(taylor): The UNION queries below were written during a period when
-    # Anthropic lobotomized Opus 4.5. Revisit this code when Opus is at full
-    # brainpower - there may be a cleaner approach (e.g., a compatibility VIEW
-    # for global_memories that adds default columns, allowing SELECT * in UNION).
+    # The UNION queries below use explicit column lists; a compatibility VIEW
+    # over global_memories that adds default columns could allow SELECT *
+    # branches instead. Consider if these queries are ever restructured.
 
     def search_similar(
         self,
@@ -864,10 +865,6 @@ class LTMemoryDB:
         """
         resolved_user_id = self._resolve_user_id(user_id)
 
-        # Get current activity days for scoring
-        from utils.user_context import get_user_cumulative_activity_days
-        current_activity_days = get_user_cumulative_activity_days()
-
         with self.session_manager.get_session(resolved_user_id) as session:
             # Query temporal memories within relevant windows
             temporal_query = """
@@ -1121,9 +1118,9 @@ class LTMemoryDB:
             WHERE a.is_archived = FALSE AND b.is_archived = FALSE
               AND similarity(a.name, b.name) > %(threshold)s
             ORDER BY sim DESC
-            LIMIT 500
+            LIMIT %(limit)s
             """
-            return session.execute_query(query, {'threshold': similarity_threshold})
+            return session.execute_query(query, {'threshold': similarity_threshold, 'limit': config.lt_memory.entity_merge_candidate_limit})
 
     def get_or_create_entity(
         self,
@@ -1131,7 +1128,7 @@ class LTMemoryDB:
         entity_type: str,
         user_id: Optional[str] = None,
         similarity_threshold: float = 0.3
-    ) -> 'Entity':
+    ) -> Entity:
         """
         Get existing entity or create new one using fuzzy name matching.
 
@@ -1150,8 +1147,6 @@ class LTMemoryDB:
         Returns:
             Entity model (existing or newly created)
         """
-        from lt_memory.models import Entity
-
         resolved_user_id = self._resolve_user_id(user_id)
 
         with self.session_manager.get_session(resolved_user_id) as session:
@@ -1316,9 +1311,8 @@ class LTMemoryDB:
         self,
         entity_id: UUID,
         user_id: Optional[str] = None
-    ) -> Optional['Entity']:
+    ) -> Optional[Entity]:
         """Fetch an entity by ID (None if not found)."""
-        from lt_memory.models import Entity
 
         resolved_user_id = self._resolve_user_id(user_id)
 

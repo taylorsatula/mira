@@ -154,7 +154,6 @@ def initialize_async_work_barrier() -> AsyncWorkBarrier:
 
 def get_async_work_barrier() -> AsyncWorkBarrier:
     """Get the global async work barrier instance."""
-    global _barrier
     if _barrier is None:
         raise RuntimeError(
             "Async work barrier not initialized. "

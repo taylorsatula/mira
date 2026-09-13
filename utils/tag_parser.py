@@ -239,9 +239,6 @@ class TagParser:
         preserve_tags = preserve_tags or []
 
         if preserve_tags:
-            # Build pattern to match all tags EXCEPT preserved ones
-            preserve_pattern = '|'.join(re.escape(tag) for tag in preserve_tags)
-
             # Remove paired mira tags that are NOT in preserve list
             text = re.sub(
                 r'<mira:([^>\/\s]+)(?:\s[^>]*)?>[\s\S]*?</mira:\1>',

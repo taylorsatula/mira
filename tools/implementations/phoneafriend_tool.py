@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from clients.llm_provider import LLMProvider
+from clients.llm_provider import LLMProvider, get_llm_provider
 from tools.registry import registry
 from tools.repo import Tool
 from utils.timezone_utils import format_utc_iso, utc_now
@@ -40,7 +40,7 @@ Do not claim access to hidden context. Name uncertainty directly when the inquir
 
 OUTSIDE_MODEL_ROLE = "an independent outside voice with a broad understanding of the world"
 
-# Route `other` is the single outside-model route (D14). The tool no longer
+# Route `other` is the single outside-model route. The tool no longer
 # offers a model choice: both of the voices it used to expose collapse onto
 # this one route, so a `model_choice` parameter would let the calling model
 # reason about a distinction that the contract cannot honour.
@@ -122,7 +122,7 @@ class PhoneAFriendTool(Tool):
         messages = thread["messages"]
         messages.append({"role": "user", "content": inquiry})
 
-        llm_provider = self.llm_provider or LLMProvider()
+        llm_provider = self.llm_provider or get_llm_provider()
         response = llm_provider.generate_response(
             messages=list(messages),
             model_config=OUTSIDE_MODEL_CONFIG,

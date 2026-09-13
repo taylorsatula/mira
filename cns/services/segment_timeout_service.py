@@ -188,21 +188,16 @@ class SegmentTimeoutService:
         inactive_duration = current_time - end_time
         inactive_minutes = inactive_duration.total_seconds() / 60
 
-        # Use single timeout threshold (3 hours)
+        # Time-of-day aware staleness threshold, evaluated in the segment
+        # owner's local time. Optional per-window overrides fall back to the
+        # base segment_timeout when unset.
         threshold = config.system.segment_timeout
-
-        # NOTE: Time-of-day aware thresholds can be re-enabled if needed:
-        # user_id = segment['user_id']
-        # user_tz = self._get_user_timezone(user_id)
-        # local_time = convert_from_utc(current_time, user_tz)
-        # local_hour = local_time.hour
-        #
-        # if 6 <= local_hour <= 9:
-        #     threshold = config.system.segment_timeout_morning
-        # elif 23 <= local_hour or local_hour <= 6:
-        #     threshold = config.system.segment_timeout_late_night
-        # else:
-        #     threshold = config.system.segment_timeout_normal
+        user_tz = self._get_user_timezone(segment['user_id'])
+        local_hour = convert_from_utc(current_time, user_tz).hour
+        if 6 <= local_hour <= 9:
+            threshold = config.system.segment_timeout_morning or threshold
+        elif 23 <= local_hour or local_hour <= 6:
+            threshold = config.system.segment_timeout_late_night or threshold
 
         # Check if timeout exceeded
         timed_out = inactive_minutes >= threshold

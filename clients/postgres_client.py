@@ -16,6 +16,8 @@ from contextlib import contextmanager
 from typing import Dict, List, Any, Optional, Set, Tuple, TypedDict, Union
 from urllib.parse import urlparse
 
+from config import config
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -143,8 +145,8 @@ class PostgresClient:
                 try:
                     pool = ConnectionPool(
                         conninfo=self._conninfo,
-                        min_size=3,
-                        max_size=30,
+                        min_size=config.database.pool_min,
+                        max_size=config.database.pool_max,
                         timeout=30,
                         max_lifetime=3600,  # Recycle connections after 1 hour
                         max_idle=300        # Close idle connections after 5 minutes

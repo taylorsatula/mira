@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
-from clients.llm_provider import LLMProvider
+from clients.llm_provider import LLMProvider, get_llm_provider
 from cns.core.message import Message, preprocess_content_blocks
 from cns.infrastructure.persona_repository import (
     PersonaRepository,
@@ -54,7 +54,7 @@ class PersonaService:
         llm_provider: LLMProvider | None = None,
     ) -> None:
         self.repository = repository or PersonaRepository()
-        self.llm = llm_provider or LLMProvider()
+        self.llm = llm_provider or get_llm_provider()
         self._evaluation_system = load_prompt("persona_evaluation_system.txt")
         self._evaluation_user = load_prompt("persona_evaluation_user.txt")
         self._refinement_system = load_prompt("persona_refinement_system.txt")
@@ -379,10 +379,10 @@ class PersonaService:
         from clients.valkey_client import get_valkey_client
         from working_memory.trinkets.base import TRINKET_KEY_PREFIX
 
-        # Field name is Persona's own slot. Upstream invalidates
-        # "behavioral_directives" because crm_mira deleted the user model and took over
-        # its slot; here that field belongs to LoraTrinket, and clearing it would drop
-        # the user model's cached section while leaving stale Persona directives.
+        # Persona owns its own slot (see the PersonaTrinket docstring); the
+        # "behavioral_directives" field belongs to LoraTrinket, and clearing it
+        # would drop the user model's cached section while leaving stale Persona
+        # directives.
         get_valkey_client().hdel_with_retry(
             f"{TRINKET_KEY_PREFIX}:{user_id}",
             "persona_directives",

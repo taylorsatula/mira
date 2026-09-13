@@ -10,7 +10,7 @@ import json
 import logging
 import pkgutil
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Any, Set, Type, Union, get_args, get_origin
+from typing import Dict, List, Any, Set, Type, Union, get_args, get_origin
 from pathlib import Path
 
 from pydantic import BaseModel, create_model
@@ -21,44 +21,67 @@ from clients.llm.types import ToolDefinition
 from tools.registry import registry
 
 
-def coerce_to_int(value: Any, param_name: str) -> Optional[int]:
+def _coerce_to_schema_type(param_name: str, value: Any, prop_spec: Dict[str, Any], tool_name: str, logger) -> Any:
     """
-    Coerce a value to int, handling LLM quirks like sending [10] instead of 10.
+    Coerce one LLM-supplied tool argument to its declared input_schema type.
 
-    Shared utility for tools that receive numeric params as strings from JSON parsing.
-
-    Args:
-        value: The value to coerce (may be int, list, str, float, or None)
-        param_name: Parameter name for error messages
-
-    Returns:
-        Integer value or None if input was None
-
-    Raises:
-        ValueError: If value cannot be coerced to int
+    Properly formed values pass through silently. Repairable mutations
+    ("10" -> 10, [10] -> 10, "true" -> True) are applied with a warning so
+    callers emitting malformed arguments stay visible in the logs instead of
+    being silently repaired at N tool sites. Values that cannot be repaired
+    raise ValueError naming the tool and parameter.
     """
-    if value is None:
-        return None
+    declared = prop_spec.get('type')
+    if value is None or not declared:
+        return value
 
-    # Handle list with single element (LLM quirk)
-    if isinstance(value, (list, tuple)):
-        if len(value) == 1:
-            value = value[0]
-        else:
-            raise ValueError(f"{param_name} must be a single integer, got list with {len(value)} elements")
+    mutated = isinstance(value, list) and len(value) == 1
+    coerced = value[0] if mutated else value
 
-    # Handle string numbers
-    if isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            raise ValueError(f"{param_name} must be an integer, got string '{value}'")
+    try:
+        if declared == 'integer':
+            if isinstance(coerced, bool):
+                coerced, mutated = int(coerced), True
+            elif not isinstance(coerced, int):
+                coerced, mutated = int(str(coerced).strip()), True
+        elif declared == 'number':
+            if isinstance(coerced, bool):
+                coerced, mutated = float(coerced), True
+            elif not isinstance(coerced, (int, float)):
+                coerced, mutated = float(str(coerced).strip()), True
+        elif declared == 'boolean':
+            if not isinstance(coerced, bool):
+                if isinstance(coerced, str) and coerced.strip().lower() in ('true', 'false'):
+                    coerced, mutated = coerced.strip().lower() == 'true', True
+                elif coerced in (0, 1):
+                    coerced, mutated = bool(coerced), True
+                else:
+                    raise ValueError(coerced)
+        elif declared == 'string':
+            if not isinstance(coerced, str):
+                if isinstance(coerced, (int, float, bool)):
+                    coerced, mutated = str(coerced), True
+                else:
+                    raise ValueError(coerced)
+        elif declared == 'array':
+            if not isinstance(coerced, list):
+                if isinstance(coerced, (str, int, float, bool)):
+                    coerced, mutated = [coerced], True
+                else:
+                    raise ValueError(coerced)
+        # Any other declared type ('object', custom formats) passes through.
+    except (ValueError, TypeError):
+        raise ValueError(
+            f"Tool '{tool_name}' parameter '{param_name}' cannot be coerced to declared type "
+            f"'{declared}': got {value!r}"
+        )
 
-    # Handle numeric types
-    if isinstance(value, (int, float)):
-        return int(value)
-
-    raise ValueError(f"{param_name} must be an integer, got {type(value).__name__}")
+    if mutated:
+        logger.warning(
+            "Tool '%s' param '%s': coerced %r to %r (schema declares '%s')",
+            tool_name, param_name, value, coerced, declared
+        )
+    return coerced
 
 
 def get_config():
@@ -411,8 +434,8 @@ class ToolRepository:
 
                     # Inject known dependency types
                     if annotation_name in ('LLMBridge', 'LLMProvider'):
-                        from clients.llm_provider import LLMProvider
-                        dependencies[param_name] = LLMProvider()
+                        from clients.llm_provider import get_llm_provider
+                        dependencies[param_name] = get_llm_provider()
                     elif annotation_name == 'ToolRepository':
                         dependencies[param_name] = self
                     elif annotation_name == 'WorkingMemory':
@@ -491,14 +514,17 @@ class ToolRepository:
             sorted(params.keys())
         )
 
-        # TODO: Add type coercion layer here based on tool's tool_schema.
-        # Currently, tools receive params as-is from JSON parsing, which means numeric
-        # values may arrive as strings (e.g., "10" instead of 10). Tools use
-        # coerce_to_int() for individual params. A unified solution would:
-        # 1. Read the tool's input_schema from tool_schema
-        # 2. Coerce each param to its declared type (integer, number, boolean, array)
-        # 3. Handle LLM quirks like [10] instead of 10 (single-element list unwrapping)
-        # This would eliminate per-param casting in every tool and centralize error handling.
+        # Coerce LLM-supplied arguments to each parameter's declared schema
+        # type. LLMs emit repairable garbage ("10" for 10, [10] for 10);
+        # coercion happens here, once, and every mutation logs a warning so
+        # repairable garbage stays visible instead of being silently repaired
+        # at N tool sites. Properly formed values pass through untouched.
+        if hasattr(tool, 'tool_schema'):
+            properties = tool.tool_schema.get('input_schema', {}).get('properties', {})
+            params = {
+                key: _coerce_to_schema_type(key, value, properties.get(key, {}), name, self.logger)
+                for key, value in params.items()
+            }
 
         try:
             result = tool.run(**params)

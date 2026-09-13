@@ -8,12 +8,12 @@ import logging
 import functools
 import threading
 import tempfile
-from typing import Any, Callable, Optional, Dict, Union
+from typing import Callable, Optional, Dict, Union
 
 from typing_extensions import TypedDict
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
-from utils.thread_monitor import ThreadMonitor, monitored_operation
+from utils.thread_monitor import ThreadMonitor
 from utils.timezone_utils import utc_now
 
 logger = logging.getLogger(__name__)

@@ -7,7 +7,7 @@ with turn-based TTL expiry.
 """
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Any, TypedDict
+from typing import Dict, Literal, Any, TypedDict
 from uuid import uuid4
 
 from working_memory.trinkets.base import StatefulTrinket

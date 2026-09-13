@@ -181,7 +181,7 @@ class ForageTrinket(StatefulTrinket):
             f'<result type="in_progress" task_id="{task_id}" query="{query}" '
             f'iteration="{iteration}/{max_iter}">\n'
             + "\n".join(lines) + "\n"
-            f"</result>"
+            "</result>"
         )
 
     def _format_pending(self, task_id: str, data: Dict[str, Any]) -> str:

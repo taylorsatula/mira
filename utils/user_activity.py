@@ -96,12 +96,6 @@ def increment_user_activity_day(user_id: str) -> int:
         # Update last login timestamp to reflect daily activity
         update_user_login(user_id)
 
-        # TODO: Add beginning-of-day actions here:
-        # - Morning summary generation
-        # - Daily notification triggers
-        # - Streak tracking
-        # - Time-of-day context updates
-
         # ========================================================================
 
         # New activity day - increment cumulative count

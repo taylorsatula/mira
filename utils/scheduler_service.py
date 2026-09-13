@@ -5,9 +5,6 @@ from dataclasses import dataclass
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.base import BaseTrigger
-from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
-from utils.timezone_utils import utc_now
 
 logger = logging.getLogger(__name__)
 

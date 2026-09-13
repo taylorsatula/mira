@@ -18,7 +18,7 @@ import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Literal, Set, Optional, TypedDict, TYPE_CHECKING
+from typing import List, Literal, Set, TypedDict, TYPE_CHECKING
 
 import json_repair
 

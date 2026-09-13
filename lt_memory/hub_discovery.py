@@ -184,8 +184,8 @@ class HubDiscoveryService:
         """
         Get memories linked to matched entities with per-entity cap.
 
-        Prevents explosion when an entity has many linked memories
-        (e.g., MIRA with 57+ memories). Takes first N per entity.
+        Prevents explosion when an entity has many linked memories.
+        Takes first N per entity.
 
         Args:
             entity_ids: Set of entity UUIDs

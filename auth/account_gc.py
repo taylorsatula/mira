@@ -30,7 +30,7 @@ class AccountGarbageCollectionService:
     accumulating in the database.
 
     The member branch is live in every deployment. The demo branch is inert
-    while no code path can mint a `subject_kind='demo'` row (decision D12);
+    while no code path can mint a `subject_kind='demo'` row;
     it exists so a hand-created or future demo row is still collected at its
     expiry rather than leaking.
     """

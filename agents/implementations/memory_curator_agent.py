@@ -26,6 +26,7 @@ from agents.base import SidebarAgent, load_agent_prompt
 from tools.implementations.memory_tool import CURATOR_MEMORY_SCHEMA
 
 if TYPE_CHECKING:
+    from cns.integration.event_bus import EventBus
     from agents.sidebar import WorkItem
     from tools.repo import ToolRepository
 
@@ -110,7 +111,6 @@ class MemoryCuratorAgent(SidebarAgent):
     # The rubric drives early complete_task; this ceiling is generous
     # enough for ~8 memories (multiple tool calls per turn).
     max_iterations = 8
-    timeout_seconds = 480
 
     # No sentry gate in v2 -- the floor trigger bounds volume via deterministic
     # SQL heuristics; the agent judges the surfaced items. No overwatch -- the

@@ -27,8 +27,11 @@ from utils.timezone_utils import (
     get_default_timezone,
     format_datetime, utc_now
 )
-from clients.sqlite_client import get_sqlite_client
-from clients.llm_provider import LLMProvider
+from clients.llm_provider import get_llm_provider
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from clients.lattice_client import LatticeIdentity
 
 # Define configuration class for PagerTool
 class PagerToolConfig(BaseModel):
@@ -280,7 +283,7 @@ class PagerTool(Tool):
     def __init__(self):
         """Initialize the pager tool with database access and LLM provider."""
         super().__init__()
-        self.llm = LLMProvider()
+        self.llm = get_llm_provider()
         
         # Initialize logger
         self.logger = logging.getLogger(__name__)
@@ -600,7 +603,7 @@ class PagerTool(Tool):
                 "device_fingerprint": device_fingerprint
             }
 
-            row_id = self.db.insert('pager_devices', device_data)
+            _ = self.db.insert('pager_devices', device_data)
             # Get the inserted row
             result = self.db.select('pager_devices', 'id = :pager_id', {'pager_id': pager_id})[0]
 
@@ -624,7 +627,7 @@ class PagerTool(Tool):
         Raises:
             ValueError: If Lattice service unavailable or not configured
         """
-        from clients.lattice_client import get_lattice_client, LatticeIdentity
+        from clients.lattice_client import get_lattice_client
         import httpx
 
         try:
@@ -811,7 +814,7 @@ class PagerTool(Tool):
             {'sender_id': sender_pager_id}
         )
         if not sender or not sender[0]['active']:
-            raise ValueError(f"Sender device not found or inactive")
+            raise ValueError("Sender device not found or inactive")
         sender = sender[0]
 
         # Verify device secret
@@ -846,7 +849,7 @@ class PagerTool(Tool):
         if location:
             try:
                 location_dict = json.loads(location) if isinstance(location, str) else location
-            except:
+            except Exception:
                 location_dict = {'raw': location}
 
         # Send via Lattice HTTP client
@@ -945,14 +948,14 @@ class PagerTool(Tool):
             {'sender_id': sender_id}
         )
         if not sender or not sender[0]['active']:
-            self.logger.error(f"Sender device not found or inactive")
-            raise ValueError(f"Sender device not found or inactive")
+            self.logger.error("Sender device not found or inactive")
+            raise ValueError("Sender device not found or inactive")
         sender = sender[0]
 
         # Verify device secret (optional but recommended)
         if device_secret and device_secret != sender['device_secret']:
-            self.logger.error(f"Invalid device secret")
-            raise ValueError(f"Invalid device secret")
+            self.logger.error("Invalid device secret")
+            raise ValueError("Invalid device secret")
 
         recipient_device = self.db.select(
             'pager_devices',
@@ -960,8 +963,8 @@ class PagerTool(Tool):
             {'recipient_id': recipient_pager_id}
         )
         if not recipient_device or not recipient_device[0]['active']:
-            self.logger.error(f"Recipient pager not found or inactive")
-            raise ValueError(f"Recipient pager not found or inactive")
+            self.logger.error("Recipient pager not found or inactive")
+            raise ValueError("Recipient pager not found or inactive")
         recipient_device = recipient_device[0]
             
         # Update sender's last active time
@@ -1019,7 +1022,7 @@ class PagerTool(Tool):
         
         # Save message to database
         try:
-            row_id = self.db.insert('pager_messages', message_data)
+            _ = self.db.insert('pager_messages', message_data)
             # Get the inserted message
             message_result = self.db.select('pager_messages', 'id = :message_id', {'message_id': message_id})[0]
             self.logger.info(f"Sent message with ID: {message_id}")
@@ -1216,7 +1219,7 @@ class PagerTool(Tool):
             
         # Update message
         read_at = utc_now().isoformat()
-        update_result = self.db.update(
+        _ = self.db.update(
             'pager_messages',
             {'read': 1, 'read_at': read_at},
             'id = :message_id',
@@ -1305,7 +1308,6 @@ class PagerTool(Tool):
         )
         if not devices:
             raise ValueError(f"Pager device '{pager_id}' not found")
-        device = devices[0]
             
         # Update device
         self.db.update(

@@ -19,6 +19,8 @@ from cns.infrastructure.valkey_message_cache import ToolResultCachePatch
 from cns.services.async_work_barrier import get_async_work_barrier
 from utils.user_context import get_current_user_id
 
+from config import config
+
 if TYPE_CHECKING:
     from cns.core.events import ToolResultHistoryCommittedEvent
     from cns.infrastructure.valkey_message_cache import ValkeyMessageCache
@@ -71,7 +73,7 @@ class ToolResultSummarizer:
         self._message_cache = message_cache
         self._barrier = get_async_work_barrier()
         self._executor = ThreadPoolExecutor(
-            max_workers=2,
+            max_workers=config.worker_pools.tool_result_summarizer_workers,
             thread_name_prefix="tool_summarizer",
         )
 

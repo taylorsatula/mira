@@ -30,24 +30,11 @@ import httpx
 # Re-export httpx exceptions so code doesn't need to change
 from httpx import (
     TimeoutException,
-    HTTPStatusError, 
+    HTTPStatusError,
     RequestError,
     ConnectError,
     ConnectTimeout,
-    ReadTimeout,
-    WriteTimeout,
-    PoolTimeout,
-    NetworkError,
-    ProtocolError,
-    ProxyError,
     Response,
-    Headers,
-    Cookies,
-    URL,
-    Timeout,
-    Limits,
-    HTTPTransport,
-    AsyncHTTPTransport,
 )
 
 logger = logging.getLogger("http_client")
@@ -121,7 +108,7 @@ class RetryMixin:
                 else:
                     raise
                     
-            except (TimeoutException, RequestError) as e:
+            except (TimeoutException, RequestError):
                 # Other errors are not retryable
                 raise
         

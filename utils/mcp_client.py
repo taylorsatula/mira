@@ -19,13 +19,7 @@ import asyncio
 from typing import Any, Callable, Dict, Optional, List, AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-import time
 import random
-
-try:
-    from builtins import BaseExceptionGroup  # type: ignore[attr-defined]
-except ImportError:  # pragma: no cover - Python < 3.11
-    BaseExceptionGroup = None  # type: ignore[assignment]
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
@@ -51,7 +45,7 @@ def _unwrap_exception(exc: Exception) -> Exception:
     visited = set()
 
     while True:
-        if BaseExceptionGroup and isinstance(current, BaseExceptionGroup):  # type: ignore[arg-type]
+        if isinstance(current, BaseExceptionGroup):
             exceptions = getattr(current, "exceptions", None)
             if exceptions:
                 current = exceptions[0]

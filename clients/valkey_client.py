@@ -8,7 +8,12 @@ Uses Vault for configuration with fail-fast semantics.
 import json
 import logging
 import time
-from typing import Any, Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional
+
+from config import config
+
+if TYPE_CHECKING:
+    import valkey
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +80,7 @@ class ValkeyClient:
         # Create thread-safe connection pool (like PostgresClient)
         if _valkey_pool is None:
             _valkey_pool = ConnectionPool(
-                max_connections=20,
+                max_connections=config.cache.max_connections,
                 **conn_params
             )
             logger.toast(f"Valkey connection pool created: {self.host}:{self.port} (max=20)")
@@ -102,18 +107,6 @@ class ValkeyClient:
         )
 
         logger.toast(f"Valkey client initialized: {self.host}:{self.port}")
-
-    @property
-    def valkey_available(self) -> bool:
-        """
-        Check if Valkey is available.
-
-        Always returns True - if ValkeyClient initialized successfully, Valkey is available.
-        ValkeyClient fails-fast at initialization if Valkey is unreachable.
-
-        This property exists for test compatibility.
-        """
-        return True
 
     @property
     def valkey_binary(self) -> "valkey.Valkey":

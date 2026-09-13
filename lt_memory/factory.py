@@ -17,7 +17,7 @@ from lt_memory.processing.extraction_engine import ExtractionEngine
 from lt_memory.processing.execution_strategy import create_execution_strategy
 from lt_memory.processing.orchestrator import ExtractionOrchestrator
 from lt_memory.processing.consolidation_handler import ConsolidationHandler
-from utils.database_session_manager import LTMemorySessionManager, get_shared_session_manager
+from utils.database_session_manager import LTMemorySessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +41,14 @@ class LTMemoryFactory:
         session_manager: LTMemorySessionManager,
         embeddings_provider,
         llm_provider,
-        conversation_repo
+        continuum_repo
     ):
         logger.info("Initializing LTMemoryFactory")
 
         self._session_manager = session_manager
         self._embeddings_provider = embeddings_provider
         self._llm_provider = llm_provider
-        self._conversation_repo = conversation_repo
+        self._continuum_repo = continuum_repo
 
         # Late-registered CNS callback: invoked by store_and_tend_extraction
         # after memories are stored, so the SegmentCollapseHandler (which owns
@@ -126,7 +126,7 @@ class LTMemoryFactory:
             self.extraction_orchestrator = ExtractionOrchestrator(
                 extraction_engine=self.extraction_engine,
                 execution_strategy=self.execution_strategy,
-                continuum_repo=self._conversation_repo,
+                continuum_repo=self._continuum_repo,
                 db=self.db,
             )
             self._service_init_order.append(self.extraction_orchestrator)
@@ -184,9 +184,9 @@ class LTMemoryFactory:
     def __repr__(self) -> str:
         """String representation for debugging."""
         return (
-            f"LTMemoryFactory(services=[db, vector_ops, linking, "
-            f"memory_processor, extraction_engine, execution_strategy, extraction_orchestrator, "
-            f"consolidation_handler, hub_discovery, proactive])"
+            "LTMemoryFactory(services=[db, vector_ops, linking, "
+            "memory_processor, extraction_engine, execution_strategy, extraction_orchestrator, "
+            "consolidation_handler, hub_discovery, proactive])"
         )
 
 
@@ -194,7 +194,7 @@ def get_lt_memory_factory(
     session_manager: LTMemorySessionManager = None,
     embeddings_provider = None,
     llm_provider = None,
-    conversation_repo = None,
+    continuum_repo = None,
     force_new: bool = False
 ) -> LTMemoryFactory:
     """
@@ -208,7 +208,7 @@ def get_lt_memory_factory(
         session_manager: Database session manager (required on first call)
         embeddings_provider: Embeddings provider (required on first call)
         llm_provider: LLM provider (required on first call)
-        conversation_repo: Continuum repository (required on first call)
+        continuum_repo: Continuum repository (required on first call)
         force_new: Force creation of a new instance (for testing)
 
     Returns:
@@ -226,11 +226,11 @@ def get_lt_memory_factory(
 
     if _lt_memory_factory_instance is None:
         if not all([session_manager, embeddings_provider,
-                    llm_provider, conversation_repo]):
+                    llm_provider, continuum_repo]):
             raise RuntimeError(
                 "First call to get_lt_memory_factory requires all arguments: "
                 "session_manager, embeddings_provider, llm_provider, "
-                "conversation_repo"
+                "continuum_repo"
             )
 
         logger.info("Creating new LTMemoryFactory singleton")
@@ -238,7 +238,7 @@ def get_lt_memory_factory(
             session_manager=session_manager,
             embeddings_provider=embeddings_provider,
             llm_provider=llm_provider,
-            conversation_repo=conversation_repo
+            continuum_repo=continuum_repo
         )
 
     return _lt_memory_factory_instance

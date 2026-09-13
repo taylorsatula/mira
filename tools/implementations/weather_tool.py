@@ -273,7 +273,7 @@ class ValidationUtils:
         # Check if parameter is a string
         if not isinstance(date_str, str):
             raise ValueError(
-                f"Date must be a string in ISO format (YYYY-MM-DD)",
+                "Date must be a string in ISO format (YYYY-MM-DD)",
                 {"date": date_str}
             )
             
@@ -687,9 +687,6 @@ class WeatherTool(Tool):
         self.logger.info(f"Running weather tool with operation: {operation}")
         
         try:
-            # Import config inside the method to avoid circular imports
-            from config import config
-            
             # Validate and resolve coordinates
             lat, lon = self._resolve_coordinates(latitude, longitude, location)
             forecast_type = ValidationUtils.validate_forecast_type(forecast_type)

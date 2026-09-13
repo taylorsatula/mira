@@ -7,17 +7,15 @@ Supports shared domaindocs via PostgreSQL domaindoc_shares table.
 """
 import json
 import logging
-from typing import Dict, Any, Optional, List, TYPE_CHECKING
+from typing import Dict, Any, Optional, List
 
 from pydantic import BaseModel, Field
 from tools.repo import Tool
 from tools.registry import registry
 from utils.timezone_utils import utc_now, format_utc_iso
 from utils.userdata_manager import UserDataManager
-from utils.domaindoc_shares import resolve_domaindoc, get_accepted_shares, invalidate_domaindoc_cache, ResolvedDomaindoc
+from utils.domaindoc_shares import resolve_domaindoc, get_accepted_shares, invalidate_domaindoc_cache
 
-if TYPE_CHECKING:
-    from working_memory.core import WorkingMemory
 
 logger = logging.getLogger(__name__)
 
@@ -615,7 +613,6 @@ class DomaindocTool(Tool):
         all_sections = [db._decrypt_dict(s) for s in all_sections]
 
         # Build section tree: top-level sections with nested subsections
-        section_by_id = {s["id"]: s for s in all_sections}
         section_tree: List[Dict[str, Any]] = []
 
         for sec in all_sections:

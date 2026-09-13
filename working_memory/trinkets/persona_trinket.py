@@ -12,10 +12,10 @@ from working_memory.trinkets.base import EventAwareTrinket
 class PersonaTrinket(EventAwareTrinket):
     """Render only the current immutable Persona revision's directives.
 
-    Occupies its own prompt slot, ``persona_directives``. Upstream reuses the
-    user model's ``behavioral_directives`` slot because crm_mira deleted the user
-    model; mira-OSS keeps both subsystems (D1), and the two trinkets share one
-    Valkey hash keyed by ``variable_name``, so they must not share a name.
+    Occupies its own prompt slot, ``persona_directives`` — separate from the
+    user model's ``behavioral_directives`` slot, which belongs to LoraTrinket.
+    Both trinkets share one Valkey hash keyed by ``variable_name``, so their
+    slot names must never collide.
     """
 
     variable_name = "persona_directives"

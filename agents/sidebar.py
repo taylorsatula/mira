@@ -86,7 +86,7 @@ class SidebarDispatcher:
         self,
         tool_repo: 'ToolRepository',
         event_bus: 'EventBus',
-        max_concurrent_agents: int = 3,
+        max_concurrent_agents: int,
     ):
         self.tool_repo = tool_repo
         self.event_bus = event_bus

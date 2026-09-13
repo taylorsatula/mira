@@ -10,7 +10,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from config.config_manager import config
-from clients.llm_provider import LLMProvider
+from clients.llm_provider import LLMProvider, get_llm_provider
 from working_memory.core import WorkingMemory
 from tools.repo import ToolRepository
 from utils.tag_parser import TagParser
@@ -35,10 +35,8 @@ logger = logging.getLogger(__name__)
 
 class CNSIntegrationFactory:
     """
-    Factory for initializing CNS with proper integration to existing MIRA components.
-    
-    Follows the same initialization patterns as system_initializer.py while providing
-    clean dependency injection for the CNS architecture.
+    Factory for initializing CNS with proper integration to existing MIRA components,
+    providing clean dependency injection for the CNS architecture.
     """
     
     def __init__(self, config_instance: object = None) -> None:
@@ -74,7 +72,8 @@ class CNSIntegrationFactory:
         logger.info("Initializing CNS with full MIRA component integration")
         
         # Initialize core services in dependency order
-        embedding_model = self._get_embedding_model()
+        # Pre-warm the singleton; the value itself is unused
+        _ = self._get_embedding_model()
         
         # Create event bus early as it's needed by working memory
         event_bus = self._get_event_bus()
@@ -112,9 +111,6 @@ class CNSIntegrationFactory:
         self._initialize_session_cache(continuum_repo, event_bus)
 
         # Initialize domain knowledge service with event bus and continuum pool
-        # Must be done after session cache initialization so continuum_pool exists
-        self._initialize_domain_knowledge_service(event_bus)
-
         # Initialize segment collapse handler with event bus
         self._initialize_segment_collapse_handler(event_bus)
 
@@ -171,7 +167,7 @@ class CNSIntegrationFactory:
         """Get or create LLM provider instance."""
         if self._llm_provider is None:
             logger.info("Initializing LLM provider")
-            self._llm_provider = LLMProvider()
+            self._llm_provider = get_llm_provider()
             logger.info("LLM provider initialized")
         return self._llm_provider
         
@@ -198,8 +194,8 @@ class CNSIntegrationFactory:
             from working_memory.trinkets.live_context_compaction_trinket import LiveContextCompactionTrinket
             from working_memory.trinkets.memory_curator_trinket import MemoryCuratorTrinket
 
-            # @CODEX: I feel like we could do away with these manual registrations if they're all going to do identical asks for ```event_bus, self._working_memory```. Thoughts?
-            # Trinkets self-register with working memory
+            # Registration order is deliberate; keep manual — no trinket
+            # auto-registration. Trinkets self-register with working memory.
             TimeManager(event_bus, self._working_memory)
             ReminderManager(event_bus, self._working_memory)
             LiveContextCompactionTrinket(
@@ -212,7 +208,7 @@ class CNSIntegrationFactory:
             ForageTrinket(event_bus, self._working_memory)
             WhileTheCatsAwayTrinket(event_bus, self._working_memory)
             LoraTrinket(event_bus, self._working_memory)
-            # D1: Persona is a second parallel system, not a replacement for the user
+            # Persona is a second parallel system, not a replacement for the user
             # model above. It renders its own slot, so both inject in one prompt.
             if self.config.system.persona_enabled:
                 PersonaTrinket(event_bus, self._working_memory)
@@ -282,8 +278,8 @@ class CNSIntegrationFactory:
         """Initialize session cache loader."""
         logger.info("Initializing session cache loader")
 
-        # Create summary generator
-        summary_generator = self._get_summary_generator()
+        # Create summary generator (pre-warms the singleton; the value itself is unused)
+        _ = self._get_summary_generator()
 
         # Create session cache loader
         self._session_cache_loader = SegmentCacheLoader(repository=continuum_repo)
@@ -347,21 +343,6 @@ class CNSIntegrationFactory:
                 llm_provider=llm_provider,
             )
         return self._live_context_compaction_service
-
-    def _initialize_domain_knowledge_service(self, event_bus: EventBus) -> None:
-        """
-        Initialize domain knowledge (domaindoc) system.
-
-        The domaindoc system uses:
-        - SQLite storage via UserDataManager (domaindocs + domaindoc_sections tables)
-        - Section-aware editing with expand/collapse and one-level subsection nesting
-        - Gated tool pattern (domaindoc_tool appears when domains are enabled)
-        - DomaindocTrinket for content injection
-        - API endpoint for lifecycle management (create/enable/disable/delete)
-
-        No service initialization needed - state is in per-user SQLite.
-        """
-        logger.info("Domaindoc system uses SQLite storage (no service initialization needed)")
 
     def _initialize_segment_collapse_handler(self, event_bus: EventBus) -> None:
         """
@@ -427,7 +408,8 @@ class CNSIntegrationFactory:
         from cns.services.manifest_query_service import initialize_manifest_query_service
 
         # Initialize service with event bus (singleton pattern)
-        manifest_service = initialize_manifest_query_service(event_bus=event_bus)
+        # Pre-warm the singleton; the value itself is unused
+        _ = initialize_manifest_query_service(event_bus=event_bus)
 
         logger.info("Manifest query service initialized and subscribed to ManifestUpdatedEvent")
 

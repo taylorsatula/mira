@@ -14,10 +14,11 @@ This module is pure data processing with no side effects.
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, NamedTuple, NotRequired, Optional, Tuple, TypedDict, Union
+from typing import Any, Dict, List, NamedTuple, Optional, TypedDict, Union
 from uuid import UUID
 
 from rapidfuzz import fuzz
+from json_repair import repair_json
 
 from lt_memory.models import ExtractedMemory, ExtractionResult, MemoryContext
 from lt_memory.vector_ops import VectorOps
@@ -291,12 +292,7 @@ class MemoryProcessor:
             logger.warning(f"JSON parsing failed: {e}")
             logger.debug(f"Response text (first 200 chars): {response_text[:200]!r}")
 
-            # Try json_repair (required dependency)
-            try:
-                from json_repair import repair_json
-            except ImportError:
-                raise ValueError(f"Invalid JSON response and json_repair unavailable: {e}")
-
+            # Try json_repair (required dependency, imported at module level)
             try:
                 repaired = repair_json(response_text)
 
@@ -525,7 +521,6 @@ class MemoryProcessor:
 
         # Stage 1: Fuzzy text matching (wider net than exact, cheaper than vector)
         if memory_context:
-            context_ids = memory_context.get("memory_ids", [])
             context_texts = memory_context.get("memory_texts", [])
 
             # Dict format: {uuid: text} — produced by extraction_engine.py

@@ -44,6 +44,7 @@ google-genai     # Google Gemini GenAI SDK - imagegen_tool.py
 kagiapi          # Kagi search API - web_tool.py (primary search provider)
 ddgs             # DuckDuckGo search - web_tool.py (fallback search provider)
 trafilatura      # Deterministic web content extraction - web_tool.py (replaces LLM extraction)
+beautifulsoup4   # Last-resort HTML text extraction - web_tool.py (_fallback_text_extract after trafilatura fails)
 hvac             # HashiCorp Vault client - vault_client.py
 
 # == BILLING & PAYMENTS ==

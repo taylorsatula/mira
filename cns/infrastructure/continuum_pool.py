@@ -258,7 +258,6 @@ def get_continuum_pool() -> ContinuumPool:
     Raises:
         RuntimeError: If pool has not been initialized
     """
-    global _continuum_pool
     if _continuum_pool is None:
         raise RuntimeError(
             "Continuum pool not initialized. Call initialize_continuum_pool() "

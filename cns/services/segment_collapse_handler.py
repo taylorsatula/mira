@@ -131,7 +131,7 @@ class SegmentCollapseHandler:
         continuum_pool: ContinuumPool,
         lt_memory_factory: LTMemoryFactory,
         tool_repo: 'ToolRepository',
-        persona_enabled: bool = True,
+        persona_enabled: bool,
     ):
         """
         Initialize collapse handler.
@@ -173,7 +173,7 @@ class SegmentCollapseHandler:
         self._synthesizer = None
         self._feedback_loop_initialized = False
 
-        # Persona is a second, parallel system (D1). Its service is built lazily like
+        # Persona is a second, parallel system. Its service is built lazily like
         # the feedback-loop components, but unlike them a disabled Persona is omitted
         # at construction by the factory rather than checked per collapse.
         self._persona_enabled = persona_enabled
@@ -318,7 +318,7 @@ class SegmentCollapseHandler:
             return tombstone
 
         # Increment attempt counter before expensive LLM call (persists to DB via jsonb_set)
-        db = self.continuum_repo._get_client(get_current_user_id())
+        db = self.continuum_repo.get_user_db_client(get_current_user_id())
         db.execute_returning("""
             UPDATE messages
             SET metadata = jsonb_set(metadata, '{collapse_attempts}', to_jsonb(%s))
@@ -405,8 +405,8 @@ class SegmentCollapseHandler:
         )
 
         # Evaluate MIRA behavior and refine Persona on the use-day cadence.
-        # Runs beside the user-model loop above, not instead of it (D1), and unlike
-        # it failures propagate: see _process_persona's docstring (D-3).
+        # Runs beside the user-model loop above, not instead of it, and unlike
+        # it failures propagate: see _process_persona's docstring.
         if self._persona_enabled:
             self._process_persona(
                 messages=messages,
@@ -478,7 +478,7 @@ class SegmentCollapseHandler:
             List of messages in segment
         """
         user_id = get_current_user_id()
-        db = self.continuum_repo._get_client(user_id)
+        db = self.continuum_repo.get_user_db_client(user_id)
 
         # Load messages after sentinel timestamp, excluding boundaries/system notifications
         query = """
@@ -565,7 +565,7 @@ class SegmentCollapseHandler:
                 "Segment summary generation failed; segment %s will remain active and retry",
                 sentinel.metadata.get('segment_id')
             )
-            raise RuntimeError(f"Segment collapse failed: summary generation error") from e
+            raise RuntimeError("Segment collapse failed: summary generation error") from e
 
     def _trigger_downstream_processing(
         self,
@@ -645,7 +645,6 @@ class SegmentCollapseHandler:
         from lt_memory.db_access import LTMemoryDB
         from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
         from utils.database_session_manager import get_shared_session_manager
-        from utils.tag_parser import parse_memory_id
 
         valkey = get_valkey_client()
 
@@ -1028,7 +1027,7 @@ class SegmentCollapseHandler:
         an already-collapsed segment; a Persona failure is instead propagated to
         handle_timeout's caller and counted toward the MAX_COLLAPSE_ATTEMPTS tombstone,
         so a persistent breakage surfaces loudly rather than silently stopping the
-        revision history from growing (D-3).
+        revision history from growing.
         """
         user_id = get_current_user_id()
         service = self._get_persona_service()
@@ -1100,7 +1099,6 @@ def get_segment_collapse_handler() -> SegmentCollapseHandler:
     Raises:
         RuntimeError: If handler not initialized (factory not run)
     """
-    global _collapse_handler_instance
     if _collapse_handler_instance is None:
         raise RuntimeError(
             "SegmentCollapseHandler not initialized. "

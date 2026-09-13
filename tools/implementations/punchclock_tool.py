@@ -17,6 +17,10 @@ from utils.timezone_utils import (
 from utils.user_context import get_current_user_id, get_user_preferences
 from utils.userdata_manager import get_user_data_manager
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from working_memory.core import WorkingMemory
+
 logger = logging.getLogger(__name__)
 
 

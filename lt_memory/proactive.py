@@ -19,8 +19,10 @@ import numpy as np
 
 from lt_memory.db_access import LTMemoryDB
 from lt_memory.linking import LinkingService
-from lt_memory.models import Memory, MemoryDict, TraversalResult
+from lt_memory.models import Memory, MemoryDict
 from lt_memory.vector_ops import VectorOps
+
+from config import config
 
 if TYPE_CHECKING:
     from lt_memory.hub_discovery import HubDiscoveryService
@@ -32,7 +34,6 @@ PROACTIVE_SIMILARITY_THRESHOLD = 0.42
 PROACTIVE_MAX_LINK_TRAVERSAL_DEPTH = 3
 PROACTIVE_MAX_MEMORIES = 10
 MIN_IMPORTANCE_SCORE = 0.1
-SEARCH_MAX_WORKERS = 2
 SEARCH_OVERSAMPLE_FACTOR = 2
 
 # Context window caps (cross-module: also imported by orchestrator, subcortical)
@@ -157,7 +158,7 @@ class ProactiveService:
             )
 
         # Execute both searches in parallel - each thread gets its own context copy
-        with ThreadPoolExecutor(max_workers=SEARCH_MAX_WORKERS) as executor:
+        with ThreadPoolExecutor(max_workers=config.lt_memory.proactive_search_workers) as executor:
             ctx_similarity = copy_context()
             ctx_hub = copy_context()
             similarity_future = executor.submit(ctx_similarity.run, _fetch_similarity_pool)

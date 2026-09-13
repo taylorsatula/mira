@@ -33,11 +33,11 @@ from .types import UserRecord, UserProfile, SessionData, CookieSettings
 logger = logging.getLogger(__name__)
 
 # Fixture identity for the auto-provisioned local account under `single`
-# mode (`GET /v0/auth/local/session`). Nothing here may carry a real person
-# into a distributed artifact (plan §11); `user@localhost` matches the row
-# pre-multi-user installs seeded, so an upgraded install adopts its existing
-# data instead of provisioning a second identity. The timezone is derived
-# from this install's configured default rather than hardcoded.
+# mode (`GET /v0/auth/local/session`). This must never adopt a real person's
+# identity; `user@localhost` matches the row pre-multi-user installs seeded,
+# so an upgraded install adopts its existing data instead of provisioning a
+# second identity. The timezone is derived from this install's configured
+# default rather than hardcoded.
 LOCAL_SESSION_EMAIL = "user@localhost"
 LOCAL_SESSION_FIRST_NAME = "Friend"
 LOCAL_SESSION_LAST_NAME: Optional[str] = None
@@ -504,9 +504,11 @@ class AuthService:
             raise AuthError("user_not_found", "User not found or inactive")
 
         # Enforce per-user token cap
+        from config import config
+        token_cap = config.auth.max_api_tokens_per_user
         existing_count = self.db.count_user_api_tokens(user_id)
-        if existing_count >= 50:
-            raise AuthError("too_many_tokens", "Token limit reached", {"limit": 50})
+        if existing_count >= token_cap:
+            raise AuthError("too_many_tokens", "Token limit reached", {"limit": token_cap})
 
         # Generate cryptographically secure token
         raw_token = secrets.token_urlsafe(32)

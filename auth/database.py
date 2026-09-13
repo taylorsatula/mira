@@ -1,7 +1,7 @@
 """
 Database operations for the lean auth system.
 
-Session discipline is the security contract of this module (plan §6.3.2):
+Session discipline is the security contract of this module:
 pre-authentication reads — user lookup, magic-link CRUD, API-token hash
 validation — run on the BYPASSRLS admin session because they happen before
 any user context exists, and post-authentication per-user token operations

@@ -17,8 +17,8 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
 from pgvector.psycopg import register_vector
 from clients.postgres_client import PostgresClient
+from config import config
 
-from utils.user_context import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -125,12 +125,12 @@ class LTMemorySessionManager:
                     # Industry best practice: keep pools small, let them queue
                     pool = ConnectionPool(
                         conninfo=conninfo,
-                        min_size=2,
-                        max_size=15,
+                        min_size=config.database.session_pool_min,
+                        max_size=config.database.session_pool_max,
                         timeout=30,
                         max_lifetime=3600,  # Recycle connections after 1 hour
                         max_idle=300,       # Close idle connections after 5 minutes
-                        kwargs={'options': '-c statement_timeout=300000'}  # 5 minute statement timeout
+                        kwargs={'options': f'-c statement_timeout={config.database.statement_timeout_ms}'}
                     )
 
                     self._pools[database_name] = pool

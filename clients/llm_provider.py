@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import signal
+import threading
 from collections.abc import Mapping as MappingABC
 from typing import Any, Generator
 
@@ -14,7 +15,6 @@ from clients.llm.events import (
     StreamEvent,
 )
 from clients.llm.dialects.base import Dialect, ProviderContextOverflowError
-from clients.llm.dialects.anthropic import AnthropicDialect
 from clients.llm.dialect_registry import get_registry
 from clients.llm.capabilities import Requirements
 from clients.llm.lifecycle import LLMLifecycle
@@ -32,6 +32,25 @@ from clients.llm.types import (
 from utils.llm_tap import toggle as _toggle_traffic_tap
 
 signal.signal(signal.SIGUSR1, _toggle_traffic_tap)
+
+
+_shared_llm_provider: LLMProvider | None = None
+_shared_llm_provider_lock = threading.Lock()
+
+
+def get_llm_provider() -> LLMProvider:
+    """Return the process-wide shared LLMProvider, constructing it once on first use.
+
+    This is the single construction point for LLMProvider in application code.
+    Construction failures propagate to the caller — LLMProvider is required
+    infrastructure (fail-fast, no fallback).
+    """
+    global _shared_llm_provider
+    if _shared_llm_provider is None:
+        with _shared_llm_provider_lock:
+            if _shared_llm_provider is None:
+                _shared_llm_provider = LLMProvider()
+    return _shared_llm_provider
 
 
 class ContextOverflowError(Exception):

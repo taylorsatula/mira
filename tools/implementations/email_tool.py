@@ -1497,8 +1497,8 @@ class EmailTool(Tool):
                     # Fetch the original message using UID
                     typ, data = self.connection.uid("FETCH", str(uid), "(RFC822)")
                     if typ != "OK" or not data or not data[0]:
-                        self.logger.error(f"Failed to fetch original email for reply in email_tool")
-                        raise ValueError(f"Failed to fetch original email for reply")
+                        self.logger.error("Failed to fetch original email for reply in email_tool")
+                        raise ValueError("Failed to fetch original email for reply")
                     
                     # Parse the message
                     email_data = data[0][1]
@@ -1717,7 +1717,6 @@ class EmailTool(Tool):
                         
                         if match:
                             flags = match.group("flags")
-                            delimiter = match.group("delimiter")
                             folder_name = match.group("name")
                             
                             # Remove quotes if present

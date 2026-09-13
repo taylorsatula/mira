@@ -1019,7 +1019,7 @@ class ReminderTool(Tool):
                 # Parse and ensure UTC
                 dt = parse_utc_time_string(dt_str)
                 return format_utc_iso(dt)
-            except:
+            except Exception:
                 return dt_str
         
         formatted = {

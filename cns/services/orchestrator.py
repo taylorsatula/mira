@@ -1632,7 +1632,7 @@ class ContinuumOrchestrator:
             expansion_embedding = self.embeddings_provider.encode_realtime(query_expansion)
             return expansion_embedding, None
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ThreadPoolExecutor(max_workers=config.worker_pools.orchestrator_encode_workers) as executor:
             ctx_expansion = copy_context()
             ctx_assistant = copy_context()
             expansion_future = executor.submit(
@@ -1910,7 +1910,6 @@ def get_orchestrator() -> ContinuumOrchestrator:
     Raises:
         RuntimeError: If orchestrator has not been initialized
     """
-    global _orchestrator_instance
     if _orchestrator_instance is None:
         raise RuntimeError(
             "Orchestrator not initialized. Ensure initialize_orchestrator() "

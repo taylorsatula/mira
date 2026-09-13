@@ -18,7 +18,7 @@ from cns.services.system_prompt_parser import (
     format_section_list,
     get_assessable_sections,
 )
-from clients.llm_provider import LLMProvider
+from clients.llm_provider import LLMProvider, get_llm_provider
 from config import config
 from utils.timezone_utils import utc_now
 
@@ -51,7 +51,7 @@ class AssessmentExtractor:
     """
 
     def __init__(self, llm_provider: Optional[LLMProvider] = None):
-        self.llm_provider = llm_provider or LLMProvider()
+        self.llm_provider = llm_provider or get_llm_provider()
         self._load_prompts()
 
         # Pre-compute system prompt sections and anonymized prompt

@@ -24,7 +24,6 @@ class WhileTheCatsAwayAgent(SidebarAgent):
     available_tools = ["web_tool", "memory_tool", "continuum_tool"]
     inherit_base_prompt = False
     max_iterations = 25
-    timeout_seconds = 14400  # 4 hours — generous for open-ended research
 
     def __init__(self, tool_repo: 'ToolRepository'):
         super().__init__(tool_repo)

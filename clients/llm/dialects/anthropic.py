@@ -664,7 +664,6 @@ class AnthropicDialect(Dialect):
         entries: list[ReasoningEntry] = []
         redacted_data = []
         tool_calls = []
-        recognized_types = {"text", "thinking", "redacted_thinking", "tool_use"}
 
         for block in getattr(message, "content", []) or []:
             block_type = block.type

@@ -7,7 +7,7 @@ feature flags, infrastructure coordinates, scheduling cadences, deployment setti
 """
 
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -20,8 +20,8 @@ class ApiConfig(BaseModel):
     show_openai_compat_thinking: bool = Field(default=True, description="Show thinking blocks from OpenAI-compatible dialects to end user")
 
     # Operational limits
-    timeout: int = Field(default=180, description="Max seconds an LLM provider HTTP request may run before it is aborted.")
-    provider_response_timeout: int = Field(default=180, description="Max seconds an LLM provider call may run before the lifecycle aborts it.")
+    timeout: int = Field(default=180, description="Max seconds an LLM provider HTTP request (socket/connect/read) may run before it is aborted. Distinct from provider_response_timeout, which bounds no-progress stalls.")
+    provider_response_timeout: int = Field(default=180, description="Max seconds an LLM provider call may show no progress before the lifecycle aborts it (stall detection). Distinct from timeout, which bounds the HTTP request itself.")
     async_work_barrier_timeout_seconds: float = Field(
         default=30.0,
         gt=0,
@@ -92,7 +92,18 @@ class SystemConfig(BaseModel):
     # Operational
     log_level: str = Field(default="WARNING", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     timezone: str = Field(default="America/Chicago", description="Default timezone (IANA name)")
-    segment_timeout: int = Field(default=60, description="Segment collapse timeout in minutes")
+    segment_timeout: int = Field(
+        default=120,
+        description="Segment collapse timeout in minutes — staleness at which an active segment collapses, evaluated in the segment owner's local time-of-day windows"
+    )
+    segment_timeout_morning: Optional[int] = Field(
+        default=None,
+        description="Optional override for the 06:00-09:00 window of the segment owner's local time; falls back to segment_timeout when unset"
+    )
+    segment_timeout_late_night: Optional[int] = Field(
+        default=None,
+        description="Optional override for the 23:00-06:00 window of the segment owner's local time; falls back to segment_timeout when unset"
+    )
 
 
 class ScheduledJobsConfig(BaseModel):
@@ -123,6 +134,46 @@ class ScheduledJobsConfig(BaseModel):
         ge=1,
         description="Use-day cadence for background entity dedup/merge (pg_trgm candidates → LLM judge)"
     )
+
+
+class DatabaseConfig(BaseModel):
+    """PostgreSQL connection-pool sizing and query guards."""
+
+    pool_min: int = Field(default=3, ge=1, description="Minimum connections kept warm in mira_service Postgres pools")
+    pool_max: int = Field(default=30, ge=1, description="Maximum connections per mira_service Postgres pool under load")
+    session_pool_min: int = Field(default=2, ge=1, description="Minimum connections in the LTMemory session-manager pools")
+    session_pool_max: int = Field(default=15, ge=1, description="Maximum connections in the LTMemory session-manager pools")
+    statement_timeout_ms: int = Field(default=300000, ge=1, description="Postgres statement_timeout in milliseconds — any single SQL query is aborted after this long")
+
+
+class AuthConfig(BaseModel):
+    """Authentication policy limits."""
+
+    max_api_tokens_per_user: int = Field(default=50, ge=1, description="Maximum API tokens a single user account may hold")
+
+
+class WorkerPoolsConfig(BaseModel):
+    """Background executor thread-pool sizes."""
+
+    peanutgallery_workers: int = Field(default=1, ge=1, description="Peanut-gallery commentary executor workers")
+    tool_result_summarizer_workers: int = Field(default=2, ge=1, description="Tool-result summarization executor workers")
+    orchestrator_encode_workers: int = Field(default=2, ge=1, description="Orchestrator dual-embedding encode executor workers")
+    repulsion_rewriter_workers: int = Field(default=4, ge=1, description="Repulsion-rewrite executor workers")
+
+
+class CacheConfig(BaseModel):
+    """Valkey connection settings."""
+
+    max_connections: int = Field(default=20, ge=1, description="Maximum simultaneous connections to the Valkey server")
+
+
+class LtMemoryConfig(BaseModel):
+    """LT_Memory ML-tuning knobs (batch sizes and worker counts)."""
+
+    embeddings_batch_size: int = Field(default=32, ge=1, description="Texts per SentenceTransformer encoding batch in the hybrid embeddings provider")
+    ner_batch_size: int = Field(default=50, ge=1, description="Texts per spaCy NER pipeline batch in entity extraction")
+    proactive_search_workers: int = Field(default=2, ge=1, description="Parallel proactive-memory search fan-out workers")
+    entity_merge_candidate_limit: int = Field(default=500, ge=1, description="Maximum pg_trgm duplicate-entity candidate pairs returned per entity-merge sweep")
 
 
 class MemoryCuratorConfig(BaseModel):
@@ -180,6 +231,12 @@ class SidebarDispatcherConfig(BaseModel):
     enabled: bool = Field(default=True, description="Enable the sidebar dispatcher polling loop")
     poll_interval_minutes: int = Field(default=1, description="Minutes between dispatcher poll cycles")
     max_concurrent_agents: int = Field(default=3, ge=1, description="Maximum sidebar agent threads running simultaneously")
+    agent_timeout_seconds: int = Field(default=120, ge=1, description="Wall-clock seconds before a running sidebar agent is considered timed out")
+    agent_iteration_timeout_seconds: int = Field(default=45, ge=1, description="Seconds a single sidebar-agent LLM iteration may run")
+    agent_timeout_overrides: Dict[str, int] = Field(
+        default={"forage": 600, "memorycurator": 480, "whilethecatsaway": 14400},
+        description="Per-agent wall-clock timeout overrides keyed by agent class name lowercased with the 'Agent' suffix stripped (e.g. ForageAgent -> 'forage')"
+    )
 
 
 class InboxToolConfig(BaseModel):

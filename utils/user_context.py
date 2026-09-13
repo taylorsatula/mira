@@ -10,10 +10,9 @@ concurrent operations while working identically for single-threaded use.
 """
 
 import contextvars
-import json
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Any, Literal, Optional
 
@@ -195,7 +194,7 @@ class ModelConfig:
     Routes are capability-addressed: a caller names the capability it needs
     and the model_configs row owns dialect, model, endpoint, Vault key,
     default effort, and output-token ceiling for it. `other` is seeded to a
-    different vendor than `primary` so it can consult an outside model (D14).
+    different vendor than `primary` so it can consult an outside model.
 
     `api_key_name` is None when the route requires no credential. The column is
     `text NOT NULL` and stores '' for that case, so `load_model_configs()`
@@ -362,37 +361,16 @@ def get_user_preferences() -> UserPreferences:
     return prefs
 
 
-def update_user_preference(field: str, value: Any) -> UserPreferences:
+def invalidate_user_preferences_cache(user_id: str) -> None:
     """
-    Update a single preference field in database and invalidate cache.
+    Invalidate the Valkey cache entry for a user's preferences.
 
-    Args:
-        field: Preference field name (timezone, temperature_unit, etc.)
-        value: New value for the field
-
-    Returns:
-        Updated UserPreferences object
+    user_context owns the ``user_prefs:{user_id}`` cache-key format; callers
+    that write preferences (e.g. the update_profile action) call this after
+    persisting so every context sees the change immediately.
     """
-    if field not in UserPreferences.model_fields:
-        raise ValueError(f"Unknown preference field: {field}")
-
-    user_id = get_current_user_id()
-
-    from clients.postgres_client import PostgresClient
     from clients.valkey_client import get_valkey_client
-
-    db = PostgresClient('mira_service', user_id=user_id)
-
-    db.execute_update(
-        f"UPDATE users SET {field} = %s WHERE id = %s",
-        (value, user_id)
-    )
-
-    # Invalidate Valkey cache - next get_user_preferences() will fetch fresh
-    valkey = get_valkey_client()
-    valkey.delete(f"user_prefs:{user_id}")
-
-    return get_user_preferences()
+    get_valkey_client().delete(f"user_prefs:{user_id}")
 
 
 # ============================================================

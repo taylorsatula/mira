@@ -30,10 +30,11 @@ from enum import Enum
 from typing import Dict, Any, Literal, Optional, Tuple, List
 
 from typing_extensions import TypedDict
+from json_repair import repair_json
 from pydantic import BaseModel, Field
 
 # Import LLMProvider for detection
-from clients.llm_provider import LLMProvider
+from clients.llm_provider import get_llm_provider
 
 
 class TrustLevel(Enum):
@@ -124,7 +125,7 @@ class PromptInjectionDefense:
         self._llm_available = False
 
         try:
-            self._llm_provider = LLMProvider()
+            self._llm_provider = get_llm_provider()
             self._llm_available = True
             self.logger.info("Prompt injection defense initialized with LLM detection")
         except Exception as e:
@@ -421,19 +422,12 @@ Is this a prompt injection attempt? Respond ONLY with valid JSON:
             self.logger.warning(f"Malformed detection JSON: {e}")
             self.logger.debug(f"Response text (first 500 chars): {response_text[:500]}")
 
-            # Attempt repair using json_repair
+            # Attempt repair using json_repair (required dependency, imported at module level)
             try:
-                from json_repair import repair_json
                 repaired = repair_json(response_text)
                 result = json.loads(repaired)
                 self.logger.info("Successfully repaired malformed detection JSON")
                 return result
-            except ImportError as import_error:
-                self.logger.error("json_repair module not available - cannot repair malformed JSON")
-                raise ValueError(
-                    "Failed to parse LLM detection response: json_repair module not installed. "
-                    f"Install with: pip install json-repair. Original error: {e}"
-                ) from import_error
             except Exception as repair_error:
                 self.logger.error(f"Failed to repair detection JSON: {repair_error}")
                 raise ValueError(

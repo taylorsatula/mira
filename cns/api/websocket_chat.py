@@ -4,16 +4,14 @@ Every frame crossing this boundary in either direction is validated against a
 Pydantic model that forbids unknown fields, so a malformed or unspeakable frame
 fails loudly at the edge instead of being half-applied. One socket reader task
 and one socket writer task own the connection for its lifetime; the message
-loop never awaits ``websocket.receive_json()`` anywhere else, which is what made
-main's second reader silently swallow frames (plan §6.4.1 defect 1).
+loop never awaits ``websocket.receive_json()`` anywhere else — a second reader
+would silently swallow frames.
 
-Frames are crm_mira's ``c1297b3`` vocabulary, with three deliberate mira-OSS
-changes recorded in plan §6.4.4: ``AuthFrame.token`` so non-browser clients can
-authenticate the socket with an issued API token, ``ThinkingFrame``/
-``ModelErrorFrame`` so ``thinking`` and ``model_error`` actually reach the browser
-(R5), and ``TurnCompleteFrame`` carrying the fields the retained UI reads (R6).
-The prepaid-account access handshake crm wraps around all of this is not ported
-(plan 6.4.4 R8, decision D7).
+``AuthFrame.token`` lets non-browser clients authenticate the socket with an
+issued API token; ``ThinkingFrame``/``ModelErrorFrame`` forward ``thinking`` and
+``model_error`` to the browser, and ``TurnCompleteFrame`` carries the fields the
+UI reads to close a turn. Account-billing handshakes are not part of this
+protocol.
 """
 
 from __future__ import annotations
@@ -177,7 +175,7 @@ class AssistantDeltaFrame(ProtocolModel):
 
 
 class ThinkingFrame(ProtocolModel):
-    """Reasoning stream, forwarded only when the request asked for it (R5)."""
+    """Reasoning stream, forwarded only when the request asked for it."""
 
     type: Literal["thinking"]
     turn_id: UUID
@@ -211,7 +209,7 @@ class ToolFrame(ProtocolModel):
 
 
 class ModelErrorFrame(ProtocolModel):
-    """Notice that the model misused a tool and the turn is recovering (R5)."""
+    """Notice that the model misused a tool and the turn is recovering."""
 
     type: Literal["model_error"]
     turn_id: UUID
@@ -224,8 +222,8 @@ class TurnCompleteFrame(ProtocolModel):
 
     crm's version carries only ``turn_id`` and ``segment_id``, which the
     retained UI cannot close a turn with: it needs the continuum identity, the
-    final text, and the tool/timing/emotion metadata (R6). ``emotion`` stays
-    because plan §6.6 keeps ``<mira:my_emotion>`` in the system prompt and
+    final text, and the tool/timing/emotion metadata. ``emotion`` stays
+    because ``<mira:my_emotion>`` remains in the system prompt and
     ``orchestrator.process_message()`` still parses it.
     """
 
@@ -434,7 +432,7 @@ class WebSocketChatHandler:
 
         Both the id and the full typed context are installed. The context is
         what lets WS-originated work call ``get_current_user()`` instead of
-        raising (plan §6.4.1 defect 8).
+        raising.
         """
         credential = token or websocket.cookies.get("session")
         if not credential:
@@ -740,9 +738,9 @@ class WebSocketChatHandler:
     ) -> dict[str, object] | None:
         """Translate one orchestrator stream event into a server frame.
 
-        crm maps only ``text`` and ``tool_event`` and returns ``None`` for
-        everything else, which drops the reasoning stream and the invalid-tool-
-        call notice on the floor (plan §6.4.4 R5). Both are forwarded here.
+        Forwards reasoning-stream and invalid-tool-call events in addition to
+        the text and tool-event deltas — dropping either would lose the
+        reasoning stream or the malformed-call signal.
         """
         event_type = event.get("type")
         if event_type == "text":

@@ -179,7 +179,7 @@ class LLMLifecycle:
 
     @staticmethod
     def _record_cost(result: Result) -> None:
-        """Feed the per-request cost summary (D5) from one completed result.
+        """Feed the per-request cost summary from one completed result.
 
         `cost_accumulator.record()` derives tokens and route name from the
         Result and is a no-op unless a request handler started an accumulator.

@@ -11,14 +11,12 @@ import traceback
 import logging
 import functools
 import asyncio
-import sys
 import os
 import tempfile
 from datetime import datetime
-from typing import Dict, Any, Optional, Callable, List
+from typing import Dict, Optional, List
 
 from typing_extensions import TypedDict
-from contextvars import copy_context
 from concurrent.futures import ThreadPoolExecutor, Future
 import psutil
 

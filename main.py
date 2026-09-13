@@ -113,14 +113,14 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"model_configs loading failed - cannot start MIRA: {e}") from e
     logger.info("model_configs routes loaded from database")
 
-    # No payments surface in mira-OSS (D7); cost visibility lives in utils/cost_accumulator.py.
+    # No payments surface in mira-OSS; cost visibility lives in utils/cost_accumulator.py.
 
     # LLMProvider is core infrastructure owned by main: Mira cannot operate
     # without it, so it constructs here rather than nested inside whichever
     # component happened to need it first.
-    from clients.llm_provider import LLMProvider
+    from clients.llm_provider import get_llm_provider
     try:
-        shared_llm_provider = LLMProvider()
+        shared_llm_provider = get_llm_provider()
     except Exception as e:
         logger.critical(f"Failed to initialize LLMProvider: {e}")
         raise RuntimeError(f"llm_provider initialization failed - cannot start MIRA: {e}") from e
@@ -135,7 +135,7 @@ async def lifespan(app: FastAPI):
             session_manager=get_shared_session_manager(),
             embeddings_provider=embeddings_provider,
             llm_provider=shared_llm_provider,
-            conversation_repo=continuum_repo
+            continuum_repo=continuum_repo
         )
         logger.info("lt_memory factory initialized as singleton")
     except Exception as e:
@@ -319,8 +319,8 @@ async def lifespan(app: FastAPI):
     logger.info("UserDataManager cache cleared (SQLite connections closed)")
 
     # Clean up database connections
-    from clients.postgres_client import PostgresClient
-    PostgresClient.close_all_pools()
+    from clients.postgres_client import PostgresClient as ShutdownPostgresClient
+    ShutdownPostgresClient.close_all_pools()
     logger.info("PostgreSQL connection pools closed")
     
     from utils.database_session_manager import get_shared_session_manager
@@ -379,7 +379,7 @@ def create_app() -> FastAPI:
                 "type": error["type"]
             })
         
-        response = create_error_response(
+        _ = create_error_response(
             APIError("REQUEST_VALIDATION_ERROR", "Invalid request format", {"detail": formatted_errors}),
             request_id
         )
@@ -468,7 +468,7 @@ def create_app() -> FastAPI:
     if config.lattice.enabled:
         app.include_router(federation_api.router, prefix="/v0/api", tags=["federation"])
 
-    # No payments routes in mira-OSS (D7); cost visibility lives in utils/cost_accumulator.py.
+    # No payments routes in mira-OSS; cost visibility lives in utils/cost_accumulator.py.
 
     # Performance monitoring (gated by mira.perf logger level)
     from utils.perf import register_perf_routes, install_db_instrumentation
@@ -480,7 +480,7 @@ def create_app() -> FastAPI:
     # every mode: under `single` an unauthenticated visit round-trips
     # through /v0/auth/local/session and its cookie, and under `multi` it
     # gets the standard 401 envelope until the deployment ships its own
-    # sign-in surface (mira-OSS has no /login/ page — D8). Root meta files
+    # sign-in surface (mira-OSS has no /login/ page). Root meta files
     # and /assets carry no user data and stay public so a gated page can
     # still load its own JS/CSS.
     page_dependencies = [Depends(auth_api.get_current_user_for_pages)]

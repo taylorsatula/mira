@@ -1068,8 +1068,8 @@ async def webauthn_list_credentials(
 def _page_auth_failure() -> HTTPException:
     """Where an unauthenticated page request goes, by mode.
 
-    mira-OSS ships no `/login/` page (the CRM web redesign is omitted under
-    D8). Under `single` the auth surface itself bootstraps the session:
+    mira-OSS ships no `/login/` page (the CRM web redesign is omitted).
+    Under `single` the auth surface itself bootstraps the session:
     `/v0/auth/local/session` provisions the local account, mints a cookie,
     and bounces back to `/chat`. Under `multi` there is nothing to redirect
     to yet, so the page request fails with the standard 401 envelope and the

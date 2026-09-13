@@ -16,7 +16,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-EMBEDDINGS_BATCH_SIZE = 32  # Batch size for sentence-transformers encoding
+from config import config
 
 # Module-level singleton instance
 _hybrid_provider_instance = None
@@ -102,6 +102,18 @@ class HybridEmbeddingsProvider:
         from sentence_transformers import SentenceTransformer
 
         self.logger.debug("Loading mdbr-leaf-ir-asym model for asymmetric retrieval")
+        # EMBEDDING MODEL INVARIANT — read before changing:
+        # 1. mdbr-leaf-ir-asym produces 768-dimension vectors. The database schema
+        #    (memories.embedding vector(768), global_memories.embedding) and every
+        #    similarity computation depend on that dimensionality.
+        # 2. Changing the model requires regenerating ALL stored embeddings
+        #    (memories and global_memories) — vectors from different models are
+        #    not comparable.
+        # 3. mdbr-leaf-ir-asym is an ASYMMETRIC embedding model, and the codebase
+        #    relies on its two-mode contract: encode_deep() for document/memory
+        #    ingestion and encode_realtime() for queries. A replacement model must
+        #    either be asymmetric with the same two-mode contract or every call
+        #    site must be changed.
         self.model = SentenceTransformer(
             "MongoDB/mdbr-leaf-ir-asym",
             cache_folder=None  # Uses default HuggingFace cache directory
@@ -140,7 +152,7 @@ class HybridEmbeddingsProvider:
         # Generate query embeddings (uses mdbr-leaf-ir internally)
         text_desc = f"{len(texts)} texts" if isinstance(texts, list) else f"text ({len(texts)} chars)"
         self.logger.debug(f"encode_realtime: generating embedding for {text_desc}")
-        embeddings = self.model.encode_query(texts, batch_size=EMBEDDINGS_BATCH_SIZE)
+        embeddings = self.model.encode_query(texts, batch_size=config.lt_memory.embeddings_batch_size)
 
         embeddings = embeddings.astype(np.float16)
 
@@ -173,7 +185,7 @@ class HybridEmbeddingsProvider:
         # Generate document embeddings (uses snowflake-arctic-embed internally)
         text_desc = f"{len(texts)} texts" if isinstance(texts, list) else f"text ({len(texts)} chars)"
         self.logger.debug(f"encode_deep: generating embedding for {text_desc}")
-        embeddings = self.model.encode_document(texts, batch_size=EMBEDDINGS_BATCH_SIZE)
+        embeddings = self.model.encode_document(texts, batch_size=config.lt_memory.embeddings_batch_size)
 
         embeddings = embeddings.astype(np.float16)
 

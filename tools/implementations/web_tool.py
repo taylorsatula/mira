@@ -25,29 +25,10 @@ from utils.url_safety import (
     validate_public_http_url,
 )
 
-try:
-    from kagiapi import KagiClient
-    KAGI_AVAILABLE = True
-except ImportError:
-    KAGI_AVAILABLE = False
-
-try:
-    from ddgs import DDGS
-    DDGS_AVAILABLE = True
-except ImportError:
-    DDGS_AVAILABLE = False
-
-try:
-    from bs4 import BeautifulSoup, Comment
-    BS4_AVAILABLE = True
-except ImportError:
-    BS4_AVAILABLE = False
-
-try:
-    import trafilatura
-    TRAFILATURA_AVAILABLE = True
-except ImportError:
-    TRAFILATURA_AVAILABLE = False
+from kagiapi import KagiClient
+from ddgs import DDGS
+from bs4 import BeautifulSoup, Comment
+import trafilatura
 
 
 # --- Configuration ---
@@ -227,12 +208,6 @@ class WebTool(Tool):
                 self.logger.warning(f"Kagi search failed: {e}, falling back to DuckDuckGo")
 
         # Fall back to DuckDuckGo
-        if not DDGS_AVAILABLE:
-            raise ValueError(
-                "Web search requires either Kagi API key or DuckDuckGo. "
-                "Install ddgs: pip install ddgs"
-            )
-
         try:
             ddgs = DDGS()
             raw_results = ddgs.text(
@@ -382,9 +357,6 @@ class WebTool(Tool):
 
     def _extract_content(self, html: str) -> Optional[str]:
         """Extract main content from HTML using trafilatura."""
-        if not TRAFILATURA_AVAILABLE:
-            self.logger.warning("trafilatura not available, skipping extraction")
-            return None
         try:
             return trafilatura.extract(
                 html,
@@ -399,9 +371,6 @@ class WebTool(Tool):
 
     def _fallback_text_extract(self, html: str) -> Optional[str]:
         """Last-resort extraction: strip tags, return plain text via BeautifulSoup."""
-        if not BS4_AVAILABLE:
-            self.logger.warning("BeautifulSoup not available for fallback extraction")
-            return None
         try:
             soup = BeautifulSoup(html, "html.parser")
             for tag in soup.find_all(["script", "style", "noscript", "iframe", "object", "embed"]):
@@ -416,7 +385,7 @@ class WebTool(Tool):
 
     def _synthesize_content(self, text: str, url: str, focus: Optional[str] = None) -> Optional[str]:
         """Compress long page content via LLM. Receives clean text, returns condensed text."""
-        from clients.llm_provider import LLMProvider, ContextOverflowError
+        from clients.llm_provider import get_llm_provider, ContextOverflowError
         from clients.llm.dialects.base import ProviderError
 
         if len(text) > self._MAX_SYNTHESIS_INPUT:
@@ -434,7 +403,7 @@ class WebTool(Tool):
             user_message = text
 
         try:
-            llm = LLMProvider()
+            llm = get_llm_provider()
             response = llm.generate_response(
                 messages=[{"role": "user", "content": user_message}],
                 model_config="fast",
@@ -448,8 +417,8 @@ class WebTool(Tool):
         # overflow, and raw httpx transport errors that leak past the
         # OpenAI-family dialects' httpx.post. Anything else (TypeError, KeyError
         # for an unknown route, misconfiguration) is a programming or deployment
-        # error and propagates loudly; a broad handler here hid a guaranteed
-        # TypeError on every call for the whole 2.0 migration.
+        # error and propagates loudly; a broad handler here once swallowed a
+        # guaranteed TypeError on every call.
         except (ProviderError, ContextOverflowError, httpx.TransportError) as e:
             self.logger.warning(f"Content synthesis failed: {e}")
             return None
@@ -591,10 +560,6 @@ class WebTool(Tool):
 
     def _init_kagi(self) -> None:
         """Initialize Kagi client from vault."""
-        if not KAGI_AVAILABLE:
-            self.logger.info("Kagi library not available, will use DuckDuckGo for search")
-            return
-
         try:
             from clients.vault_client import get_api_key
             api_key = get_api_key("kagi_api_key")

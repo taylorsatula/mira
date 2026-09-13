@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from cns.core.message import Message, preprocess_content_blocks
 from cns.infrastructure.continuum_repository import ContinuumRepository
-from clients.llm_provider import LLMProvider, ContextOverflowError
+from clients.llm_provider import LLMProvider, ContextOverflowError, get_llm_provider
 from utils.timezone_utils import utc_now
 from utils.tag_parser import TagParser
 
@@ -65,7 +65,7 @@ class SummaryGenerator:
         self.repository = repository
 
         # Use provided LLM or create default (routing via model_config= per-call)
-        self.llm_provider = llm_provider or LLMProvider()
+        self.llm_provider = llm_provider or get_llm_provider()
         self.tag_parser = TagParser()
         self._load_prompts()
 

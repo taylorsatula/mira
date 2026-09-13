@@ -23,14 +23,14 @@ Implement `MailSender` structurally (any class with a matching `send`) and
 inject it: `AuthService(mailer=ResendMailSender(api_key))`, or compose the
 service yourself at your composition root. Nothing in this module needs to
 change, and no vendor implementation ships here — mira-OSS must not acquire
-a default dependency on a third-party email service (plan §0.1).
+a default dependency on a third-party email service.
 
 Configuration
 -------------
 Deliberately owned by this module, not by `auth/config.py`:
 `auth/config.py` exposes only `APP_URL` and plain constants, and the private
 deployment's email-gateway Vault key names are scrubbed from this
-codebase (plan §11) — they map a security topology that is not shipped.
+codebase — they map a security topology that is not shipped.
 Each setting resolves **environment first, then Vault**
 (`secret/mira/services`), matching this deployment's Vault-only-credentials
 posture while keeping a container or an interactive dev shell usable with

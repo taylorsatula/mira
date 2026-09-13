@@ -19,12 +19,8 @@ successful floor run that day. A failed run is not retried (max_retries=0); the
 next due activity day re-samples.
 """
 import logging
-from typing import TYPE_CHECKING
 
 from agents.sidebar import WorkItem
-
-if TYPE_CHECKING:
-    from agents.base import SidebarAgent
 
 logger = logging.getLogger(__name__)
 

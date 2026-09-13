@@ -14,6 +14,8 @@ from collections import defaultdict
 import spacy
 from rapidfuzz import fuzz
 
+from config import config
+
 logger = logging.getLogger(__name__)
 
 
@@ -144,7 +146,7 @@ class EntityExtractor:
 
         # Process in batch using spaCy pipe for efficiency
         results = []
-        for doc in self.nlp.pipe(texts, batch_size=50):
+        for doc in self.nlp.pipe(texts, batch_size=config.lt_memory.ner_batch_size):
             entities = set()
             for ent in doc.ents:
                 if ent.label_ in self.ENTITY_TYPES:

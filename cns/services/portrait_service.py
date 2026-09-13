@@ -21,7 +21,7 @@ import logging
 from typing import Optional
 from uuid import UUID, uuid4
 
-from clients.llm_provider import LLMProvider
+from clients.llm_provider import LLMProvider, get_llm_provider
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ def _load_prompts() -> None:
 def _get_llm_provider() -> LLMProvider:
     global _llm_provider
     if _llm_provider is None:
-        _llm_provider = LLMProvider()
+        _llm_provider = get_llm_provider()
     return _llm_provider
 
 

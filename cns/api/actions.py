@@ -6,7 +6,8 @@ call tools and services directly, just as MIRA does during continuums.
 """
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, TYPE_CHECKING, TypedDict
+from pathlib import Path
+from typing import Any, TypedDict
 from enum import Enum
 from uuid import UUID
 
@@ -15,7 +16,9 @@ from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, field_validator
 
-from utils.user_context import get_current_user_id, set_current_user_id
+from config import config
+
+from utils.user_context import get_current_user_id, set_current_user_id, invalidate_user_preferences_cache
 from auth.api import get_current_user
 from auth.types import SessionData, APITokenContext
 from .base import BaseHandler, ValidationError, NotFoundError
@@ -23,12 +26,6 @@ from utils.timezone_utils import utc_now, format_utc_iso
 from clients.valkey_client import get_valkey_client
 from working_memory.trinkets.base import TRINKET_KEY_PREFIX
 from utils.userdata_manager import UserDataManager
-
-if TYPE_CHECKING:
-    from cns.infrastructure.continuum_repository import ContinuumRepository
-    from cns.core.continuum import Continuum
-    from cns.core.message import Message
-    from config.config_manager import AppConfig
 
 logger = logging.getLogger(__name__)
 
@@ -694,9 +691,7 @@ class UserDomainHandler(BaseDomainHandler):
                 )
 
             # Invalidate user preferences cache so changes take effect immediately
-            valkey = get_valkey_client()
-            cache_key = f"user_prefs:{self.user_id}"
-            valkey.delete(cache_key)
+            invalidate_user_preferences_cache(self.user_id)
 
             return {
                 "success": True,
@@ -1124,8 +1119,6 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
 
     def execute_action(self, action: str, data: dict[str, Any]) -> dict[str, Any]:
         """Execute domaindoc actions using SQLite storage."""
-        import json
-
         db = self._get_db()
 
         # Actions that operate on the owner's db for shared docs
@@ -1139,7 +1132,7 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         resolved = None
         if action in _shared_edit_actions and data.get("label"):
             try:
-                from utils.domaindoc_shares import resolve_domaindoc, is_shared_label, owner_label_from_shared
+                from utils.domaindoc_shares import resolve_domaindoc, owner_label_from_shared
                 resolved = resolve_domaindoc(self.user_id, data["label"])
                 if resolved.is_shared:
                     db = resolved.db
@@ -1433,7 +1426,7 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
             "updated": True,
             "label": new_label or label,
             "description": new_description or doc.get("encrypted__description"),
-            "message": f"Domaindoc metadata updated"
+            "message": "Domaindoc metadata updated"
         }
 
     def _action_list_sections(self, db: UserDataManager, data: dict[str, Any]) -> dict[str, Any]:
@@ -1851,7 +1844,8 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         self._validate_label(label)
 
         db = self._get_db()
-        doc = self._get_domaindoc(db, label)
+        # Existence check only — _get_domaindoc raises ValidationError if the doc is missing
+        _ = self._get_domaindoc(db, label)
 
         pg = self._get_pg()
         # RLS on users is unconditional, so reading the table directly by email returns
@@ -2065,7 +2059,7 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
 
     def _expand_description(self, label: str, description: str) -> str:
         """Use LLM to expand a brief description into comprehensive guidance."""
-        from clients.llm_provider import LLMProvider
+        from clients.llm_provider import get_llm_provider
 
         logger.debug(
             "_expand_description called with label length=%s and description length=%s",
@@ -2074,7 +2068,7 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         )
 
         try:
-            llm = LLMProvider()
+            llm = get_llm_provider()
 
             prompt = f"""You are helping expand a brief description into comprehensive guidance for a knowledge document.
 
@@ -2440,8 +2434,8 @@ class PersonaDomainHandler(BaseDomainHandler):
     """Handler for immutable Persona revision workflows.
 
     Persona evaluates MIRA against the behavioral contract and stores prescriptive
-    directives. It is a second system beside the user model, not a replacement for it
-    (D1), so it gets its own domain and its own action names: get, refine, accept,
+    directives. It is a second system beside the user model, not a replacement for it,
+    so it gets its own domain and its own action names: get, refine, accept,
     decline, update and reset keep serving the settings page's user-model panel through
     LoraDomainHandler, and reusing those names here would read as one feature
     duplicated rather than two features that coexist.
@@ -2559,7 +2553,7 @@ class PersonaDomainHandler(BaseDomainHandler):
 
 
 _REPULSION_REWRITER_EXECUTOR = ThreadPoolExecutor(
-    max_workers=4,
+    max_workers=config.worker_pools.repulsion_rewriter_workers,
     thread_name_prefix="repulsion_rewriter",
 )
 
@@ -2655,7 +2649,7 @@ class FeedbackDomainHandler(BaseDomainHandler):
         output_file: "Path",
     ) -> None:
         try:
-            from clients.llm_provider import LLMProvider
+            from clients.llm_provider import get_llm_provider
             from config.prompts.loader import load_prompt
             from utils.user_context import get_model_config
 
@@ -2668,7 +2662,7 @@ class FeedbackDomainHandler(BaseDomainHandler):
                 matched_tells=", ".join(matched_tells) if matched_tells else "(none)",
             )
 
-            llm = LLMProvider()
+            llm = get_llm_provider()
             response = llm.generate_response(
                 messages=[{"role": "user", "content": user_prompt}],
                 system_prompt=system_prompt,
@@ -2893,7 +2887,7 @@ async def actions_endpoint(
                 }
             }
         )
-    except Exception as e:
+    except Exception:
         logger.exception("Actions endpoint error")
         return JSONResponse(
             status_code=500,

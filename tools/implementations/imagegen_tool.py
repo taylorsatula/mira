@@ -7,9 +7,12 @@ so the model has complete visual+textual context. publish emits the final image
 to the user.
 """
 
-import base64
 import json
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from google.genai import types
 from pathlib import Path
 from typing import Dict, Any, List
 from uuid import uuid4

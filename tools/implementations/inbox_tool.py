@@ -36,7 +36,7 @@ from typing import Dict, Any, Optional
 
 from config.config import InboxToolConfig
 
-from tools.repo import Tool, coerce_to_int
+from tools.repo import Tool
 from tools.registry import registry
 from utils.timezone_utils import utc_now, format_utc_iso
 
@@ -189,8 +189,8 @@ class InboxTool(Tool):
             if operation == "read":
                 return self._op_read(
                     filename=params.get("filename"),
-                    chars=coerce_to_int(params.get("chars"), "chars") or 10000,
-                    offset=coerce_to_int(params.get("offset"), "offset") or 0,
+                    chars=params.get("chars") or 10000,
+                    offset=params.get("offset") or 0,
                 )
             if operation == "archive":
                 return self._op_archive(

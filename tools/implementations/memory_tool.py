@@ -21,7 +21,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
-from tools.repo import Tool, coerce_to_int
+from tools.repo import Tool
 from tools.registry import registry
 from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
 from clients.valkey_client import get_valkey_client
@@ -308,9 +308,9 @@ class MemoryTool(Tool):
 
         query = query.strip()
         # Coerce numeric parameters (tool inputs may come as strings/lists from JSON)
-        max_results = coerce_to_int(max_results, "max_results") or 10
-        page = coerce_to_int(page, "page") or 1
-        traversal_depth = coerce_to_int(traversal_depth, "traversal_depth") or 1
+        max_results = max_results or 10
+        page = page or 1
+        traversal_depth = traversal_depth or 1
         limit = min(max_results, self._config.max_search_results)
         offset = (page - 1) * limit
 
@@ -320,7 +320,8 @@ class MemoryTool(Tool):
         # Extract entities from query for hub discovery (lazy-load EntityExtractor)
         extracted_entities = []
         if include_hub_discovery:
-            hub_discovery = self._get_hub_discovery()
+            # Pre-warm the singleton; the value itself is unused
+            _ = self._get_hub_discovery()
             extracted_entities = list(self._entity_extractor.extract_entities(query))
 
         # Run parallel retrieval

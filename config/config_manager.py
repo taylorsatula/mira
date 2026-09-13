@@ -15,8 +15,13 @@ from pydantic import BaseModel, Field
 from config.config import (
     ApiConfig,
     ApiServerConfig,
+    AuthConfig,
+    CacheConfig,
+    DatabaseConfig,
+    LtMemoryConfig,
     SystemConfig,
     ScheduledJobsConfig,
+    WorkerPoolsConfig,
     MemoryCuratorConfig,
     LatticeConfig,
     SidebarDispatcherConfig,
@@ -61,8 +66,13 @@ class AppConfig(BaseModel):
     
     api: ApiConfig = Field(default_factory=ApiConfig)
     api_server: ApiServerConfig = Field(default_factory=ApiServerConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
+    cache: CacheConfig = Field(default_factory=CacheConfig)
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    lt_memory: LtMemoryConfig = Field(default_factory=LtMemoryConfig)
     system: SystemConfig = Field(default_factory=SystemConfig)
     scheduled_jobs: ScheduledJobsConfig = Field(default_factory=ScheduledJobsConfig)
+    worker_pools: WorkerPoolsConfig = Field(default_factory=WorkerPoolsConfig)
     lattice: LatticeConfig = Field(default_factory=LatticeConfig)
     sidebar_dispatcher: SidebarDispatcherConfig = Field(default_factory=SidebarDispatcherConfig)
     memory_curator: MemoryCuratorConfig = Field(default_factory=MemoryCuratorConfig)

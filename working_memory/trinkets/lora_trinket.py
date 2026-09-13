@@ -9,7 +9,7 @@ When needs_checkin is true, also renders check-in guidance for behavioral debrie
 """
 import logging
 import re
-from typing import Dict, Any, List, TypedDict
+from typing import Dict, Any, TypedDict
 
 from cns.infrastructure.feedback_tracker import FeedbackTracker
 from utils.user_context import get_current_user_id, get_user_preferences

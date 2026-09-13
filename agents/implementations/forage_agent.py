@@ -22,7 +22,6 @@ class ForageAgent(SidebarAgent):
     available_tools = ["continuum_tool", "memory_tool", "web_tool"]
     inherit_base_prompt = False
     max_iterations = 20
-    timeout_seconds = 600
     overwatch_model_config_name = "primary"
 
     _PROGRESS_BAR_WIDTH = 20

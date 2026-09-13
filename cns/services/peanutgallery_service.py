@@ -16,6 +16,8 @@ from cns.core.message import Message
 from cns.integration.event_bus import EventBus
 from cns.services.peanutgallery_model import PeanutGalleryModel, PeanutGalleryResult
 
+from config import config
+
 logger = logging.getLogger(__name__)
 
 # Peanut Gallery tuning
@@ -44,7 +46,7 @@ class PeanutGalleryService:
         self.event_bus = event_bus
 
         self._executor = ThreadPoolExecutor(
-            max_workers=1,
+            max_workers=config.worker_pools.peanutgallery_workers,
             thread_name_prefix="peanutgallery"
         )
 

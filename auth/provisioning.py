@@ -9,10 +9,8 @@ nothing, and deletion is `local_teardown`.
 The seam exists so `auth/service.py` can hold one account-lifecycle path without naming
 a product-specific external service in it. It is the minimal excision mechanism, not a
 plug-in surface. Do not extend it — no hooks, priorities, ordering, events or
-registration. Per plan §0.2, mira-OSS and crm_mira are parting and crm_mira adapts to
-mira-OSS at unification, so a seam built for that convergence would be dead weight in
-the distributed artifact. Add a method here only when `auth` itself needs a second
-implementation.
+registration; a seam built for anticipated convergence would be dead weight. Add a
+method here only when `auth` itself needs a second implementation.
 
 Nothing in this module reaches for Vault, Postgres or Valkey at import time; the first
 database or Valkey touch happens inside `local_teardown`.

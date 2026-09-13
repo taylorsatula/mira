@@ -26,7 +26,7 @@ from utils.image_compression import compress_image, CompressedImage
 from utils.text_sanitizer import sanitize_message_content
 from utils.timezone_utils import utc_now, format_utc_iso
 
-from .base import BaseHandler, SuccessResponse, ErrorResponse, ValidationError, create_success_response
+from .base import BaseHandler, SuccessResponse, ValidationError, create_success_response
 from cns.services.orchestrator import get_orchestrator
 from cns.infrastructure.continuum_pool import get_continuum_pool
 
@@ -140,7 +140,7 @@ class ChatEndpoint(BaseHandler):
                 raise ValidationError("document_type is required when document is provided")
             if document_type not in SUPPORTED_DOCUMENT_FORMATS:
                 raise ValidationError(
-                    f"Unsupported document format. Supported: PDF, DOCX, XLSX, TXT, CSV, JSON"
+                    "Unsupported document format. Supported: PDF, DOCX, XLSX, TXT, CSV, JSON"
                 )
             try:
                 document_bytes = base64.b64decode(document, validate=True)
@@ -180,7 +180,6 @@ class ChatEndpoint(BaseHandler):
                 continuum.id, user_id
             )
             segment_turn_number = result.turn_number
-            segment_id = result.segment_id
 
             # Process documents into provider-neutral text.
             processed_doc: ProcessedDocument | None = None

@@ -14,13 +14,13 @@ import re
 from typing import Optional
 from uuid import uuid4
 
-from clients.llm_provider import LLMProvider
+from clients.llm_provider import LLMProvider, get_llm_provider
 
 logger = logging.getLogger(__name__)
 
-# TTL for LoRA refinement previews stored in Valkey.
-# Same as portrait: 10 minutes — long enough to review, short enough to avoid
-# stale previews accumulating. Expired keys are invisible to accept/decline.
+# TTL for LoRA refinement previews stored in Valkey. Rationale and the
+# accept/decline expiry semantics live with the portrait constant
+# (cns/services/portrait_service.py PREVIEW_TTL_SECONDS), the owning copy.
 PREVIEW_TTL_SECONDS = 600
 
 _LORA_PREVIEW_PREFIX = "lora_preview"
@@ -66,7 +66,7 @@ def _get_section_list() -> str:
 def _get_llm_provider() -> LLMProvider:
     global _llm_provider
     if _llm_provider is None:
-        _llm_provider = LLMProvider()
+        _llm_provider = get_llm_provider()
     return _llm_provider
 
 

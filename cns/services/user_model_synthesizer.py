@@ -13,7 +13,7 @@ from typing import List, Literal, Optional
 from cns.infrastructure.feedback_repository import FeedbackRepository, FeedbackSignalRow
 from cns.infrastructure.feedback_tracker import FeedbackTracker
 from cns.services.system_prompt_parser import format_section_list, get_assessable_sections
-from clients.llm_provider import LLMProvider
+from clients.llm_provider import LLMProvider, get_llm_provider
 from config import config
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ class UserModelSynthesizer:
         llm_provider: Optional[LLMProvider] = None
     ):
         self.feedback_repo = feedback_repo
-        self.llm_provider = llm_provider or LLMProvider()
+        self.llm_provider = llm_provider or get_llm_provider()
         self._load_prompts()
 
         # Pre-compute section list for critic context

@@ -622,8 +622,6 @@ def clear_manager_cache(user_id: Optional[UUID] = None) -> None:
         user_id: If provided, only clear the cache for this user.
                  If None, clear all cached managers.
     """
-    global _manager_cache
-
     if user_id is not None:
         cache_key = str(user_id)
         if cache_key in _manager_cache:

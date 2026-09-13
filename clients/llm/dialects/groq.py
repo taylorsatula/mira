@@ -44,8 +44,8 @@ class GroqDialect(OpenAIChatBase):
                 requested=thinking.budget_tokens,
                 applied=applied,
                 reason=(
-                    f"Groq dialect lacks native budget support; applied "
-                    f"heuristic monotonic mapping"
+                    "Groq dialect lacks native budget support; applied "
+                    "heuristic monotonic mapping"
                 ),
             ))
             effort = applied

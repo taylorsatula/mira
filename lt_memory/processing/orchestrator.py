@@ -12,7 +12,7 @@ All complexity lives in submit_segment_extraction. Callers are trivial.
 """
 import json
 import logging
-from typing import Dict, Any, Optional, TYPE_CHECKING
+from typing import Dict, Any, TYPE_CHECKING
 from uuid import UUID
 
 from cns.core.message import Message
@@ -78,7 +78,7 @@ class ExtractionOrchestrator:
         Raises:
             RuntimeError: If boundary message not found or has no messages
         """
-        db_client = self.continuum_repo._get_client(user_id)
+        db_client = self.continuum_repo.get_user_db_client(user_id)
 
         # Step 1: Query boundary row for segment_id, continuum_id, position
         boundary_row = db_client.execute_query("""
@@ -195,7 +195,7 @@ class ExtractionOrchestrator:
                 for segment in failed_segments:
                     # Increment attempt counter before expensive work (persists via jsonb_set)
                     attempts = segment.get('extraction_attempts', 0)
-                    db_client = self.continuum_repo._get_client(uid)
+                    db_client = self.continuum_repo.get_user_db_client(uid)
                     db_client.execute_returning("""
                         UPDATE messages
                         SET metadata = jsonb_set(metadata, '{extraction_attempts}', to_jsonb(%s))

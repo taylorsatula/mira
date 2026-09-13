@@ -28,7 +28,7 @@ What must change before strict can become the default
    blocks (two per page in `web/{chat,settings,domaindocs,memories}/index.html`: a theme
    bootstrap in `<head>`, a page script at the end of `<body>`) and 32 `onclick=`
    attributes (`web/chat/index.html`, `web/domaindocs/index.html`) are what
-   `script-src 'self'` actually rejects. Owner: the frontend session (plan §5 D-7).
+   `script-src 'self'` actually rejects.
    The vendored markdown and DOM-sanitizer libraries are not part of this problem —
    `web/chat/index.html` loads marked/purify from the static `/assets` mount,
    so they are already external.

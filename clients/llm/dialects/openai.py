@@ -93,8 +93,8 @@ class OpenAIDialect(OpenAIChatBase):
                 requested=thinking.budget_tokens,
                 applied=applied,
                 reason=(
-                    f"OpenAI dialect lacks native budget support; applied "
-                    f"heuristic monotonic mapping"
+                    "OpenAI dialect lacks native budget support; applied "
+                    "heuristic monotonic mapping"
                 ),
             ))
             effort = applied

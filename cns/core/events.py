@@ -25,6 +25,7 @@ from utils.timezone_utils import utc_now
 
 if TYPE_CHECKING:
     from cns.core.continuum import Continuum
+    from cns.core.message import Message
 
 @dataclass(frozen=True, kw_only=True)
 class ContinuumEvent:

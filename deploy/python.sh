@@ -64,13 +64,8 @@ fi
 # Download to /tmp to keep user's home directory clean
 cd /tmp
 
-# NOTE: Currently downloads from main branch for active development
-# When ready for stable release, change to:
-#   wget -q -O mira-X.XX.tar.gz https://github.com/taylorsatula/mira-OSS/archive/refs/tags/X.XX.tar.gz
-#   tar -xzf mira-X.XX.tar.gz -C /tmp
-#   sudo cp -r /tmp/mira-OSS-X.XX/* /opt/mira/app/
-#   rm -f /tmp/mira-X.XX.tar.gz
-#   rm -rf /tmp/mira-OSS-X.XX
+# NOTE: Currently downloads from main branch for active development.
+# The stable-release procedure (tagged tarball install) lives in deploy/RELEASE.md.
 
 run_with_status "Downloading MIRA from main branch" \
     wget -q -O mira-main.tar.gz https://github.com/taylorsatula/mira-OSS/archive/refs/heads/main.tar.gz

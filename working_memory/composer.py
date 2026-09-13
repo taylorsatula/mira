@@ -24,7 +24,7 @@ PLACEMENT_NOTIFICATION = "notification"
 SECTION_LAYOUT: Dict[str, List[str]] = {
     PLACEMENT_SYSTEM: [
         'base_prompt',
-        # Two separate slots, two separate subjects (D1): behavioral_directives is
+        # Two separate slots, two separate subjects: behavioral_directives is
         # the user model's descriptive observations about the user; persona_directives
         # is MIRA's prescriptive self-evaluation. They are not two versions of one
         # feature and must not share a slot.

@@ -61,7 +61,7 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> None:
             set_current_user_id(user_id)
             try:
                 db = lt_memory_factory.db
-                updated = db.recalculate_temporal_scores(user_id=user_id, batch_size=1000)
+                updated = db.recalculate_temporal_scores(user_id=user_id)
                 total_updated += updated
             finally:
                 clear_user_context()
@@ -90,7 +90,7 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> None:
             set_current_user_id(user_id)
             try:
                 db = lt_memory_factory.db
-                updated = db.bulk_recalculate_scores(user_id=user_id, batch_size=1000)
+                updated = db.bulk_recalculate_scores(user_id=user_id)
                 total_updated += updated
             finally:
                 clear_user_context()

@@ -14,14 +14,12 @@ Core principles:
 
 import logging
 import re
-from datetime import datetime, timezone, timedelta, UTC
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import pytz
 from zoneinfo import ZoneInfo, available_timezones
 from dateutil import parser
-
-from config import config
 
 logger = logging.getLogger(__name__)
 

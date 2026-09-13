@@ -516,10 +516,9 @@ def _check_vault() -> dict[str, Any]:
     service_url = get_database_url("mira_service", admin=False)
     admin_url = get_database_url("mira_service", admin=True)
 
-    # Shape ported from crm 92d768c (validate every required service-config
-    # field at boot rather than at first use), with the OSS field list —
-    # crm's demanded the email-gateway, CRM, Square and Stripe keys, none
-    # of which exist in this distribution (plan §6.3.8, §11).
+    # Validate every required service-config field at boot rather than at
+    # first use — a missing credential should fail the gate, not the first
+    # request that needs it.
     required_service_fields = [
         "valkey_url",
         "app_url",
@@ -936,7 +935,7 @@ def _check_tools() -> dict[str, Any]:
 
 def _check_dependency_initialization() -> dict[str, Any]:
     from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
-    from clients.llm_provider import LLMProvider
+    from clients.llm_provider import get_llm_provider
     from cns.infrastructure.continuum_pool import get_continuum_pool
     from cns.infrastructure.continuum_repository import get_continuum_repository
     from cns.integration.factory import create_cns_orchestrator
@@ -951,8 +950,8 @@ def _check_dependency_initialization() -> dict[str, Any]:
     lt_memory_factory = get_lt_memory_factory(
         session_manager=get_shared_session_manager(),
         embeddings_provider=embeddings_provider,
-        llm_provider=LLMProvider(),
-        conversation_repo=continuum_repo,
+        llm_provider=get_llm_provider(),
+        continuum_repo=continuum_repo,
     )
     orchestrator = create_cns_orchestrator()
     initialize_orchestrator(orchestrator)

@@ -10,7 +10,7 @@ where T is N (node), W (way), or R (relation), e.g. "N123456789".
 """
 
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, Optional
 
 from pydantic import BaseModel, Field
 from tools.repo import Tool

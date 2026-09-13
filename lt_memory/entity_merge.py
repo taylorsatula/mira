@@ -184,7 +184,7 @@ def run_entity_merge_for_user(user_id: str) -> Dict[str, int]:
     skipped; the caller (scheduled job) iterates users with set/clear user context.
     """
     from lt_memory.factory import get_lt_memory_factory
-    from clients.llm_provider import LLMProvider
+    from clients.llm_provider import get_llm_provider
 
     factory = get_lt_memory_factory()
     db = factory.db
@@ -199,7 +199,7 @@ def run_entity_merge_for_user(user_id: str) -> Dict[str, int]:
     groups = _build_merge_groups(pairs)[:GROUPS_PER_CALL]
     user_prompt, short_to_full = _build_groups_prompt(groups)
 
-    decisions = _assess_groups(LLMProvider(), user_prompt, short_to_full)
+    decisions = _assess_groups(get_llm_provider(), user_prompt, short_to_full)
     if not decisions:
         logger.info(
             "Entity merge for user %s: LLM approved no merges (of %d groups)",

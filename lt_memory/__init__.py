@@ -50,4 +50,18 @@ __all__ = [
     'MemoryLink',
     'Entity',
     'ProcessingChunk',
+
+    # TypedDicts and type aliases
+    'RelationshipType',
+    'MemoryLinkEntry',
+    'EntityLinkEntry',
+    'AnnotationEntry',
+    'LinkMetadata',
+    'TraversalResult',
+    'UserMemorySettings',
+    'MemoryPageResult',
+    'NamedEntity',
+    'MemoryContext',
+    'MemoryContextSnapshot',
+    'MemoryDict',
 ]
