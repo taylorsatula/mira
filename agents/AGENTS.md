@@ -1,5 +1,7 @@
 # agents/ — the autonomous sidebar-agent runtime: base-class loop mechanics and dispatcher
 
+*Same deal when the idea involves MIRA acting on its own — watching something, tending something, digesting something while you're not around. Hand the spec to your pair-programming assistant with `HOW_TO_BUILD_AN_AGENT.md` and a new sidebar worker exists by the end of the session, no core-loop archaeology required.*
+
 ## Rules
 
 - `SidebarAgent` (`base.py`) owns all loop mechanics; implementations define only `agent_id`, `model_config_name`, `available_tools`, `get_agent_prompt(work_item)`, `build_initial_message(work_item)`. Do not override `run()` — all termination cases (success, failure, timeout, sentry skip, input rejection, iteration cap) must flow through `_exit()`, which writes the `sidebar_activity` record and calls `on_completion()`. A subclass that bypasses `_exit()` leaves no dedup record and the dispatcher will re-dispatch the item forever.
@@ -22,7 +24,7 @@
 
 ## Wiring
 
-- Scheduler path: `main.py` → `utils/sidebar_jobs.py` (`register_sidebar_dispatcher_job`) constructs `SidebarDispatcher(tool_repo, event_bus, max_concurrent_agents)` and registers `MemoryFloorTrigger` as the sole trigger; the APScheduler job calls `poll()`, which iterates users active within 2 days and sets/clears `set_current_user_id()` per user. Registering a trigger anywhere else is dead code.
+- Scheduler path: `main.py` → `utils/sidebar_jobs.py` (`register_sidebar_jobs`) constructs `SidebarDispatcher(tool_repo, event_bus, max_concurrent_agents)` and registers `MemoryFloorTrigger` as the sole trigger; the APScheduler job calls `poll()`, which iterates users active within 2 days and sets/clears `set_current_user_id()` per user. Registering a trigger anywhere else is dead code.
 - Spawn paths: (1) dispatcher `_spawn_agent()` — daemon thread running `agent.run(item, event_bus)` under `copy_context()`; (2) direct invocation — a tool creates a `WorkItem` and runs the agent itself (e.g. `tools/implementations/forage_tool.py`, integration-mode memory curation at the segment-collapse hook). Both paths end at the same `_exit()` → `sidebar_activity` → `on_completion()` chain.
 - Tool boundary: agents call `sidebar_tool` (scratchpad + `complete_task`) and their declared `available_tools`; both tools are owned by `tools/implementations/AGENTS.md`, as are the agent-spawning tools themselves. `agents/base.py` only assembles schemas and injects identity.
 - Completion publishing goes through `cns.core.events.UpdateTrinketEvent` on `continuum_id='sidebar'`; which trinket receives it is decided by the agent's `_get_completion_trinket()` override — trinket contracts are owned by `working_memory/trinkets/AGENTS.md`.

@@ -1,5 +1,7 @@
 # tools/ — Tool framework: base class, repository, and config registry
 
+*Want a new capability? You don't need to surgery the framework — describe the tool you're imagining to your pair-programming assistant and point it at `HOW_TO_BUILD_A_TOOL.md`. It handles the base class, the schema, the per-user storage; restart MIRA and the tool is live. Dreamed at lunch, running by dinner.*
+
 ## Rules
 
 - Adding a tool requires exactly four coordinated pieces, in order: (1) a `XxxToolConfig(BaseModel)` with an `enabled` field registered via `registry.register("xxx_tool", XxxToolConfig)` at module level in the implementation file, (2) a `Tool` subclass with `name`, `simple_description`, and `tool_schema` class attributes, (3) a `run()` dispatching on `params.pop("operation")` (or equivalent), (4) the file inside `implementations/`. If no config is registered, `Tool.__init__` auto-generates a default config class (`XxxToolConfig`, `enabled=True`) via `registry.create_default` — so a tool with custom config fields must register explicitly or those fields silently do not exist. Skipping module-level registration with a custom config means the auto-generated one wins only if the module was imported before the config read; the reliable contract is always register-your-own.

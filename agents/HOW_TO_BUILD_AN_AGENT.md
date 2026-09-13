@@ -248,14 +248,15 @@ class MyAgent(SidebarAgent):
 
 The restricted schema pattern (a narrowed `input_schema` with a subset of operations) is your primary security boundary against tool misuse: an injected agent cannot call operations whose schemas are not in its context. The override replaces the tool's schema **wholesale** in `_get_tool_schemas()`.
 
+**Read the limits before copying the template — all three were verified the hard way:**
+
+1. **It only narrows what already exists.** `CURATOR_MEMORY_SCHEMA = copy.deepcopy(MemoryTool.tool_schema)` works because `MemoryTool.tool_schema` is a static class-attribute dict. Tools with a **dynamic `@property` schema** (`domaindoc_tool.py:tool_schema`, which rebuilds a live `label` enum at read time) cannot be deepcopied and narrowed at module scope -- you must hand-build the schema literal, which silently drops the live enum (an unknown `label` then fails at call time instead of being constrained upfront). Check which kind you are restricting before copying the template.
+2. **Restriction cannot grant an operation the tool never had.** If the rubric needs a capability the tool doesn't expose, a restricted schema cannot conjure it. Either (a) add the read operation to the tool itself upstream, or (b) pre-fetch the data into `work_item.context` from the trigger, the way `memory_floor_trigger.py` fetches texts and scores so the agent judges without a search round-trip. Pre-fetched content enters the LLM context exactly as a tool result would -- restriction is about *limiting actions*, not about being the only pipe for content.
+3. **"Read-only" is verified by handler behavior, not by operation name.** Operations that look like reads can mutate: `domaindoc_tool`'s `expand`/`collapse` are `UPDATE domaindoc_sections SET collapsed = ...` writes. Read the actual `run()` handler before deciding an op is safe to grant — name-based restriction is how a "read-only" agent gets a mutating op.
+
 **Live template:** `memory_tool.py:CURATOR_MEMORY_SCHEMA` -- the full memory_tool schema minus `create_memory`, consumed by `MemoryCuratorAgent.tool_schema_overrides` so the curator can never mint memories. (`email_tool.py:SIDEBAR_EMAIL_SCHEMA` is a retained-but-unused earlier example of the same shape.)
 
 Export the restricted schema from the **tool's** module, not the agent's -- the tool owns its operation contract.
-
-**Two limits of the pattern, both verified the hard way:**
-
-1. **It only narrows what already exists.** `CURATOR_MEMORY_SCHEMA = copy.deepcopy(MemoryTool.tool_schema)` works because `MemoryTool.tool_schema` is a static class-attribute dict. Tools with a **dynamic `@property` schema** (`domaindoc_tool.py:tool_schema`, which rebuilds a live `label` enum at read time) cannot be deepcopied and narrowed at module scope -- you must hand-build the schema literal, which silently drops the live enum (an unknown `label` then fails at call time instead of being constrained upfront). Check which kind you are restricting before copying the template.
-2. **Restriction cannot grant an operation the tool never had.** If the rubric needs a capability the tool doesn't expose (e.g. a domaindoc agent that must read full section bodies -- `domaindoc_tool`'s read ops are only `overview` and `search`), a restricted schema cannot conjure it. Either (a) add the read operation to the tool itself upstream, or (b) pre-fetch the data into `work_item.context` from the trigger, the way `memory_floor_trigger.py` fetches texts and scores so the agent judges without a search round-trip. Pre-fetched content enters the LLM context exactly as a tool result would -- restriction is about *limiting actions*, not about being the only pipe for content.
 
 **Per-mode tool lists.** `available_tools` is a class attribute, so a two-mode agent with different tool needs per mode cannot express that with a plain list. The mode-scoped override that works:
 
@@ -282,9 +283,13 @@ def _get_completion_trinket(self) -> str:
 def _build_completion_context(self, status: str, summary: str,
                               work_item: 'WorkItem') -> dict[str, Any]:
     context = {'task_id': work_item.item_id, 'status': status}
+    # Map EVERY status the loop can emit, or the unmapped ones render as
+    # failures in your trinket: success, failed, timeout, skipped, rejected.
     if status == 'success':
         context['result'] = summary
-    else:
+    elif status == 'skipped':
+        context['skipped_reason'] = summary      # sentry said not worth a run
+    else:                                        # failed | timeout | rejected
         context['error'] = summary
         context['error_type'] = 'AgentFailure'
     return context
@@ -356,12 +361,12 @@ class MyTrigger:
 ```
 
 **Trigger rules:**
-- `check_for_new_items()` must be **idempotent** and **cheap** -- safe to call repeatedly with no LLM calls. All LLM work (including injection defense) belongs in the agent, not the trigger.
+- `check_for_new_items()` must be **idempotent** and **cheap** -- safe to call repeatedly with no LLM calls. All LLM work (including injection defense) belongs in the agent, not the trigger. **Beware hidden LLM paths**: a tool operation can invoke a model invisibly (`web_tool`'s fetch condenses pages over 5000 chars via the `fast` route), which silently violates this rule and breaks anything deterministic like hash comparisons — check the operations your trigger calls before trusting them LLM-free.
 - **Dedup is handled by the dispatcher** via `sidebar_activity` SQLite. Triggers return all discovered items and the dispatcher decides what to act on (first dispatch, retry, or skip).
 - `on_dispatched()` is for domain-specific side effects only (e.g. setting an IMAP flag). It must be idempotent because it's called on retries too.
 - **Error handling distinction**: Return `[]` to signal "no work found" (not an error). Raise `Exception` only for actual failures (connection errors, programming bugs). The dispatcher lets exceptions propagate — if a trigger has a bug, operators need to know via error logs, not silent `[]` returns.
 - Store untrusted content as `"raw_content"` in the WorkItem context. Set `sanitize_untrusted_input = True` on the agent class to have the base class sanitize it before the LLM loop.
-- Make `item_id` **stable across polls** for the same logical work item -- it is the dedup key (`UNIQUE(interface_name, thread_id)` in `sidebar_activity`). Key it to the **entity**, not the cycle: a single-item trigger may key by cycle (`memory_floor_trigger.py` uses `floor_{user_id}_{activity_days}`), but a **multi-item** trigger emitting one WorkItem per entity must derive the key from the entity's own stable ID (`rsteward_{reminder_id}`, `folder:uid`) -- a cycle- or timestamp-keyed ID in a multi-item trigger re-dispatches every entity on every cycle and the dispatcher will happily run them all again.
+- Make `item_id` **stable across polls** for the same logical work item -- it is the dedup key (`UNIQUE(interface_name, thread_id)` in `sidebar_activity`), and that uniqueness is **global across users**: the dispatcher keys in-flight work by `interface_name:item_id` on a process-global map, which is why every key shape below embeds `{user_id}`. Key it to the **entity**, not the cycle: a single-item trigger may key by cycle (`memory_floor_trigger.py` uses `floor_{user_id}_{activity_days}`), but a **multi-item** trigger emitting one WorkItem per entity must derive the key from the entity's own stable ID (`rsteward_{reminder_id}`, `folder:uid`) -- a cycle- or timestamp-keyed ID in a multi-item trigger re-dispatches every entity on every cycle and the dispatcher will happily run them all again.
 - The dispatcher caps at `MAX_ITEMS_PER_USER_PER_POLL = 5` and tracks in-flight work keyed `interface_name:item_id` against `max_concurrent_agents`. Returning 500 items does not run 500 agents -- a backlog drains over successive polls.
 - Dedup records are not forever: terminal `sidebar_activity` rows are deleted by the dispatcher's 30-day cleanup (`_maybe_cleanup`). An entity whose item was terminal (e.g. `handled`) becomes re-dispatchable ~30 days later. For a janitor that is usually correct behavior; for an agent whose "done" must be permanent, the trigger itself must stop surfacing the entity (or the tool must record the tending separately).
 - **Physical-resource dedup**: when the entity is a file or other physical object, prefer an identity key that changes when the object genuinely changes — e.g. `{user_id}_{filename}_{mtime}` re-triages a re-dropped replacement but never the same file. Strongest form: make the agent's own action remove the entity from discovery (archiving a file out of the watched folder means future polls never see it again); the dedup record is then a backstop, not the mechanism.
@@ -379,7 +384,22 @@ from agents.triggers import MyTrigger
 dispatcher.register_trigger(MyTrigger())
 ```
 
-`register_sidebar_jobs` is the only place a trigger may be registered; the APScheduler job it creates calls `dispatcher.poll()` every `poll_interval_minutes`. Registering anywhere else is dead code. Guard construction behind your config's `enabled` flag if the trigger should be opt-in.
+`register_sidebar_jobs` is the only place a trigger may be registered; the APScheduler job it creates calls `dispatcher.poll()` every `poll_interval_minutes`. Registering anywhere else is dead code.
+
+**Opt-in triggers use the double gate** (both halves, as `memory_floor_trigger.py` and every opt-in agent since have done):
+
+```python
+# 1. registration-time: never even construct when disabled (utils/sidebar_jobs.py)
+if config.my_agent.enabled:
+    dispatcher.register_trigger(MyTrigger())
+
+# 2. poll-time: re-check config inside check_for_new_items so a user can
+#    flip the flag at runtime without a restart
+if not config.my_agent.enabled:
+    return []
+```
+
+The registration guard saves construction cost; the poll-time check honors runtime changes. One without the other is half the pattern.
 
 ### Step 6: Add Configuration
 
@@ -459,7 +479,7 @@ If `build_recovery_context` returns `None` (default), the retry starts with the 
 
 **Scratchpad persistence cuts both ways.** Notes survive across retries (same `thread_id`) — but they also survive a *successful* run: cleanup is 30-day retention (`SidebarDispatcher._maybe_cleanup`), not per-run. A re-dispatched or retried agent may encounter notes from weeks ago, so point it at them explicitly (as above) rather than assuming a clean slate.
 
-A retry only happens if the trigger *rediscovers* the item on a later poll — retries ride the normal discovery cycle, there is no out-of-band retry queue.
+A retry only happens if the trigger *rediscovers* the item on a later poll — retries ride the normal discovery cycle, there is no out-of-band retry queue. **Direct-invocation agents have no discovery cycle**, so retries there are yours to hand-roll in the dispatching tool: re-apply the `status == 'failed' and run_count <= max_retries` check once after `agent.run()` returns, and spawn again with `context['prior_run']` set (see `inbox_sweeper` / `domaindoc_proofreader` dispatch tools for the shape).
 
 ### Step 9: Add a Sentry Gate (Optional)
 
@@ -544,6 +564,8 @@ Two constructor requirements that break silently if missed: the agent needs `too
 
 Direct invocation still ends at the same `_exit()` -> `sidebar_activity` -> `on_completion()` chain as the dispatcher path, so dedup records and trinket publishing behave identically. The difference is only who creates the `WorkItem` and who owns the thread.
 
+The pre-fetch pattern transfers here too, with one site change: there is no trigger, so **the spawning tool's thread is the pre-fetch site** — extract content into `raw_content` before constructing the `WorkItem`, exactly as a trigger would (the crash-path publishing below is the other half a trigger would have given you for free).
+
 ## Security Considerations
 
 Sidebar agents run without a human in the loop. Every agent that processes untrusted input needs proportionate guardrails.
@@ -553,6 +575,8 @@ Sidebar agents run without a human in the loop. Every agent that processes untru
 If your agent processes content from strangers (email, webhooks, public APIs):
 
 1. **Set `sanitize_untrusted_input = True`** on your agent class. The base class runs `PromptInjectionDefense.sanitize_untrusted_content()` with `trust_level=TrustLevel.UNTRUSTED` and `require_llm_detection=True` *before* the LLM loop starts, truncating the sanitized result at 8000 chars. Dangerous content never enters the agent's LLM context; on rejection the agent exits through `_exit('rejected')` with no main-loop tokens burned. Your trigger stores content as `"raw_content"` in the WorkItem context; the base class writes `"sanitized_content"` and `"injection_warnings"` back after defense passes -- your `build_initial_message()` must read the **sanitized** key, not the raw one. **Derived content counts as untrusted**: if one mode's input is produced from untrusted material (a digest summarizing triaged files, a report quoting scraped text), that derived content rides in `raw_content` too, so it passes the same gate — an agent-written summary of a hostile file is still the hostile file's words.
+
+   **Know what the gate does NOT cover.** It runs once, pre-loop, over `raw_content` only. Two large classes of untrusted content never pass through it: **mid-loop tool results** (every web-using agent receives fetched pages inside the loop — the defenses there are the tool's own wrapping of untrusted content plus your restricted schema, not the gate) and **main-conversation-trusted content** (a collapsed segment's transcript is trust-equivalent to what the primary model already processes; the extraction pipeline consumes segments ungated, and a collapse-spawned agent may do the same — with the honest caveat that a hostile quote inside a segment reaches the loop unsanitized). Size is the other axis: the gate truncates at 8000 chars, so segment-scale input cannot ride `raw_content` at all. Corollary: a sentry gate cannot filter content of any kind — it runs before the loop and before any tool call, so it never sees what the content is; content-shape filtering belongs in the trigger's deterministic discovery.
 2. **Triggers must be cheap** -- discovery (polling, dedup, content extraction) should involve no LLM calls. All LLM work belongs in the agent, gated by the dispatch decision. This prevents wasted calls on items that get capped or concurrency-blocked by the dispatcher.
 3. **Restrict tool operations** -- use `tool_schema_overrides` to limit what the agent can do. The LLM can't call operations whose schemas aren't in its context.
 4. **Escape rendered output** -- anything the agent writes that ends up in the main conversation's system prompt (via trinkets) must have `<`/`>` escaped. `AsyncActivityTrinket` does this with `html.escape()`.
@@ -647,6 +671,7 @@ The base class `run()` loop (do not override):
 - [ ] Trigger in `agents/triggers/` -- cheap deterministic discovery, no LLM calls, stable `item_id`, no trigger-side dedup
 - [ ] Trigger exported from `agents/triggers/__init__.py` **and** registered in `utils/sidebar_jobs.py:register_sidebar_jobs`
 - [ ] Or: direct-invocation tool spawning under `copy_context()` with `MyAgent(tool_repo=...)` + `agent.run(work_item, event_bus)`
+- [ ] Or: service-hook spawn — a lifecycle event hands your agent a WorkItem directly (segment-collapse handler, integration-curator pattern). No trigger, no dispatch tool; the hook owns thread + context and must publish failure itself on crash
 - [ ] Config in `config/config.py` + `config_manager.py`, and `agent_timeout_overrides` entry if the agent needs more than 120s
 
 **Optional gates**
@@ -669,6 +694,8 @@ The base class `run()` loop (do not override):
 ## Verification
 
 No mocks, no test files (root AGENTS.md). An agent that has never executed is the standard failure product of this workflow.
+
+**The offline floor** (for build environments without Vault/model routes — several agent contracts route through Vault: per-user config, the user timezone, and every user-SQLite store): imports of agent + trigger + trinket modules; prompt load via `load_agent_prompt` (a missing prompt file is invisible to `py_compile` and fails only at first `get_agent_prompt()` — this is the one check that catches it); restricted-schema op sets asserted against the real tool's schema; `trigger.agent_class` resolving through the lazy import; timeout-override key derivation; and any pure logic executed for real. Everything past the floor is **UNVERIFIED** until a live dispatch — say so and name the covering probe.
 
 1. **Boot gate** -- `python -m utils.power_on_self_test pre-server`. `_check_tools` discovers every tool and validates each static `tool_schema` through `ToolDefinition.from_mapping`, so a malformed restricted schema fails here.
 2. **Prompt loads** -- `get_agent_prompt()` on a real `WorkItem`. A missing prompt file raises at first call, not at import; nothing else catches this.

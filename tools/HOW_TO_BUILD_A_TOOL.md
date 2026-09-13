@@ -82,6 +82,8 @@ Three component types, three guides:
 | Reflect state in the system prompt | **trinket** | `working_memory/trinkets/HOW_TO_BUILD_A_TRINKET.md` |
 | Do autonomous multi-step work with no user present | **sidebar agent** | `agents/HOW_TO_BUILD_AN_AGENT.md` |
 
+When the ask is "and MIRA should *do something* about it unprompted," remember the boundary: a tool's job is to **surface** the state and let the model act conversationally — an overdue flag on a list result, a `gone_too_long` hint the model relays or turns into an internal reminder. That composition (tool flags, model decides) covers most "bug me about it" asks without a scheduler; a sidebar agent is for work that must happen when the user isn't there at all.
+
 ## 📋 Pattern Index
 
 ### Essential Patterns
@@ -131,9 +133,9 @@ Every tool needs these core patterns. Anchors name a file and a symbol; line num
 | **Tool Discovery** | `tools/repo.py:ToolRepository.discover_tools` / `_process_module` | Auto-registration from `tools/implementations/` |
 | **Param Filtering/Coercion** | `tools/repo.py:ToolRepository.invoke_tool` / `_coerce_to_schema_type` | What reaches `run()` and what is dropped |
 | **Abstract Base in implementations/** | `tools/repo.py` (`_is_abstract_base_class`) | Shared base that must not appear in the catalog |
-| **Natural Language Dates** | `reminder_tool.py:_parse_date` | Phrase ladder: explicit today/tomorrow/yesterday → regex relatives ("in 3 weeks") → lenient fallback. `parse_time_string` does ISO/date-only/time-only **only** — it raises on "tomorrow" |
+| **Natural Language Dates** | `reminder_tool.py:_parse_date` | Phrase ladder: explicit today/tomorrow/yesterday → regex relatives ("in 3 weeks") → lenient fallback. `parse_time_string` does ISO/date-only/time-only **only** — it raises on "tomorrow". Weekday phrases ("last Tuesday") are in no existing ladder — expect to extend it with `dateutil.relativedelta(weekday=...)` |
 | **UUID Cross-Tool Linking** | `reminder_tool.py:_lookup_contact` / `_get_contact_by_uuid` | Linking rows across tools in the same user store — note the policy split: reminder links silently on substring match (read-path leniency), while contacts' mutating ops demand exact-or-UUID and return `needs_confirmation`/`ambiguous` instead of guessing. **For bindings that touch money or permanence, follow the stricter contacts policy** |
-| **Duplicate Detection** | `reminder_tool.py:_check_duplicate_reminder` | Idempotent retries within a time window |
+| **Duplicate Detection** | `reminder_tool.py:_check_duplicate_reminder` | Idempotent retries within a time window — the *time-window* shape. The exact-key shape (same logical item → return existing) is a `UNIQUE` constraint in the table DDL plus check-before-insert; both are valid, pick the one that matches your semantics |
 | **Config Validation** | `tools/repo.py:Tool.validate_config`, `email_tool.py:validate_config` | Live connection test + folder auto-discovery for the validate endpoint |
 | **Manager Caching** | `utils/userdata_manager.py:get_user_data_manager` | Per-user `UserDataManager` cache |
 | **Response Sanitization** | `web_tool.py:_SENSITIVE_RESPONSE_HEADERS` | Strip credentials from outbound responses |
@@ -184,7 +186,7 @@ class Tool(ABC):
 - **Automatic User Scoping**: `self.db` is always scoped to the current user - no manual filtering needed
 - **Lazy Initialization**: Database connection created on first access
 - **File Isolation**: `self.user_data_path` returns `data/users/{user_id}/tools/{tool_name}/`
-- **Parallel Safety**: Set `parallel_safe = False` for tools that mutate shared state where operation order matters (e.g., create-then-edit). Sequential tools execute first, then parallel-safe tools run concurrently. For mixed read/write tools, override `is_call_parallel_safe(cls, tool_input)` to allow read operations to run in parallel while keeping writes sequential.
+- **Parallel Safety**: Set `parallel_safe = False` for tools that mutate shared state where operation order matters (e.g., create-then-edit). Sequential tools execute first, then parallel-safe tools run concurrently. **`parallel_safe = False` alone also serializes your reads** — mixed read/write tools pair it with the `is_call_parallel_safe(cls, tool_input)` override returning True for the read operations only (the Quick Start template shows the two pieces combined; the override fully replaces the base `return cls.parallel_safe`).
 
 ### Database Operations (utils/userdata_manager.py)
 
@@ -274,6 +276,8 @@ Essential questions:
 - "What problem does this solve that existing tools don't?"
 - "What should this tool explicitly NOT do?"
 - "What would indicate success for users?"
+
+The **rejections** in an ask are requirements too. "i'm not a library, i don't need due dates" and "every calorie app turns it into homework" are the strongest spec you will get — a feature the user explicitly refused is a defect if you build it. When no human is available to clarify, extract the rejections first, then fill the remaining gaps with the smallest defensible assumption and record what you assumed.
 
 ### Phase 2: Specification Analysis
 
@@ -420,6 +424,8 @@ items = self.db.select('my_items')
 # Returns: [{'id': '...', 'encrypted__title': 'Secret Meeting', 'encrypted__notes': 'Confidential', ...}]
 #          ^^^^ Note: 'encrypted__title' NOT 'title'
 ```
+
+**Encrypted columns are filter-opaque — you cannot `WHERE` on them.** `select(table, where, params)` interpolates filter params raw, but the stored value is Fernet ciphertext (randomized per write — the same plaintext never encrypts to the same bytes). `WHERE encrypted__url = :url` therefore matches nothing, ever. Filtering on an encrypted column means selecting broadly and filtering in Python after decryption, or storing a non-encrypted lookup twin (a plain hash column) alongside the ciphertext. Indexes on `encrypted__` columns are equally useless for the same reason — plan your queries around the plaintext columns you keep.
 
 ### Deferred Table Creation
 
@@ -623,6 +629,8 @@ display = format_datetime(convert_from_utc(stored_dt, user_tz), "date_time_short
 
 **Keep the DST-strict resolution outside the lenient fallback ladder.** `parse_time_string`'s `replace(tzinfo=...)` silently picks the first of two ambiguous instants and shifts nonexistent ones by an hour, and its broad `except` would replace the ambiguity message with a generic "Invalid date format" — the ambiguity message is exactly what the model needs in order to ask the user which time they meant. `reminder_tool.py:_parse_date` documents this ordering inline.
 
+**One canonical stored format.** Compare timestamp strings in SQL only when every writer used the same serializer — store exclusively via `format_utc_iso()` so lexicographic comparisons (`due_at < :now`) hold. Mixed shapes (with/without milliseconds, with/without offset) compare incorrectly and fail silently, not loudly.
+
 **Periods and ranges — the gap the instant parsers leave.** Neither `parse_time_string` nor dateutil resolves "last month", "September", or "2025-09" — month/period resolution is yours to build, in the **user's calendar**: take the month boundary in the user's timezone, then convert to UTC bounds. Conventions that hold up: a date-only end bound includes that whole day (exclusive next-midnight); a time-bearing end bound is the exact cutoff; dedupe invoices/periods on the *resolved UTC bounds*, not on the input string — "September", "2025-09", and "last month"-said-in-September must all resolve to the same key.
 
 `get_user_preferences()` raises without user context. Catch `RuntimeError` → `"UTC"` only where a wrong label is cosmetic; never on a path that stores or compares an instant.
@@ -666,7 +674,7 @@ Adding a tool is exactly four coordinated pieces, in order. `tools/AGENTS.md` ow
 
 | # | Piece | Where | Skipping it means |
 |---|---|---|---|
-| 1 | `XxxToolConfig(BaseModel)` with an `enabled` field, registered via `registry.register("xxx_tool", XxxToolConfig)` **at module level** | the implementation file | Your custom config fields silently do not exist — `Tool.__init__` fabricates an `enabled`-only default |
+| 1 | `XxxToolConfig(BaseModel)` with an `enabled` field, registered via `registry.register("xxx_tool", XxxToolConfig)` **at module level** | the implementation file | Your custom config fields silently do not exist — `Tool.__init__` fabricates an `enabled`-only default, and **that default is `True`: an unregistered tool is silently auto-ENABLED**, violating disabled-by-default. Skipping registration doesn't just lose fields; it ships the tool on |
 | 2 | `Tool` subclass with `name`, `simple_description`, `tool_schema` class attributes | the implementation file | No `simple_description` drops the tool from the `invokeother_tool` catalog and enum, so it is unloadable at runtime unless it is in `ESSENTIAL_TOOLS` |
 | 3 | `run()` dispatching on the `operation` param | the implementation file | — |
 | 4 | The file inside `tools/implementations/` | — | Discovery never imports it; the class does not exist |
@@ -696,14 +704,15 @@ from pydantic import BaseModel, Field
 from tools.registry import registry
 
 class MyToolConfig(BaseModel):
-    enabled: bool = Field(default=True, description="Whether enabled")
+    # Disabled by default — new tools opt in (see Contribute It Back).
+    enabled: bool = Field(default=False, description="Whether enabled by default")
     max_items: int = Field(default=10, description="Max items to return")
 
 # Register if you have custom config beyond 'enabled'
 registry.register("my_tool", MyToolConfig)
 ```
 
-If you don't register a config, `Tool.__init__` fabricates one with just `enabled: bool = True` via `registry.create_default`. **A tool with custom config fields must register explicitly** or those fields silently do not exist — and the fabrication only wins the race if your module was imported before the config read. The reliable contract is always register-your-own, at module level.
+If you don't register a config, `Tool.__init__` fabricates one with `enabled: bool = True` via `registry.create_default` — an unregistered tool is therefore **auto-enabled**, the opposite of what a new tool wants. **A tool with custom config fields must register explicitly** or those fields silently do not exist — and the fabrication only wins the race if your module was imported before the config read. The reliable contract is always register-your-own, at module level. When probing the registry yourself: `get_or_create` returns the config **class**, not an instance — call it before instantiating.
 
 ### Tool Descriptions
 
@@ -722,7 +731,7 @@ Two required fields:
 - Use `enum` for fixed options
 - Clear descriptions - the model uses these to decide how to call the tool
 - Mark required fields in `"required"` array
-- Every static `tool_schema` is validated at boot: `utils/power_on_self_test.py:_check_tools` runs `ToolDefinition.from_mapping()` over each one, so a malformed schema fails the pre-server gate rather than surfacing mid-conversation
+- Every static `tool_schema` is checked at boot by `utils/power_on_self_test.py:_check_tools` via `ToolDefinition.from_mapping()` — but that check validates the **envelope only** (top-level keys, non-empty name and description). `input_schema` internals — enums, `required`, `additionalProperties`, nested objects — pass through unvalidated and surface as model-side tool-call failures, not boot failures. A schema that boots is not thereby a correct schema
 - A schema whose enums change with user data must be a `@property`, not a class dict — `domaindoc_tool.py:tool_schema` rebuilds a live label catalog at schema-read time
 
 ### The run() Contract
@@ -939,7 +948,9 @@ logger = logging.getLogger(__name__)
 
 
 class MyToolConfig(BaseModel):
-    enabled: bool = Field(default=True, description="Whether enabled by default")
+    # New tools start DISABLED -- a contributor's tool must not enter
+    # anyone's startup set uninvited (see Contribute It Back).
+    enabled: bool = Field(default=False, description="Whether enabled by default")
     max_items: int = Field(default=50, description="Ceiling on items returned per call")
 
 
@@ -1150,7 +1161,8 @@ logger = logging.getLogger(__name__)
 
 
 class MyAPIToolConfig(BaseModel):
-    enabled: bool = Field(default=True, description="Whether enabled")
+    # Disabled by default -- same rule as every new tool.
+    enabled: bool = Field(default=False, description="Whether enabled by default")
 
 registry.register("my_api_tool", MyAPIToolConfig)
 
@@ -1449,6 +1461,17 @@ Pick the tier by behavioral surface touched, not by change size:
 
 **Probe-surface membership (standing rule):** any path whose failure would report incorrect data to users, lose data, or degrade silently — reads, writes, searches, auth flows, failure paths. If a required probe cannot run against live infrastructure, fix the code until it can; do not simulate.
 
+**The offline tier — what executes without the live stack.** Some build environments have no Vault, database, or model routes, and several real contracts route through all three (`config.<tool>_tool` reads, `get_user_preferences()`, and every `encrypted__` round-trip each depend on Vault). When live execution is unavailable, this is the floor — all of it real, none of it simulated:
+
+- `py_compile` + pyflakes on every touched file
+- Import your module directly (`ToolRepository._process_module('tools.implementations.my_tool')`) when full `discover_tools()` dies on an *unrelated* tool's missing optional dependency
+- `ToolDefinition.from_mapping(Tool.schema)` — envelope validation, the boot gate's own check
+- Registration confirmation via `registry.get('my_tool')` (note: `get_or_create` returns the config **class**, not an instance)
+- Pure logic executed for real — parse/scale/settle/compute functions run against direct inputs; this is where offline probes earn the most (one portfolio tool caught a sign error in its settlement algorithm exactly this way)
+- Every helper contract read from source, not assumed
+
+Then report **UNVERIFIED** for everything above the floor and name the live probe that covers it. Offline-executed is not live-verified; conflating the two is the exact failure this section exists to prevent.
+
 ### What runs at boot
 
 `utils/power_on_self_test.py` is the pre-server gate. `_check_tools` already covers every tool you add:
@@ -1524,7 +1547,7 @@ End the change report with a verification state: **EXECUTED** (what ran) or **UN
 - [ ] Return envelope matches what `cns/services/tool_loop.py` expects
 
 **Maps and verification**
-- [ ] `tools/implementations/AGENTS.md` `## Files` bullet added in the same commit
+- [ ] `tools/implementations/AGENTS.md` `## Files` bullet added in the same commit (or, when the work rides a branch, written in the branch and landing with the merge — a bullet in a worktree nobody merges is a bullet that never existed)
 - [ ] `tools/AGENTS.md` updated if the change touched the framework contract
 - [ ] Verified live per the tier above; report ends EXECUTED or UNVERIFIED
 
