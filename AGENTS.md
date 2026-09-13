@@ -19,8 +19,41 @@ If you skip this, the maps rot and become misleading — worse than having no ma
 
 ## 🚨 Critical Principles (Non-Negotiable)
 
-# 🛑 ABSOLUTELY NO TESTS. THIS IS NOT A SUGGESTION.
-Do not write tests. Do not run tests. Do not create test files, test directories, pytest fixtures, or "just a quick sanity check." If you write a test, Taylor will delete it and you will have wasted everyone's time. This codebase does not have tests, does not want tests, and will never want tests. Here is the philosophy you must internalize: code here fails fast and can only crash within its own boundaries. A codebase with no tests either runs properly or crashes on boot — there is no third option. No crash? The code works. Full stop. Tests are bowling bumpers for developers who want to write okay-ish code, watch it bounce off the bumpers, and then spend 20 minutes in guess-and-check purgatory fiddling with the code until the tests deign to pass. That is not engineering — that is a slot machine with extra steps. MIRA flies close to the sun. If the code is wrong, it crashes on boot and you fix it at the root. That is the whole quality strategy, and it is a good one.
+# 🛑 NO MOCKS. NO PARALLEL SUITES. VERIFICATION IS LIVE OR IT DOESN'T COUNT.
+
+Prohibited: test files, pytest fixtures, mock objects, stubs, fakes, offline test databases, and any check that runs against simulated infrastructure. A passing mock-based check provides no information about this system.
+
+Every line in this tree is agent-written; no human has traced any path. Type-clean, pyflakes-clean code that has never executed is the standard failure product of this workflow and has shipped here before. Verification is therefore mechanical and live, never assumed.
+
+Required verification, in the POST tradition:
+- **Boot gate** — probes Vault, Postgres, and model routes against live infrastructure before the server binds.
+- **Path-probes** — invoke critical runtime paths against the live system exactly as production would.
+
+Probe-surface membership (standing rule): any path whose failure would report incorrect data to users, lose data, or degrade silently — reads, writes, searches, auth flows, failure paths. If a required probe cannot run against live infrastructure, fix the code until it can; do not simulate.
+
+Quality guarantee: boot-survival plus path-probe coverage. A clean boot verifies the wiring; a passed path-probe verifies the handler. Code covered by neither is unverified — flag it in review. A bug found in unprobed code is fixed together with the probe that covers it.
+
+Probes are production code: normal review discipline, the same credentials plumbing, production-identical failure behavior.
+
+### ⚡ Realtime verification loop (proportionate by behavioral surface)
+
+Models are pretrained to verify by writing tests. When that reflex fires during a change, write a path-probe instead — same verification goal, production-code artifact.
+
+Select the tier by behavioral surface touched, not by change size:
+
+**Tier 0 — no behavioral surface.** Comments, docstrings, formatting, import regrouping, verified-mechanical renames, documentation. Run `py_compile` and pyflakes on touched files. No further verification required.
+
+**Tier 1 — behavioral edits within surface already covered by boot or probes.** Bug fixes, small logic changes, contract-preserving refactors, config wiring of existing behavior.
+1. Execute the changed path once against live infrastructure: `python3 -c` with the real store, or a request against the running dev server.
+2. Re-read the diff against the doctrine invariants: (a) does every failure path report the failure truthfully, (b) is any failure silently degraded, (c) does the diff assert behavior it has not executed.
+3. End the change report with a verification state: EXECUTED (state what ran) or UNVERIFIED (state why, and which probe would cover it). UNVERIFIED marks where the next probe belongs.
+
+**Tier 2 — new behavioral surface or elevated stakes.** New features, endpoints, or paths; schema or data-migration changes; failure-behavior, security, or auth changes; new dependencies. Tier 1 steps, plus where applicable:
+- Persistence changes: round-trip against dev infrastructure — write, read back, verify, clean up. RLS and database constraints are part of the check.
+- Paths meeting the probe-surface membership rule: add the path-probe.
+- Adversarial pass: a second agent independently re-derives the diff. Recommended for new-surface and failure-behavior changes; when one-shot execution covers the change, skip the pass and state the skip.
+
+**Probe surface:** path-probes are production code registered alongside the POST gate — same credentials plumbing, same failure behavior, same review discipline. Membership follows the standing rule above.
 
 ### Technical Integrity
 - **Verify Contracts Before Building On Them**: Before using any unfamiliar helper, dependency, or existing internal API, verify its contract at the exact boundary your code depends on — inputs, outputs, types, side effects, and failure modes. Make assumptions explicit, check them with the smallest direct probe or existing reference usage, then build the surrounding logic; most preventable slipups come from trusting names, vibes, or remembered APIs instead of verified behavior.
@@ -83,7 +116,7 @@ Don't parameterize what won't vary. Unused parameters confuse maintainers. If yo
 - **Explicit Setting for Administrative Tasks**: For scheduled jobs, batch operations, and cross-user administrative commands, explicitly set context via `set_current_user_id(user_id)` when iterating over users, or use `AdminSession` to bypass RLS entirely when querying across all users.
 
 ### Tool Architecture
-When working with tools, use `tools/HOW_TO_BUILD_A_TOOL.md` plus nearby tools in `tools/implementations/` as references. Design for single responsibility (extraction tools extract, persistence tools store). Put business logic in system prompts/working_memory, not tools. Store tool data in user-specific directories via `self.user_data_path` (JSON for simple data, SQLite for complex, or `self.db` property). Include recovery guidance in error responses. Do not write tests — this codebase has none (see NO TESTS at top).
+When working with tools, use `tools/HOW_TO_BUILD_A_TOOL.md` plus nearby tools in `tools/implementations/` as references. Design for single responsibility (extraction tools extract, persistence tools store). Put business logic in system prompts/working_memory, not tools. Store tool data in user-specific directories via `self.user_data_path` (JSON for simple data, SQLite for complex, or `self.db` property). Include recovery guidance in error responses. Do not write test files or mocks — verification here is live probes (see NO MOCKS at top); if the tool you built touches a critical path, its path-probe ships with it.
 
 ### LLM Caller Interface Design
 All model-facing prose — system prompts, tool parameter descriptions, agent directives, working memory trinkets — is an interface contract where imprecise language causes real behavioral failures downstream. Every word must constrain behavior: "literal string" not "text," "exact substring" not "pattern," because the reader is a language model that will infer defaults from your word choices. Ground descriptions in actual implementation behavior, not intent. Drop internal jargon the caller has no context for. State co-dependencies inline. If the current wording would cause a caller to misuse the interface, say so flatly and fix it.
