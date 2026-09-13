@@ -761,7 +761,16 @@ class SidebarAgent(ABC):
                 complete_result.get('summary', '')
                 if isinstance(complete_result, dict) else ''
             )
-            self._exit('success', summary)
+            # complete_task already wrote its own terminal record
+            # ('handled' | 'escalated'). Route that status through to
+            # _exit -- the activity UPSERT would otherwise overwrite it
+            # with the 'failed' default, which at max_retries > 0
+            # re-dispatches every successfully completed item.
+            activity_status = (
+                complete_result.get('status', 'handled')
+                if isinstance(complete_result, dict) else 'handled'
+            )
+            self._exit('success', summary, activity_status=activity_status)
             return True
 
         assert self._event_bus is not None
