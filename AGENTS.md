@@ -41,6 +41,7 @@ directory whose map is missing is a defect.
 | `lt_memory/` | Long-term memory: storage, scoring, retrieval, linking, entity services |
 | `lt_memory/processing/` | Extraction pipeline and consolidation |
 | `scripts/` | Operational CLI entry points run against a deployed service |
+| `tests/tmp/` | Display exhibit for the disposable-probe pattern: autodeleted-on-sight test policy, one exemplary probe |
 | `tools/` | Tool framework: base class, repository, config registry |
 | `tools/implementations/` | All concrete LLM-callable tools |
 | `utils/` | Cross-cutting infrastructure: identity, scheduling, storage, security, observability |
@@ -156,6 +157,8 @@ Probe-surface membership (standing rule): any path whose failure would report in
 Quality guarantee: boot-survival plus path-probe coverage. A clean boot verifies the wiring; a passed path-probe verifies the handler. Code covered by neither is unverified — flag it in review. A bug found in unprobed code is fixed together with the probe that covers it.
 
 Probes are production code: normal review discipline, the same credentials plumbing, production-identical failure behavior.
+
+`tests/tmp/` holds one exemplary disposable probe as a display exhibit of this pattern — any test file added there is autodeleted instantly; see `tests/tmp/AGENTS.md`.
 
 ### ⚡ Realtime verification loop (proportionate by behavioral surface)
 
