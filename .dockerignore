@@ -1,0 +1,81 @@
+# MIRA build-context exclusions.
+#
+# This file MUST live at the repo root. The documented builds
+#     docker build -t mira-base:latest -f deploy/docker/Dockerfile.base .
+#     docker build -t mira:latest -f deploy/docker/Dockerfile .
+# use the repo root as the build context, and Docker only reads
+# <context>/.dockerignore (or a <Dockerfile>.dockerignore sidecar) — a copy
+# under deploy/docker/ is silently ignored and .git, local venvs, and stray
+# credential files get baked into the image.
+#
+# Pattern semantics: bare `*` does not cross `/`, so `*.txt` below matches
+# root-level files only — requirements.txt is re-included and the
+# config/prompts/*.txt prompt templates are intentionally kept. Junk patterns
+# use `**/` prefixes because those files occur at every level.
+
+# Git
+.git
+.gitignore
+
+# Session scratch notes (never ship in an image)
+SCRATCH-*.md
+
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+venv/
+.venv/
+*.egg-info/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+**/*.swp
+**/*.swo
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Documentation (not needed in image)
+docs/
+
+# Development files
+*.md
+!README.md
+.env.example
+.pre-commit-config.yaml
+
+# Data directories (app data is generated at runtime; user data mounts at
+# /opt/mira/app/data as a volume)
+data/
+persistent/
+firehose_output.json
+
+# CI/CD
+.github/
+
+# Build artifacts
+**/*.log
+**/*.tmp
+
+# macOS
+**/.DS_Store
+
+# Plan files
+Plan-Ideas/
+*.txt
+!requirements.txt
+
+# Local development artifacts
+scratch/
+
+# Junk
+junk_drawer/
+lazygit-master/

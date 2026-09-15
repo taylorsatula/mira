@@ -2088,7 +2088,7 @@ Example output: "Backyard garden management: current plantings with locations an
             logger.debug("Calling LLM generate_response...")
             response = llm.generate_response(
                 messages=[{"role": "user", "content": prompt}],
-                model_config="primary",
+                model_config="fast",
             )
             logger.debug(f"LLM response received: stop_reason={response.stop_reason}")
 
@@ -2559,8 +2559,10 @@ _REPULSION_REWRITER_EXECUTOR = ThreadPoolExecutor(
 
 _REWRITER_SYSTEM_PROMPT_FILE = "repulsion_rewriter_system.txt"
 _REWRITER_USER_PROMPT_FILE = "repulsion_rewriter_user.txt"
-# D6: the repulsion rewriter runs on the chat substrate with effort='high'.
-_REWRITER_MODEL_CONFIG = "primary"
+# D6: the repulsion rewriter runs with effort='high' on the batch route
+# (main chat is the only primary consumer; batch keeps rewrites off the
+# single local llama-server slot so they cannot evict the chat KV cache).
+_REWRITER_MODEL_CONFIG = "batch"
 
 
 class FeedbackDomainHandler(BaseDomainHandler):

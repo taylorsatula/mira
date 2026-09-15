@@ -22,7 +22,9 @@ class ForageAgent(SidebarAgent):
     available_tools = ["continuum_tool", "memory_tool", "web_tool"]
     inherit_base_prompt = False
     max_iterations = 20
-    overwatch_model_config_name = "primary"
+    # Overwatch observer on `fast`: keeps the per-iteration one-shot off
+    # the local primary slot (single KV cache shared with the main chat).
+    overwatch_model_config_name = "fast"
 
     _PROGRESS_BAR_WIDTH = 20
 

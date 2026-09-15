@@ -97,7 +97,7 @@ class MemoryCuratorAgent(SidebarAgent):
     agent_id = "memory_curator"
     # Curation judgment shares the chat substrate rather than having its own
     # route -- it is the same kind of reflective work, on the same model.
-    model_config_name = "primary"
+    model_config_name = "batch"
     available_tools = ["memory_tool"]  # sidebar_tool auto-appended by the base
 
     # The curator operates on existing memories only -- never creates new ones.

@@ -24,7 +24,7 @@ email-validator   # Pydantic EmailStr validation - auth/api.py (multi-user signu
 webauthn          # Passkey registration and authentication - auth/webauthn_service.py (pulls cbor2)
 
 # == AI & MACHINE LEARNING ==
-anthropic>=0.78.0  # Anthropic Messages SDK - anthropic dialect; >=0.78.0 because clients/llm/dialects/anthropic.py sends output_config.effort on adaptive-thinking requests (output_config param: 0.77.0; effort in OutputConfigParam: 0.78.0)
+anthropic>=0.78.0  # Anthropic Messages SDK - anthropic dialect; >=0.78.0 because clients/llm/dialects/anthropic.py sends output_config.effort on adaptive-thinking requests (output_config param: 0.77.0; effort in OutputConfigParam: 0.78.0). 0.x and 1.x both work: the dialect passes anthropic.Timeout (the SDK's re-export of its vendored httpx/httpx2 Timeout) so SDK 1.x's httpx2 switch is transparent.
 numpy            # Numerical computing - embeddings, vector operations, ML utilities
 torch            # PyTorch CPU wheel managed explicitly for sentence-transformers
 sentence-transformers  # Sentence embeddings - mdbr-leaf-ir-asym
@@ -68,16 +68,34 @@ pytest           # Test framework - extensive test suite
 pytest-asyncio   # Async test support - async tests
 
 # == OPTIONAL DEPENDENCIES ==
-# These packages enhance functionality but are not required for core operation
-# Install with: pip install python-docx openpyxl playwright
+# Deliberately NOT installed by `pip install -r requirements.txt`. MIRA runs
+# without all three; each has a designed fallback. Install on demand:
+#   pip install python-docx openpyxl playwright && playwright install chromium
 
-# Document processing - enables richer DOCX/XLSX text extraction
-# Falls back to stdlib XML parsing if not installed
-python-docx      # (optional) DOCX text extraction - document_processing.py
-openpyxl         # (optional) XLSX text extraction - document_processing.py
+# Document processing - richer DOCX/XLSX text extraction.
+# utils/document_processing.py derives HAS_DOCX / HAS_OPENPYXL from ImportError
+# and falls back to stdlib zipfile + ElementTree parsing (_extract_docx_stdlib,
+# _extract_xlsx_stdlib). The stdlib path is verified equivalent to the library
+# path for both inlineStr workbooks (what openpyxl itself writes) and
+# sharedStrings workbooks, including rich-text <si> runs, sheet display names
+# resolved from xl/workbook.xml, and true workbook sheet order.
+#python-docx     # DOCX text extraction - document_processing.py
+#openpyxl        # XLSX text extraction - document_processing.py
 
-# Web scraping - enables JavaScript-rendered page capture
-playwright       # (optional) Headless browser - web_tool.py
+# JavaScript-rendered page capture.
+# Two independently optional layers, which is why this was mislabelled before:
+#   1. the PYTHON PACKAGE - web_tool._fetch_playwright() imports
+#      utils.playwright_service lazily and maps ImportError to the error code
+#      "playwright_unavailable". utils/playwright_service.py itself imports
+#      playwright.sync_api at module level, but nothing imports that module
+#      except the lazy call site and the POST check below.
+#   2. the CHROMIUM BROWSER - what deploy actually gates, via
+#      CONFIG_INSTALL_PLAYWRIGHT (deploy/python.sh Step 7, deploy/config.sh).
+#      A missing browser surfaces as the distinct error code
+#      "chromium_unavailable".
+# The POST check is CheckSpec("playwright_service", required=False, ...), so its
+# failure lands in advisory_failures and the gate still passes.
+#playwright      # headless browser - playwright_service.py, web_tool.py
 
 # Lattice federation - enables cross-server pager messaging (username@server)
 # ImportError-guarded: MIRA runs fine without it (federation simply disabled).

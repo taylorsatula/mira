@@ -153,13 +153,13 @@ Run interactively (setup wizard) or headless with environment variables:
 
 ```bash
 # Interactive setup
-docker run -it -v mira-data:/opt/vault -p 1993:1993 mira:latest
+docker run -it -v mira-data:/opt/vault -v mira-userdata:/opt/mira/app/data -p 1993:1993 mira:latest
 
 # Headless (non-interactive)
-docker run -e MIRA_ANTHROPIC_KEY=sk-ant-xxx -e MIRA_PROVIDER_KEY=gsk_xxx -v mira-data:/opt/vault -p 1993:1993 mira:latest
+docker run -e MIRA_ANTHROPIC_KEY=sk-ant-xxx -e MIRA_PROVIDER_KEY=gsk_xxx -v mira-data:/opt/vault -v mira-userdata:/opt/mira/app/data -p 1993:1993 mira:latest
 ```
 
-Vault data persists in the `mira-data` volume. PostgreSQL and Valkey data persist in container volumes.
+Vault data persists in the `mira-data` volume. User data (uploaded and generated files, per-user tool data) persists in the `mira-userdata` volume — without it, recreating the container loses those files (conversations live in the PostgreSQL volume). PostgreSQL and Valkey data persist in container volumes.
 
 ## Trying MIRA without installing anything
 I run a hosted copy of MIRA on [miraos.org](https://miraos.org/). It has a macOS app that can be downloaded [here](https://miraos.org/assets/MIRA-for-Mac.dmg).

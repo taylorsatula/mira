@@ -50,7 +50,15 @@ print_header "Beginning Installation"
 print_info "This script requires sudo privileges for system package installation."
 print_info "Please enter your password - the installation will then run unattended."
 echo ""
-sudo -v
+# Headless installs (nohup/CI) have no tty. `sudo -v` is a timestamp
+# operation that demands a terminal even when NOPASSWD satisfies
+# elevation (sudo 1.9.x, timestamp_type=tty): it aborts headless runs
+# with "a terminal is required to authenticate". Probe elevation with
+# a real command instead; prompt for a password only when the probe
+# shows one is needed (interactive tty runs).
+if ! sudo -n true 2>/dev/null; then
+    sudo -v
+fi
 
 # Keep sudo alive (Linux only)
 if [ "$OS" = "linux" ]; then

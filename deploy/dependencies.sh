@@ -34,6 +34,17 @@ if [ "$OS" = "linux" ] && [ "$DISTRO" = "debian" ]; then
         print_step "Updating package lists..."
         sudo apt-get update
         print_step "Installing system packages (Python ${PYTHON_VER})..."
+        # valkey-server, not valkey: Ubuntu splits the package and ships no
+        # 'valkey' metapackage (Debian/Fedora do) — asking apt for 'valkey' on
+        # Ubuntu LTS aborts this step with 'Unable to locate package'.
+        # Playwright Chromium runtime deps (full set, matching the Docker
+        # base image) — a subset leaves Playwright's host validation
+        # warning that browsers cannot launch.
+        # Contrib modules ship inside postgresql-17 (pg_trgm, pgcrypto, cube;
+        # verified on noble and resolute) — do NOT add an unversioned
+        # postgresql-contrib: it resolves to the distro's own postgres major
+        # (16 on noble, 18 on resolute), whose auto-created cluster races the
+        # pinned 17 cluster for port 5432.
         sudo apt-get install -y \
             build-essential \
             cmake \
@@ -46,25 +57,40 @@ if [ "$OS" = "linux" ] && [ "$DISTRO" = "debian" ]; then
             wget \
             curl \
             postgresql-17 \
-            postgresql-contrib \
             postgresql-17-pgvector \
-            valkey \
+            valkey-server \
+            libnss3 \
+            libnspr4 \
             libatk1.0-0t64 \
             libatk-bridge2.0-0t64 \
-            libatspi2.0-0t64 \
-            libxcomposite1
+            libcups2t64 \
+            libdrm2 \
+            libxkbcommon0 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxfixes3 \
+            libxrandr2 \
+            libgbm1 \
+            libpango-1.0-0 \
+            libcairo2 \
+            libasound2t64 \
+            libatspi2.0-0t64
     else
         # Silent mode with progress indicator
         (sudo apt-get update > /dev/null 2>&1) &
         show_progress $! "Updating package lists"
 
+        # valkey-server + the contrib/postgresql version pins — see the
+        # loud-branch comments above
         (sudo apt-get install -y \
             build-essential cmake git python${PYTHON_VER}-venv python${PYTHON_VER}-dev libpq-dev \
             postgresql-server-dev-17 unzip wget curl postgresql-17 \
-            postgresql-contrib postgresql-17-pgvector valkey \
-            libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 \
-            libxcomposite1 > /dev/null 2>&1) &
-        show_progress $! "Installing system packages (18 packages)"
+            postgresql-17-pgvector valkey-server \
+            libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 \
+            libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+            libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64 \
+            libatspi2.0-0t64 > /dev/null 2>&1) &
+        show_progress $! "Installing system packages"
     fi
 elif [ "$OS" = "linux" ] && [ "$DISTRO" = "fedora" ]; then
     # Check minimum Fedora version (PGDG dropped support for F-40 and earlier)
@@ -102,6 +128,7 @@ elif [ "$OS" = "linux" ] && [ "$DISTRO" = "fedora" ]; then
         print_step "Updating package lists..."
         sudo dnf makecache
         print_step "Installing system packages..."
+        # Playwright Chromium runtime deps — same set as the apt branch.
         sudo dnf install -y \
             "$DEV_TOOLS_GROUP" \
             python3-devel \
@@ -118,7 +145,18 @@ elif [ "$OS" = "linux" ] && [ "$DISTRO" = "fedora" ]; then
             atk \
             at-spi2-atk \
             at-spi2-core \
-            libXcomposite
+            libXcomposite \
+            nss \
+            nspr \
+            cups-libs \
+            alsa-lib \
+            mesa-libgbm \
+            libxkbcommon \
+            libXdamage \
+            libXfixes \
+            libXrandr \
+            pango \
+            cairo
     else
         # Silent mode with progress indicator
         (sudo dnf makecache > /dev/null 2>&1) &
@@ -128,8 +166,10 @@ elif [ "$OS" = "linux" ] && [ "$DISTRO" = "fedora" ]; then
             "$DEV_TOOLS_GROUP" python3-devel python3-pip libpq-devel \
             postgresql17-server postgresql17-contrib postgresql17-devel pgvector_17 \
             unzip wget curl valkey \
-            atk at-spi2-atk at-spi2-core libXcomposite > /dev/null 2>&1) &
-        show_progress $! "Installing system packages (17 packages)"
+            atk at-spi2-atk at-spi2-core libXcomposite \
+            nss nspr cups-libs alsa-lib mesa-libgbm libxkbcommon \
+            libXdamage libXfixes libXrandr pango cairo > /dev/null 2>&1) &
+        show_progress $! "Installing system packages"
     fi
 
     # Initialize PostgreSQL database cluster if not already done
@@ -250,6 +290,15 @@ print_success "System dependencies installed"
 
 # Local LLM setup via llama.cpp (only for offline/local mode)
 if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
+    # build_llama_cpp: no serves deployments whose llama-server runs on
+    # another machine (remote offline mode via --config) — nothing to build
+    # locally. Interview mode leaves the variable unset; the default matches
+    # the historical build-always behavior.
+    if [ "${CONFIG_BUILD_LLAMA_CPP:-yes}" = "no" ]; then
+        print_header "Step 1b: llama.cpp Setup"
+        print_info "Skipping llama.cpp build (build_llama_cpp: no — remote llama-server)"
+        print_success "llama.cpp setup complete"
+    else
     print_header "Step 1b: llama.cpp Setup"
 
     LLAMA_MODELS_DIR="/opt/mira/models"
@@ -346,4 +395,5 @@ if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
     fi
 
     print_success "llama.cpp setup complete"
+    fi
 fi

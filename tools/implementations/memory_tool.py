@@ -12,7 +12,6 @@ entity extraction) to the existing extraction pipeline.
 """
 
 import copy
-import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
@@ -675,8 +674,9 @@ class MemoryTool(Tool):
         existing = memory.annotations if hasattr(memory, 'annotations') and memory.annotations else []
         updated = existing + [annotation_entry]
 
-        # Update via db_access (serialize to JSON string for JSONB column)
-        self._memory_db.update_memory(memory.id, {"annotations": json.dumps(updated)})
+        # Update via db_access — pass the list raw; update_memory wraps
+        # JSONB columns for the driver (pre-serializing here double-encodes)
+        self._memory_db.update_memory(memory.id, {"annotations": updated})
 
         self.logger.info(f"Added annotation to memory {memory.id}")
 

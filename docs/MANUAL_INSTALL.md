@@ -44,10 +44,20 @@ After installing Python dependencies, download the spaCy model:
 venv/bin/python -m spacy download en_core_web_lg
 ```
 
-For web rendering support, install the Playwright browser:
+For web rendering support, install the Playwright package and browser. Neither
+is in `requirements.txt` — both are optional, and `web_tool` reports
+`playwright_unavailable` / `chromium_unavailable` without them:
 
 ```bash
+venv/bin/pip install playwright
 venv/bin/playwright install chromium
+```
+
+DOCX/XLSX uploads extract through stdlib `zipfile` + `ElementTree` by default.
+Install these only if you want the library extractors instead:
+
+```bash
+venv/bin/pip install python-docx openpyxl
 ```
 
 ## Database

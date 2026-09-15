@@ -352,6 +352,32 @@ class ImageGenerationTool(Tool):
         if not operation:
             raise ValueError("Required parameter 'operation' not provided")
 
+        # Conditional requirements the JSON schema cannot express: only
+        # `operation` is schema-required, so enforce each operation's own
+        # argument here with recovery guidance rather than letting the
+        # dispatch below surface as a bare TypeError.
+        if operation == "generate" and not params.get("prompt"):
+            raise ValueError(
+                "'prompt' is required for operation='generate' — include a text "
+                "prompt describing the image to create."
+            )
+        if operation == "refine":
+            if not params.get("image_id"):
+                raise ValueError(
+                    "'image_id' is required for operation='refine' — it is the "
+                    "ID returned by a prior generate or refine call."
+                )
+            if not params.get("instructions"):
+                raise ValueError(
+                    "'instructions' is required for operation='refine' — "
+                    "describe what to change in the existing image."
+                )
+        if operation == "publish" and not params.get("image_id"):
+            raise ValueError(
+                "'image_id' is required for operation='publish' — it is the "
+                "ID returned by a prior generate or refine call."
+            )
+
         if operation == "generate":
             return self._generate(**params)
         elif operation == "refine":

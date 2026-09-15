@@ -1,0 +1,94 @@
+# MIRA deployment configuration — template.
+#
+# Copy to a file of your choosing (e.g. deploy-config.yml), fill in every
+# __SET_ME__ placeholder, then run:
+#     ./deploy/deploy.sh --config deploy-config.yml --loud
+#
+# Rules (enforced before sudo is requested):
+#   - Every key below is REQUIRED. Deleting a line aborts the deploy.
+#   - Leaving any __SET_ME__ aborts the deploy. Replace it with your value,
+#     or with "" to skip that field (skip = the interview's Enter-to-skip:
+#     the deploy proceeds with placeholder values and the final banner
+#     explains how to set the real value in Vault later).
+#   - Only flat `key: value` lines are supported — no nesting, no lists.
+#   - `#` starts a comment only when preceded by whitespace. A ` #` inside
+#     a value truncates it; a `#` without leading space is kept literally.
+#   - The installer still asks for your sudo password once (preflight).
+#
+# The only interactive prompt left is sudo; everything else comes from here.
+
+# ---------------------------------------------------------------------------
+# LLM mode
+# ---------------------------------------------------------------------------
+# offline_mode: yes = all five model routes point at llama-server instances
+# (llama.cpp's OpenAI-compatible server). no = hosted providers below.
+offline_mode: yes
+
+# Only used when offline_mode: yes —
+#   build_llama_cpp: yes  → build llama-server from source on THIS machine
+#                           (historical behavior when llama-server is absent)
+#   build_llama_cpp: no  → llama-server runs elsewhere (e.g. a GPU box on
+#                           your LAN); skip the local build entirely
+build_llama_cpp: no
+# Main-capability server: takes the primary/batch/assessment routes.
+llama_main_url: "http://localhost:3090/v1/chat/completions"
+llama_main_model: local-main
+# Speed-critical server: takes the fast/other routes (runs every message).
+# Point both at one server if you only run one instance.
+llama_small_url: "http://localhost:3092/v1/chat/completions"
+llama_small_model: local-small
+# auto = recommended main+small split (see docs/OFFLINE_MODELS.md)
+# custom = bring your own GGUF (custom_gguf then required)
+local_model_choice: auto
+custom_gguf: ""
+
+# Only used when offline_mode: no —
+# chat_provider_type: anthropic or generic (any OpenAI-compatible endpoint).
+chat_provider_type: anthropic
+# Generic-provider fields (required when chat_provider_type: generic).
+chat_endpoint: "https://openrouter.ai/api/v1/chat/completions"
+chat_api_key: __SET_ME__
+chat_model: "claude-opus-4-6"
+# Anthropic fields (required when chat_provider_type: anthropic).
+anthropic_key: __SET_ME__
+# "" = use the same key for batch operations.
+anthropic_batch_key: ""
+# Fast subcortical inference (runs on every message): Groq recommended.
+subcortical_endpoint: "https://api.groq.com/openai/v1/chat/completions"
+subcortical_api_key: __SET_ME__
+subcortical_model: "qwen/qwen3.6-27b"
+
+# ---------------------------------------------------------------------------
+# Optional integrations
+# ---------------------------------------------------------------------------
+# "" = web search stays limited (web_tool skips Kagi-only features).
+kagi_api_key: ""
+
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
+# "" = the install uses the documented sentinel password ((changethisifdeployingpwd)).
+# Avoid single quotes in a custom password (SQL interpolation limitation).
+db_password: ""
+
+# ---------------------------------------------------------------------------
+# Timezone
+# ---------------------------------------------------------------------------
+# IANA name the app operates in (user-facing clock, timestamps MIRA shows you).
+# "" = this machine's system timezone (UTC when the platform exposes nothing).
+# Any other value must be a valid IANA name — the app fails fast at boot otherwise.
+timezone: ""
+
+# ---------------------------------------------------------------------------
+# Host-side options
+# ---------------------------------------------------------------------------
+# Chromium for JS-heavy webpage extraction (web_tool).
+install_playwright: yes
+# Linux only (ignored on macOS). Auto-start on boot via systemd.
+install_systemd: yes
+start_mira_now: yes
+# Answer to the existing-installation prompt: overwrite /opt/mira/app?
+overwrite_existing: no
+# Answer to the occupied-ports prompt (1993/8200/6379/5432): stop the
+# occupying services, or abort?
+stop_occupied_ports: yes

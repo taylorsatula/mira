@@ -173,7 +173,7 @@ class UserModelSynthesizer:
 
         response = self.llm_provider.generate_response(
             messages=llm_messages,
-            model_config="primary",
+            model_config="batch",
         )
 
         return self.llm_provider.extract_text_content(response)
@@ -198,7 +198,7 @@ class UserModelSynthesizer:
 
         response = self.llm_provider.generate_response(
             messages=llm_messages,
-            model_config="primary",
+            model_config="batch",
         )
 
         raw_output = self.llm_provider.extract_text_content(response)
@@ -250,7 +250,7 @@ class UserModelSynthesizer:
 
         response = self.llm_provider.generate_response(
             messages=llm_messages,
-            model_config="primary",
+            model_config="batch",
         )
 
         return self.llm_provider.extract_text_content(response)

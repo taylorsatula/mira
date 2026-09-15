@@ -249,7 +249,7 @@ def _run_refinement(current_xml: str, instructions: str) -> str:
     response = llm.generate_response(
         messages=[{"role": "user", "content": user_message}],
         system_prompt=_refinement_system_prompt,
-        model_config="primary",
+        model_config="batch",
     )
     return llm.extract_text_content(response).strip()
 
@@ -272,7 +272,7 @@ def _rerun_refinement_with_feedback(
     response = llm.generate_response(
         messages=[{"role": "user", "content": user_message}],
         system_prompt=_refinement_system_prompt,
-        model_config="primary",
+        model_config="batch",
     )
     return llm.extract_text_content(response).strip()
 
@@ -300,7 +300,7 @@ def _validate_with_critic(candidate_xml: str) -> dict:
     llm = _get_llm_provider()
     response = llm.generate_response(
         messages=llm_messages,
-        model_config="primary",
+        model_config="batch",
     )
 
     raw_output = llm.extract_text_content(response)

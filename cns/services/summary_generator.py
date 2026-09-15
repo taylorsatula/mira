@@ -145,7 +145,7 @@ class SummaryGenerator:
         try:
             response = self.llm_provider.generate_response(
                 messages=llm_messages,
-                model_config="primary",
+                model_config="batch",
             )
 
             raw_summary_output = self.llm_provider.extract_text_content(response)
@@ -170,7 +170,7 @@ class SummaryGenerator:
                     )
                 except Exception as e:
                     logger.error(f"Chunked summarization also failed: {e}")
-                    return SummaryResult(synopsis="[Segment content not summarized]", precis="", display_title="Large segment archived", complexity=1.0)
+                    raise ValueError(f"Chunked summary generation failed: {e}") from e
             else:
                 # Non-segment summaries can't be chunked
                 raise
@@ -282,14 +282,21 @@ class SummaryGenerator:
         complexity = parsed.get('complexity')
         precis = parsed.get('precis') or ''
 
-        # Missing display_title indicates LLM refused or failed to follow instructions
-        # Autocollapse with tombstone instead of retrying forever
+        # Missing display_title indicates the LLM returned nothing usable —
+        # an empty/blank response, a refusal, or reasoning tokens that consumed
+        # the budget before content was emitted. Raise so the collapse handler's
+        # retry + circuit-breaker semantics own the failure; the handler's
+        # force-tombstone (processing_failed=True) is the designed degradation,
+        # not a silent tombstone indistinguishable from a real summary.
         if not display_title:
             logger.warning(
-                f"LLM did not generate <mira:display_title> tag - autocollapsing with tombstone. "
-                f"Output (first 200 chars): {summary_output[:200]}"
+                f"LLM did not generate <mira:display_title> tag - summary response unusable. "
+                f"Output (first 200 chars): {summary_output[:200]!r}"
             )
-            return SummaryResult(synopsis="[Segment content not summarized]", precis="", display_title="Archived segment", complexity=1.0)
+            raise ValueError(
+                "Summary response unusable: LLM output missing <mira:display_title> tag "
+                f"(empty or budget-exhausted response; first 200 chars: {summary_output[:200]!r})"
+            )
 
         # Default complexity to 2 (moderate) if missing or invalid
         if complexity is None or complexity not in [0.5, 1, 2, 3]:
@@ -368,7 +375,7 @@ class SummaryGenerator:
                 {"role": "system", "content": formatted_system_prompt},
                 {"role": "user", "content": prompt_text}
             ],
-            model_config="primary",
+            model_config="batch",
         )
 
         raw_output = self.llm_provider.extract_text_content(response)
@@ -395,7 +402,7 @@ class SummaryGenerator:
                 {"role": "system", "content": self._synthesis_system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            model_config="primary",
+            model_config="batch",
         )
 
         raw_output = self.llm_provider.extract_text_content(response)

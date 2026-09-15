@@ -44,8 +44,12 @@ EXPOSE 1993
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD /opt/mira/healthcheck.sh
 
-# Volumes for persistent data
-VOLUME ["/var/lib/postgresql/17/main", "/opt/vault", "/var/lib/valkey", "/home/mira/.cache/huggingface"]
+# Volumes for persistent data. /opt/mira/app/data holds per-user storage
+# (userdata.db, artifacts, imagegen outputs) anchored by
+# utils/userdata_manager.py:base_dir — without a volume, container recreation
+# destroys it. init-mira.sh chowns it to mira on every start (volume
+# mountpoints come up root-owned and the app writes as mira).
+VOLUME ["/var/lib/postgresql/17/main", "/opt/vault", "/var/lib/valkey", "/home/mira/.cache/huggingface", "/opt/mira/app/data"]
 
 # Use our custom entrypoint that handles first-boot, then hands off to s6
 ENTRYPOINT ["/init-mira.sh"]

@@ -300,6 +300,12 @@ def get_model_config(name: str) -> ModelConfig:
 # UserPreferences - Database-backed user settings
 # ============================================================
 
+def _config_default_timezone() -> str:
+    """Timezone default from system config; lazy import avoids a module-level cycle."""
+    from config.config_manager import config
+    return config.system.timezone
+
+
 class UserPreferences(BaseModel):
     """
     User preferences and profile data loaded from database.
@@ -307,7 +313,7 @@ class UserPreferences(BaseModel):
     """
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    timezone: str = Field(default="America/Chicago")
+    timezone: str = Field(default_factory=_config_default_timezone)
     temperature_unit: str = Field(default="fahrenheit")
     memory_manipulation_enabled: bool = Field(default=True)
     created_at: Optional[datetime] = None
@@ -349,7 +355,7 @@ def get_user_preferences() -> UserPreferences:
     prefs = UserPreferences(
         first_name=result.get('first_name'),
         last_name=result.get('last_name'),
-        timezone=result.get('timezone') or 'America/Chicago',
+        timezone=result.get('timezone') or _config_default_timezone(),
         temperature_unit=result.get('temperature_unit') or 'fahrenheit',
         memory_manipulation_enabled=result.get('memory_manipulation_enabled', True),
         created_at=result.get('created_at'),

@@ -59,21 +59,25 @@ CREATE TABLE model_configs (
     max_tokens INTEGER NOT NULL CHECK (max_tokens > 0)
 );
 
--- Seed values are the defaults an online install starts with. Every
--- api_key_name is a key deploy/postgresql.sh already writes to Vault at
--- secret/mira/api_keys; offline installs rewrite endpoint_url and model
--- through the OFFLINE_SQL block in that same script.
--- The batch route authenticates with its own Vault credential
--- ('anthropic_batch_key') to isolate its rate limits from 'anthropic_key'
--- (assessment). The name refers to the model route, not the Anthropic Batch
--- API transport, which was removed in 2.0 (decision D10).
+-- Seed values match the reference deployment: main chat (primary) is the
+-- only consumer of the local llama-server (single KV-cache slot), so no
+-- async subsystem call can evict the main conversation's cached prefix
+-- between turns; every auxiliary route goes to poolside models on
+-- OpenRouter, sharing the 'subcortical_key' credential at
+-- secret/mira/api_keys. primary needs no credential ('' — the local
+-- llama-server is unauthenticated). Truly offline installs can still rewrite
+-- endpoint_url/model through the OFFLINE_SQL block in deploy/postgresql.sh.
+-- Route assignments live in the cns/services call sites: peanut gallery,
+-- forage overwatch, and domaindoc descriptor expansion ride 'fast';
+-- summaries, compaction, persona/portrait/LoRA/user-model, memory curator,
+-- and the repulsion rewriter ride 'batch'.
 INSERT INTO model_configs (name, model, dialect_name, endpoint_url, api_key_name, effort, max_tokens)
 VALUES
-    ('primary', 'openai/gpt-5.5', 'openrouter', 'https://openrouter.ai/api/v1/chat/completions', 'provider_key', 'high', 16000),
-    ('fast', 'qwen/qwen3.6-27b', 'groq', 'https://api.groq.com/openai/v1/chat/completions', 'subcortical_key', 'none', 4096),
-    ('batch', 'claude-sonnet-4-6', 'anthropic', 'https://api.anthropic.com/v1/messages', 'anthropic_batch_key', 'high', 16000),
-    ('assessment', 'claude-opus-4-6', 'anthropic', 'https://api.anthropic.com/v1/messages', 'anthropic_key', 'none', 10000),
-    ('other', 'google/gemini-3.1-pro-preview', 'openrouter', 'https://openrouter.ai/api/v1/chat/completions', 'provider_key', 'high', 10000);
+    ('primary', 'Qwen3.8 27B Uncensored Q8_0', 'openai', 'http://192.168.1.9:3090/v1/chat/completions', '', 'high', 16000),
+    ('fast', 'poolside/laguna-xs-2.1', 'openai', 'https://openrouter.ai/api/v1/chat/completions', 'subcortical_key', 'none', 4096),
+    ('batch', 'poolside/laguna-s-2.1', 'openai', 'https://openrouter.ai/api/v1/chat/completions', 'subcortical_key', 'high', 16000),
+    ('assessment', 'poolside/laguna-s-2.1', 'openai', 'https://openrouter.ai/api/v1/chat/completions', 'subcortical_key', 'none', 10000),
+    ('other', 'poolside/laguna-s-2.1', 'openai', 'https://openrouter.ai/api/v1/chat/completions', 'subcortical_key', 'high', 10000);
 
 -- ---------------------------------------------------------------------------
 -- Cost visibility
@@ -94,8 +98,16 @@ CREATE TABLE usage_pricing (
 
 INSERT INTO usage_pricing (name, input_price_per_mtok, output_price_per_mtok)
 VALUES ('__default__', 5.000000, 25.000000);
-INSERT INTO usage_pricing (name) VALUES
-    ('primary'), ('fast'), ('batch'), ('assessment'), ('other');
+-- Poolside prices are OpenRouter's published rates (USD per Mtok, 2026-09):
+-- laguna-xs-2.1 0.06/0.12, laguna-s-2.1 0.09/0.18. primary (local
+-- llama-server) is seeded unpriced: marginal cost ~0, and NULL fields fall
+-- through to the fallback tiers per utils/cost_accumulator.py.
+INSERT INTO usage_pricing (name, input_price_per_mtok, output_price_per_mtok) VALUES
+    ('primary', NULL, NULL),
+    ('fast', 0.060000, 0.120000),
+    ('batch', 0.090000, 0.180000),
+    ('assessment', 0.090000, 0.180000),
+    ('other', 0.090000, 0.180000);
 
 -- ---------------------------------------------------------------------------
 -- Accounts and authentication-ready contracts
@@ -112,7 +124,7 @@ CREATE TABLE users (
     webauthn_credentials JSONB NOT NULL DEFAULT '{}'::jsonb,
     memory_manipulation_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     daily_manipulation_last_run TIMESTAMPTZ,
-    timezone VARCHAR(100) NOT NULL DEFAULT 'America/Chicago',
+    timezone VARCHAR(100) NOT NULL,
     temperature_unit VARCHAR(20) NOT NULL DEFAULT 'fahrenheit'
         CHECK (temperature_unit IN ('fahrenheit', 'celsius')),
 
@@ -760,7 +772,7 @@ REVOKE EXECUTE ON FUNCTION active_user_identity(uuid) FROM PUBLIC;
 -- Comments
 -- ---------------------------------------------------------------------------
 
-COMMENT ON TABLE model_configs IS 'Exactly five required MIRA routes, each owning dialect, model, endpoint, Vault key, default effort, and output ceiling: primary (main chat and the general-purpose cognitive services), fast (subcortical analysis and other latency-critical turns), batch (bulk background work: extraction, forage, while-the-cat-is-away), assessment (assessment extraction), other (a sidebar turn routed to an outside model, deliberately a different vendor from primary).';
+COMMENT ON TABLE model_configs IS 'Exactly five required MIRA routes, each owning dialect, model, endpoint, Vault key, default effort, and output ceiling: primary (main chat only — the sole consumer of the local llama-server, so async subsystem calls cannot evict its KV-cache prefix), fast (latency-critical small turns: subcortical analysis, peanut gallery, forage overwatch, descriptor expansion), batch (bulk background work: segment summaries, live-context compaction, persona/portrait/LoRA/user-model synthesis, memory curator, forage, while-the-cat-is-away, repulsion rewriter), assessment (assessment extraction), other (a sidebar turn routed to an outside model, deliberately a different vendor from primary).';
 COMMENT ON TABLE usage_pricing IS 'Per-route cost lookup keyed by model_configs name; __default__ is the reserved fallback pair.';
 COMMENT ON TABLE users IS 'MIRA account. subject_kind admits member and demo; only member is provisioned today.';
 COMMENT ON TABLE persona_revisions IS 'Immutable Persona directive history.';

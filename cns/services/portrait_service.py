@@ -188,7 +188,7 @@ def _call_llm(summaries: list[str]) -> str:
     response = llm.generate_response(
         messages=[{"role": "user", "content": user_message}],
         system_prompt=_system_prompt,
-        model_config="primary",
+        model_config="batch",
     )
 
     return llm.extract_text_content(response).strip()
@@ -230,7 +230,7 @@ def refine_portrait(user_id: str, instructions: str) -> dict[str, str]:
     response = llm.generate_response(
         messages=[{"role": "user", "content": user_message}],
         system_prompt=refinement_system,
-        model_config="primary",
+        model_config="batch",
     )
     proposed = llm.extract_text_content(response).strip()
 

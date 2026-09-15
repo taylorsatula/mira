@@ -41,6 +41,13 @@ SYSTEM_FEATURE_FLAG_ENVIRONMENT_FIELDS: dict[str, str] = {
     "MIRA_PERSONA_ENABLED": "persona_enabled",
 }
 
+# Registry of string-valued SystemConfig overrides: environment variable name -> field name.
+# Deploy writes MIRA_TIMEZONE into the service unit so an install's timezone is an explicit
+# operator choice rather than the hardcoded field default.
+SYSTEM_STRING_ENVIRONMENT_FIELDS: dict[str, str] = {
+    "MIRA_TIMEZONE": "timezone",
+}
+
 
 def _load_system_feature_flag_overrides() -> dict[str, bool]:
     """Load strict non-secret feature switches from the process environment.
@@ -58,6 +65,22 @@ def _load_system_feature_flag_overrides() -> dict[str, bool]:
         if raw_value not in {"0", "1"}:
             raise ValueError(f"{environment_name} must be exactly 0 or 1")
         overrides[field_name] = raw_value == "1"
+    return overrides
+
+
+def _load_system_string_overrides() -> dict[str, str]:
+    """Load strict string SystemConfig overrides from the process environment.
+
+    Unset variables are omitted so the field default applies. Values are
+    validated at the SystemConfig field validator (fail fast at boot), so
+    this loader only requires presence and non-emptiness.
+    """
+    overrides: dict[str, str] = {}
+    for environment_name, field_name in SYSTEM_STRING_ENVIRONMENT_FIELDS.items():
+        raw_value = os.getenv(environment_name)
+        if raw_value is None or raw_value == "":
+            continue
+        overrides[field_name] = raw_value
     return overrides
 
 
@@ -91,7 +114,10 @@ class AppConfig(BaseModel):
         
         try:
             instance = cls(
-                system=SystemConfig(**_load_system_feature_flag_overrides()),
+                system=SystemConfig(
+                    **_load_system_feature_flag_overrides(),
+                    **_load_system_string_overrides(),
+                ),
             )
             instance._load_system_prompt()
             logger.info("Configuration initialized successfully")

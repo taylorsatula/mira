@@ -37,12 +37,23 @@ if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ] && [ "$OS" = "linux" ]; then
             PG_SERVICE="postgresql.service"
         fi
 
+        # Set correct Valkey service unit by detecting what this host actually
+        # ships: Ubuntu's valkey-server package installs valkey-server.service
+        # (redis-style naming), Fedora's valkey package installs
+        # valkey.service. A wrong name in Requires= would make systemd refuse
+        # to start mira.service.
+        if systemctl cat valkey-server.service > /dev/null 2>&1; then
+            VALKEY_SERVICE="valkey-server.service"
+        else
+            VALKEY_SERVICE="valkey.service"
+        fi
+
         sudo tee /etc/systemd/system/mira.service > /dev/null <<EOF
 [Unit]
 Description=MIRA - AI Assistant with Persistent Memory
 Documentation=https://github.com/taylorsatula/mira-OSS
-Requires=vault.service ${PG_SERVICE} valkey.service
-After=vault.service ${PG_SERVICE} valkey.service vault-unseal.service
+Requires=vault.service ${PG_SERVICE} ${VALKEY_SERVICE}
+After=vault.service ${PG_SERVICE} ${VALKEY_SERVICE} vault-unseal.service
 ConditionPathExists=/opt/mira/app/main.py
 
 [Service]
@@ -54,6 +65,7 @@ Environment="VAULT_ADDR=http://127.0.0.1:8200"
 Environment="VAULT_ROLE_ID=$VAULT_ROLE_ID"
 Environment="VAULT_SECRET_ID=$VAULT_SECRET_ID"
 Environment="MIRA_LOG_DIR=/opt/mira/logs"
+Environment="MIRA_TIMEZONE=$CONFIG_TIMEZONE"
 ExecStart=/opt/mira/app/venv/bin/python3 /opt/mira/app/main.py
 Restart=on-failure
 RestartSec=10

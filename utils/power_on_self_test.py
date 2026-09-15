@@ -718,8 +718,8 @@ def _run_postgres_rls_canary(admin_db: Any) -> dict[str, Any]:
     try:
         admin_db.execute_insert(
             """
-            INSERT INTO users (id, email, first_name, last_name)
-            VALUES (%s, %s, %s, %s), (%s, %s, %s, %s)
+            INSERT INTO users (id, email, first_name, last_name, timezone)
+            VALUES (%s, %s, %s, %s, 'UTC'), (%s, %s, %s, %s, 'UTC')
             """,
             (
                 str(owner_id),
@@ -999,7 +999,7 @@ def _check_scheduler_registration() -> dict[str, Any]:
     required = {
         "lt_memory_extract_unprocessed_segments",
         "lt_memory_temporal_score_recalculation",
-        "lt_memory_bulk_score_recalcation",
+        "lt_memory_bulk_score_recalculation",
         "lt_memory_entity_merge",
         "segment_timeout_detection",
         "auth_cleanup",

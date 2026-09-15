@@ -11,6 +11,8 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from utils.timezone_utils import get_default_timezone, validate_timezone
+
 
 class ApiConfig(BaseModel):
     """LLM API and provider dialect configuration."""
@@ -91,7 +93,16 @@ class SystemConfig(BaseModel):
 
     # Operational
     log_level: str = Field(default="WARNING", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
-    timezone: str = Field(default="America/Chicago", description="Default timezone (IANA name)")
+    timezone: str = Field(
+        default_factory=get_default_timezone,
+        description="Default timezone (IANA name); defaults to the host system timezone, overridable via MIRA_TIMEZONE"
+    )
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone_name(cls, value: str) -> str:
+        """Fail fast on a non-IANA timezone instead of surfacing ZoneInfo errors at runtime."""
+        return validate_timezone(value)
     segment_timeout: int = Field(
         default=120,
         description="Segment collapse timeout in minutes — staleness at which an active segment collapses, evaluated in the segment owner's local time-of-day windows"
@@ -232,7 +243,17 @@ class SidebarDispatcherConfig(BaseModel):
     poll_interval_minutes: int = Field(default=1, description="Minutes between dispatcher poll cycles")
     max_concurrent_agents: int = Field(default=3, ge=1, description="Maximum sidebar agent threads running simultaneously")
     agent_timeout_seconds: int = Field(default=120, ge=1, description="Wall-clock seconds before a running sidebar agent is considered timed out")
-    agent_iteration_timeout_seconds: int = Field(default=45, ge=1, description="Seconds a single sidebar-agent LLM iteration may run")
+    agent_iteration_timeout_seconds: int = Field(
+        default=300, ge=1,
+        description=(
+            "Seconds a single sidebar-agent LLM iteration may run, evaluated between "
+            "iterations. Only agents with wall-clock overrides this large can reach it "
+            "(forage/wtcha); default agents hit agent_timeout_seconds first. Calibrated for "
+            "local-model deployments where a thinking-model iteration plus web fetches "
+            "routinely exceeds a minute — 45s aborted every forage iteration on a Q8 27B "
+            "llama-server, failing the agent before its second iteration could start."
+        )
+    )
     agent_timeout_overrides: Dict[str, int] = Field(
         default={"forage": 600, "memorycurator": 480, "whilethecatsaway": 14400},
         description="Per-agent wall-clock timeout overrides keyed by agent class name lowercased with the 'Agent' suffix stripped (e.g. ForageAgent -> 'forage')"

@@ -26,17 +26,45 @@ CONFIG_CHAT_MODEL=""
 CONFIG_SUBCORTICAL_ENDPOINT=""
 CONFIG_SUBCORTICAL_API_KEY=""
 CONFIG_SUBCORTICAL_MODEL=""
+CONFIG_BUILD_LLAMA_CPP=""
+CONFIG_TIMEZONE=""                   # IANA name; empty = this host's system timezone
 STATUS_CHAT_PROVIDER=""
 STATUS_CHAT_KEY=""
 STATUS_SUBCORTICAL=""
 STATUS_SUBCORTICAL_KEY=""
 STATUS_KAGI=""
 STATUS_DB_PASSWORD=""
+STATUS_TIMEZONE=""
 STATUS_PLAYWRIGHT=""
 STATUS_SYSTEMD=""
 STATUS_MIRA_SERVICE=""
 
-clear
+# Detect this host's IANA timezone — the default for CONFIG_TIMEZONE when the
+# operator leaves it empty. Mirrors utils/timezone_utils.py get_default_timezone()
+# so the install default and the app-side fallback agree.
+detect_system_timezone() {
+    if [ -f /etc/timezone ]; then
+        head -1 /etc/timezone | tr -d '[:space:]'
+        return
+    fi
+    if [ -L /etc/localtime ]; then
+        readlink /etc/localtime | sed 's|.*zoneinfo/||'
+        return
+    fi
+    echo "UTC"
+}
+SYSTEM_TIMEZONE="$(detect_system_timezone)"
+
+# --config <file>: parse and apply the declarative config, bypassing the
+# interview entirely. Fails before sudo is requested on unfilled __SET_ME__
+# placeholders, duplicate/unknown/missing keys, or bad enum values.
+if [ -n "$CONFIG_FILE" ]; then
+    source "${SCRIPT_DIR}/lib/config_file.sh"
+    parse_yaml_config "$CONFIG_FILE"
+    apply_yaml_config
+fi
+
+if [ -t 1 ]; then clear; fi
 echo -e "${BOLD}${CYAN}"
 echo "╔════════════════════════════════════════╗"
 echo "║   MIRA Deployment Script (main)        ║"
@@ -62,12 +90,21 @@ echo -e "${CHECKMARK}"
 if [ -d "/opt/mira/app" ]; then
     echo ""
     print_warning "Existing MIRA installation found at /opt/mira/app"
-    read -p "$(echo -e ${YELLOW}This will OVERWRITE the existing installation. Continue? ${RESET})(y/n): " OVERWRITE
-    if [[ ! "$OVERWRITE" =~ ^[Yy](es)?$ ]]; then
-        print_info "Installation cancelled."
-        exit 0
+    if [ -n "$CONFIG_FILE" ]; then
+        if [ "$YAML_overwrite_existing" = "yes" ]; then
+            print_info "Proceeding with overwrite (overwrite_existing: yes)"
+        else
+            print_info "Installation cancelled (overwrite_existing: no)."
+            exit 0
+        fi
+    else
+        read -p "$(echo -e ${YELLOW}This will OVERWRITE the existing installation. Continue? ${RESET})(y/n): " OVERWRITE
+        if [[ ! "$OVERWRITE" =~ ^[Yy](es)?$ ]]; then
+            print_info "Installation cancelled."
+            exit 0
+        fi
+        print_info "Proceeding with overwrite..."
     fi
-    print_info "Proceeding with overwrite..."
     echo ""
 fi
 
@@ -127,6 +164,15 @@ case "$OS_TYPE" in
         ;;
 esac
 
+# --config on macOS: systemd cannot be installed; force the interview's
+# macOS semantics so the summary and finalize agree (OS is detected above;
+# apply_yaml_config runs before detection and cannot see it).
+if [ -n "$CONFIG_FILE" ] && [ "$OS" = "macos" ]; then
+    CONFIG_INSTALL_SYSTEMD="no"
+    CONFIG_START_MIRA_NOW="no"
+    STATUS_SYSTEMD="${DIM}N/A (macOS)${RESET}"
+fi
+
 print_header "Port Availability Check"
 
 echo -ne "${DIM}${ARROW}${RESET} Checking ports 1993, 8200, 6379, 5432... "
@@ -147,10 +193,20 @@ if [ -n "$PORTS_IN_USE" ]; then
     echo -e "${WARNING}"
     print_warning "The following ports are already in use:$PORTS_IN_USE"
     print_info "MIRA requires: 1993 (app), 8200 (vault), 6379 (valkey), 5432 (postgresql)"
-    read -p "$(echo -e ${YELLOW}Stop existing services and continue?${RESET}) (y/n): " CONTINUE
-    if [[ ! "$CONTINUE" =~ ^[Yy](es)?$ ]]; then
-        print_info "Installation cancelled. Free up the required ports and try again."
-        exit 0
+    if [ -n "$CONFIG_FILE" ]; then
+        if [ "$YAML_stop_occupied_ports" = "yes" ]; then
+            print_info "Stopping services on occupied ports (stop_occupied_ports: yes)"
+            CONTINUE="y"
+        else
+            print_info "Installation cancelled (stop_occupied_ports: no). Free up the required ports and try again."
+            exit 0
+        fi
+    else
+        read -p "$(echo -e ${YELLOW}Stop existing services and continue?${RESET}) (y/n): " CONTINUE
+        if [[ ! "$CONTINUE" =~ ^[Yy](es)?$ ]]; then
+            print_info "Installation cancelled. Free up the required ports and try again."
+            exit 0
+        fi
     fi
     echo ""
 
@@ -235,6 +291,9 @@ else
 fi
 
 print_success "Port check passed"
+
+# --config mode already applied every choice above; skip the interview.
+if [ -z "$CONFIG_FILE" ]; then
 
 print_header "LLM Provider Configuration"
 
@@ -458,8 +517,19 @@ else
     STATUS_DB_PASSWORD="${CHECKMARK} Custom password set"
 fi
 
+# Timezone (defaults to this machine's system timezone; the app validates
+# the IANA name at boot and fails fast on garbage)
+echo -e "${BOLD}${BLUE}5. Timezone${RESET} ${DIM}(IANA name — Enter uses this machine's: ${SYSTEM_TIMEZONE})${RESET}"
+read -p "$(echo -e ${CYAN}Timezone${RESET}): " TIMEZONE_INPUT
+if [ -z "$TIMEZONE_INPUT" ]; then
+    CONFIG_TIMEZONE="$SYSTEM_TIMEZONE"
+else
+    CONFIG_TIMEZONE="$TIMEZONE_INPUT"
+fi
+STATUS_TIMEZONE="${CHECKMARK} ${CONFIG_TIMEZONE}"
+
 # Playwright Browser Installation (optional)
-echo -e "${BOLD}${BLUE}5. Playwright Browser${RESET} ${DIM}(OPTIONAL - for JS-heavy webpage extraction)${RESET}"
+echo -e "${BOLD}${BLUE}6. Playwright Browser${RESET} ${DIM}(OPTIONAL - for JS-heavy webpage extraction)${RESET}"
 read -p "$(echo -e ${CYAN}Install Playwright?${RESET}) (y/n, default=y): " PLAYWRIGHT_INPUT
 # Default to yes if user just presses Enter
 if [ -z "$PLAYWRIGHT_INPUT" ]; then
@@ -474,7 +544,7 @@ else
 fi
 
 # Systemd service option (Linux only)
-echo -e "${BOLD}${BLUE}6. Systemd Service${RESET} ${DIM}(OPTIONAL - Linux only, auto-start on boot)${RESET}"
+echo -e "${BOLD}${BLUE}7. Systemd Service${RESET} ${DIM}(OPTIONAL - Linux only, auto-start on boot)${RESET}"
 if [ "$OS" = "linux" ]; then
     read -p "$(echo -e ${CYAN}Install as systemd service?${RESET}) (y/n): " SYSTEMD_INPUT
     if [[ "$SYSTEMD_INPUT" =~ ^[Yy](es)?$ ]]; then
@@ -498,6 +568,16 @@ elif [ "$OS" = "macos" ]; then
     STATUS_SYSTEMD="${DIM}N/A (macOS)${RESET}"
 fi
 
+fi
+
+# Timezone resolution: an empty CONFIG_TIMEZONE (yml "" or interview Enter)
+# means "this host's system timezone" — resolve to a concrete IANA name so
+# the systemd unit always carries an explicit value.
+if [ -z "$CONFIG_TIMEZONE" ]; then
+    CONFIG_TIMEZONE="$SYSTEM_TIMEZONE"
+fi
+[ -n "$STATUS_TIMEZONE" ] || STATUS_TIMEZONE="${CHECKMARK} ${CONFIG_TIMEZONE}"
+
 echo ""
 echo -e "${BOLD}Configuration Summary:${RESET}"
 if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
@@ -519,6 +599,7 @@ else
 fi
 echo -e "  Kagi:            ${STATUS_KAGI}"
 echo -e "  DB Password:     ${STATUS_DB_PASSWORD}"
+echo -e "  Timezone:        ${STATUS_TIMEZONE}"
 echo -e "  Playwright:      ${STATUS_PLAYWRIGHT}"
 echo -e "  Systemd Service: ${STATUS_SYSTEMD}"
 echo ""

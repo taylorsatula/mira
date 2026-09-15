@@ -348,6 +348,24 @@ class SegmentCollapseHandler:
             event.continuum_id
         )
 
+        # Evaluate MIRA behavior and refine Persona on the use-day cadence.
+        # Runs BEFORE the sentinel save so its failures propagate to the
+        # retry/circuit-breaker path: a persistent Persona breakage counts
+        # toward MAX_COLLAPSE_ATTEMPTS and surfaces as the force-tombstone,
+        # instead of stranding a collapsed segment with its persona signal
+        # silently lost (the persona evaluator itself returned empty on the
+        # 06:57 and 12:32 collapses). evaluate_segment is idempotent per
+        # segment (segment_was_evaluated skip-guard), so a retry after a
+        # successful pass re-runs nothing.
+        # Runs beside the user-model loop below, not instead of it, and unlike
+        # it failures propagate: see _process_persona's docstring.
+        if self._persona_enabled:
+            self._process_persona(
+                messages=messages,
+                segment_id=UUID(event.segment_id),
+                continuum_id=UUID(event.continuum_id),
+            )
+
         # Extract tools used from actual messages (not sentinel metadata)
         tools_used = self._extract_tools_from_messages(messages)
 
@@ -403,16 +421,6 @@ class SegmentCollapseHandler:
             segment_id=UUID(event.segment_id),
             continuum_id=UUID(event.continuum_id),
         )
-
-        # Evaluate MIRA behavior and refine Persona on the use-day cadence.
-        # Runs beside the user-model loop above, not instead of it, and unlike
-        # it failures propagate: see _process_persona's docstring.
-        if self._persona_enabled:
-            self._process_persona(
-                messages=messages,
-                segment_id=UUID(event.segment_id),
-                continuum_id=UUID(event.continuum_id),
-            )
 
         # Portrait synthesis if use-day threshold reached
         self._process_portrait_synthesis()

@@ -13,6 +13,7 @@ Core principles:
 """
 
 import logging
+import os
 import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -96,11 +97,39 @@ def validate_timezone(tz_name: str) -> str:
 
 def get_default_timezone() -> str:
     """
-    Get the system default timezone (UTC).
+    Detect the host system's IANA timezone; UTC when detection fails.
+
+    Checks /etc/timezone (Debian-family) first, then the /etc/localtime
+    symlink (macOS and most Linux distros embed the zoneinfo path in the
+    link target). A detected name that fails IANA validation falls back to
+    UTC rather than poisoning downstream datetime handling.
 
     Returns:
         IANA timezone name
     """
+    # Plain-name file: /etc/timezone holds a bare IANA name
+    try:
+        with open("/etc/timezone", "r") as f:
+            tz_name = f.read().strip()
+        if tz_name:
+            return validate_timezone(tz_name)
+    except FileNotFoundError:
+        pass
+    except ValueError:
+        pass
+
+    # Symlink target: /etc/localtime -> .../zoneinfo/<IANA name>
+    try:
+        target = os.readlink("/etc/localtime")
+        if "zoneinfo/" in target:
+            tz_name = target.split("zoneinfo/")[-1]
+            if tz_name:
+                return validate_timezone(tz_name)
+    except OSError:
+        pass
+    except ValueError:
+        pass
+
     return "UTC"
 
 

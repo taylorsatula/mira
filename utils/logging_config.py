@@ -22,8 +22,13 @@ if TYPE_CHECKING:
 import colorama
 from colorama import Fore, Style
 
-# Initialize colorama for cross-platform support
-colorama.init(autoreset=True, strip=False)
+# colorama.init() with wrap=True (the default) replaces sys.stdout/stderr
+# with autoreset-wrapping streams that inject RESET codes around every
+# write. That corruptes any stdout used as a protocol channel - the POST
+# gate child prints BEGIN/END markers and JSON on stdout. On Linux wrapping
+# is pure corruption: ANSI renders natively and ColoredFormatter appends
+# Style.RESET_ALL itself; wrapping is only needed on legacy Windows consoles.
+colorama.init(autoreset=False, strip=False, wrap=False)
 
 # Import for contextvar access
 from utils.user_context import get_current_user_id

@@ -335,6 +335,16 @@ main() {
         print_info "Existing configuration found. Starting services..."
     fi
 
+    # User data (userdata.db, artifacts, imagegen outputs) lives under
+    # /opt/mira/app/data — the anchor is utils/userdata_manager.py:base_dir
+    # (project-root-relative) plus the Path("data/users") call sites in
+    # utils/artifact_store.py and cns/services/subcortical.py. Volume
+    # mountpoints — named or anonymous — come up root-owned, and the app
+    # runs as mira, so fix ownership on every start. This mirrors the
+    # /opt/vault ownership handling in init_vault above.
+    mkdir -p /opt/mira/app/data
+    chown mira:mira /opt/mira/app/data
+
     # Hand off to s6-overlay
     print_header "Starting Services via s6-overlay"
     exec /init

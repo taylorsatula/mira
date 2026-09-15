@@ -122,7 +122,7 @@ class PeanutGalleryModel:
 
         response = self.llm_provider.generate_response(
             messages=[{"role": "user", "content": user_prompt}],
-            model_config="primary",
+            model_config="fast",
             system_prompt=self._system_prompt
         )
 

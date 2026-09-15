@@ -374,7 +374,7 @@ class LiveContextCompactionService:
         messages = self._build_compactor_messages(compaction_range, new_history)
         response = self.llm_provider.generate_response(
             messages=messages,
-            model_config="primary",
+            model_config="batch",
         )
         raw_brief = self.llm_provider.extract_text_content(response).strip()
         if not raw_brief:

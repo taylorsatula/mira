@@ -19,7 +19,21 @@ if [ "$OS" = "macos" ]; then
     sleep 2
 fi
 
-# Wait for PostgreSQL to be ready to accept connections
+# Wait for PostgreSQL to be ready to accept connections. On Linux, start the
+# service first if it is not running: a re-run deploy may have stopped it via
+# config.sh's occupied-port handling, and the package auto-start only happens
+# once, at apt/dnf install time. Fedora PGDG names the unit
+# postgresql-17.service; Debian names it postgresql.service.
+if [ "$OS" = "linux" ]; then
+    if ! sudo -u postgres pg_isready > /dev/null 2>&1 && \
+       ! sudo -u postgres /usr/pgsql-17/bin/pg_isready > /dev/null 2>&1; then
+        if [ "$DISTRO" = "fedora" ]; then
+            run_quiet sudo systemctl start postgresql-17.service
+        else
+            run_quiet sudo systemctl start postgresql.service
+        fi
+    fi
+fi
 echo -ne "${DIM}${ARROW}${RESET} Waiting for PostgreSQL to be ready... "
 PG_READY=0
 for i in {1..30}; do

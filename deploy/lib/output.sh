@@ -61,7 +61,13 @@ run_with_status() {
 
     if [ "$LOUD_MODE" = true ]; then
         print_step "$msg"
-        "$@"
+        # Loud mode shows command output as it runs, but a command that
+        # fails without printing anything (e.g. `test -s file`) would
+        # otherwise die silently under set -e. Mark the failure.
+        if ! "$@"; then
+            echo -e "${ERROR} Command failed: $msg"
+            return 1
+        fi
     else
         echo -ne "${DIM}${ARROW}${RESET} $msg... "
         if "$@" > /dev/null 2>&1; then

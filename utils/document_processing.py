@@ -8,6 +8,7 @@ Optional dependencies (python-docx, openpyxl) provide richer extraction
 but are not required - falls back to stdlib XML parsing.
 """
 import logging
+import re
 import zipfile
 from dataclasses import dataclass
 from io import BytesIO
@@ -261,42 +262,99 @@ def _extract_xlsx_with_library(doc_bytes: bytes) -> str:
         raise ValueError(f"Failed to extract XLSX text: {e}") from e
 
 
+def _xlsx_sheets_in_order(z: zipfile.ZipFile) -> list[tuple[str, str]]:
+    """Resolve (display name, zip part) for each worksheet, in workbook order.
+
+    `xl/workbook.xml` lists `<sheet name= r:id=>` in the order the user sees;
+    `xl/_rels/workbook.xml.rels` maps each rId to its part. Falling back to a
+    sorted namelist would both lose the display names and order `sheet10`
+    before `sheet2`, so the manifest is authoritative when present.
+    """
+    ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    rns = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    prns = 'http://schemas.openxmlformats.org/package/2006/relationships'
+    names = z.namelist()
+
+    def _natural(part: str) -> list:
+        stem = part.rsplit('/', 1)[-1]
+        return [int(t) if t.isdigit() else t for t in re.split(r'(\d+)', stem)]
+
+    worksheet_parts = sorted(
+        (n for n in names if n.startswith('xl/worksheets/') and n.endswith('.xml')),
+        key=_natural,
+    )
+
+    if 'xl/workbook.xml' in names and 'xl/_rels/workbook.xml.rels' in names:
+        try:
+            rels_tree = ElementTree.fromstring(z.read('xl/_rels/workbook.xml.rels'))
+            rid_to_target = {
+                rel.get('Id'): rel.get('Target')
+                for rel in rels_tree.findall(f'{{{prns}}}Relationship')
+            }
+            wb_tree = ElementTree.fromstring(z.read('xl/workbook.xml'))
+            ordered = []
+            for sheet in wb_tree.findall(f'.//{{{ns}}}sheet'):
+                target = rid_to_target.get(sheet.get(f'{{{rns}}}id'))
+                if not target:
+                    continue
+                # Targets are relative to xl/ or absolute from the package root.
+                part = target.lstrip('/') if target.startswith('/') else f'xl/{target}'
+                if part in names:
+                    ordered.append((sheet.get('name') or part.rsplit('/', 1)[-1], part))
+            if ordered:
+                return ordered
+        except ElementTree.ParseError:
+            logger.warning("XLSX workbook manifest unparseable; using part-name order")
+
+    return [(part.rsplit('/', 1)[-1], part) for part in worksheet_parts]
+
+
 def _extract_xlsx_stdlib(doc_bytes: bytes) -> str:
     """Extract XLSX text using stdlib only (zipfile + xml)."""
+    ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
     try:
         with zipfile.ZipFile(BytesIO(doc_bytes)) as z:
             # Read shared strings (XLSX stores text in a shared strings table)
             shared_strings = []
             if 'xl/sharedStrings.xml' in z.namelist():
-                ss_xml = z.read('xl/sharedStrings.xml')
-                ss_tree = ElementTree.fromstring(ss_xml)
-                # Find all <t> elements (text content)
-                for si in ss_tree.findall('.//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t'):
-                    shared_strings.append(si.text or '')
+                ss_tree = ElementTree.fromstring(z.read('xl/sharedStrings.xml'))
+                # One entry per <si>, not per <t>: a rich-text <si> holds several
+                # <r><t> runs that concatenate into a single cell value. Counting
+                # <t> elements instead would shift every later index.
+                for si in ss_tree.findall(f'{{{ns}}}si'):
+                    shared_strings.append(
+                        ''.join(t.text or '' for t in si.findall(f'.//{{{ns}}}t'))
+                    )
 
-            # Read sheet data
             lines = []
-            for name in sorted(z.namelist()):
-                if name.startswith('xl/worksheets/sheet') and name.endswith('.xml'):
-                    sheet_xml = z.read(name)
-                    sheet_tree = ElementTree.fromstring(sheet_xml)
-                    ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
-
-                    for row in sheet_tree.findall(f'.//{{{ns}}}row'):
-                        cells = []
-                        for cell in row.findall(f'{{{ns}}}c'):
-                            val = cell.find(f'{{{ns}}}v')
-                            cell_type = cell.get('t')
-                            if val is not None and val.text:
-                                if cell_type == 's':  # Shared string reference
-                                    idx = int(val.text)
-                                    cells.append(shared_strings[idx] if idx < len(shared_strings) else '')
-                                else:
-                                    cells.append(val.text)
+            for sheet_name, part in _xlsx_sheets_in_order(z):
+                sheet_tree = ElementTree.fromstring(z.read(part))
+                lines.append(f"=== Sheet: {sheet_name} ===")
+                for row in sheet_tree.findall(f'.//{{{ns}}}row'):
+                    cells = []
+                    for cell in row.findall(f'{{{ns}}}c'):
+                        cell_type = cell.get('t')
+                        if cell_type == 'inlineStr':
+                            # Inline string: text lives in <is><t>; there is no
+                            # <v> and no sharedStrings entry. openpyxl writes
+                            # every text cell this way.
+                            is_elem = cell.find(f'{{{ns}}}is')
+                            cells.append(
+                                ''.join(t.text or '' for t in is_elem.findall(f'.//{{{ns}}}t'))
+                                if is_elem is not None else ''
+                            )
+                            continue
+                        val = cell.find(f'{{{ns}}}v')
+                        if val is not None and val.text:
+                            if cell_type == 's':  # Shared string reference
+                                idx = int(val.text)
+                                cells.append(shared_strings[idx] if idx < len(shared_strings) else '')
                             else:
-                                cells.append('')
-                        if any(cells):
-                            lines.append('\t'.join(cells))
+                                cells.append(val.text)
+                        else:
+                            cells.append('')
+                    if any(cells):
+                        lines.append('\t'.join(cells))
 
             return '\n'.join(lines)
     except Exception as e:

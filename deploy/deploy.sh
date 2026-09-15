@@ -2,7 +2,11 @@
 # MIRA Deployment Orchestrator
 # This is the main entry point for deploying MIRA
 #
-# Usage: ./deploy/deploy.sh [--loud]
+# Usage: ./deploy/deploy.sh [--loud] [--config <file>]
+#
+# --config bypasses the interactive interview entirely: copy
+# deploy/deploy-config.example.yml, fill in the placeholders, and run
+#   ./deploy/deploy.sh --config deploy-config.yml --loud
 #
 # Quick start (downloads and runs):
 #   git clone https://github.com/taylorsatula/mira-OSS.git /tmp/mira-install && /tmp/mira-install/deploy/deploy.sh
@@ -44,10 +48,19 @@ fi
 
 # Parse arguments
 LOUD_MODE=false
-for arg in "$@"; do
-    if [ "$arg" = "--loud" ]; then
-        LOUD_MODE=true
-    fi
+CONFIG_FILE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --loud) LOUD_MODE=true ;;
+        --config)
+            shift
+            CONFIG_FILE="${1:?--config requires a file path}" ;;
+        --config=*) CONFIG_FILE="${1#*=}" ;;
+        *)
+            echo "Unknown option: $1 (supported: --loud, --config <file>)"
+            exit 1 ;;
+    esac
+    shift
 done
 
 # ============================================================================

@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from uuid import UUID
 
+from psycopg.types.json import Jsonb
+
 from lt_memory.models import (
     Memory,
     ExtractedMemory,
@@ -30,6 +32,13 @@ from utils.database_session_manager import LTMemorySessionManager, LTMemorySessi
 from config import config
 
 logger = logging.getLogger(__name__)
+
+# memories-table columns stored as JSONB: values passed to update_memory for
+# these fields are raw Python lists/dicts and must be wrapped in Jsonb() for
+# psycopg — the driver cannot adapt them on its own.
+_JSONB_MEMORY_FIELDS = frozenset(
+    {"inbound_links", "outbound_links", "entity_links", "annotations"}
+)
 
 
 def _load_scoring_formula() -> str:
@@ -317,7 +326,10 @@ class LTMemoryDB:
         for field, value in updates.items():
             param_name = f'update_{field}'
             set_clauses.append(f"{field} = %({param_name})s")
-            params[param_name] = value
+            # JSONB columns must be wrapped for psycopg — raw lists/dicts
+            # raise `cannot adapt type 'dict'` at the driver boundary (the
+            # memory curator's merge_memories died to this in the wild)
+            params[param_name] = Jsonb(value) if field in _JSONB_MEMORY_FIELDS else value
 
         # Always update updated_at
         set_clauses.append("updated_at = NOW()")

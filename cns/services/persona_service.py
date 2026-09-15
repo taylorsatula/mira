@@ -89,7 +89,7 @@ class PersonaService:
         response = self.llm.generate_response(
             messages=[{"role": "user", "content": user_prompt}],
             system_prompt=self._evaluation_system,
-            model_config="primary",
+            model_config="batch",
         )
         signals = self._parse_evaluation(
             self.llm.extract_text_content(response),
@@ -185,7 +185,7 @@ class PersonaService:
             response = self.llm.generate_response(
                 messages=[{"role": "user", "content": prompt}],
                 system_prompt=self._refinement_system,
-                model_config="primary",
+                model_config="batch",
             )
             try:
                 candidate = self._parse_persona(self.llm.extract_text_content(response))
@@ -263,7 +263,7 @@ class PersonaService:
         response = self.llm.generate_response(
             messages=[{"role": "user", "content": prompt}],
             system_prompt=self._refinement_system,
-            model_config="primary",
+            model_config="batch",
         )
         return self._parse_persona(self.llm.extract_text_content(response))
 
@@ -278,7 +278,7 @@ class PersonaService:
                 }
             ],
             system_prompt=self._critic_system,
-            model_config="primary",
+            model_config="batch",
         )
         output = self.llm.extract_text_content(response)
         status = re.search(r'<mira:persona_review\s+status="(pass|fail)"', output)

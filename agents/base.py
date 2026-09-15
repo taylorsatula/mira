@@ -219,9 +219,10 @@ class SidebarAgent(ABC):
     # Overwatch -- opt-in passive observer that summarizes each iteration
     # via a cheap one-shot LLM call in a background thread. The agent
     # loop is unaware of the observer. Set overwatch_model_config_name to activate.
-    # overwatch_max_tokens is load-bearing: the observer runs on `primary`
-    # whose row ceiling is 16000, and a per-request override is the only
-    # thing keeping the observer's output to one summary line.
+    # overwatch_max_tokens is load-bearing: the observer's route row ceiling
+    # is generous (4096 on `fast`, 16000 on `batch`/`primary`), and a per-request
+    # override is the only thing keeping the observer's output to one summary
+    # line.
     overwatch_model_config_name: str | None = None
     overwatch_max_tokens: int = 80
 

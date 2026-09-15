@@ -46,6 +46,12 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # Install sentence-transformers separately (dependency resolution)
 RUN pip install --no-cache-dir sentence-transformers
 
+# playwright is an optional dependency, absent from requirements.txt. This image
+# has no CONFIG_INSTALL_PLAYWRIGHT gate and always ships the Chromium browser
+# (runtime stage, `playwright install chromium` below), so the package that
+# provides that CLI is installed explicitly here.
+RUN pip install --no-cache-dir playwright
+
 # Download spaCy model
 RUN python -m spacy download en_core_web_lg
 
@@ -154,7 +160,14 @@ COPY --from=builder /opt/mira/venv /opt/mira/venv
 COPY --from=builder /root/.cache/huggingface /home/mira/.cache/huggingface
 RUN chown -R mira:mira /home/mira/.cache
 
-# Install Playwright browser
+# Install Playwright browser. PLAYWRIGHT_BROWSERS_PATH is the contract that
+# makes build-time install and runtime lookup agree: without it the browsers
+# land in HOME/.cache/ms-playwright of the build user (/root), while the s6
+# mira service runs as the mira user with HOME=/home/mira and resolves
+# browsers under PLAYWRIGHT_BROWSERS_PATH or its own HOME — launch would fail
+# with "Executable doesn't exist". This ENV must stay set for the install RUN
+# and in the runtime stage image (s6 services inherit the container env).
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/mira/.cache/ms-playwright
 RUN /opt/mira/venv/bin/playwright install chromium \
     && chown -R mira:mira /home/mira/.cache
 

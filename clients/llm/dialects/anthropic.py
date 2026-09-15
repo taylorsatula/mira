@@ -10,7 +10,6 @@ from collections.abc import Iterator
 from typing import Any, TYPE_CHECKING
 
 import anthropic
-import httpx
 
 from clients.llm.artifacts import FileArtifactSink
 from clients.llm.events import (
@@ -130,7 +129,10 @@ class AnthropicDialect(Dialect):
         self._active_stream: Any = None
         self.client = client or anthropic.Anthropic(
             api_key=api_key,
-            timeout=httpx.Timeout(connect=30.0, read=600.0, write=30.0, pool=30.0),
+            # anthropic.Timeout is the SDK's own re-export of its vendored
+            # httpx Timeout class (httpx on SDK 0.x, httpx2 on SDK 1.x) - passing
+            # an externally-constructed httpx.Timeout is rejected by SDK 1.x.
+            timeout=anthropic.Timeout(connect=30.0, read=600.0, write=30.0, pool=30.0),
         )
         from utils.logging_config import instrument_anthropic_client
 
@@ -262,13 +264,10 @@ class AnthropicDialect(Dialect):
         }
         if request.thinking.active:
             params.update(thinking_params)
-        # Anthropic ignores temperature while a thinking block is in play, so it is
-        # sent only when thinking is off on the wire: either the caller expressed no
-        # thinking intent at all, or effort='none' resolved to an explicitly
-        # disabled thinking block.
-        thinking_on = thinking_params.get("thinking", {}).get("type") in {"adaptive", "enabled"}
-        if request.temperature is not None and not thinking_on:
-            params["temperature"] = request.temperature
+        # No temperature is sent: the Anthropic API has deprecated the
+        # parameter (all current models pin temperature=1) and SDK 1.x removed
+        # it from Messages.create() entirely - passing it raises TypeError.
+        # The openai-family dialects still honor request.temperature.
 
         system = self._system_param(request.system)
         if system is not None:

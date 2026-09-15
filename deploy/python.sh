@@ -334,6 +334,20 @@ print_success "Embedding model ready"
 print_header "Step 7: Playwright Browser Setup"
 
 if [ "${CONFIG_INSTALL_PLAYWRIGHT}" = "yes" ]; then
+    # playwright is an optional dependency and is deliberately absent from
+    # requirements.txt, so the package is installed here rather than in Step 5.
+    # That makes the config prompt gate the package and the browser together:
+    # opting out leaves web_tool._fetch_playwright() to report the
+    # "playwright_unavailable" error code, and the POST check
+    # CheckSpec("playwright_service", required=False, ...) to fail as advisory.
+    echo -ne "${DIM}${ARROW}${RESET} Checking playwright package... "
+    install_python_package playwright
+    if [ $? -ne 0 ]; then
+        print_error "Failed to install playwright"
+        print_info "Run with --loud flag to see detailed error output"
+        exit 1
+    fi
+
     # Check if Playwright Chromium is already installed
     PLAYWRIGHT_CACHE="$HOME/.cache/ms-playwright"
     echo -ne "${DIM}${ARROW}${RESET} Checking Playwright cache... "
