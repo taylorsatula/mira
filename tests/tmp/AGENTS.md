@@ -7,3 +7,7 @@
 - Any test file added to this folder will be **autodeleted instantly** on sight. This folder is not a test suite, is not run by anything, and will never contain more than the exhibit below.
 - The folder exists only to display one exemplary disposable probe, so a session can see the shape: live infrastructure, real credentials plumbing, no mocks, executed once, then kept as an example rather than as a check.
 - Verification in MIRA is live (see the NO MOCKS section of the root `AGENTS.md`). A one-off probe that earns permanence becomes a production path-probe registered alongside the POST gate — not a file here.
+
+## Files
+
+- `jsonb_roundtrip_probe.py` — The one display exhibit: an exemplary disposable probe that round-tripped real JSONB memory columns (`inbound_links`/`outbound_links`/`entity_links`/`annotations`) through `lt_memory/db_access.py:update_memory` against live Postgres with production Vault credentials. Executed once, never run again. Verified current against the source: `update_memory` still takes the `Dict[str, Any]` updates shape and still wraps JSONB fields via `_JSONB_MEMORY_FIELDS` (`Jsonb(value) or cannot adapt type 'dict'`), and the probe's other call surfaces (`get_memory`, `get_memories_paginated` returning a `MemoryPageResult` TypedDict) match. Do not rewrite, run, or extend it; see the `lt_memory/AGENTS.md` note on the `Jsonb()` wrapping contract.

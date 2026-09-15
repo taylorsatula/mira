@@ -77,6 +77,10 @@ directory decides relevance from the title alone.
 - Each fact is documented in exactly one of the maps that load together. A
   constraint that applies at both parent and child level may appear in both;
   the non-owning map states it in one line and cites the owning map.
+- **Reciprocity:** a cross-directory constraint is stated in full by the map
+  whose code enforces it; every other map it binds carries a one-line citation
+  naming the owner. Non-owning-only statements and citations to dead owners
+  are defects.
 - Adding a member to a registry, enum, or contract family requires
   coordinated edits in several files. Document the full list once, in order,
   with the file anchor and the consequence of skipping each step.
@@ -114,6 +118,8 @@ line; a missed one misleads every session.
 | Directory reaches ≥2 source files, or gains an invariant its parent's map does not own | Create its `AGENTS.md` (shape above) |
 | File moved between directories | Update both maps' `## Files` sections |
 | New map created or removed | Update the parent map's `## Files` pointer |
+| Wiring edge added (import, event subscribe/publish, injected dependency, schema coupling, shared contract) | Owner map states it fully in `## Wiring`; counterpart map(s) get the one-line citation — same commit as the code. |
+| Wiring edge removed or renamed | Grep all maps for the edge's symbols (file, event class, function, key names); delete the owner statement and every citation to it. Same commit. |
 
 **Enforcement:** the audits below are the check that no trigger was missed.
 Run them before committing any change that touched source files or maps. A
@@ -139,6 +145,61 @@ table is the check.
         | grep -ohE '^[[:space:]]*- `[^`]*`' | sed 's/^[[:space:]]*- `//; s/`$//' | sort -u \
         | while read p; do [ -e "$d/$p" ] || echo "MISSING-FILE ($m): $p"; done
     done
+
+The anchor audit above checks path existence. The reciprocity check below is
+the second half: every backticked file reference a map makes to a file outside
+its own subtree must be mentioned somewhere in that file's loading set (the
+file's ancestor maps) — otherwise the reference is invisible to anyone
+working on the target. Run it after the anchor audit; it prints one line per
+invisible reference.
+
+    python3 - <<'EOF'
+    import os, re, subprocess
+    repo = subprocess.run(["git","rev-parse","--show-toplevel"],capture_output=True,text=True).stdout.strip()
+    maps = [p for p in subprocess.run(["git","ls-files"],capture_output=True,text=True).stdout.splitlines() if p.endswith("AGENTS.md")]
+    TOK = re.compile(r"`([^`]*\.(?:py|txt|sql|md|js|sh|json)(?::[A-Za-z_][A-Za-z0-9_]*)?)`")
+    byd = {os.path.dirname(os.path.join(repo,p)) or repo: p for p in maps}
+    def loadset(d):
+        out,cur = [],repo
+        for part in os.path.relpath(d,repo).split(os.sep):
+            if cur in byd: out.append(byd[cur])
+            cur = os.path.join(cur,part)
+        if cur in byd: out.append(byd[cur])
+        return out
+    for mp in maps:
+        dm = os.path.dirname(os.path.join(repo,mp))
+        for tok in TOK.findall(open(os.path.join(repo,mp)).read()):
+            base = tok.split(":")[0]
+            if base.endswith("AGENTS.md"): continue
+            p = os.path.normpath(os.path.join(repo,base))
+            if not os.path.exists(p) or os.path.dirname(p) == dm: continue
+            if dm != repo and os.path.commonpath([dm, p]) == dm: continue  # own subtree
+            name = os.path.basename(base)
+            if not any(name in open(os.path.join(repo,m)).read() for m in loadset(os.path.dirname(p))):
+                print(f"INVISIBLE ({mp}): {base}")
+    EOF
+
+## Repo root files
+
+- `main.py` — application entry point and wiring hub. Owns: router mounting
+  (`/v0/api` from `cns/api`, `/v0/auth` from `auth`, `websocket_chat` at `/v0`),
+  the middleware stack (`SecurityHeadersMiddleware`), the global `APIError` →
+  HTTP-status mapping, shutdown ordering (`websocket_chat.close_all_connections()`
+  awaited during shutdown), startup sequencing (`lifespan` performs first
+  construction of the LT_Memory factory; `create_cns_orchestrator()` builds the
+  CNS graph; `register_sidebar_dispatcher_job()` registers the sidebar scheduler;
+  `load_announcement()` runs once), and the pre-server POST gate before the
+  server binds. Per-directory contracts citing these behaviors live in
+  `cns/api/AGENTS.md`, `auth/AGENTS.md`, `cns/integration/AGENTS.md`,
+  `agents/AGENTS.md`, `config/AGENTS.md`, `lt_memory/AGENTS.md`,
+  `utils/AGENTS.md`, `web/AGENTS.md`.
+- `requirements.txt` — dependency pins. A package commented out of the optional
+  block here is invisible to `Dockerfile.base`, which installs from this file
+  (owning statement: `deploy/AGENTS.md`).
+- `VERSION` — release identity string, read by `cns/api/update.py:get_latest_version`
+  and reported by `/health` (`cns/api/AGENTS.md`).
+- `README.md`, `license.txt`, `NEARFUTURE_FEATURES.md` — static repo documents;
+  no runtime consumers.
 
 ## 🚨 Critical Principles (Non-Negotiable)
 
