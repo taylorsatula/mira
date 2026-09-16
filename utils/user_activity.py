@@ -54,15 +54,19 @@ def increment_user_activity_day(user_id: str) -> int:
     with session_manager.get_session(user_id) as session:
         # Atomic first-of-day claim: the date predicate in the UPDATE itself
         # is the guard, so concurrent first-of-day callers increment exactly once.
+        # last_login_at is updated in the same statement: opening a second
+        # connection here would self-deadlock on this transaction's row lock.
         rowcount = session.execute_update("""
             UPDATE users
             SET cumulative_activity_days = cumulative_activity_days + 1,
-                last_activity_date = %(activity_date)s
+                last_activity_date = %(activity_date)s,
+                last_login_at = %(login_time)s
             WHERE id = %(user_id)s
               AND (last_activity_date IS NULL OR last_activity_date < %(activity_date)s)
         """, {
             'user_id': user_id,
-            'activity_date': user_local_date
+            'activity_date': user_local_date,
+            'login_time': utc_now()
         })
 
         current_user = session.execute_single("""
@@ -102,9 +106,6 @@ def increment_user_activity_day(user_id: str) -> int:
         # ========================================================================
 
         logger.info(f"First message of day for user {user_id} (local date: {user_local_date})")
-
-        # Update last login timestamp to reflect daily activity
-        update_user_login(user_id)
 
         # ========================================================================
 
@@ -155,22 +156,3 @@ def get_user_cumulative_activity_days(user_id: str) -> int:
             raise ValueError(f"User {user_id} not found")
 
         return result.get('cumulative_activity_days', 0) or 0
-
-
-def update_user_login(user_id: str) -> None:
-    """
-    Update user's last login timestamp.
-
-    Args:
-        user_id: User ID to update
-    """
-    session_manager = get_shared_session_manager()
-    with session_manager.get_admin_session() as session:
-        session.execute_update("""
-            UPDATE users
-            SET last_login_at = %(login_time)s
-            WHERE id = %(user_id)s
-        """, {
-            'user_id': user_id,
-            'login_time': utc_now()
-        })
