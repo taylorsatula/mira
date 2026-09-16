@@ -809,12 +809,16 @@ class MemoryTool(Tool):
             SELECT * FROM memories
             WHERE REPLACE(id::text, '-', '') LIKE %(pattern)s
               AND is_archived = FALSE
-            LIMIT 1
+            LIMIT 2
             """
-            result = session.execute_single(query, {'pattern': f"{clean_id.lower()}%"})
+            result = session.execute_query(query, {'pattern': f"{clean_id.lower()}%"})
 
+            if len(result) > 1:
+                raise ValueError(
+                    f"Ambiguous short ID '{short_id}' — matches multiple memories; use the full UUID"
+                )
             if result:
-                return Memory(**result)
+                return Memory(**result[0])
             return None
 
     def _touch(

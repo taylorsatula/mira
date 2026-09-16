@@ -35,43 +35,46 @@ class DistributedLock:
         self.default_ttl = default_ttl
         self.valkey = get_valkey()
     
-    def acquire(self, resource_id: str, ttl: Optional[int] = None, lock_value: Optional[str] = None) -> bool:
+    def acquire(self, resource_id: str, ttl: int | None = None) -> str | None:
         """
         Attempt to acquire a distributed lock.
 
         Uses Valkey's atomic SET NX (set if not exists) operation to ensure
-        only one process can acquire the lock.
+        only one process can acquire the lock for a resource at a time.
 
         Args:
             resource_id: Unique identifier for the resource to lock
             ttl: Time-to-live in seconds (uses default if not specified)
-            lock_value: Optional value to store with lock (for debugging)
 
         Returns:
-            True if lock was acquired, False if already locked
+            The lock token if acquired, None if already locked. The token
+            must be passed to release()/renew() — those operations are
+            compare-and-delete / compare-and-expire against it, so a lock
+            that expired and was re-acquired by another owner is never
+            clobbered.
 
         Raises:
             Exception: If Valkey is unavailable (infrastructure failure)
         """
         key = f"{self.lock_prefix}{resource_id}"
         ttl = ttl or self.default_ttl
-        lock_value = lock_value or str(uuid.uuid4())
+        token = str(uuid.uuid4())
 
         # SET NX (set if not exists) with EX (expiration)
         # This is atomic - either we get the lock or we don't
         success = self.valkey.set(
             key,
-            lock_value,
+            token,
             nx=True,  # Only set if key doesn't exist
             ex=ttl    # Set expiration time
         )
 
         if success:
             logger.debug(f"Acquired lock for {resource_id} with TTL {ttl}s")
-        else:
-            logger.debug(f"Failed to acquire lock for {resource_id} - already locked")
+            return token
 
-        return bool(success)
+        logger.debug(f"Failed to acquire lock for {resource_id} - already locked")
+        return None
     
     def get_lock_owner(self, resource_id: str) -> Optional[str]:
         """
@@ -90,29 +93,62 @@ class DistributedLock:
         value = self.valkey.get(key)
         return value
     
-    def release(self, resource_id: str) -> bool:
+    def release(self, resource_id: str, token: str) -> bool:
         """
-        Release a distributed lock.
+        Release a distributed lock by token (atomic compare-and-delete).
 
         Args:
             resource_id: Unique identifier for the resource to unlock
+            token: Token returned by the acquire() call that won the lock
 
         Returns:
-            True if lock was released, False if lock didn't exist
+            True if this owner's lock was released, False if the token did
+            not match (expired and re-acquired by another owner). A False is
+            a logged no-op, never an error.
 
         Raises:
             Exception: If Valkey is unavailable (infrastructure failure)
         """
         key = f"{self.lock_prefix}{resource_id}"
 
-        deleted = self.valkey.delete(key)
+        released = self.valkey.compare_and_delete(key, token)
 
-        if deleted:
+        if released:
             logger.debug(f"Released lock for {resource_id}")
         else:
-            logger.debug(f"No lock to release for {resource_id}")
+            logger.warning(
+                "Lock for %s not released: token mismatch "
+                "(lock expired and was re-acquired by another owner)",
+                resource_id,
+            )
 
-        return bool(deleted)
+        return released
+
+    def renew(self, resource_id: str, token: str, ttl: int | None = None) -> bool:
+        """
+        Extend a held lock's TTL by token (atomic compare-and-expire).
+
+        Args:
+            resource_id: Unique identifier for the locked resource
+            token: Token returned by the acquire() call that won the lock
+            ttl: New TTL in seconds (uses default if not specified)
+
+        Returns:
+            True if the TTL was extended, False if ownership was lost (the
+            caller logs and continues — the lock is gone either way).
+
+        Raises:
+            Exception: If Valkey is unavailable (infrastructure failure)
+        """
+        key = f"{self.lock_prefix}{resource_id}"
+        ttl = ttl or self.default_ttl
+
+        renewed = self.valkey.compare_and_expire(key, token, ttl)
+
+        if not renewed:
+            logger.warning("Lock renewal for %s failed: ownership lost", resource_id)
+
+        return renewed
     
     def is_locked(self, resource_id: str) -> bool:
         """
@@ -166,15 +202,15 @@ class DistributedLock:
         Yields:
             None if lock acquired successfully
         """
-        acquired = False
+        acquired_token: str | None = None
         try:
-            acquired = self.acquire(resource_id, ttl)
-            if not acquired:
+            acquired_token = self.acquire(resource_id, ttl)
+            if acquired_token is None:
                 raise LockAcquisitionError(f"Could not acquire lock for {resource_id}")
             yield
         finally:
-            if acquired:
-                self.release(resource_id)
+            if acquired_token is not None:
+                self.release(resource_id, acquired_token)
 
 
 class LockAcquisitionError(Exception):
@@ -202,35 +238,44 @@ class UserRequestLock:
     
     
     
-    def acquire(self, user_id: str) -> bool:
+    def acquire(self, user_id: str) -> str | None:
         """
         Attempt to acquire lock for user.
-        
+
         Args:
             user_id: User identifier
-        
+
         Returns:
-            True if lock acquired, False if user has concurrent request
+            Lock token if acquired, None if user has a concurrent request
         """
-        success = self.lock.acquire(user_id, ttl=self.default_ttl)
-        if success:
+        token = self.lock.acquire(user_id, ttl=self.default_ttl)
+        if token is not None:
             logger.debug(f"Acquired lock for user {user_id} (TTL: {self.default_ttl}s)")
         else:
             logger.debug(f"Failed to acquire lock for user {user_id} - concurrent request in progress")
-        return success
-    
-    
-    def release(self, user_id: str) -> bool:
+        return token
+
+    def release(self, user_id: str, token: str) -> bool:
         """
-        Release lock for user.
-        
+        Release lock for user by token (atomic compare-and-delete).
+
         Args:
             user_id: User identifier
-        
+            token: Token returned by acquire()
+
         Returns:
-            True if lock was released
+            True if this owner's lock was released
         """
-        return self.lock.release(user_id)
+        return self.lock.release(user_id, token)
+
+    def renew(self, user_id: str, token: str) -> bool:
+        """
+        Extend the held lock's TTL by token (atomic compare-and-expire).
+
+        Returns:
+            True if renewed, False if ownership was lost
+        """
+        return self.lock.renew(user_id, token, ttl=self.default_ttl)
     
     def is_locked(self, user_id: str) -> bool:
         """

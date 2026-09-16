@@ -159,7 +159,11 @@ function setupEventListeners() {
 		// On mobile, Enter adds newline (send via button); on desktop, Enter sends (Shift+Enter for newline)
 		if (e.key === 'Enter' && !e.shiftKey && !isMobile()) {
 			e.preventDefault();
-			if (!elements.sendButton.disabled) window.sendMessage();
+			if (elements.sendButton.classList.contains('stop-mode')) {
+				window.cancelGeneration();
+			} else if (!elements.sendButton.disabled) {
+				window.sendMessage();
+			}
 		}
 	});
 

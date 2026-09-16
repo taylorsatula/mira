@@ -317,17 +317,9 @@ class SegmentCollapseHandler:
             self.continuum_pool.invalidate()
             return tombstone
 
-        # Increment attempt counter before expensive LLM call (persists to DB via jsonb_set)
-        db = self.continuum_repo.get_user_db_client(get_current_user_id())
-        db.execute_returning("""
-            UPDATE messages
-            SET metadata = jsonb_set(metadata, '{collapse_attempts}', to_jsonb(%s))
-            WHERE id = %s
-                AND metadata->>'is_segment_boundary' = 'true'
-            RETURNING id
-        """, (attempts + 1, str(sentinel.id)))
-
-        # Load messages in segment (between this sentinel and next, or end of continuum)
+        # Load messages in segment (between this sentinel and next, or end of continuum).
+        # Runs before the attempt counter: a still-processing turn must not burn
+        # attempts on every timeout scan when the cheap read already answers.
         messages = self._load_segment_messages(
             event.continuum_id,
             sentinel
@@ -340,6 +332,21 @@ class SegmentCollapseHandler:
                 f"(messages are committed after the full turn completes). "
                 f"The segment will collapse automatically once the conversation finishes."
             )
+
+        # Claim the collapse via compare-and-set: the UPDATE only lands while the
+        # sentinel is still active/paused, so a concurrent manual collapse (which
+        # flips status to 'collapsed' first) makes this return no rows.
+        db = self.continuum_repo.get_user_db_client(get_current_user_id())
+        claimed = db.execute_returning("""
+            UPDATE messages
+            SET metadata = jsonb_set(metadata, '{collapse_attempts}', to_jsonb(%s))
+            WHERE id = %s
+                AND metadata->>'is_segment_boundary' = 'true'
+                AND metadata->>'status' IN ('active', 'paused')
+            RETURNING id
+        """, (attempts + 1, str(sentinel.id)))
+        if not claimed:
+            raise RuntimeError("Segment no longer active; collapse already claimed")
 
         # Generate summary and embedding (raises on failure)
         result, embedding = self._generate_summary(
@@ -386,9 +393,26 @@ class SegmentCollapseHandler:
             complexity_score=result.complexity
         )
 
-        # Save collapsed sentinel to database
-        # Note: segment_embedding will be extracted from sentinel.metadata during save
         user_id = get_current_user_id()
+
+        # Re-read the sentinel: if a turn interleaved since entry (last_turn_at
+        # moved) or the segment left active/paused (another collapse claimed it),
+        # abort before overwriting — the segment stays active and retries on the
+        # next timeout check; only this attempt's summary work is discarded.
+        current = self.continuum_repo.find_segment_by_id(
+            event.continuum_id, event.segment_id, user_id
+        )
+        if (
+            current is None
+            or current.metadata.get('status') not in ('active', 'paused')
+            or current.metadata.get('last_turn_at') != sentinel.metadata.get('last_turn_at')
+        ):
+            raise RuntimeError(
+                f"Segment {event.segment_id} changed during collapse "
+                f"(turn interleaved or status no longer active/paused); "
+                f"aborting save. Segment remains active."
+            )
+
         self.continuum_repo.save_message(
             collapsed_sentinel,
             event.continuum_id,
@@ -898,12 +922,16 @@ class SegmentCollapseHandler:
             SELECT * FROM memories
             WHERE REPLACE(id::text, '-', '') LIKE %(pattern)s
               AND is_archived = FALSE
-            LIMIT 1
+            LIMIT 2
             """
-            result = session.execute_single(query, {'pattern': f"{clean_id.lower()}%"})
+            result = session.execute_query(query, {'pattern': f"{clean_id.lower()}%"})
 
+            if len(result) > 1:
+                raise ValueError(
+                    f"Ambiguous short ID '{short_id}' — matches multiple memories; use the full UUID"
+                )
             if result:
-                return Memory(**result)
+                return Memory(**result[0])
             return None
 
     def _extract_tools_from_messages(self, messages: List[Message]) -> List[str]:

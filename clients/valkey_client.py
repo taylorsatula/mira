@@ -237,6 +237,15 @@ class ValkeyClient:
         data = json.loads(json_str)
         return [data]  # Wrap in list to match expected JSONPath result format
 
+    def getdel_json(self, key: str) -> Optional[list[Dict[str, Any]]]:
+        """Atomically get-and-delete JSON data (single-use semantics)."""
+        json_str = self._client.getdel(key)
+        if json_str is None:
+            return None
+
+        data = json.loads(json_str)
+        return [data]
+
     def hset_with_retry(self, hash_key: str, field: str, value: str) -> int:
         """Hash set with retry pattern for transient failures."""
         try:
@@ -299,6 +308,27 @@ class ValkeyClient:
         return 1
         """
         return bool(self._client.eval(script, 1, key, expected_value, new_value))
+
+    def compare_and_delete(self, key: str, expected_value: str) -> bool:
+        """Atomically delete a key only when it still holds the expected value."""
+        script = """
+        if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+            return 0
+        end
+        redis.call('DEL', KEYS[1])
+        return 1
+        """
+        return bool(self._client.eval(script, 1, key, expected_value))
+
+    def compare_and_expire(self, key: str, expected_value: str, seconds: int) -> bool:
+        """Atomically extend a key's TTL only when it still holds the expected value."""
+        script = """
+        if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+            return 0
+        end
+        return redis.call('EXPIRE', KEYS[1], ARGV[2])
+        """
+        return bool(self._client.eval(script, 1, key, expected_value, seconds))
 
     def increment(self, key: str) -> int:
         """Atomically increment a counter by one, creating it at 1 if missing."""

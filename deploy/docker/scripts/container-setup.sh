@@ -149,32 +149,31 @@ if [ "$CONFIG_PROVIDER_NAME" != "Groq" ]; then
     case "$CONFIG_PROVIDER_NAME" in
         "OpenRouter")
             print_info "Example: meta-llama/llama-3.3-70b-instruct:free"
-            DEFAULT_MODEL="meta-llama/llama-3.3-70b-instruct:free"
+            # Live check against the public models list: prefill the suggestion only if OpenRouter actually serves it.
+            prefill_provider_model "meta-llama/llama-3.3-70b-instruct:free"
             ;;
         "Together AI")
             print_info "Example: meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"
-            DEFAULT_MODEL="meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"
+            CONFIG_PROVIDER_MODEL="meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"
             ;;
         "Fireworks AI")
             print_info "Example: accounts/fireworks/models/llama-v3p1-70b-instruct"
-            DEFAULT_MODEL="accounts/fireworks/models/llama-v3p1-70b-instruct"
+            CONFIG_PROVIDER_MODEL="accounts/fireworks/models/llama-v3p1-70b-instruct"
             ;;
         "Cerebras")
             print_info "Example: llama-3.3-70b"
-            DEFAULT_MODEL="llama-3.3-70b"
+            CONFIG_PROVIDER_MODEL="llama-3.3-70b"
             ;;
         "SambaNova")
             print_info "Example: Meta-Llama-3.1-70B-Instruct"
-            DEFAULT_MODEL="Meta-Llama-3.1-70B-Instruct"
-            ;;
-        *)
-            DEFAULT_MODEL=""
+            CONFIG_PROVIDER_MODEL="Meta-Llama-3.1-70B-Instruct"
             ;;
     esac
-    if [ -n "$DEFAULT_MODEL" ]; then
-        read -p "$(echo -e ${CYAN}Model name${RESET}) [default: ${DEFAULT_MODEL}]: " MODEL_INPUT
-        CONFIG_PROVIDER_MODEL="${MODEL_INPUT:-$DEFAULT_MODEL}"
+    if [ -n "$CONFIG_PROVIDER_MODEL" ]; then
+        read -p "$(echo -e ${CYAN}Model name${RESET}) [default: ${CONFIG_PROVIDER_MODEL}]: " MODEL_INPUT
+        CONFIG_PROVIDER_MODEL="${MODEL_INPUT:-$CONFIG_PROVIDER_MODEL}"
     else
+        print_info "Pick a model from your provider's website and enter its exact name."
         read -p "$(echo -e ${CYAN}Model name${RESET}): " CONFIG_PROVIDER_MODEL
     fi
 fi
@@ -208,6 +207,11 @@ while true; do
         break
     fi
 done
+
+# Groq prompts for no model above: the key (collected in 2b) is required for its models-list check, so prefill-or-leave-unset happens here.
+if [ "$CONFIG_PROVIDER_NAME" = "Groq" ]; then
+    prefill_provider_model "qwen/qwen3.6-27b"
+fi
 
 # Kagi API Key (optional)
 echo -e "${BOLD}${BLUE}3. Kagi Search API Key${RESET} ${DIM}(OPTIONAL - kagi.com/settings?p=api)${RESET}"

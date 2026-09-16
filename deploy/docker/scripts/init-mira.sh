@@ -106,6 +106,19 @@ setup_from_env_vars() {
 
     export CONFIG_PROVIDER_MODEL="${MIRA_PROVIDER_MODEL:-}"
 
+    # Model defaulting: never assume a model — confirm it live against the
+    # provider's models list, prefill only what the provider serves, and
+    # otherwise leave it unset so the empty-model guard in init_postgresql
+    # aborts with guidance instead of installing dead routes.
+    case "$CONFIG_PROVIDER_NAME" in
+        Groq)
+            prefill_provider_model "qwen/qwen3.6-27b"
+            ;;
+        OpenRouter)
+            prefill_provider_model "meta-llama/llama-3.3-70b-instruct:free"
+            ;;
+    esac
+
     print_success "Configuration loaded from environment"
     print_info "  Anthropic Key: ****${CONFIG_ANTHROPIC_KEY: -4}"
     print_info "  Provider: $CONFIG_PROVIDER_NAME"
@@ -186,23 +199,20 @@ EOF
     print_step "Applying database schema..."
     sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 -f /opt/mira/app/deploy/mira_service_schema.sql
 
-    # Non-Groq provider: repoint the generic-key routes at the endpoint the
-    # wizard collected. Postgres is running here, so the rewrite happens at
-    # once — there is no deferred s6 step. This mirrors what the bare-metal
-    # installer does (python.sh rewrites the seeded rows pre-schema;
-    # postgresql.sh rewrites all five rows for offline installs). A container
-    # install collects ONE generic provider key and model, so 'other' shares
-    # the provider: like an air-gapped install, it has no genuinely different
-    # outside vendor to route to. The anthropic routes ('batch',
-    # 'assessment') keep the separately collected Anthropic key.
-    if [ "$CONFIG_PROVIDER_NAME" != "Groq" ] && [ -n "$CONFIG_PROVIDER_ENDPOINT" ]; then
-        if [ -z "$CONFIG_PROVIDER_MODEL" ]; then
-            print_error "Provider '$CONFIG_PROVIDER_NAME' needs a model name (MIRA_PROVIDER_MODEL, or answer the wizard prompt); refusing to install routes that cannot resolve."
-            exit 1
-        fi
-        print_step "Routing primary/fast/other model_configs at $CONFIG_PROVIDER_NAME..."
-        sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 -c "UPDATE model_configs SET dialect_name = 'openai', endpoint_url = '$CONFIG_PROVIDER_ENDPOINT', model = '$CONFIG_PROVIDER_MODEL' WHERE name IN ('primary', 'fast', 'other');"
+    # Repoint all five seeded routes at the provider the wizard collected.
+    # Postgres is running here, so the rewrite happens at once — there is no
+    # deferred s6 step. A container install collects ONE generic provider key
+    # and model, so every route shares it (mirrors the offline-install
+    # rewrite in deploy/postgresql.sh). Every route needs the credential,
+    # so all five are bound to subcortical_key — the seeded primary row ships
+    # with an empty api_key_name (the unauthenticated llama-server) that would
+    # 401 against the collected provider.
+    if [ -z "$CONFIG_PROVIDER_MODEL" ]; then
+        print_error "Provider '$CONFIG_PROVIDER_NAME' needs a model name (MIRA_PROVIDER_MODEL, or answer the wizard prompt); refusing to install routes that cannot resolve. Visit your provider's website to pick a model it currently serves."
+        exit 1
     fi
+    print_step "Routing all five model_configs at $CONFIG_PROVIDER_NAME..."
+    sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 -c "UPDATE model_configs SET dialect_name = 'openai', endpoint_url = '$CONFIG_PROVIDER_ENDPOINT', model = '$CONFIG_PROVIDER_MODEL', api_key_name = 'subcortical_key' WHERE name IN ('primary', 'fast', 'batch', 'assessment', 'other');"
 
     # Update passwords if custom password provided
     if [ "$CONFIG_DB_PASSWORD" != "changethisifdeployingpwd" ]; then
@@ -251,11 +261,11 @@ init_vault() {
     print_step "Storing API credentials in Vault..."
     # model_configs seeds primary with an empty api_key_name (the unauthenticated
     # local llama-server) and fast/batch/assessment/other with subcortical_key.
-    # Only subcortical_key is written here: the container UPDATE repoints
-    # dialect/endpoint/model but never api_key_name, so no seeded row can name
-    # provider_key. provider_key exists for the bare-metal installer
-    # (deploy/postgresql.sh, deploy/python.sh), which seeds primary against an
-    # authenticated outside chat provider — not this script.
+    # Only subcortical_key is written here: the container UPDATE binds all five
+    # routes to it, so no row can name provider_key. provider_key exists for the
+    # bare-metal installer (deploy/postgresql.sh, deploy/python.sh), which
+    # seeds primary against an authenticated outside chat provider — not this
+    # script.
     vault kv put secret/mira/api_keys \
         anthropic_key="$CONFIG_ANTHROPIC_KEY" \
         anthropic_batch_key="$CONFIG_ANTHROPIC_BATCH_KEY" \

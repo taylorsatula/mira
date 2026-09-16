@@ -88,9 +88,9 @@ _lock: UserRequestLock | None = None
 def _get_lock() -> UserRequestLock:
     """Per-user request lock shared with the chat paths (same Valkey key namespace).
 
-    TTL comes from config and must exceed the longest heartbeat turn: the lock
-    is never renewed mid-turn, and an expired lock would let a user chat start
-    while the heartbeat turn is still running.
+    TTL is a crash backstop only: it must exceed the longest heartbeat turn so
+    a crashed worker cannot wedge the user, while a live turn holds and
+    releases the lock by token.
     """
     global _lock
     if _lock is None:
@@ -269,6 +269,10 @@ def _execute_heartbeat_turn(
     digest = build_background_digest(user_id)
     stimulus = _build_stimulus(tick_id, digest)
 
+    # Liveness stamp: the timeout service's last_turn_at guard then covers this
+    # wake turn for one threshold window even if the turn hangs.
+    pool.repository.stamp_segment_liveness(continuum.id, user_id)
+
     uow = pool.begin_work(continuum)
     continuum, response_text, _metadata = get_orchestrator().process_message(
         continuum,
@@ -381,8 +385,8 @@ async def heartbeat_tick() -> None:
                 logger.debug("Heartbeat paused externally for user %s", user_id)
                 continue
 
-            acquired = await loop.run_in_executor(None, _get_lock().acquire, user_id)
-            if not acquired:
+            lock_token = await loop.run_in_executor(None, _get_lock().acquire, user_id)
+            if lock_token is None:
                 logger.debug("Heartbeat skipped for user %s: request lock held", user_id)
                 continue
 
@@ -419,7 +423,7 @@ async def heartbeat_tick() -> None:
                         created_at=result.get("final_message_created_at"),
                     )
             finally:
-                await loop.run_in_executor(None, _get_lock().release, user_id)
+                await loop.run_in_executor(None, _get_lock().release, user_id, lock_token)
         except GenerationCancelled:
             logger.info("Heartbeat turn for user %s cancelled externally", user_id)
             continue

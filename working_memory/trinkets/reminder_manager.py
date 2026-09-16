@@ -1,4 +1,5 @@
 """Reminder manager trinket for system prompt injection."""
+import html
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple, TYPE_CHECKING
@@ -169,13 +170,14 @@ class ReminderManager(EventAwareTrinket):
     def _format_reminder_xml(self, reminder: Dict, due: str, time: str | None = None) -> str:
         """Format a single reminder as XML element."""
         attrs = [
-            f'id="{reminder["id"]}"',
-            f'title="{reminder["encrypted__title"]}"',
-            f'due="{due}"'
+            f'id="{html.escape(str(reminder["id"]), quote=True)}"',
+            f'title="{html.escape(reminder["encrypted__title"], quote=True)}"',
+            f'due="{html.escape(due, quote=True)}"'
         ]
         if time:
-            attrs.append(f'time="{time}"')
+            attrs.append(f'time="{html.escape(time, quote=True)}"')
 
         if reminder.get('encrypted__description'):
-            return f"<reminder {' '.join(attrs)}>\n<details>{reminder['encrypted__description']}</details>\n</reminder>"
+            description = html.escape(reminder['encrypted__description'])
+            return f"<reminder {' '.join(attrs)}>\n<details>{description}</details>\n</reminder>"
         return f"<reminder {' '.join(attrs)}/>"

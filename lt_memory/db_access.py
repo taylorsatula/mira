@@ -1162,10 +1162,11 @@ class LTMemoryDB:
         resolved_user_id = self._resolve_user_id(user_id)
 
         with self.session_manager.get_session(resolved_user_id) as session:
-            # Try exact match first (fast path)
+            # Archived entities are dead links — a name matching one creates fresh
             exact_query = """
             SELECT * FROM entities
             WHERE user_id = %(user_id)s AND name = %(name)s
+              AND is_archived = FALSE
             LIMIT 1
             """
             existing = session.execute_single(exact_query, {
@@ -1186,6 +1187,7 @@ class LTMemoryDB:
             SELECT *, similarity(name, %(name)s) AS sim_score
             FROM entities
             WHERE user_id = %(user_id)s
+              AND is_archived = FALSE
               AND similarity(name, %(name)s) > %(threshold)s
             ORDER BY sim_score DESC
             LIMIT 1
@@ -1210,13 +1212,18 @@ class LTMemoryDB:
                 fuzzy_match.pop('sim_score', None)
                 return Entity(**fuzzy_match)
 
-            # No match found - create new entity
+            # The unique constraint includes archived rows — resurrect the slot's
+            # archived row instead of violating
             insert_query = """
             INSERT INTO entities (
                 user_id, name, entity_type, created_at
             ) VALUES (
                 %(user_id)s, %(name)s, %(entity_type)s, NOW()
             )
+            ON CONFLICT (user_id, name, entity_type)
+            DO UPDATE SET is_archived = FALSE,
+                          archived_at = NULL,
+                          updated_at = NOW()
             RETURNING *
             """
 
@@ -1345,8 +1352,9 @@ class LTMemoryDB:
 
         Rewrites every memory's entity_links entry pointing at source to point
         at target instead (deduplicating any memory already linked to both),
-        bumps target's link_count by the affected count, and archives the
-        source entity. The target keeps its name/type; the source is soft-deleted.
+        recounts target's link_count from non-archived linked memories, zeroes
+        the source's count, and archives the source entity. The target keeps
+        its name/type; the source is soft-deleted.
         """
         resolved_user_id = self._resolve_user_id(user_id)
 
@@ -1388,17 +1396,27 @@ class LTMemoryDB:
                     'source_filter': json.dumps([{"uuid": str(source_id)}])
                 })
 
+                # Recount, not increment: a memory already linked to both
+                # entities would otherwise be counted twice
                 session.execute_update("""
                     UPDATE entities
-                    SET link_count = link_count + %(affected_count)s,
+                    SET link_count = (
+                        SELECT COUNT(*)
+                        FROM memories
+                        WHERE entity_links @> jsonb_build_array(
+                                  jsonb_build_object('uuid', %(target_id_str)s)
+                              )
+                          AND is_archived = FALSE
+                    ),
                         last_linked_at = NOW(),
                         updated_at = NOW()
                     WHERE id = %(target_id)s
-                """, {'affected_count': affected_count, 'target_id': target_id})
+                """, {'target_id_str': str(target_id), 'target_id': target_id})
 
                 session.execute_update("""
                     UPDATE entities
-                    SET is_archived = TRUE,
+                    SET link_count = 0,
+                        is_archived = TRUE,
                         archived_at = NOW(),
                         updated_at = NOW()
                     WHERE id = %(source_id)s

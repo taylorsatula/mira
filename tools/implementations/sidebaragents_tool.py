@@ -13,9 +13,16 @@ from pydantic import BaseModel, Field
 from agents.base import ensure_activity_schema
 from tools.repo import Tool
 from tools.registry import registry
+from utils.timezone_utils import utc_now
 
 if TYPE_CHECKING:
     from working_memory.core import WorkingMemory
+
+
+def _sqlite_now() -> str:
+    """UTC timestamp in the same format the table's other writers use
+    (SQLite datetime('now')) so TEXT updated_at values sort consistently."""
+    return utc_now().strftime("%Y-%m-%d %H:%M:%S")
 
 logger = logging.getLogger(__name__)
 
@@ -187,11 +194,16 @@ class SidebarAgentsTool(Tool):
         if not thread_id:
             raise ValueError("dismiss requires thread_id")
 
-        self.db.execute(
-            "UPDATE sidebar_activity SET status = 'dismissed', "
-            "updated_at = datetime('now') WHERE thread_id = :tid",
+        rows_updated = self.db.update(
+            'sidebar_activity',
+            {'status': 'dismissed', 'updated_at': _sqlite_now()},
+            'thread_id = :tid',
             {'tid': thread_id},
         )
+        if rows_updated == 0:
+            raise ValueError(
+                f"dismiss failed: no sidebar activity thread '{thread_id}' found"
+            )
 
         self._refresh_trinket()
         return {"success": True, "thread_id": thread_id, "action": "dismissed"}
@@ -201,11 +213,16 @@ class SidebarAgentsTool(Tool):
         if not thread_id:
             raise ValueError("resolve requires thread_id")
 
-        self.db.execute(
-            "UPDATE sidebar_activity SET status = 'resolved', "
-            "updated_at = datetime('now') WHERE thread_id = :tid",
+        rows_updated = self.db.update(
+            'sidebar_activity',
+            {'status': 'resolved', 'updated_at': _sqlite_now()},
+            'thread_id = :tid',
             {'tid': thread_id},
         )
+        if rows_updated == 0:
+            raise ValueError(
+                f"resolve failed: no sidebar activity thread '{thread_id}' found"
+            )
 
         self._refresh_trinket()
         return {"success": True, "thread_id": thread_id, "action": "resolved"}

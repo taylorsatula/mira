@@ -6,7 +6,8 @@ All operations are synchronous - events are published and handled immediately.
 """
 import json
 import logging
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from threading import RLock
+from typing import Any, Dict, TYPE_CHECKING
 
 from clients.valkey_client import get_valkey_client
 from utils.user_context import get_current_user_id, get_user_preferences, set_current_user_id
@@ -25,6 +26,11 @@ if TYPE_CHECKING:
     from cns.integration.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
+
+# Compose mutates per-user state on process-global singletons (orchestrator
+# composed-prompt fields, shared composer) across a synchronous event round-trip;
+# RLock because the same thread re-enters via synchronous event handlers.
+_compose_lock = RLock()
 
 
 class WorkingMemory:
@@ -50,7 +56,7 @@ class WorkingMemory:
         self.event_bus = event_bus
         self.composer = SystemPromptComposer()
         self._trinkets: Dict[str, EventAwareTrinket] = {}
-        self._current_continuum_id: Optional[str] = None
+        self._current_continuum_ids: Dict[str, str] = {}
         self._portrait_cache: dict[str, str] = {}
 
         # Subscribe to core events
@@ -87,110 +93,116 @@ class WorkingMemory:
         This triggers all trinkets to update and then composes the final prompt.
         """
         from cns.core.events import UpdateTrinketEvent, SystemPromptComposedEvent
-        
-        # Store context for future trinket updates
-        self._current_continuum_id = event.continuum_id
 
-        # Substitute template variables in system prompt
-        prefs = get_user_preferences()
-        first_name = (prefs.first_name or '').strip() or "friend"
-        logger.debug(f"Personalizing system prompt for '{first_name}'")
+        with _compose_lock:
+            # Store context for future trinket updates (per user: process-global
+            # singleton, concurrent composes for different users)
+            self._current_continuum_ids[get_current_user_id()] = event.continuum_id
 
-        personalized_prompt = event.base_prompt.replace("{first_name}", first_name)
+            # Substitute template variables in system prompt
+            prefs = get_user_preferences()
+            first_name = (prefs.first_name or '').strip() or "friend"
+            logger.debug(f"Personalizing system prompt for '{first_name}'")
 
-        user_id = get_current_user_id()
-        if user_id not in self._portrait_cache:
-            from cns.services.portrait_service import read_portrait
-            portrait = read_portrait(user_id)
-            self._portrait_cache[user_id] = portrait or ""
-        portrait = self._portrait_cache[user_id]
-        portrait_text = f"\n{portrait}" if portrait else ""
-        personalized_prompt = personalized_prompt.replace("{user_context}", portrait_text)
+            personalized_prompt = event.base_prompt.replace("{first_name}", first_name)
 
-        # Replace {relative time since account creation} with computed duration
-        if prefs.created_at:
-            duration = format_relationship_duration(prefs.created_at)
-        else:
-            duration = "some time"
-        personalized_prompt = personalized_prompt.replace(
-            "{relative time since account creation}", duration
-        )
+            user_id = get_current_user_id()
+            if user_id not in self._portrait_cache:
+                from cns.services.portrait_service import read_portrait
+                portrait = read_portrait(user_id)
+                self._portrait_cache[user_id] = portrait or ""
+            portrait = self._portrait_cache[user_id]
+            portrait_text = f"\n{portrait}" if portrait else ""
+            personalized_prompt = personalized_prompt.replace("{user_context}", portrait_text)
 
-        # Resolve the fixed chat substrate; per-user model switching is not a
-        # feature, so this is stable for the lifetime of the route table.
-        # {model_name} carries the route label: ModelConfig has no
-        # description field, and the route name is the operator-facing label.
-        from utils.user_context import get_model_config
-        llm_config = get_model_config("primary")
-        personalized_prompt = personalized_prompt.replace("{model_id}", llm_config.model)
-        personalized_prompt = personalized_prompt.replace("{model_name}", llm_config.name)
+            # Replace {relative time since account creation} with computed duration
+            if prefs.created_at:
+                duration = format_relationship_duration(prefs.created_at)
+            else:
+                duration = "some time"
+            personalized_prompt = personalized_prompt.replace(
+                "{relative time since account creation}", duration
+            )
 
-        # Set base prompt
-        self.composer.set_base_prompt(personalized_prompt)
-        
-        # Clear previous sections except base
-        self.composer.clear_sections(preserve_base=True)
+            # Resolve the fixed chat substrate; per-user model switching is not a
+            # feature, so this is stable for the lifetime of the route table.
+            # {model_name} carries the route label: ModelConfig has no
+            # description field, and the route name is the operator-facing label.
+            from utils.user_context import get_model_config
+            llm_config = get_model_config("primary")
+            personalized_prompt = personalized_prompt.replace("{model_id}", llm_config.model)
+            personalized_prompt = personalized_prompt.replace("{model_name}", llm_config.name)
 
-        # Request updates from all registered trinkets
-        for trinket_name in self._trinkets.keys():
-            self.event_bus.publish(UpdateTrinketEvent.create(
+            # Set base prompt
+            self.composer.set_base_prompt(personalized_prompt)
+
+            # Clear previous sections except base
+            self.composer.clear_sections(preserve_base=True)
+
+            # Request updates from all registered trinkets
+            for trinket_name in self._trinkets.keys():
+                self.event_bus.publish(UpdateTrinketEvent.create(
+                    continuum_id=event.continuum_id,
+                    target_trinket=trinket_name,
+                    context={}
+                ))
+
+            # After all trinkets have updated (synchronously), compose the prompt
+            structured = self.composer.compose()
+
+            # Publish composed prompt event with structured content
+            self.event_bus.publish(SystemPromptComposedEvent.create(
                 continuum_id=event.continuum_id,
-                target_trinket=trinket_name,
-                context={}
+                cached_content=structured['cached_content'],
+                non_cached_content=structured['non_cached_content'],
+                conversation_prefix_items=tuple(structured['conversation_prefix_items']),
+                post_history_items=tuple(structured['post_history_items']),
+                notification_center=structured['notification_center']
             ))
-        
-        # After all trinkets have updated (synchronously), compose the prompt
-        structured = self.composer.compose()
 
-        # Publish composed prompt event with structured content
-        self.event_bus.publish(SystemPromptComposedEvent.create(
-            continuum_id=event.continuum_id,
-            cached_content=structured['cached_content'],
-            non_cached_content=structured['non_cached_content'],
-            conversation_prefix_items=tuple(structured['conversation_prefix_items']),
-            post_history_items=tuple(structured['post_history_items']),
-            notification_center=structured['notification_center']
-        ))
-
-        logger.info(
-            f"Composed system prompt: cached {len(structured['cached_content'])} chars, "
-            f"non-cached {len(structured['non_cached_content'])} chars, "
-            f"{len(structured['conversation_prefix_items'])} prefix items, "
-            f"{len(structured['post_history_items'])} post-history items, "
-            f"notification center {len(structured['notification_center'])} chars"
-        )
+            logger.info(
+                f"Composed system prompt: cached {len(structured['cached_content'])} chars, "
+                f"non-cached {len(structured['non_cached_content'])} chars, "
+                f"{len(structured['conversation_prefix_items'])} prefix items, "
+                f"{len(structured['post_history_items'])} post-history items, "
+                f"notification center {len(structured['notification_center'])} chars"
+            )
     
     def _handle_update_trinket(self, event: 'UpdateTrinketEvent') -> None:
         """
         Route update request to specific trinket.
 
+        Held under _compose_lock: this handler mutates the shared composer when
+        reached mid-compose (publish_trinket_update during memory surfacing).
+
         Event handler continues processing even if individual trinkets fail,
         but distinguishes infrastructure failures from logic errors for observability.
         """
-        trinket = self._trinkets.get(event.target_trinket)
-        if not trinket:
-            logger.warning(f"No trinket registered with name: {event.target_trinket}")
-            return
+        with _compose_lock:
+            trinket = self._trinkets.get(event.target_trinket)
+            if not trinket:
+                logger.warning(f"No trinket registered with name: {event.target_trinket}")
+                return
 
-        try:
-            trinket.handle_update_request(event)
-            logger.debug(f"Routed update to {event.target_trinket}")
-        except Exception as e:
-            # Event handler continues - isolate trinket failures
-            # Use exception type to distinguish infrastructure from logic errors
-            error_type = type(e).__name__
-            if 'Database' in error_type or 'Valkey' in error_type or 'Connection' in error_type:
-                logger.error(
-                    f"Infrastructure failure in trinket {event.target_trinket}: {e}",
-                    exc_info=True,
-                    extra={'error_category': 'infrastructure'}
-                )
-            else:
-                logger.error(
-                    f"Trinket {event.target_trinket} failed: {e}",
-                    exc_info=True,
-                    extra={'error_category': 'logic'}
-                )
+            try:
+                trinket.handle_update_request(event)
+                logger.debug(f"Routed update to {event.target_trinket}")
+            except Exception as e:
+                # Event handler continues - isolate trinket failures
+                # Use exception type to distinguish infrastructure from logic errors
+                error_type = type(e).__name__
+                if 'Database' in error_type or 'Valkey' in error_type or 'Connection' in error_type:
+                    logger.error(
+                        f"Infrastructure failure in trinket {event.target_trinket}: {e}",
+                        exc_info=True,
+                        extra={'error_category': 'infrastructure'}
+                    )
+                else:
+                    logger.error(
+                        f"Trinket {event.target_trinket} failed: {e}",
+                        exc_info=True,
+                        extra={'error_category': 'logic'}
+                    )
     
     def _handle_trinket_content(self, event: 'TrinketContentEvent') -> None:
         """
@@ -199,13 +211,13 @@ class WorkingMemory:
         Trinkets publish their sections which we add to the composer.
         Placement is determined by SECTION_LAYOUT in the composer.
         """
-
-        self.composer.add_section(
-            event.variable_name,
-            event.content,
-            cache_policy=event.cache_policy,
-        )
-        logger.debug(f"Received content for '{event.variable_name}' from {event.trinket_name}")
+        with _compose_lock:
+            self.composer.add_section(
+                event.variable_name,
+                event.content,
+                cache_policy=event.cache_policy,
+            )
+            logger.debug(f"Received content for '{event.variable_name}' from {event.trinket_name}")
     
     def _flush_stateful_trinkets(self, event: 'SegmentCollapsedEvent') -> None:
         """
@@ -266,14 +278,14 @@ class WorkingMemory:
             target_trinket: Name of the trinket class to update
             context: Optional context data for the trinket
         """
-        if not self._current_continuum_id:
+        if not self._current_continuum_ids.get(get_current_user_id()):
             logger.warning("No active continuum context for trinket update")
             return
         
         from cns.core.events import UpdateTrinketEvent
 
         self.event_bus.publish(UpdateTrinketEvent.create(
-            continuum_id=self._current_continuum_id,
+            continuum_id=self._current_continuum_ids[get_current_user_id()],
             target_trinket=target_trinket,
             context=context or {}
         ))

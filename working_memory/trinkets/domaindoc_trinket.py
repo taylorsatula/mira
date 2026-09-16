@@ -7,6 +7,7 @@ Collapsed sections show only headers; expanded sections show full content.
 When a parent is collapsed, ALL its descendants are hidden.
 Pinned sections are always expanded regardless of collapsed state.
 """
+import html
 import logging
 from collections import defaultdict
 from typing import Dict, Any, List
@@ -156,10 +157,10 @@ class DomaindocTrinket(EventAwareTrinket):
             top_level, subsections_by_parent
         )
 
-        shared_attr = f' shared_by="{shared_by}"' if shared_by else ""
-        return f"""<domaindoc label="{label}"{shared_attr}>
+        shared_attr = f' shared_by="{html.escape(shared_by, quote=True)}"' if shared_by else ""
+        return f"""<domaindoc label="{html.escape(label, quote=True)}"{shared_attr}>
 <guidance>
-<purpose>{description}</purpose>
+<purpose>{html.escape(description)}</purpose>
 <section_management>
 <instruction>Sections support two levels of nesting (section \u2192 subsection \u2192 sub-subsection). When a parent is collapsed, ALL descendants are hidden. Pinned sections are always expanded. Use parent="X" to target nested sections.</instruction>
 <section_states>
@@ -221,7 +222,7 @@ class DomaindocTrinket(EventAwareTrinket):
 
             # ── States (only if visible) ──────────────────────────
             if visible:
-                s_attrs = [f'header="{header}"']
+                s_attrs = [f'header="{html.escape(header, quote=True)}"']
                 if pinned:
                     s_attrs.append('state="always_expanded"')
                 elif collapsed:
@@ -246,22 +247,24 @@ class DomaindocTrinket(EventAwareTrinket):
 
             # ── Index (unconditional TOC) ─────────────────────────
             if summary:
+                escaped_summary = html.escape(summary)
+                escaped_header = html.escape(header, quote=True)
                 if depth == 0:
                     index.append(
-                        f'<entry section="{header}">{summary}</entry>')
+                        f'<entry section="{escaped_header}">{escaped_summary}</entry>')
                 elif depth == 1:
                     index.append(
-                        f'<entry section="{header}" parent="{parent_header}">'
-                        f'{summary}</entry>')
+                        f'<entry section="{escaped_header}" parent="{html.escape(parent_header, quote=True)}">'
+                        f'{escaped_summary}</entry>')
                 else:
                     index.append(
-                        f'<entry section="{header}" parent="{parent_header}" '
-                        f'grandparent="{grandparent_header}">{summary}</entry>')
+                        f'<entry section="{escaped_header}" parent="{html.escape(parent_header, quote=True)}" '
+                        f'grandparent="{html.escape(grandparent_header, quote=True)}">{escaped_summary}</entry>')
 
             # ── Content (only if visible) ─────────────────────────
             if visible:
                 if effective_collapsed:
-                    c_attrs = [f'header="{header}"', 'state="collapsed"']
+                    c_attrs = [f'header="{html.escape(header, quote=True)}"', 'state="collapsed"']
                     if child_count > 0 and depth in CHILD_COUNT_ATTR:
                         c_attrs.append(f'{CHILD_COUNT_ATTR[depth]}="{child_count}"')
                     elif is_large:
@@ -270,16 +273,16 @@ class DomaindocTrinket(EventAwareTrinket):
                 elif depth == 2:
                     # Sub-subsections: self-closing when empty
                     if sec_content.strip():
-                        content.append(f'<{tag} header="{header}">')
-                        content.append(sec_content)
+                        content.append(f'<{tag} header="{html.escape(header, quote=True)}">')
+                        content.append(html.escape(sec_content))
                         content.append(f"</{tag}>")
                     else:
-                        content.append(f'<{tag} header="{header}"/>')
+                        content.append(f'<{tag} header="{html.escape(header, quote=True)}"/>')
                 else:
                     # Depth 0/1 expanded: open tag, optional content
-                    content.append(f'<{tag} header="{header}">')
+                    content.append(f'<{tag} header="{html.escape(header, quote=True)}">')
                     if sec_content.strip():
-                        content.append(sec_content)
+                        content.append(html.escape(sec_content))
 
             # ── Recurse into children ─────────────────────────────
             for child in child_dicts:

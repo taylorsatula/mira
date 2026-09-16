@@ -119,6 +119,10 @@ class ThinkingConfig:
     def active(self) -> bool:
         return self.effort is not None or self.budget_tokens is not None
 
+    @property
+    def deliberating(self) -> bool:
+        return self.active and self.effort != "none"
+
 
 @dataclass(frozen=True)
 class Usage:

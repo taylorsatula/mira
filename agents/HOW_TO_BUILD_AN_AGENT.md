@@ -615,21 +615,29 @@ The base class `run()` loop (do not override):
     - LLM or parse error -> fail OPEN, proceed
 6.  build_initial_message(work_item)
 7.  prior_run in context? -> prepend build_recovery_context(prior_run)
-8.  Message loop, up to max_iterations:
+8.  Message loop, max_iterations passes plus one grace pass
+    (range(1, max_iterations + 2)):
     a. _build_system_prompt(work_item, iteration)
        = base_system.txt (if inherit_base_prompt) + get_agent_prompt(work_item)
          + _iteration_status(iteration)
     b. call LLM; fire overwatch in a daemon thread if configured
     c. no tool calls -> nudge toward complete_task, continue
-    d. _execute_tool_calls(): inject sidebar identity, run each call
+    d. _execute_tool_calls(): inject sidebar identity, run each call;
+       a successful complete_task breaks immediately — trailing calls
+       in that block never run (their side effects don't commit)
     e. complete_task succeeded -> extract the tool's own status from its
-       result and pass BOTH to _exit: status='success' (trace + trinket),
+       result (guaranteed to be tool_results[-1]) and pass BOTH to _exit:
+       status='success' (trace + trinket),
        activity_status='handled'/'escalated' (the dedup record).
        Without routing the tool's status through, _exit's 'failed' default
        UPSERTs over complete_task's record — see Step 8 before enabling
        max_retries on any agent
-    f. append tool results + get_heartbeat(iteration), continue
-9.  Iteration cap hit -> one final nudge, then failure exit
+    f. append tool results + get_heartbeat(iteration), continue;
+       at iteration == max_iterations the heartbeat is the wind-down
+       nudge, answered on the grace pass
+9.  Grace pass (iteration max_iterations + 1) answers the wind-down nudge
+    and renders as "N (grace)" in the overwatch header and
+    _iteration_status(); still no completion -> failure exit
 10. finally: _finalize_trace() writes the trace JSON
 ```
 

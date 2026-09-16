@@ -52,7 +52,19 @@ def increment_user_activity_day(user_id: str) -> int:
 
     session_manager = get_shared_session_manager()
     with session_manager.get_session(user_id) as session:
-        # Check if this is first message of user's day
+        # Atomic first-of-day claim: the date predicate in the UPDATE itself
+        # is the guard, so concurrent first-of-day callers increment exactly once.
+        rowcount = session.execute_update("""
+            UPDATE users
+            SET cumulative_activity_days = cumulative_activity_days + 1,
+                last_activity_date = %(activity_date)s
+            WHERE id = %(user_id)s
+              AND (last_activity_date IS NULL OR last_activity_date < %(activity_date)s)
+        """, {
+            'user_id': user_id,
+            'activity_date': user_local_date
+        })
+
         current_user = session.execute_single("""
             SELECT cumulative_activity_days, last_activity_date
             FROM users
@@ -63,10 +75,8 @@ def increment_user_activity_day(user_id: str) -> int:
             raise ValueError(f"User {user_id} not found for activity day increment")
 
         current_days = current_user.get('cumulative_activity_days', 0) or 0
-        last_date = current_user.get('last_activity_date')
 
-        # Check if already active today (user's local date)
-        if last_date and last_date >= user_local_date:
+        if rowcount == 0:
             # Already counted today - rapidpath for subsequent messages
             session.execute_update("""
                 INSERT INTO user_activity_days (user_id, activity_date, first_message_at, message_count)
@@ -98,20 +108,6 @@ def increment_user_activity_day(user_id: str) -> int:
 
         # ========================================================================
 
-        # New activity day - increment cumulative count
-        new_count = current_days + 1
-
-        session.execute_update("""
-            UPDATE users
-            SET cumulative_activity_days = %(new_count)s,
-                last_activity_date = %(activity_date)s
-            WHERE id = %(user_id)s
-        """, {
-            'user_id': user_id,
-            'new_count': new_count,
-            'activity_date': user_local_date
-        })
-
         # Track in granular table
         session.execute_update("""
             INSERT INTO user_activity_days (user_id, activity_date, first_message_at, message_count)
@@ -126,12 +122,12 @@ def increment_user_activity_day(user_id: str) -> int:
 
         # Cache for rapidpath
         update_current_user({
-            'cumulative_activity_days': new_count,
+            'cumulative_activity_days': current_days,
             '_activity_day_incremented_today': True
         })
 
-        logger.debug(f"User {user_id} activity day incremented to {new_count}")
-        return new_count
+        logger.debug(f"User {user_id} activity day incremented to {current_days}")
+        return current_days
 
 
 def get_user_cumulative_activity_days(user_id: str) -> int:

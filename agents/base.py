@@ -606,7 +606,7 @@ class SidebarAgent(ABC):
             }]
 
             prev_iteration_start: Any = None
-            for iteration in range(1, self.max_iterations + 1):
+            for iteration in range(1, self.max_iterations + 2):
                 iteration_start = utc_now()
 
                 elapsed = (iteration_start - start_time).total_seconds()
@@ -762,11 +762,10 @@ class SidebarAgent(ABC):
                 complete_result.get('summary', '')
                 if isinstance(complete_result, dict) else ''
             )
-            # complete_task already wrote its own terminal record
-            # ('handled' | 'escalated'). Route that status through to
-            # _exit -- the activity UPSERT would otherwise overwrite it
-            # with the 'failed' default, which at max_retries > 0
-            # re-dispatches every successfully completed item.
+            # complete_task is terminal: the break in _execute_tool_calls
+            # guarantees tool_results[-1] is its envelope. Route its own
+            # status through to _exit -- the activity UPSERT default
+            # ('failed') would otherwise re-dispatch completed items.
             activity_status = (
                 complete_result.get('status', 'handled')
                 if isinstance(complete_result, dict) else 'handled'
@@ -826,6 +825,7 @@ class SidebarAgent(ABC):
 
             if is_complete and not result.is_error:
                 completed = True
+                break
 
         return completed, tool_results
 
@@ -958,7 +958,12 @@ def _build_overwatch_prompt(
     prior_entries: list[str],
 ) -> str:
     """Build compact prompt for the overwatch observer model."""
-    parts = [f"{task_context}\nIteration {iteration}/{max_iterations}"]
+    header = (
+        f"Iteration {iteration} (grace)"
+        if iteration > max_iterations
+        else f"Iteration {iteration}/{max_iterations}"
+    )
+    parts = [f"{task_context}\n{header}"]
 
     # Prior log entries for continuity — the observer sees the arc
     if prior_entries:

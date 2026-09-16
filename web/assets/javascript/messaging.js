@@ -56,11 +56,27 @@
 // MESSAGE QUEUE MANAGEMENT
 // ========================================
 
-function queueMessage(text) {
-	AppState.messageQueue.push({
-		text: text,
-		timestamp: Date.now()
-	});
+async function queueMessage(text, file) {
+	const item = { text: text, timestamp: Date.now() };
+	if (file && file.type && file.type.startsWith('image/')) {
+		try {
+			const dataUrl = await new Promise((resolve, reject) => {
+				const reader = new FileReader();
+				reader.onload = (e) => resolve(e.target.result);
+				reader.onerror = reject;
+				reader.readAsDataURL(file);
+			});
+			// Cap stored attachments at ~1MB so a 5MB preserve-resolution image
+			// can't put ~7MB of base64 into localStorage per queued item.
+			if (dataUrl.length <= 1024 * 1024) {
+				item.image = dataUrl;
+				item.image_type = file.type;
+			}
+		} catch (e) {
+			console.warn('Failed to persist attachment with queued message:', e);
+		}
+	}
+	AppState.messageQueue.push(item);
 	localStorage.setItem('mira-queue', JSON.stringify(AppState.messageQueue));
 	updateQueueIndicator();
 }
@@ -100,6 +116,11 @@ async function sendSingleQueuedMessage(index) {
 	localStorage.setItem('mira-queue', JSON.stringify(AppState.messageQueue));
 	updateQueueIndicator();
 	renderQueuedMessages();
+
+	if (msg.image) {
+		const blob = await (await fetch(msg.image)).blob();
+		AppState.attachedFiles = [new File([blob], 'attachment', { type: msg.image_type })];
+	}
 
 	await sendMessage();
 }
@@ -1369,7 +1390,8 @@ async function loadLastSessionResponse() {
 						const dismissed = localStorage.getItem('dismissed-announcement');
 						if (dismissed !== announcement.id) {
 							const textEl = document.getElementById('announcement-text');
-							if (textEl) textEl.innerHTML = announcement.message;
+							// Plain text by contract — never parsed as markup
+							if (textEl) textEl.textContent = announcement.message;
 							announcementBanner.style.display = '';
 							// Store announcement id for dismiss handler
 							announcementBanner.dataset.announcementId = announcement.id;
@@ -1468,7 +1490,7 @@ async function handleSendMessage(message, attachedFiles = []) {
 				}
 
 				showResponse(`Error: ${error.message}`);
-				queueMessage(message);
+				queueMessage(message, attachedFiles[0]);
 			};
 
 			setGenerating(true);
@@ -1488,6 +1510,19 @@ async function handleSendMessage(message, attachedFiles = []) {
 			);
 
 			const messageHandler = (data) => {
+				if (data.type === 'context_reset') {
+					// Server discarded this attempt's context and is regenerating;
+					// drop streamed-so-far text so only the retried response renders.
+					streamingState.buffer = '';
+					streamingState.renderedLength = 0;
+					streamingState.inCodeFence = false;
+					streamingState.fenceLanguage = '';
+					if (streamingState.containerReady) {
+						elements.responseContent.innerHTML = '';
+					}
+					return;
+				}
+
 				if (data.type === 'model_error') {
 					// The model misused a tool and the turn is recovering. The
 					// provider-switch handler this replaces was unreachable once
@@ -1639,7 +1674,7 @@ async function handleSendMessage(message, attachedFiles = []) {
 			showResponse('Connection lost — reconnecting. Your response will appear shortly.');
 		} else {
 			showResponse(`Error: ${error.message}`);
-			queueMessage(message);
+			queueMessage(message, attachedFiles[0]);
 		}
 	}
 }

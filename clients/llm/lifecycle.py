@@ -62,6 +62,7 @@ class LLMLifecycle:
                     event = self._run_with_response_timeout(
                         lambda: next(event_iterator),
                         endpoint=self._endpoint(dialect),
+                        dialect=dialect,
                         mode="streaming" if stream else "non-streaming",
                     )
                 except StopIteration:
@@ -109,7 +110,7 @@ class LLMLifecycle:
                     ),
                 ),
                 reasoning=None,
-                usage=None,
+                usage=dialect.current_partial_usage(),
                 stop_reason="tool_use",
                 provider_metadata=ProviderMetadata(
                     dialect_name=dialect.dialect_name,
@@ -118,6 +119,7 @@ class LLMLifecycle:
                     model_config_name=request.metadata.model_config_name,
                 ),
             )
+            self._record_cost(synthetic)
             yield CompleteEvent(response=synthetic)
 
     @staticmethod
@@ -129,6 +131,7 @@ class LLMLifecycle:
         operation: Callable[[], Any],
         *,
         endpoint: str,
+        dialect: Dialect,
         mode: str,
     ) -> Any:
         result: list[Any] = []
@@ -144,6 +147,13 @@ class LLMLifecycle:
         worker.start()
         worker.join(timeout=self.response_timeout_seconds)
         if worker.is_alive():
+            # A user halt outranks the stall diagnosis.
+            check_cancelled()
+            # Unblock the worker's socket read before abandoning it, or the
+            # connection leaks with a daemon thread pinned to it forever.
+            abort = getattr(dialect, "abort_active_stream", None)
+            if abort is not None:
+                abort()
             raise ProviderStallError(self._endpoint_label(endpoint), self.response_timeout_seconds, mode)
         if errors:
             raise errors[0]

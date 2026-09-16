@@ -158,30 +158,6 @@ class ValkeyMessageCache:
             )
         return written
 
-    def set_continuum(self, messages: list[Message]) -> None:
-        """
-        Store continuum messages in Valkey unconditionally.
-
-        Cache remains until explicitly invalidated by segment timeout handler.
-
-        Args:
-            messages: List of messages to cache
-
-        Requires: Active user context (set via set_current_user_id during authentication)
-
-        Raises:
-            ValkeyError: If Valkey infrastructure is unavailable
-            RuntimeError: If no user context is set
-        """
-        user_id = get_current_user_id()
-        key = self._get_key(user_id)
-        data = self._serialize_messages(messages)
-
-        # Set without expiration - invalidation is event-driven
-        self.valkey.set(key, data)
-
-        logger.debug(f"Cached continuum for user {user_id}")
-
     def apply_tool_result_patches(
         self,
         patches: list[ToolResultCachePatch],

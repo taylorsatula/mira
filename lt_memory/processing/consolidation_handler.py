@@ -185,7 +185,25 @@ class ConsolidationHandler:
                 f"{len(unique_entities)} entities"
             )
 
-        # Step 7b: Store merge note as annotation (includes segment provenance)
+        # Step 7b: Carry access stats from merged memories (min activity-days
+        # is the most conservative decay position)
+        last_accessed = max(
+            (m.last_accessed for m in old_memories if m.last_accessed),
+            default=None
+        )
+        activity_days = min(
+            (m.activity_days_at_last_access for m in old_memories
+             if m.activity_days_at_last_access is not None),
+            default=None
+        )
+        self.db.update_memory(new_memory_id, {
+            'access_count': sum(m.access_count for m in old_memories),
+            'mention_count': sum(m.mention_count for m in old_memories),
+            'last_accessed': last_accessed,
+            'activity_days_at_last_access': activity_days,
+        }, user_id=user_id)
+
+        # Step 7c: Store merge note as annotation (includes segment provenance)
         if merge_note:
             source_uuids = [str(mid) for mid in old_memory_ids]
             annotation: Dict[str, Any] = {
@@ -201,37 +219,52 @@ class ConsolidationHandler:
                 'annotations': [annotation]
             }, user_id=user_id)
 
-        # Step 8: Update all memories that were linking TO old memories
-        # Rewrite their outbound_links to point to new_memory_id
-        source_memory_ids = {
+        # Step 8: Rewrite links in affected memories to point at the new
+        # memory. Outbound side: memories that linked TO old memories.
+        # Inbound side: targets of the old memories' outbound links still
+        # record the old (soon-archived) ids in their inbound_links.
+        affected_ids = {
             UUID(link['uuid']) for link in all_inbound_links
             if link['uuid'] not in old_memory_id_strs
         }
+        affected_ids.update(
+            UUID(link['uuid']) for link in unique_outbound.values()
+        )
 
-        for source_memory_id in source_memory_ids:
-            # Get the source memory
-            source_memory = self.db.get_memory(source_memory_id, user_id=user_id)
-            if not source_memory:
+        for affected_id in affected_ids:
+            affected = self.db.get_memory(affected_id, user_id=user_id)
+            if not affected:
                 continue
 
-            # Rewrite outbound_links: replace old_ids with new_id
-            updated_outbound = []
-            for outbound_link in source_memory.outbound_links:
-                if outbound_link['uuid'] in old_memory_id_strs:
-                    # Update link to point to new consolidated memory
-                    updated_link = outbound_link.copy()
+            updates = {}
+
+            rewritten_outbound = []
+            for link in affected.outbound_links:
+                if link['uuid'] in old_memory_id_strs:
+                    updated_link = link.copy()
                     updated_link['uuid'] = new_memory_id_str
-                    updated_outbound.append(updated_link)
+                    rewritten_outbound.append(updated_link)
                 else:
-                    updated_outbound.append(outbound_link)
+                    rewritten_outbound.append(link)
+            if rewritten_outbound != affected.outbound_links:
+                updates['outbound_links'] = rewritten_outbound
 
-            # Update the source memory with rewritten links
-            self.db.update_memory(source_memory_id, {
-                'outbound_links': updated_outbound
-            }, user_id=user_id)
+            rewritten_inbound = []
+            for link in affected.inbound_links:
+                if link['uuid'] in old_memory_id_strs:
+                    updated_link = link.copy()
+                    updated_link['uuid'] = new_memory_id_str
+                    rewritten_inbound.append(updated_link)
+                else:
+                    rewritten_inbound.append(link)
+            if rewritten_inbound != affected.inbound_links:
+                updates['inbound_links'] = rewritten_inbound
 
-        if source_memory_ids:
-            logger.debug(f"Rewrote outbound_links for {len(source_memory_ids)} source memories")
+            if updates:
+                self.db.update_memory(affected_id, updates, user_id=user_id)
+
+        if affected_ids:
+            logger.debug(f"Rewrote links for {len(affected_ids)} affected memories")
 
         # Step 9: Archive the old memories
         for old_id in old_memory_ids:

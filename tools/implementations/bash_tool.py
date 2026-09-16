@@ -868,6 +868,9 @@ class BashTool(Tool):
     """Run guardrailed shell commands on the configured remote host over SSH."""
 
     name = "bash_tool"
+    # Any shell command may mutate host state — no per-operation gating
+    parallel_safe = False
+
     simple_description = "Run shell commands on the configured remote host; destructive patterns are refused."
 
     tool_schema = {

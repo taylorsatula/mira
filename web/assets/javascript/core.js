@@ -176,10 +176,18 @@ function initializeAPIClient() {
 			AppState.responseInterrupted = false;
 			setTimeout(async () => {
 				try {
-					const history = await AppState.apiClient.history.getHistory({ limit: 1 });
-					const lastMsg = history.messages?.find(m => m.role === 'assistant');
-					if (lastMsg && lastMsg.content) {
-						window.showResponse?.(lastMsg.content);
+					// One keyset page; a turn exceeding 50 rows is the same truncation
+					// loadInlineHistory already tolerates.
+					const history = await AppState.apiClient.history.getHistory({ limit: 50 });
+					const messages = history.messages || [];
+					const userIdx = messages.findIndex(m => m.role === 'user');
+					// No user row in the window means the turn boundary is unknown —
+					// previous-turn text as recovery is worse than nothing.
+					if (userIdx !== -1) {
+						const content = window.assembleTurnContent(messages.slice(userIdx));
+						if (content) {
+							window.showResponse?.(content);
+						}
 					}
 				} catch (e) {
 					console.warn('Failed to recover interrupted response:', e);

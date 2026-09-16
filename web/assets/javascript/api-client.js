@@ -418,7 +418,11 @@ class MiraAPIClient {
             return;
         }
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: 'halt', turn_id: this.activeTurnId }));
+            this.ws.send(JSON.stringify({
+                type: 'halt',
+                turn_id: this.activeTurnId,
+                message_id: this.turnToMessage.get(this.activeTurnId) ?? undefined,
+            }));
         }
     }
 
@@ -517,8 +521,10 @@ class MiraAPIClient {
 
                 case 'thinking':
                 case 'model_error':
-                    // Forwarded to onMessage listeners for progressive display
-                    // and the invalid-tool-call notice respectively.
+                case 'context_reset':
+                    // Forwarded to onMessage listeners for progressive display,
+                    // the invalid-tool-call notice, and mid-turn stream resets
+                    // respectively.
                     break;
 
                 case 'turn_complete':
@@ -590,11 +596,16 @@ class MiraAPIClient {
             this.reconnectAttempts = this.maxReconnectAttempts;
         }
 
-        const activeCallback = this._getActiveMessageCallback();
-        if (activeCallback) {
-            activeCallback.reject(new Error(message));
-            this.messageCallbacks.delete(activeCallback.id);
-            this._forgetTurn(activeCallback);
+        // Route by id before FIFO fallback so a second send's TURN_BUSY
+        // rejects its own promise, not the first send's; absent message_id
+        // (old servers, other error sites) keeps the FIFO behavior.
+        const matched = data.message_id && this.messageCallbacks.get(data.message_id);
+        const cb = (matched && { ...matched, id: data.message_id })
+            || this._getActiveMessageCallback();
+        if (cb) {
+            cb.reject(new Error(message));
+            this.messageCallbacks.delete(cb.id);
+            this._forgetTurn(cb);
         }
     }
     
@@ -719,7 +730,8 @@ class MiraAPIClient {
     }
     
     _startKeepalive() {
-        // Send ping every 30 seconds
+        // Clear first — reconnects must not stack ping timers
+        if (this.keepaliveInterval) clearInterval(this.keepaliveInterval);
         this.keepaliveInterval = setInterval(() => {
             if (this.connectionState === 'authenticated') {
                 this._sendMessage({ type: 'ping' });
@@ -729,11 +741,20 @@ class MiraAPIClient {
     
     _rejectPendingCallbacks(reason) {
         if (this.messageCallbacks.size === 0) return;
+        // Frames still in messageQueue were never sent — their promises must
+        // survive to re-bind at turn_started when _processMessageQueue resends
+        // them; rejecting here would surface the turn twice (one error, one
+        // silently re-sent).
+        const queuedIds = new Set(this.messageQueue.map(m => m.message_id));
         console.log(`Rejecting ${this.messageCallbacks.size} pending message callback(s): ${reason}`);
         for (const [id, callback] of this.messageCallbacks) {
+            if (queuedIds.has(id)) {
+                callback.turn_id = null;
+                continue;
+            }
             callback.reject(new Error(reason));
+            this.messageCallbacks.delete(id);
         }
-        this.messageCallbacks.clear();
         this.turnToMessage.clear();
         this.activeTurnId = null;
     }

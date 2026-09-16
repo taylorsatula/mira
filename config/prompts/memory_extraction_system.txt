@@ -168,7 +168,7 @@ Write the wall-clock time exactly as it appears in the conversation, in the user
 
 <relationship_linking>
 EXTERNAL MEMORY LINKS (related_memory_ids):
-When assistant messages contain <meta><references_memory id="..."> tags, and a new memory updates or extends that referenced memory, include its ID with a three-word bond.
+When assistant messages contain <meta><references_memory id="..."> tags, and a new memory updates or extends that referenced memory, include that exact id — the mem_-prefixed short ID as it appears inside the tag — with a three-word bond.
 </relationship_linking>
 
 <examples>
@@ -219,11 +219,11 @@ Extract:
 Why: Specific enough to surface for health, travel, and comfort conversations without any extension.
 
 EXAMPLE 6 — Linking to existing memory:
-Existing memory [b7c8d9e0]: "Annika clicks her pen constantly while thinking — finds it distracting during shared work time"
+Existing memory [mem_b7c8d9e0]: "Annika clicks her pen constantly while thinking — finds it distracting during shared work time"
 User: "You know what's funny, Annika still clicks that damn pen but I actually like it now. It's how I know she's home."
 
 Extract:
-{"text": "Annika's pen-clicking has shifted from distracting to comforting — he associates the sound with her being home and present", "related_memory_ids": [{"id": "b7c8d9e0", "bond": "annoyance became comfort"}]}
+{"text": "Annika's pen-clicking has shifted from distracting to comforting — he associates the sound with her being home and present", "related_memory_ids": [{"id": "mem_b7c8d9e0", "bond": "annoyance became comfort"}]}
 
 Why: Directly connects to the existing memory. Emotional valence flipped from annoyance to comfort. The downstream pipeline determines the relationship type.
 
@@ -260,7 +260,7 @@ Each memory object:
 
 Conditional fields — REQUIRED when their condition is met:
 "entities": [{"name": "str", "type": "PERSON|ORG|PRODUCT|PLACE"}]  — required when memory mentions a named person, org, product, or place
-"related_memory_ids": [{"id": "8-char-id", "bond": "3 words max"}]  — required when extending or updating an existing memory referenced via <meta><references_memory>
+"related_memory_ids": [{"id": "mem_XXXXXXXX", "bond": "3 words max"}]  — required when extending or updating an existing memory referenced via <meta><references_memory>; id must be the exact mem_-prefixed short ID shown in the transcript
 
 Time-bound fields — include only when the information is genuinely time-bound:
 "expires_at": "YYYY-MM-DDTHH:MM:SS"    — information becomes invalid after this date; user's local wall time, no UTC conversion. Example: "2026-03-05T17:00:00"

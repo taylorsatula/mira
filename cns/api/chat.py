@@ -87,76 +87,78 @@ class ChatEndpoint(BaseHandler):
         # Sanitize text
         msg = sanitize_message_content(msg)
 
-        # Check message length - reject oversized messages with friendly assistant response
-        if len(msg) > MAX_TEXT_MESSAGE_LENGTH:
-            rejection_msg = (
-                f"I can't process messages longer than {MAX_TEXT_MESSAGE_LENGTH:,} characters. "
-                f"Your message was {len(msg):,} characters. "
-                f"Please break it into smaller chunks or summarize the key points you'd like to discuss."
-            )
-
-            continuum_pool = get_continuum_pool()
-            continuum = continuum_pool.get_or_create()
-
-            # Add rejection as assistant message so frontend renders it natively
-            continuum.add_assistant_message(rejection_msg, {"type": "size_limit_rejection"})
-            unit_of_work = continuum_pool.begin_work(continuum)
-            unit_of_work.commit()
-
-            return create_success_response(
-                data={"response": rejection_msg, "rejected": True},
-                meta={"timestamp": utc_now().isoformat()}
-            )
-
-        # Validate and compress image if provided
-        compressed: CompressedImage | None = None
-        if image:
-            if not image_type:
-                raise ValidationError("image_type is required when image is provided")
-            if image_type not in SUPPORTED_IMAGE_FORMATS:
-                raise ValidationError(
-                    f"Unsupported image format. Supported: {', '.join(sorted(SUPPORTED_IMAGE_FORMATS))}"
-                )
-            try:
-                decoded = base64.b64decode(image, validate=True)
-                if len(decoded) > MAX_IMAGE_SIZE_MB * 1024 * 1024:
-                    raise ValidationError(f"Image exceeds maximum size of {MAX_IMAGE_SIZE_MB}MB")
-
-                # Compress to both tiers: inference (1200px) and storage (512px WebP)
-                compressed = compress_image(decoded, image_type)
-
-            except ValidationError:
-                raise
-            except ValueError as e:
-                # compress_image raises ValueError on failure
-                raise ValidationError(f"Image compression failed: {e}")
-            except Exception as e:
-                raise ValidationError(f"Invalid base64 image: {str(e)}")
-
-        # Validate document if provided (decode and process after getting orchestrator)
-        document_bytes: bytes | None = None
-        if document:
-            if not document_type:
-                raise ValidationError("document_type is required when document is provided")
-            if document_type not in SUPPORTED_DOCUMENT_FORMATS:
-                raise ValidationError(
-                    "Unsupported document format. Supported: PDF, DOCX, XLSX, TXT, CSV, JSON"
-                )
-            try:
-                document_bytes = base64.b64decode(document, validate=True)
-                if len(document_bytes) > MAX_DOCUMENT_SIZE_MB * 1024 * 1024:
-                    raise ValidationError(f"Document exceeds maximum size of {MAX_DOCUMENT_SIZE_MB}MB")
-            except ValidationError:
-                raise
-            except Exception as e:
-                raise ValidationError(f"Invalid base64 document: {str(e)}")
-
-        # Concurrency control: one active request per user
-        if not _user_request_lock.acquire(user_id):
+        # Concurrency control: one active request per user; the oversized
+        # rejection persists a message, so it must be ordered like a real turn.
+        lock_token = _user_request_lock.acquire(user_id)
+        if lock_token is None:
             # Use a validation error to preserve consistent error envelope
             raise ValidationError("Another chat request is already in progress for this user")
 
         try:
+            # Check message length - reject oversized messages with friendly assistant response
+            if len(msg) > MAX_TEXT_MESSAGE_LENGTH:
+                rejection_msg = (
+                    f"I can't process messages longer than {MAX_TEXT_MESSAGE_LENGTH:,} characters. "
+                    f"Your message was {len(msg):,} characters. "
+                    f"Please break it into smaller chunks or summarize the key points you'd like to discuss."
+                )
+
+                continuum_pool = get_continuum_pool()
+                continuum = continuum_pool.get_or_create()
+
+                # Add rejection as assistant message so frontend renders it natively
+                continuum.add_assistant_message(rejection_msg, {"type": "size_limit_rejection"})
+                unit_of_work = continuum_pool.begin_work(continuum)
+                unit_of_work.commit()
+
+                return create_success_response(
+                    data={"response": rejection_msg, "rejected": True},
+                    meta={"timestamp": utc_now().isoformat()}
+                )
+
+            # Validate and compress image if provided
+            compressed: CompressedImage | None = None
+            if image:
+                if not image_type:
+                    raise ValidationError("image_type is required when image is provided")
+                if image_type not in SUPPORTED_IMAGE_FORMATS:
+                    raise ValidationError(
+                        f"Unsupported image format. Supported: {', '.join(sorted(SUPPORTED_IMAGE_FORMATS))}"
+                    )
+                try:
+                    decoded = base64.b64decode(image, validate=True)
+                    if len(decoded) > MAX_IMAGE_SIZE_MB * 1024 * 1024:
+                        raise ValidationError(f"Image exceeds maximum size of {MAX_IMAGE_SIZE_MB}MB")
+
+                    # Compress to both tiers: inference (1200px) and storage (512px WebP)
+                    compressed = compress_image(decoded, image_type)
+
+                except ValidationError:
+                    raise
+                except ValueError as e:
+                    # compress_image raises ValueError on failure
+                    raise ValidationError(f"Image compression failed: {e}")
+                except Exception as e:
+                    raise ValidationError(f"Invalid base64 image: {str(e)}")
+
+            # Validate document if provided (decode and process after getting orchestrator)
+            document_bytes: bytes | None = None
+            if document:
+                if not document_type:
+                    raise ValidationError("document_type is required when document is provided")
+                if document_type not in SUPPORTED_DOCUMENT_FORMATS:
+                    raise ValidationError(
+                        "Unsupported document format. Supported: PDF, DOCX, XLSX, TXT, CSV, JSON"
+                    )
+                try:
+                    document_bytes = base64.b64decode(document, validate=True)
+                    if len(document_bytes) > MAX_DOCUMENT_SIZE_MB * 1024 * 1024:
+                        raise ValidationError(f"Document exceeds maximum size of {MAX_DOCUMENT_SIZE_MB}MB")
+                except ValidationError:
+                    raise
+                except Exception as e:
+                    raise ValidationError(f"Invalid base64 document: {str(e)}")
+
             # Resolve dependencies
             orchestrator = get_orchestrator()
             continuum_pool = get_continuum_pool()
@@ -256,6 +258,11 @@ class ChatEndpoint(BaseHandler):
                 segment_turn_number=segment_turn_number,  # Turn count within segment
             )
 
+            # Renew before committing so a long turn cannot race lock expiry
+            # against its own commit; a lost renewal (expired + re-acquired)
+            # is already unrecoverable and release() will report it.
+            _user_request_lock.renew(user_id, lock_token)
+
             # Commit batched changes
             uow.commit()
 
@@ -292,7 +299,7 @@ class ChatEndpoint(BaseHandler):
             )
 
         finally:
-            _user_request_lock.release(user_id)
+            _user_request_lock.release(user_id, lock_token)
 
 
 @router.post("/chat")

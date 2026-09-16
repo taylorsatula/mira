@@ -100,6 +100,8 @@ class OpenAIChatBase(Dialect):
         self.endpoint_url = endpoint_url
         self.api_key = api_key
         self.timeout = timeout
+        self._active_response: httpx.Response | None = None
+        self._partial_usage: Usage | None = None
 
     @classmethod
     def from_selection(
@@ -239,6 +241,7 @@ class OpenAIChatBase(Dialect):
             headers=headers,
             timeout=self.timeout,
         ) as response:
+            self._active_response = response
             if response.status_code >= 400:
                 error_text = response.read().decode("utf-8", errors="replace")
                 self._raise_provider_http_error(
@@ -274,6 +277,13 @@ class OpenAIChatBase(Dialect):
                         "SSE JSON chunk must be an object",
                     )
 
+                if isinstance(chunk.get("error"), dict):
+                    raise ProviderProtocolError(
+                        self.endpoint_url,
+                        "streaming",
+                        f"In-band stream error: {chunk['error']}",
+                    )
+
                 if llm_tap.is_active():
                     llm_tap.log_stream_chunk(
                         provider=self.dialect_name,
@@ -299,6 +309,7 @@ class OpenAIChatBase(Dialect):
                                 chunk_usage.cache_read_input_tokens,
                             ),
                         )
+                    self._partial_usage = usage
 
                 choices = chunk.get("choices")
                 if not choices:
@@ -417,6 +428,8 @@ class OpenAIChatBase(Dialect):
                                 tool_id=state["id"],
                             )
 
+        self._active_response = None
+
         if usage is None:
             logger.warning(
                 "%s stream from %s ended without usage despite include_usage; "
@@ -444,6 +457,24 @@ class OpenAIChatBase(Dialect):
         self._log_response(request, result)
 
         yield CompleteEvent(response=result)
+
+    # ------------------------------------------------------------------
+    # Live-stream hooks: cross-thread abort and partial-usage snapshot.
+    # ------------------------------------------------------------------
+
+    def abort_active_stream(self) -> None:
+        """Close the in-flight streaming response from another thread.
+
+        The worker sits blocked inside a socket read; closing the httpx
+        response is the only unblock that works (generator.close() raises
+        ValueError while the frame is executing, not suspended at a yield).
+        """
+        response = self._active_response
+        if response is not None:
+            response.close()
+
+    def current_partial_usage(self) -> Usage | None:
+        return self._partial_usage
 
     # ------------------------------------------------------------------
     # Payload construction.
@@ -544,6 +575,8 @@ class OpenAIChatBase(Dialect):
             elif block_type == "file_ref":
                 file_id = block.get("file_id", "unknown")
                 content_parts.append({"type": "text", "text": f"[File upload not supported by this provider: {file_id}]"})
+            elif block_type == "document":
+                content_parts.append({"type": "text", "text": f"[Document not supported by this provider: {block.get('media_type', 'unknown')}]"})
             elif block_type == "reasoning":
                 dropped_block_types.append("reasoning")
             else:
@@ -1172,12 +1205,13 @@ class OpenAIChatBase(Dialect):
         if error_body and status >= 400:
             logger.error("%s API %s error %d — raw body: %s", self.dialect_name, mode, status, repr(error_body))
         error_message = _extract_provider_message(error_body, fallback_text)
-        if status == 400 and error_body:
+        # 413 (Groq request-too-large) carries overflow payloads too; tool_use_failed stays 400-only.
+        if status in (400, 413) and error_body:
             error_info = error_body.get("error", {})
             error_code = str(error_info.get("code", ""))
             if "context_length" in error_code or "reduce the length" in error_message.lower():
                 raise ProviderContextOverflowError(self.endpoint_url, mode, error_message)
-            if error_code == "tool_use_failed":
+            if status == 400 and error_code == "tool_use_failed":
                 match = re.search(r"attempted to call tool '(\w+)'", error_message)
                 if match:
                     raise ToolNotLoadedError(self.endpoint_url, mode, match.group(1), error_message)

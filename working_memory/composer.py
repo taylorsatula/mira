@@ -47,6 +47,7 @@ SECTION_LAYOUT: Dict[str, List[str]] = {
         'inbox_status',
         'forage_results',
         'whilethecatsaway_results',
+        'memory_curation',
         'relevant_memories',
         'peanutgallery_guidance',
     ],

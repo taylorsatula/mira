@@ -405,10 +405,22 @@ class MemoryDomainHandler(BaseDomainHandler):
             
             if not all(isinstance(id, str) for id in memory_ids):
                 raise ValidationError("All memory IDs must be strings")
-            
+
+            try:
+                parsed_ids = [UUID(mid) for mid in memory_ids]
+            except ValueError:
+                raise ValidationError("All memory IDs must be valid UUIDs")
+
+            missing = [
+                str(mid) for mid in parsed_ids
+                if not lt_db.get_memory(mid)
+            ]
+            if missing:
+                raise NotFoundError("memories", ", ".join(missing))
+
             # Archive memories (soft delete)
-            for mid in memory_ids:
-                lt_db.archive_memory(UUID(mid))
+            for mid in parsed_ids:
+                lt_db.archive_memory(mid)
 
             return {
                 "deleted_count": len(memory_ids),

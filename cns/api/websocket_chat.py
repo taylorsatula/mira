@@ -124,6 +124,7 @@ class HaltFrame(ProtocolModel):
 
     type: Literal["halt"]
     turn_id: UUID
+    message_id: UUID | None = None
 
 
 class PingFrame(ProtocolModel):
@@ -146,6 +147,8 @@ class AuthSuccessFrame(ProtocolModel):
 
 class ServerShutdownFrame(ProtocolModel):
     type: Literal["server_shutdown"]
+    # Machine-readable reason — the client rejects callbacks on data.code
+    code: str = "SERVER_SHUTDOWN"
     message: str
 
 
@@ -157,6 +160,9 @@ class ProtocolErrorFrame(ProtocolModel):
     type: Literal["protocol_error"]
     code: str
     message: str
+    # Lets the client attribute pre-turn_started errors (TURN_BUSY,
+    # NO_MATCHING_ACTIVE_TURN) to the send that caused them.
+    message_id: UUID | None = None
 
 
 class TurnStartedFrame(ProtocolModel):
@@ -206,6 +212,14 @@ class ToolFrame(ProtocolModel):
         if self.event != "tool_error" and self.is_error:
             raise ValueError(f"{self.event} requires is_error=false")
         return self
+
+
+class ContextResetFrame(ProtocolModel):
+    """Discard streamed-so-far text; the turn is regenerating from a reset."""
+
+    type: Literal["context_reset"]
+    turn_id: UUID
+    segment_id: UUID
 
 
 class ModelErrorFrame(ProtocolModel):
@@ -275,6 +289,7 @@ ServerFrame = Annotated[
     | AssistantDeltaFrame
     | ThinkingFrame
     | ToolFrame
+    | ContextResetFrame
     | ModelErrorFrame
     | TurnCompleteFrame
     | TurnStoppedFrame
@@ -350,7 +365,16 @@ class ChatConnection:
     async def send(self, frame: object) -> None:
         if not self.accepts_output:
             return
-        await self.outbound.put(validate_server_frame(frame))
+        validated = validate_server_frame(frame)
+        try:
+            self.outbound.put_nowait(validated)
+        except asyncio.QueueFull:
+            # A full queue means a dead client; a dropped terminal frame would
+            # leave a client promise pending forever, so kill the connection.
+            logger.warning("Outbound queue full; dropping frame and closing connection")
+            self.accepts_output = False
+            if self.writer_task is not None:
+                self.writer_task.cancel()
 
     async def drain(self) -> None:
         await self.outbound.join()
@@ -360,11 +384,15 @@ class ChatConnection:
             self.reader_task.cancel()
             await asyncio.gather(self.reader_task, return_exceptions=True)
         if self.writer_task is not None and not self.writer_task.done():
-            await self.outbound.put(StopWriter())
             try:
-                await asyncio.wait_for(self.writer_task, timeout=2)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
+                self.outbound.put_nowait(StopWriter())
+            except asyncio.QueueFull:
                 self.writer_task.cancel()
+            else:
+                try:
+                    await asyncio.wait_for(self.writer_task, timeout=2)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    self.writer_task.cancel()
         try:
             await self.websocket.close()
         except RuntimeError:
@@ -373,14 +401,23 @@ class ChatConnection:
     async def _read_frames(self) -> None:
         try:
             while True:
-                raw = await self.websocket.receive_json()
                 try:
+                    raw = await self.websocket.receive_json()
                     frame = validate_client_frame(raw)
                 except PydanticValidationError as error:
                     await self.send({
                         "type": "protocol_error",
                         "code": "MALFORMED_FRAME",
                         "message": _validation_message(error),
+                    })
+                    continue
+                except ValueError as error:
+                    # receive_json raises JSONDecodeError (a ValueError) on a
+                    # non-JSON frame; one bad frame must not kill the reader.
+                    await self.send({
+                        "type": "protocol_error",
+                        "code": "MALFORMED_FRAME",
+                        "message": f"Frame is not valid JSON: {error}",
                     })
                     continue
                 await self.inbound.put(frame)
@@ -396,7 +433,13 @@ class ChatConnection:
                 try:
                     if isinstance(frame, StopWriter):
                         return
-                    await self.websocket.send_json(frame.model_dump(mode="json", exclude_none=True))
+                    await asyncio.wait_for(
+                        self.websocket.send_json(frame.model_dump(mode="json", exclude_none=True)),
+                        15,  # a stalled socket must not wedge the writer forever
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Writer send timed out; stopping writer for this connection")
+                    return
                 finally:
                     self.outbound.task_done()
         except (WebSocketDisconnect, RuntimeError):
@@ -416,6 +459,7 @@ async def close_all_connections() -> None:
     for connection in connections:
         await connection.send({
             "type": "server_shutdown",
+            "code": "SERVER_SHUTDOWN",
             "message": "Server is shutting down",
         })
     for connection in connections:
@@ -547,19 +591,6 @@ class WebSocketChatHandler:
             })
             return
 
-        if not await run_in_threadpool(self.user_request_lock.acquire, user_id):
-            await connection.send({
-                "type": "protocol_error",
-                "code": "USER_CONNECTION_BUSY",
-                "message": (
-                    "MIRA is designed in a way where each user has a 'lock' on a "
-                    "connection to the server. For some reason yours didn't expire "
-                    "last time you disconnected. It will clear in 60 seconds. Please "
-                    "refresh the page in one minute."
-                ),
-            })
-            return
-
         connection.user_id = user_id  # stamped for proactive push fan-out
         await connection.send({"type": "auth_success", "user_id": user_id})
         try:
@@ -570,7 +601,6 @@ class WebSocketChatHandler:
                     set_cancel_reason("disconnect")
                     connection.cancel_event.set()
                 await asyncio.gather(connection.active_turn_task, return_exceptions=True)
-            await run_in_threadpool(self.user_request_lock.release, user_id)
             clear_user_context()
 
     async def _dispatch(self, connection: ChatConnection, user_id: str) -> None:
@@ -597,6 +627,7 @@ class WebSocketChatHandler:
                         "type": "protocol_error",
                         "code": "NO_MATCHING_ACTIVE_TURN",
                         "message": "Halt turn_id does not match the active turn",
+                        "message_id": frame.message_id,
                     })
                     continue
                 set_cancel_reason("halt")
@@ -608,6 +639,7 @@ class WebSocketChatHandler:
                         "type": "protocol_error",
                         "code": "TURN_BUSY",
                         "message": "A server turn is already active",
+                        "message_id": frame.message_id,
                     })
                     continue
                 turn_id = uuid4()
@@ -640,20 +672,28 @@ class WebSocketChatHandler:
         """Validate attachments, run the orchestrator, commit, then emit one terminal frame."""
         segment_id: UUID | None = None
         start_time = utc_now()
+        lock_token = await run_in_threadpool(self.user_request_lock.acquire, user_id)
+        if lock_token is None:
+            await connection.send({
+                "type": "protocol_error",
+                "code": "TURN_BUSY",
+                "message": "Another turn is already active for this user",
+                "message_id": message.message_id,
+            })
+            return
         try:
             content = sanitize_message_content(message.content.strip())
             if not content:
                 raise ValueError("Message cannot be empty")
-            compressed = self._prepare_image(message)
-            processed_document = self._prepare_document(message)
+            set_cancel_event(cancel_event)
+            # Attachments decode and compress off the event loop, inside the
+            # copied context so RLS user scoping rides along.
+            context = contextvars.copy_context()
+            compressed = await run_in_threadpool(context.run, self._prepare_image, message)
+            processed_document = await run_in_threadpool(context.run, self._prepare_document, message)
             if not app_config.system_prompt:
                 raise RuntimeError("System prompt not configured")
 
-            set_cancel_event(cancel_event)
-            context = contextvars.copy_context()
-            # Give previous-turn tool-result compaction a bounded head start
-            # before loading the hot continuum. The timeout is intentionally
-            # fail-open; the timeout value itself is configuration.
             wait_for_background_work = partial(
                 get_async_work_barrier().wait_for_user,
                 user_id,
@@ -689,6 +729,7 @@ class WebSocketChatHandler:
                     return
                 future = asyncio.run_coroutine_threadsafe(connection.send(frame), loop)
                 future.result()
+                self.user_request_lock.renew(user_id, lock_token)
 
             result = await run_in_threadpool(
                 context.run,
@@ -753,6 +794,8 @@ class WebSocketChatHandler:
                     "code": "TURN_SETUP_FAILED",
                     "message": get_friendly_error_message(error),
                 })
+        finally:
+            await run_in_threadpool(self.user_request_lock.release, user_id, lock_token)
 
     def _prepare_image(self, message: MessageFrame) -> CompressedImage | None:
         if message.image is None:
@@ -791,8 +834,9 @@ class WebSocketChatHandler:
     ) -> dict[str, object] | None:
         """Translate one orchestrator stream event into a server frame.
 
-        Forwards reasoning-stream and invalid-tool-call events in addition to
-        the text and tool-event deltas — dropping either would lose the
+        Forwards reasoning-stream, invalid-tool-call, and context-reset
+        events in addition to the text and tool-event deltas — dropping any of
+        these would lose the
         reasoning stream or the malformed-call signal.
         """
         event_type = event.get("type")
@@ -824,6 +868,12 @@ class WebSocketChatHandler:
                 if field_name in event:
                     frame[field_name] = event[field_name]
             return frame
+        if event_type == "context_reset":
+            return {
+                "type": "context_reset",
+                "turn_id": turn_id,
+                "segment_id": segment_id,
+            }
         if event_type == "model_error":
             return {
                 "type": "model_error",
@@ -913,7 +963,8 @@ async def websocket_chat_endpoint(websocket: WebSocket) -> None:
     * client ``{type:"auth", token?}`` -> ``{type:"auth_success", user_id}``
     * client ``{type:"message", message_id, content, include_thinking?, image?,
       image_type?, document?, document_type?}`` -> ``turn_started``, then
-      ``assistant_delta`` / ``thinking`` / ``tool`` / ``model_error``, then
+      ``assistant_delta`` / ``thinking`` / ``tool`` / ``model_error`` /
+      ``context_reset``, then
       exactly one of ``turn_complete`` / ``turn_stopped`` / ``turn_error``
     * client ``{type:"halt", turn_id}`` -> the active turn ends in ``turn_stopped``
     * client ``{type:"ping"}`` -> ``{type:"pong"}``

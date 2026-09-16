@@ -7,12 +7,10 @@ import logging
 import secrets
 import time
 
-import psycopg
-
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
 
-from .base import BaseHandler, ErrorResponse, SuccessResponse, create_success_response, create_error_response
+from .base import BaseHandler, ErrorResponse, SuccessResponse, create_success_response
 from .update import get_latest_version
 from clients.postgres_client import PostgresClient
 from utils.timezone_utils import utc_now, format_utc_iso
@@ -39,13 +37,15 @@ class HealthEndpoint(BaseHandler):
         components: dict[str, dict] = {}
         overall_status = "healthy"
 
-        # Check database connectivity (unified mira_service database)
+        # Check database connectivity (unified mira_service database).
+        # Status only in the response — unauthenticated endpoint; detail goes to the log.
         try:
             db = PostgresClient("mira_service")
             db.execute_single("SELECT 1")
             components["database"] = {"status": "healthy", "latency_ms": round((time.time() - start_time) * 1000, 1)}
-        except (psycopg.OperationalError, psycopg.DatabaseError) as e:
-            components["database"] = {"status": "unhealthy", "error": str(e)}
+        except Exception as e:
+            logger.error("Health check: database unreachable", exc_info=e)
+            components["database"] = {"status": "unhealthy"}
             overall_status = "unhealthy"
 
         # Basic system info
@@ -101,8 +101,12 @@ def health_endpoint():
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Health endpoint error: {e}", exc_info=True)
-        return JSONResponse(status_code=500, content=create_error_response(e).to_dict())
+        # Unauthenticated endpoint: static body, never the exception text
+        logger.error("Health endpoint error", exc_info=e)
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"code": "INTERNAL_ERROR", "message": "Health check failed"}},
+        )
 
 
 def _require_diagnostics_token(x_mira_diagnostics_token: str | None = Header(default=None)) -> None:
@@ -189,8 +193,11 @@ async def thread_health_endpoint(_: None = Depends(_require_diagnostics_token)):
         return response.to_dict()
 
     except Exception as e:
-        logger.error(f"Thread health endpoint error: {e}", exc_info=True)
-        return JSONResponse(status_code=500, content=create_error_response(e).to_dict())
+        logger.error("Thread health endpoint error", exc_info=e)
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"code": "INTERNAL_ERROR", "message": "Health check failed"}},
+        )
 
 
 @router.get("/health/thread-dump")
@@ -216,5 +223,8 @@ def thread_dump_endpoint(_: None = Depends(_require_diagnostics_token)):
         }).to_dict()
 
     except Exception as e:
-        logger.error(f"Thread dump endpoint error: {e}", exc_info=True)
-        return JSONResponse(status_code=500, content=create_error_response(e).to_dict())
+        logger.error("Thread dump endpoint error", exc_info=e)
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"code": "INTERNAL_ERROR", "message": "Health check failed"}},
+        )

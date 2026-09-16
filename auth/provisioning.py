@@ -64,11 +64,16 @@ class AccountProvisioner(Protocol):
 def local_teardown(user_id: str) -> bool:
     """Remove every trace of a local MIRA account.
 
-    Ordering matters, and each step depends on the one before it: log the user out
-    before their data directory goes away, and close the cached SQLite connection
-    before the file it holds is unlinked.
+    The ``DELETE FROM users`` runs first and carries the eligibility predicate
+    (unactivated member, or expired demo) so the row can only be removed while it
+    still matches the GC scan's candidate set. Revoking sessions and removing the
+    data directory happen only after a successful DELETE, so a user who activates
+    in the window between the GC snapshot and this call survives intact (the DELETE
+    hits zero rows and the account is reported as gone from the candidate set).
+    Accepted residual: a crash between the DELETE and the rmtree leaks an orphaned
+    ``data/users/{id}`` directory — the row is gone, so GC never revisits it.
 
-    The final ``DELETE FROM users`` runs on the **admin** session. A user-scoped session
+    The ``DELETE`` runs on the **admin** session. A user-scoped session
     would bind ``app.current_user_id`` to the account being deleted, and the caller may
     hold no RLS context at all — the scheduled garbage-collection pass does not.
 
@@ -81,11 +86,37 @@ def local_teardown(user_id: str) -> bool:
             canonicalising at entry rejects anything that could name a path outside
             ``DATA_USERS_ROOT`` and makes the path component and the query parameter
             agree on one spelling.
-        RuntimeError: If no user row was deleted, meaning the account vanished
-            mid-cleanup and the earlier steps ran against an account that is already
-            gone.
+        RuntimeError: If no user row was deleted while the row is still present,
+            meaning teardown was invoked for an account that has since become
+            ineligible (e.g. activated) without matching the guard predicate.
     """
     user_id = str(uuid.UUID(user_id))  # fail before any destructive step, not after
+
+    with get_shared_session_manager().get_admin_session() as session:
+        rows_deleted = session.execute_update(
+            """
+            DELETE FROM users
+            WHERE id = %(user_id)s
+              AND (
+                (subject_kind = 'member' AND last_login_at IS NULL)
+                OR (subject_kind = 'demo' AND demo_expires_at <= NOW())
+              )
+            """,
+            {"user_id": user_id},
+        )
+
+        if rows_deleted == 0:
+            remaining = session.execute_single(
+                "SELECT 1 FROM users WHERE id = %(user_id)s", {"user_id": user_id}
+            )
+            if remaining is not None:
+                # raced an activation between the GC snapshot and the DELETE
+                logger.info(
+                    "Account %s became ineligible during GC teardown; skipping",
+                    user_id,
+                )
+                return True
+            raise RuntimeError(f"Account {user_id} disappeared during cleanup")
 
     SessionManager().revoke_user_sessions(user_id)
     clear_manager_cache(user_id)
@@ -95,15 +126,6 @@ def local_teardown(user_id: str) -> bool:
         shutil.rmtree(user_dir)
 
     clear_user_context()
-
-    with get_shared_session_manager().get_admin_session() as session:
-        rows_deleted = session.execute_update(
-            "DELETE FROM users WHERE id = %(user_id)s",
-            {"user_id": user_id},
-        )
-
-    if rows_deleted == 0:
-        raise RuntimeError(f"Account {user_id} disappeared during cleanup")
 
     logger.info("Tore down local account %s", user_id)
     return True

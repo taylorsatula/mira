@@ -7,14 +7,17 @@
 
 BEGIN;
 
--- Verify continuum exists (will fail if not)
+-- Verify continuum exists (will fail if not).
+-- psql never interpolates :'var' inside a dollar-quoted DO body, so the
+-- value is hoisted into a session setting via a plain SET statement first.
+SET mira.user_id = :'user_id';
 DO $$
 DECLARE
     conv_id uuid;
 BEGIN
-    SELECT id INTO conv_id FROM continuums WHERE user_id = :'user_id'::uuid;
+    SELECT id INTO conv_id FROM continuums WHERE user_id = current_setting('mira.user_id')::uuid;
     IF conv_id IS NULL THEN
-        RAISE EXCEPTION 'Continuum does not exist for user %. Run this script after continuum creation.', :'user_id';
+        RAISE EXCEPTION 'Continuum does not exist for user %.', current_setting('mira.user_id');
     END IF;
 END $$;
 

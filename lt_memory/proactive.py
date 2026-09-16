@@ -284,6 +284,11 @@ class ProactiveService:
             memories: List of Memory objects that were retrieved
         """
         for memory in memories:
+            # Global memories are system-curated and have no user row in
+            # update_access_stats' scope — attempting the update only produces
+            # spurious "failed" warnings for every surfaced global memory.
+            if memory.source == 'global':
+                continue
             try:
                 self.db.update_access_stats(memory.id)
             except Exception as e:

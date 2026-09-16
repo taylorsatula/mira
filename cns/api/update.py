@@ -49,12 +49,16 @@ def get_latest_version() -> str:
 
 
 def get_client_ip(request: Request) -> str:
-    """Extract client IP, checking X-Forwarded-For for proxied requests."""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        # X-Forwarded-For can be comma-separated list; first is original client
-        return forwarded.split(",")[0].strip()
+    """Return the socket peer address. X-Forwarded-For is ignored: client-controlled
+    and no proxy is deployed."""
     return request.client.host if request.client else "unknown"
+
+
+def _sanitize_log_field(value: str) -> str:
+    """Make a client-supplied log value forge-resistant: one physical line,
+    control characters visibly escaped, nothing that could splice log rows."""
+    stripped = value.strip().replace("\x00", "")
+    return stripped.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
 
 
 @router.get("/check_update", response_model=UpdateCheckResponse)
@@ -68,8 +72,9 @@ def check_update_endpoint(request: Request, version: str = "") -> UpdateCheckRes
     latest = get_latest_version()
     client_ip = get_client_ip(request)
 
-    # Log the update check for analytics (to data/update_checks.log)
-    update_logger.info(f"ip={client_ip}\tversion={version or 'none'}\tlatest={latest}")
+    # Scrubbed, not rejected — forgeries stay visible on one line, no free 4xx oracle.
+    safe_version = _sanitize_log_field(version)
+    update_logger.info(f"ip={client_ip}\tversion={safe_version or 'none'}\tlatest={latest}")
 
     # No version provided or invalid - can't compare
     if not version:

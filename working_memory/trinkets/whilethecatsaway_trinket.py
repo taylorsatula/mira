@@ -8,6 +8,7 @@ working documents that need explicit dismissal.
 
 Lifecycle: success | timeout | failed → auto-expire after RESULT_TTL_TURNS.
 """
+import html
 import logging
 from typing import Dict, Any, TYPE_CHECKING
 
@@ -131,8 +132,8 @@ class WhileTheCatsAwayTrinket(StatefulTrinket):
         summary = data.get('result', '')
         return (
             f'<result type="success" task_id="{task_id}" '
-            f'topic="{topic}">\n'
-            f"{summary}\n"
+            f'topic="{html.escape(topic, quote=True)}">\n'
+            f"{html.escape(summary)}\n"
             f"</result>"
         )
 
@@ -145,7 +146,7 @@ class WhileTheCatsAwayTrinket(StatefulTrinket):
         if result_type == 'timeout':
             return (
                 f'<result type="timeout" task_id="{task_id}" '
-                f'topic="{topic}" '
+                f'topic="{html.escape(topic, quote=True)}" '
                 f'turns_remaining="{turns_remaining}">\n'
                 f"Background research timed out.\n"
                 f"</result>"
@@ -154,8 +155,8 @@ class WhileTheCatsAwayTrinket(StatefulTrinket):
         error = data.get('error', 'Unknown error')
         return (
             f'<result type="failed" task_id="{task_id}" '
-            f'topic="{topic}" '
+            f'topic="{html.escape(topic, quote=True)}" '
             f'turns_remaining="{turns_remaining}">\n'
-            f"Background research failed: {error}\n"
+            f"Background research failed: {html.escape(error)}\n"
             f"</result>"
         )

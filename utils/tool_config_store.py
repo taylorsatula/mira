@@ -141,7 +141,8 @@ def prepare_tool_config_for_validation(
     secret_updates: dict[str, str | None] = {}
 
     for field_name in secret_fields:
-        incoming_value = incoming_config[field_name]
+        # Omitted secret field = sentinel semantics: preserve existing, write nothing
+        incoming_value = incoming_config.get(field_name, SECRET_REDACTION_SENTINEL)
         existing_value = hydrated_existing.get(field_name)
 
         if incoming_value == SECRET_REDACTION_SENTINEL:

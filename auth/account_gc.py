@@ -7,9 +7,12 @@ expired demo subjects. This is what makes open multi-user signup safe to
 leave on: an abandoned signup is transient state, not permanent rows.
 
 Deletion goes through the injected `AccountProvisioner`, whose
-`NullProvisioner.delete` reaches `local_teardown` — revoke sessions,
-clear the per-user SQLite manager cache, remove the tool data directory,
-and delete the row on an admin session.
+`NullProvisioner.delete` reaches `local_teardown` — eligibility-guarded
+DELETE of the row on an admin session first, then revoke sessions,
+clear the per-user SQLite manager cache, and remove the tool data
+directory. The guard in the DELETE mirrors this scan's eligibility
+predicate, so an account that activates between the snapshot and the
+deletion survives.
 """
 import logging
 import time

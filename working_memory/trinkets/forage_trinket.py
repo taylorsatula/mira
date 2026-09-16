@@ -9,6 +9,7 @@ Handles multiple concurrent forages with status lifecycle:
 Success results persist until explicitly dismissed or segment collapse.
 Error/timeout results auto-expire after 5 turns.
 """
+import html
 import logging
 from typing import Dict, Any, TYPE_CHECKING
 
@@ -176,9 +177,9 @@ class ForageTrinket(StatefulTrinket):
         iteration = data.get('iteration', 0)
         max_iter = data.get('max_iterations', 0)
         summaries = data.get('summaries', [])
-        lines = [f"[{s['iteration']}] {s['text']}" for s in summaries]
+        lines = [f"[{s['iteration']}] {html.escape(s['text'])}" for s in summaries]
         return (
-            f'<result type="in_progress" task_id="{task_id}" query="{query}" '
+            f'<result type="in_progress" task_id="{task_id}" query="{html.escape(query, quote=True)}" '
             f'iteration="{iteration}/{max_iter}">\n'
             + "\n".join(lines) + "\n"
             "</result>"
@@ -187,7 +188,7 @@ class ForageTrinket(StatefulTrinket):
     def _format_pending(self, task_id: str, data: Dict[str, Any]) -> str:
         query = data.get('query', '')
         return (
-            f'<result type="pending" task_id="{task_id}" query="{query}">\n'
+            f'<result type="pending" task_id="{task_id}" query="{html.escape(query, quote=True)}">\n'
             f"Foraging in progress...\n"
             f"</result>"
         )
@@ -197,8 +198,8 @@ class ForageTrinket(StatefulTrinket):
         written_result = data.get('result', '')
         iterations = data.get('iterations', 0)
         return (
-            f'<result type="success" task_id="{task_id}" query="{query}" iterations="{iterations}">\n'
-            f"{written_result}\n"
+            f'<result type="success" task_id="{task_id}" query="{html.escape(query, quote=True)}" iterations="{iterations}">\n'
+            f"{html.escape(written_result)}\n"
             f"</result>"
         )
 
@@ -209,20 +210,21 @@ class ForageTrinket(StatefulTrinket):
         query = data.get('query', '')
 
         if result_type == 'timeout':
-            elapsed = data.get('elapsed', 0)
-            iteration = data.get('iteration', 0)
+            # Producer sends `iterations` (count) + `error`; never elapsed/iteration
+            iterations = data.get('iterations', 0)
+            error = data.get('error', 'Iteration limit exceeded')
             return (
-                f'<result type="timeout" task_id="{task_id}" query="{query}" '
+                f'<result type="timeout" task_id="{task_id}" query="{html.escape(query, quote=True)}" '
                 f'turns_remaining="{turns_remaining}">\n'
-                f"Forage timed out after {elapsed:.0f}s at iteration {iteration}.\n"
+                f"Forage timed out after {iterations} iteration(s): {html.escape(error)}\n"
                 f"</result>"
             )
 
         error = data.get('error', 'Unknown error')
         error_type = data.get('error_type', 'Error')
         return (
-            f'<result type="failed" task_id="{task_id}" query="{query}" '
+            f'<result type="failed" task_id="{task_id}" query="{html.escape(query, quote=True)}" '
             f'turns_remaining="{turns_remaining}">\n'
-            f"Forage failed: {error_type} — {error}\n"
+            f"Forage failed: {html.escape(error_type)} — {html.escape(error)}\n"
             f"</result>"
         )

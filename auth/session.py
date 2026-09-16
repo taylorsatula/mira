@@ -129,6 +129,7 @@ class SessionManager:
             if parse_utc_time_string(max_expiry) < utc_now():
                 # Session exceeded max lifetime
                 valkey.delete(key)
+                valkey.delete(self._csrf_key(session_token))
                 return None
 
         if extend_activity:
@@ -140,7 +141,7 @@ class SessionManager:
                 session_data,
                 config.SESSION_IDLE_TIMEOUT
             )
-
+            valkey.expire(self._csrf_key(session_token), config.SESSION_IDLE_TIMEOUT)
         return SessionData(**session_data)
 
     def revoke_session(self, session_token: str) -> bool:

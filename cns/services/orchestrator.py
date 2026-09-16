@@ -518,22 +518,30 @@ class ContinuumOrchestrator:
         system_prompt: str,
     ) -> list[dict[str, object]]:
         from cns.core.events import ComposeSystemPromptEvent
+        from working_memory.core import _compose_lock
 
-        self._cached_content = None
-        self._non_cached_content = None
-        self._conversation_prefix_items = ()
-        self._post_history_items = ()
-        self._notification_center = None
-        self.event_bus.publish(ComposeSystemPromptEvent.create(
-            continuum_id=str(continuum.id),
-            base_prompt=system_prompt,
-        ))
+        with _compose_lock:
+            self._cached_content = None
+            self._non_cached_content = None
+            self._conversation_prefix_items = ()
+            self._post_history_items = ()
+            self._notification_center = None
+            self.event_bus.publish(ComposeSystemPromptEvent.create(
+                continuum_id=str(continuum.id),
+                base_prompt=system_prompt,
+            ))
+            # None means the compose handler failed — never proceed with an empty
+            # system prompt. (None, not falsy: trinket sections may be empty strings.)
+            if self._cached_content is None:
+                raise RuntimeError(
+                    f"System prompt composition failed for continuum {continuum.id}"
+                )
 
-        cached_content = self._cached_content or ""
-        non_cached_content = self._non_cached_content or ""
-        conversation_prefix_items = self._conversation_prefix_items or ()
-        post_history_items = self._post_history_items or ()
-        notification_center = self._notification_center or ""
+            cached_content = self._cached_content or ""
+            non_cached_content = self._non_cached_content or ""
+            conversation_prefix_items = self._conversation_prefix_items or ()
+            post_history_items = self._post_history_items or ()
+            notification_center = self._notification_center or ""
 
         system_blocks = []
         all_system_parts = []
@@ -1241,10 +1249,14 @@ class ContinuumOrchestrator:
                 )
                 if overflow_attempt == 1:
                     deep_fallback_active = True
+                    if stream and stream_callback:
+                        stream_callback({"type": "context_reset"})
                     messages_for_llm = self._apply_deep_context_overflow_fallback(messages_for_llm)
                     acc.reset()
                     continue
 
+                if stream and stream_callback:
+                    stream_callback({"type": "context_reset"})
                 acc.reset()
                 fallback = "collapse the segment, please. incremental compaction failed"
                 fallback_entry_id = acc.append_text(fallback)
@@ -1371,17 +1383,22 @@ class ContinuumOrchestrator:
 
         # A tool-loader turn ends with a synthetic continuation prompt, not an
         # answer, so subscribers must not observe it as a completed turn.
-        auto_continuing = acc.invoked_tool_loader and not _tried_loading_all_tools
+        # A halted loader pass ends as a stopped turn, not a continuation.
+        auto_continuing = acc.invoked_tool_loader and not _tried_loading_all_tools and not stopped
         if not stopped and not auto_continuing:
             # Warm the provider cache before registering successful-completion
             # callbacks. A warm failure must not publish TurnCompletedEvent.
             if self.subcortical_layer is not None:
                 self.subcortical_layer.warm_cache(continuum, mem.surfaced_memories)
 
-            # The transient scaffold is present in the cache but is not a
-            # conversation record, so it must not inflate the turn number.
-            durable_message_count = len(continuum.messages) - int(_internal_continuation)
-            turn_number = (durable_message_count + 1) // 2
+            # Turn numbering counts user-role rows only: tool and assistant rows
+            # must not inflate it, and the transient scaffold is excluded by its
+            # own metadata flag (the continuation adjustment would double-exclude it).
+            user_message_count = sum(
+                1 for m in continuum.messages
+                if m.role == "user" and not m.metadata.get("transient_system_scaffold")
+            )
+            turn_number = user_message_count
             completed_event = TurnCompletedEvent.create(
                 continuum_id=continuum_id,
                 turn_number=turn_number,

@@ -164,3 +164,33 @@ install_python_package() {
         show_progress $! "Installing $package"
     fi
 }
+
+# Live models-list check for the OpenAI-compatible provider being configured:
+# prefill CONFIG_PROVIDER_MODEL with the suggested model only when the
+# provider's models endpoint actually lists it. On a missing model or a failed
+# request the variable is left unset — the caller's empty-model guard is the
+# fail-fast, never a silent fallback to an unverified default.
+# Requires: output.sh sourced; CONFIG_PROVIDER_ENDPOINT/KEY/NAME set.
+prefill_provider_model() {
+    local suggested_model="$1"
+
+    if [ -n "$CONFIG_PROVIDER_MODEL" ]; then
+        return 0
+    fi
+
+    local models_url="${CONFIG_PROVIDER_ENDPOINT%/chat/completions}/models"
+    local auth_header=()
+    if [ -n "$CONFIG_PROVIDER_KEY" ]; then
+        auth_header=(-H "Authorization: Bearer $CONFIG_PROVIDER_KEY")
+    fi
+
+    local response
+    if response=$(curl -fsS --max-time 15 "${auth_header[@]}" "$models_url" 2>/dev/null) \
+        && printf '%s' "$response" | grep -q "\"$suggested_model\""; then
+        export CONFIG_PROVIDER_MODEL="$suggested_model"
+        print_success "Prefilled model '$suggested_model' (verified against ${CONFIG_PROVIDER_NAME}'s model list)"
+    else
+        print_warning "Could not confirm '$suggested_model' on ${CONFIG_PROVIDER_NAME}'s model list."
+        print_info "Visit your provider's website, pick a model it serves, and enter it when prompted (or set MIRA_PROVIDER_MODEL)."
+    fi
+}

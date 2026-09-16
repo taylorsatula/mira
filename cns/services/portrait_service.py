@@ -143,7 +143,7 @@ def read_portrait(user_id: str) -> str:
         return (row.get("portrait") or "") if row else ""
     except Exception as e:
         logger.error("Portrait read failed for user %s: %s", user_id, e)
-        raise
+        return ""
 
 
 def _fetch_summaries(user_id: str) -> list[str]:

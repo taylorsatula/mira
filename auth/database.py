@@ -68,27 +68,32 @@ class AuthDatabase:
         # Create user and initial memories in a single transaction
         # This ensures atomic rollback if memory creation fails
         with self.session_manager.get_admin_session() as session:
-            result = session.execute_single("""
-                INSERT INTO users (
-                    email, first_name, last_name, timezone, is_active, created_at,
-                    subject_kind, demo_start_at, demo_expires_at
-                )
-                VALUES (
-                    %(email)s, %(first_name)s, %(last_name)s, %(timezone)s, TRUE,
-                    %(created_at)s, %(subject_kind)s, %(demo_start_at)s,
-                    %(demo_expires_at)s
-                )
-                RETURNING id
-            """, {
-                'email': email,
-                'first_name': first_name,
-                'last_name': last_name,
-                'timezone': timezone,
-                'created_at': utc_now(),
-                'subject_kind': subject_kind,
-                'demo_start_at': demo_start_at,
-                'demo_expires_at': demo_expires_at,
-            })
+            import psycopg
+            from .exceptions import AuthError
+            try:
+                result = session.execute_single("""
+                    INSERT INTO users (
+                        email, first_name, last_name, timezone, is_active, created_at,
+                        subject_kind, demo_start_at, demo_expires_at
+                    )
+                    VALUES (
+                        %(email)s, %(first_name)s, %(last_name)s, %(timezone)s, TRUE,
+                        %(created_at)s, %(subject_kind)s, %(demo_start_at)s,
+                        %(demo_expires_at)s
+                    )
+                    RETURNING id
+                """, {
+                    'email': email,
+                    'first_name': first_name,
+                    'last_name': last_name,
+                    'timezone': timezone,
+                    'created_at': utc_now(),
+                    'subject_kind': subject_kind,
+                    'demo_start_at': demo_start_at,
+                    'demo_expires_at': demo_expires_at,
+                })
+            except psycopg.errors.UniqueViolation:
+                raise AuthError("user_already_exists", "User with this email already exists")
             user_id = str(result['id'])
 
             # Create initial memories in same transaction
@@ -383,6 +388,40 @@ So, now that that's out of the way: What do you want to chat about first? I can 
             """, {
                 'user_id': user_id,
                 'credentials': json.dumps(credentials)
+            })
+            return rows_updated > 0
+
+    def update_credential_sign_count(
+        self,
+        user_id: str,
+        credential_id: str,
+        new_sign_count: int,
+        last_used_at: str
+    ) -> bool:
+        """Atomically update one credential's sign_count and last_used_at.
+
+        Single-statement UPDATE so concurrent verifications cannot lose an
+        increment via read-modify-write on the whole JSONB column.
+        """
+        with self.session_manager.get_admin_session() as session:
+            rows_updated = session.execute_update("""
+                UPDATE users
+                SET webauthn_credentials = jsonb_set(
+                        jsonb_set(
+                            webauthn_credentials,
+                            %(sign_count_path)s,
+                            to_jsonb(%(sign_count)s::bigint)
+                        ),
+                        %(last_used_at_path)s,
+                        to_jsonb(%(last_used_at)s::text)
+                    )
+                WHERE id = %(user_id)s
+            """, {
+                'user_id': user_id,
+                'sign_count_path': [credential_id, 'sign_count'],
+                'sign_count': new_sign_count,
+                'last_used_at_path': [credential_id, 'last_used_at'],
+                'last_used_at': last_used_at
             })
             return rows_updated > 0
 

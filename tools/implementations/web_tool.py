@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, field_validator
 from tools.repo import Tool
 from tools.registry import registry
 from utils import http_client
+from utils.prompt_injection_defense import wrap_untrusted
 from utils.url_safety import (
     MAX_REDIRECT_HOPS,
     ValidatedURL,
@@ -199,9 +200,9 @@ class WebTool(Tool):
                     url = item.get("url", "")
                     if self._should_include_url(url, input.allowed_domains, input.blocked_domains):
                         results.append({
-                            "title": item.get("title", ""),
+                            "title": wrap_untrusted(item.get("title", ""), "web_search"),
                             "url": url,
-                            "snippet": item.get("snippet", "")
+                            "snippet": wrap_untrusted(item.get("snippet", ""), "web_search")
                         })
                 return {"success": True, "results": results, "provider": "kagi"}
             except Exception as e:
@@ -224,9 +225,9 @@ class WebTool(Tool):
                 url = item.get("href", "")
                 if self._should_include_url(url, input.allowed_domains, input.blocked_domains):
                     results.append({
-                        "title": item.get("title", ""),
+                        "title": wrap_untrusted(item.get("title", ""), "web_search"),
                         "url": url,
-                        "snippet": item.get("body", "")
+                        "snippet": wrap_untrusted(item.get("body", ""), "web_search")
                     })
 
             return {"success": True, "results": results, "provider": "duckduckgo"}
@@ -296,9 +297,10 @@ class WebTool(Tool):
             else:
                 # Synthesis failed — hard truncate as fallback
                 content = content[:self._MAX_FAITHFUL_LENGTH] + "\n\n[Truncated — full page at source]"
-        result = {"success": True, "url": input.url, "content": content}
+        result = {"success": True, "url": input.url,
+                  "content": wrap_untrusted(content, "web_fetch")}
         if input.include_metadata:
-            result["title"] = self._extract_title(html)
+            result["title"] = wrap_untrusted(self._extract_title(html), "web_fetch")
             result["metadata"] = {
                 "content_type": response_info.get("content_type", "text/html"),
                 "size": len(html),
@@ -392,15 +394,20 @@ class WebTool(Tool):
             text = text[:self._MAX_SYNTHESIS_INPUT]
             self.logger.info(f"Truncated synthesis input to {self._MAX_SYNTHESIS_INPUT} chars")
 
+        # The page text is untrusted — wrap it so the fast model cannot be
+        # injected by page content before its condensed output reaches the
+        # main model (which wraps again in _build_fetch_result).
+        wrapped_text = wrap_untrusted(text, "web_fetch")
+
         # Build user message: directive fenced above the content firehose
         if focus:
             user_message = (
                 f"\U0001F6A8 FOCUS: {focus} \U0001F6A8\n"
                 f"{'=' * 60}\n\n"
-                f"{text}"
+                f"{wrapped_text}"
             )
         else:
-            user_message = text
+            user_message = wrapped_text
 
         try:
             llm = get_llm_provider()
@@ -536,12 +543,12 @@ class WebTool(Tool):
             try:
                 result["data"] = response.json()
             except ValueError:
-                result["data"] = response.text
+                result["data"] = wrap_untrusted(response.text, "http_response")
                 result["warning"] = "Response is not valid JSON"
         elif format_type == "text":
-            result["data"] = response.text
+            result["data"] = wrap_untrusted(response.text, "http_response")
         elif format_type == "full":
-            result["data"] = response.text
+            result["data"] = wrap_untrusted(response.text, "http_response")
             # Sanitize headers - remove sensitive ones to prevent credential leakage
             sanitized_headers = {
                 k: v for k, v in response.headers.items()

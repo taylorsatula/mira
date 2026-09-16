@@ -161,40 +161,14 @@ class Client(RetryMixin, httpx.Client):
         return self._execute_with_retry(super().delete, *args, **kwargs)
     
     def stream(self, *args, **kwargs):
+        """Return the httpx stream context manager without retry.
+
+        The connection is established when the CALLER enters the returned
+        context manager, outside this method's frame — no retry here can see
+        a ConnectError. Connection retry for streaming lives in the
+        module-level `stream()` wrapper, where CM entry is inside the function.
         """
-        Stream request with retry on connection establishment.
-        Note: Once streaming starts, we can't retry mid-stream.
-        """
-        last_exception = None
-        
-        for attempt in range(self.max_retries + 1):
-            try:
-                return super().stream(*args, **kwargs)
-                
-            except HTTPStatusError as e:
-                last_exception = e
-                status_code = e.response.status_code if e.response else 0
-                
-                if self._should_retry(status_code, attempt):
-                    delay = self._calculate_delay(attempt, status_code)
-                    logger.warning(f"Stream connection failed ({status_code}), attempt {attempt + 1}/{self.max_retries + 1}, retrying in {delay:.1f}s...")
-                    time.sleep(delay)
-                    continue
-                else:
-                    raise
-                    
-            except (ConnectError, ConnectTimeout) as e:
-                last_exception = e
-                if attempt < self.max_retries:
-                    delay = self._calculate_delay(attempt, 503)
-                    logger.warning(f"Stream connection error, attempt {attempt + 1}/{self.max_retries + 1}, retrying in {delay:.1f}s...")
-                    time.sleep(delay)
-                    continue
-                else:
-                    raise
-        
-        if last_exception:
-            raise last_exception
+        return super().stream(*args, **kwargs)
 
 
 # Convenience functions that mirror httpx module-level functions
@@ -259,8 +233,11 @@ def delete(url: str, **kwargs) -> Response:
 
 @contextmanager
 def stream(method: str, url: str, **kwargs):
-    """
-    Convenience function for streaming requests with automatic retry.
+    """Streaming request with retry on connection establishment.
+
+    The context manager is entered inside this function, so ConnectError at
+    entry is retryable here. No mid-stream retry: once the response body has
+    started yielding, any error propagates to the caller unchanged.
 
     Usage:
         with http_client.stream('GET', url) as response:
@@ -270,8 +247,22 @@ def stream(method: str, url: str, **kwargs):
     max_retries = kwargs.pop('max_retries', DEFAULT_MAX_RETRIES)
     http2 = kwargs.pop('http2', False)
     with Client(max_retries=max_retries, http2=http2) as client:
-        with client.stream(method, url, **kwargs) as response:
-            yield response
+        for attempt in range(max_retries + 1):
+            response_started = False
+            try:
+                with client.stream(method, url, **kwargs) as response:
+                    response_started = True
+                    yield response
+                return
+            except (ConnectError, ConnectTimeout):
+                if response_started or attempt >= max_retries:
+                    raise
+                delay = 0.5 * (2 ** attempt) + random.uniform(0, 0.5)
+                logger.warning(
+                    f"Stream connection error, attempt {attempt + 1}/{max_retries + 1}, "
+                    f"retrying in {delay:.1f}s..."
+                )
+                time.sleep(delay)
 
 
 class _IPPinNetworkBackend(httpcore.NetworkBackend):

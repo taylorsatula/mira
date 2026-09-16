@@ -246,7 +246,8 @@ class ContinuumRepository:
             )
 
             # Track user activity day (upstream activity tracking for vacation-proof scoring)
-            if message.role == "user":
+            # Heartbeat stimuli are machine-sourced, not user activity.
+            if message.role == "user" and message.metadata.get("heartbeat") != "true":
                 try:
                     from utils.user_activity import increment_user_activity_day
                     logger.info(f"[SINGLE] Attempting to increment activity day for user {user_id}")
@@ -337,11 +338,25 @@ class ContinuumRepository:
             # and exposed to tools via set_current_segment_id(). Source it from the
             # request contextvar so the persisted sentinel uses the same id the
             # tools saw this turn. When absent (e.g. fixture loaders with no request
-            # context) the helper allocates a fresh uuid4.
+            # context) the helper allocates a fresh uuid4. A stale contextvar id can
+            # collide with an existing sentinel of this continuum (the contextvar
+            # outlives the segment it named), so re-check before use.
+            segment_id = get_current_segment_id()
+            if segment_id:
+                collisions = db.execute_query("""
+                    SELECT id FROM messages
+                    WHERE continuum_id = %s
+                        AND metadata->>'is_segment_boundary' = 'true'
+                        AND metadata->>'segment_id' = %s
+                    LIMIT 1
+                """, (continuum_id, segment_id))
+                if collisions:
+                    segment_id = str(uuid4())
+
             sentinel = create_segment_boundary_sentinel(
                 first_message_time=first_message_time,
                 continuum_id=str(continuum_id),
-                segment_id=get_current_segment_id(),
+                segment_id=segment_id,
             )
 
             # Direct INSERT with conflict on the unique partial index
@@ -425,7 +440,8 @@ class ContinuumRepository:
                     """,
                     base_tuple + (segment_embedding_value,)
                 )
-                if message.role == "user":
+                # Heartbeat stimuli are machine-sourced, not user activity.
+                if message.role == "user" and message.metadata.get("heartbeat") != "true":
                     has_user_message = True
 
             # Track user activity day if batch contained user message
@@ -861,6 +877,34 @@ class ContinuumRepository:
         rows = db.execute_returning(query, (wake_at, str(continuum_id)))
         return bool(rows)
 
+    def stamp_segment_liveness(self, continuum_id: str | UUID, user_id: str) -> bool:
+        """
+        Stamp last_turn_at on the active segment sentinel at heartbeat wake-turn dispatch.
+
+        The segment timeout service's last_turn_at guard then covers the wake
+        turn for one threshold window: a hung heartbeat turn does not get
+        force-tombstoned as abandoned while it is still running.
+
+        Args:
+            continuum_id: Continuum ID
+            user_id: User ID
+
+        Returns:
+            True if an active segment sentinel was stamped, False if none exists
+        """
+        db = self.get_user_db_client(user_id)
+
+        query = """
+            UPDATE messages
+            SET metadata = jsonb_set(metadata, '{last_turn_at}', to_jsonb(%s::text))
+            WHERE continuum_id = %s
+                AND metadata->>'is_segment_boundary' = 'true'
+                AND metadata->>'status' = 'active'
+            RETURNING id
+        """
+        rows = db.execute_returning(query, (format_utc_iso(utc_now()), str(continuum_id)))
+        return bool(rows)
+
     def pause_segment(self, continuum_id: str | UUID, user_id: str) -> bool:
         """
         Pause the active segment, making it invisible to the timeout service.
@@ -981,6 +1025,7 @@ class ContinuumRepository:
             WHERE continuum_id = %s
                 AND metadata->>'is_segment_boundary' = 'true'
                 AND metadata->>'segment_id' = %s
+            ORDER BY created_at DESC
             LIMIT 1
         """
 

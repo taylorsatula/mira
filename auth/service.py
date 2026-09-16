@@ -455,8 +455,9 @@ class AuthService:
         if not user or not user.is_active:
             raise AuthError("user_not_found", "User not found or inactive")
 
-        # Update last login
-        self.db.update_user_login(str(user.id))
+        # Update last login; 0 rows means the account was deleted concurrently
+        if not self.db.update_user_login(str(user.id)):
+            raise AuthError("user_not_found", "User not found or inactive")
 
         # Create session
         session_token = self.session_manager.create_session(

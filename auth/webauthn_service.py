@@ -100,7 +100,7 @@ class WebAuthnService:
         challenge_user_id = user_id or get_current_user_id()
         valkey = get_valkey()
         key = self._challenge_key(challenge_user_id, operation)
-        data = valkey.json_get(key, "$")
+        data = valkey.getdel_json(key)
 
         if not data or len(data) == 0:
             return None
@@ -108,9 +108,6 @@ class WebAuthnService:
         challenge_hex = data[0].get("challenge")
         if not challenge_hex:
             return None
-
-        # Delete challenge after retrieval (one-time use)
-        valkey.delete(key)
 
         return bytes.fromhex(challenge_hex)
 
@@ -323,7 +320,7 @@ class WebAuthnService:
 
         valkey = get_valkey()
         key = self._discoverable_challenge_key(challenge_id)
-        data = valkey.json_get(key, "$")
+        data = valkey.getdel_json(key)
 
         if not data or len(data) == 0:
             return None
@@ -331,9 +328,6 @@ class WebAuthnService:
         challenge_hex = data[0].get("challenge")
         if not challenge_hex:
             return None
-
-        # Delete challenge after retrieval (one-time use)
-        valkey.delete(key)
 
         return bytes.fromhex(challenge_hex)
 
@@ -365,11 +359,12 @@ class WebAuthnService:
             credential_current_sign_count=stored_cred["sign_count"]
         )
 
-        stored_cred["sign_count"] = verification.new_sign_count
-        stored_cred["last_used_at"] = utc_now().isoformat()
-        user_creds[credential_id] = stored_cred
-
-        self.db.update_webauthn_credentials(str(user.id), user_creds)
+        self.db.update_credential_sign_count(
+            str(user.id),
+            credential_id,
+            verification.new_sign_count,
+            utc_now().isoformat()
+        )
 
     def verify_authentication(
         self,

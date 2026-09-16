@@ -7,6 +7,7 @@ via UpdateTrinketEvent events, stores it in memory, renders XML. Cleared
 automatically on segment collapse via WorkingMemory._flush_stateful_trinkets().
 """
 import logging
+import re
 from typing import Any, Dict, TYPE_CHECKING
 
 from working_memory.trinkets.base import StatefulTrinket
@@ -61,10 +62,12 @@ class EmailTrinket(StatefulTrinket):
         ]
 
         for em in snapshot:
-            # Escape XML-sensitive chars in user-controlled content
-            from_attr = _xml_attr_escape(em.get('from_addr', ''))
-            subject_attr = _xml_attr_escape(em.get('subject', ''))
-            date_attr = _xml_attr_escape(em.get('date', ''))
+            # Attacker-controlled headers render into the primary system
+            # prompt as XML attributes — screen for injection text, cap length,
+            # then escape XML-sensitive chars.
+            from_attr = _xml_attr_escape(screen_headers(em.get('from_addr', '')))
+            subject_attr = _xml_attr_escape(screen_headers(em.get('subject', '')))
+            date_attr = _xml_attr_escape(screen_headers(em.get('date', '')))
             uid_attr = _xml_attr_escape(em.get('uid', ''))
 
             lines.append(
@@ -89,6 +92,34 @@ class EmailTrinket(StatefulTrinket):
                 f"Clearing {len(snapshot)} inbox items "
                 "on segment collapse"
             )
+
+
+_MAX_HEADER_CHARS = 120
+_HEADER_ATTACK_MARKERS = (
+    re.compile(r"ignore\s+(all\s+)?(previous|prior|above)\s+instructions?", re.IGNORECASE),
+    re.compile(r"<\s*/?\s*(system|assistant|instruction|inbox_status|untrusted_content)", re.IGNORECASE),
+    re.compile(r"(system|developer)\s+prompt", re.IGNORECASE),
+    re.compile(r"disregard\s+(the\s+)?(above|all|instructions)", re.IGNORECASE),
+    re.compile(r"\[\s*(SYSTEM|INST)\s*\]", re.IGNORECASE),
+)
+_SCREEN_MARKER = "[header withheld: suspicious content]"
+
+
+def screen_headers(value: str) -> str:
+    """Neutralize an attacker-controlled email header before HUD rendering.
+
+    Returns a marker for headers matching obvious injection patterns and
+    caps length otherwise. Rendering callers still apply XML attribute
+    escaping — this screens semantics, not syntax.
+    """
+    if not value:
+        return value
+    for pattern in _HEADER_ATTACK_MARKERS:
+        if pattern.search(value):
+            return _SCREEN_MARKER
+    if len(value) <= _MAX_HEADER_CHARS:
+        return value
+    return value[:_MAX_HEADER_CHARS] + "…"
 
 
 def _xml_attr_escape(value: str) -> str:

@@ -35,6 +35,13 @@ class ForageAgent(SidebarAgent):
         return load_agent_prompt("forage_system.txt")
 
     def _iteration_status(self, iteration: int) -> str:
+        if iteration > self.max_iterations:
+            return (
+                "# Research Progress\n\n"
+                f"Turn {iteration} (grace)\n\n"
+                "This is the final turn. Call sidebar_tool complete_task "
+                "now with whatever you have."
+            )
         width = self._PROGRESS_BAR_WIDTH
         filled = round(width * iteration / self.max_iterations)
         filled = max(0, min(width, filled))

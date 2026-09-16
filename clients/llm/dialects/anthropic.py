@@ -177,6 +177,7 @@ class AnthropicDialect(Dialect):
         params = self._build_params(request)
         tool_uses_seen: set[str] = set()
         final_message = None
+        yielded_any = False
 
         def run_stream():
             return self.client.beta.messages.stream(**params, betas=ANTHROPIC_BETA_FLAGS)
@@ -188,17 +189,21 @@ class AnthropicDialect(Dialect):
                     try:
                         for event in stream:
                             if event.type == "text":
+                                yielded_any = True
                                 yield TextEvent(content=event.text)
                             elif event.type == "content_block_delta":
                                 delta = getattr(event, "delta", None)
                                 if getattr(delta, "type", None) == "thinking_delta":
+                                    yielded_any = True
                                     yield ThinkingEvent(content=delta.thinking)
                             elif event.type == "content_block_start":
                                 block = event.content_block
                                 if block.type == "tool_use" and block.id not in tool_uses_seen:
                                     tool_uses_seen.add(block.id)
+                                    yielded_any = True
                                     yield ToolDetectedEvent(tool_name=block.name, tool_id=block.id)
                                 elif block.type == "server_tool_use":
+                                    yielded_any = True
                                     yield ToolDetectedEvent(tool_name=block.name, tool_id=block.id)
                                     yield ToolExecutingEvent(
                                         tool_name=block.name,
@@ -210,7 +215,13 @@ class AnthropicDialect(Dialect):
                         self._active_stream = None
                 break
             except anthropic.APIStatusError as error:
-                if is_overloaded_error(error) and attempt < OVERLOAD_MAX_RETRIES - 1:
+                # Retry only pre-first-event: a restart mid-stream would re-yield
+                # the whole response and double the client-visible text.
+                if (
+                    is_overloaded_error(error)
+                    and attempt < OVERLOAD_MAX_RETRIES - 1
+                    and not yielded_any
+                ):
                     delay = min(OVERLOAD_BASE_DELAY * (2 ** attempt), OVERLOAD_MAX_DELAY)
                     time.sleep(delay * (0.5 + random.random()))
                     continue
@@ -247,7 +258,7 @@ class AnthropicDialect(Dialect):
 
     def _build_params(self, request: Request) -> dict[str, Any]:
         sanitized = [self.sanitize_outbound_message(m) for m in request.messages]
-        messages = self._serialize_messages(sanitized, thinking_active=request.thinking.active)
+        messages = self._serialize_messages(sanitized, thinking_active=request.thinking.deliberating)
         max_tokens = request.max_tokens
         thinking_params, thinking_adjustment = self._translate_thinking(
             model=request.model,
@@ -262,8 +273,7 @@ class AnthropicDialect(Dialect):
             "max_tokens": max_tokens,
             "messages": messages,
         }
-        if request.thinking.active:
-            params.update(thinking_params)
+        params.update(thinking_params)
         # No temperature is sent: the Anthropic API has deprecated the
         # parameter (all current models pin temperature=1) and SDK 1.x removed
         # it from Messages.create() entirely - passing it raises TypeError.
@@ -308,7 +318,7 @@ class AnthropicDialect(Dialect):
         spends zero deliberation tokens: an explicitly disabled thinking block.
         """
         if not thinking.active:
-            return {}, 0
+            return {"thinking": {"type": "disabled"}}, 0
 
         adaptive = uses_adaptive_thinking(model)
         effort = thinking.effort
@@ -522,6 +532,7 @@ class AnthropicDialect(Dialect):
         sig_index = 0
 
         result: list[dict[str, Any]] = []
+        thinking_blocks: list[dict[str, Any]] = []
         for block in content:
             if not isinstance(block, dict):
                 continue
@@ -541,10 +552,10 @@ class AnthropicDialect(Dialect):
                         matched = True
                         break
                     elif sig.get("type") == "redacted_thinking":
-                        result.append({"type": "redacted_thinking", "data": sig["data"]})
+                        thinking_blocks.append({"type": "redacted_thinking", "data": sig["data"]})
                 if not matched:
                     continue
-                result.append(anthro_block)
+                thinking_blocks.append(anthro_block)
             elif block_type == "tool_call":
                 result.append({
                     "type": "tool_use",
@@ -561,13 +572,14 @@ class AnthropicDialect(Dialect):
             elif block_type == "document":
                 result.append(self._serialize_inner_block(block))
 
-        while sig_index < len(thinking_signatures):
-            sig = thinking_signatures[sig_index]
-            sig_index += 1
-            if sig.get("type") == "redacted_thinking":
-                result.append({"type": "redacted_thinking", "data": sig["data"]})
+        if thinking_active:
+            while sig_index < len(thinking_signatures):
+                sig = thinking_signatures[sig_index]
+                sig_index += 1
+                if sig.get("type") == "redacted_thinking":
+                    thinking_blocks.append({"type": "redacted_thinking", "data": sig["data"]})
 
-        return result
+        return (thinking_blocks + result) if thinking_active else result
 
     def _serialize_user_content(self, content: Any) -> Any:
         if not isinstance(content, list):
@@ -800,7 +812,9 @@ class AnthropicDialect(Dialect):
         message = str(error)
         if status_code == 400:
             lowered = message.lower()
-            if "prompt is too long" in lowered or "context" in lowered or "too many tokens" in lowered:
+            # Narrow matches only: a bare "context" substring fires on ordinary
+            # 400s and would trigger destructive compaction on non-overflow errors.
+            if "prompt is too long" in lowered or "too many tokens" in lowered:
                 raise ProviderContextOverflowError("anthropic", mode, message)
         if status_code in (401, 403):
             raise ProviderAuthError("anthropic", mode, message)

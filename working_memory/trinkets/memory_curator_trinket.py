@@ -11,6 +11,7 @@ Lifecycle:
 The trinket is keyed by task_id (one per curation run). Integration and floor
 runs are tracked independently.
 """
+import html
 import logging
 from typing import Dict, Any, TYPE_CHECKING
 
@@ -124,12 +125,12 @@ class MemoryCuratorTrinket(StatefulTrinket):
         summary = data.get('summary', '')
         segment_id = data.get('segment_id', '')
 
-        header = f'<result type="success" task_id="{task_id}" mode="{mode}"'
+        header = f'<result type="success" task_id="{task_id}" mode="{html.escape(mode, quote=True)}"'
         if segment_id:
-            header += f' segment="{segment_id}"'
+            header += f' segment="{html.escape(segment_id, quote=True)}"'
         header += '>'
 
-        return f"{header}\n{summary}\n</result>"
+        return f"{header}\n{html.escape(summary)}\n</result>"
 
     def _format_error(self, task_id: str, result: Dict[str, Any]) -> str:
         data = result['data']

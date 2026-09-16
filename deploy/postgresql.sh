@@ -176,20 +176,26 @@ if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
 fi
 
 # Update PostgreSQL passwords if custom password was set
+# NOTE: the ALTER pairs run as `if` conditions so a failure reaches the warning
+# branch instead of aborting under set -e.
 if [ "$CONFIG_DB_PASSWORD" != "changethisifdeployingpwd" ]; then
     echo -ne "${DIM}${ARROW}${RESET} Updating database passwords... "
     if [ "$OS" = "linux" ]; then
-        sudo -u postgres psql -c "ALTER USER mira_admin WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1 && \
-        sudo -u postgres psql -c "ALTER USER mira_dbuser WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1
+        if sudo -u postgres psql -c "ALTER USER mira_admin WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1 && \
+           sudo -u postgres psql -c "ALTER USER mira_dbuser WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1; then
+            echo -e "${CHECKMARK}"
+        else
+            echo -e "${ERROR}"
+            print_warning "Failed to update passwords - you may need to update manually"
+        fi
     elif [ "$OS" = "macos" ]; then
-        psql postgres -c "ALTER USER mira_admin WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1 && \
-        psql postgres -c "ALTER USER mira_dbuser WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1
-    fi
-    if [ $? -eq 0 ]; then
-        echo -e "${CHECKMARK}"
-    else
-        echo -e "${ERROR}"
-        print_warning "Failed to update passwords - you may need to update manually"
+        if psql postgres -c "ALTER USER mira_admin WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1 && \
+           psql postgres -c "ALTER USER mira_dbuser WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1; then
+            echo -e "${CHECKMARK}"
+        else
+            echo -e "${ERROR}"
+            print_warning "Failed to update passwords - you may need to update manually"
+        fi
     fi
 fi
 

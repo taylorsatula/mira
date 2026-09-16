@@ -112,9 +112,31 @@ class UnitOfWork:
             # loaded — a stale write would re-cache the pre-collapse message
             # set. A skipped write is not an error: the cache stays empty and
             # the next get_or_create() reloads collapse-correct state from DB.
-            self.pool.valkey_cache.set_continuum_if_epoch(
-                self.continuum.messages, self.cache_epoch
-            )
+            # The cache is an optional layer atop the durable DB write that just
+            # landed: a cache failure must not fail the request, but a stale
+            # cache entry must not be left serving either.
+            try:
+                self.pool.valkey_cache.set_continuum_if_epoch(
+                    self.continuum.messages, self.cache_epoch
+                )
+            except Exception:
+                logger.error(
+                    "Valkey cache write failed after DB commit for continuum %s; "
+                    "users may see stale conversation until the cache reloads. "
+                    "The turn itself is safely persisted.",
+                    self.continuum.id,
+                    exc_info=True,
+                )
+                try:
+                    self.pool.valkey_cache.invalidate_continuum()
+                except Exception:
+                    logger.critical(
+                        "Valkey cache invalidation failed for continuum %s after a "
+                        "failed cache write; stale cache may serve until the next "
+                        "collapse forces a reload. The turn itself is safely persisted.",
+                        self.continuum.id,
+                        exc_info=True,
+                    )
 
             logger.debug(f"Committed {len(self.pending_messages)} messages for continuum {self.continuum.id}")
 
@@ -206,9 +228,10 @@ class ContinuumPool:
                 )
                 continuum.apply_cache(messages)
 
-                # Cache in Valkey for future requests
+                # Epoch captured before the DB read — a collapse in between
+                # means a newer cache entry exists; don't clobber it.
                 if messages:
-                    self.valkey_cache.set_continuum(messages)
+                    self.valkey_cache.set_continuum_if_epoch(messages, epoch)
 
             else:
                 # CONTINUING SESSION - cache hit

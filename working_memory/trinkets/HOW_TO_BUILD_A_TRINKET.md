@@ -105,7 +105,7 @@ self.working_memory.publish_trinket_update(
 )
 ```
 
-`publish_trinket_update()` is a no-op with a warning until the first compose of the process sets `_current_continuum_id`.
+`publish_trinket_update()` is a no-op with a warning until the first compose of the process sets `_current_continuum_ids[user_id]`.
 
 ### Pattern 3: Custom Update Handling
 

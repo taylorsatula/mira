@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from tools.repo import Tool
 from tools.registry import registry
+from utils.prompt_injection_defense import wrap_untrusted
 
 # Define configuration class for EmailTool
 class EmailToolConfig(BaseModel):
@@ -947,12 +948,12 @@ class EmailTool(Tool):
                     # Create the result with content
                     email_info = {
                         "id": email_id,
-                        "from": self._decode_header(msg.get("From", "")),
+                        "from": wrap_untrusted(self._decode_header(msg.get("From", "")), "email_header"),
                         "to": self._decode_header(msg.get("To", "")),
                         "cc": self._decode_header(msg.get("Cc", "")),
-                        "subject": self._decode_header(msg.get("Subject", "")),
+                        "subject": wrap_untrusted(self._decode_header(msg.get("Subject", "")), "email_header"),
                         "date": self._decode_header(msg.get("Date", "")),
-                        "body_text": body["text"],
+                        "body_text": wrap_untrusted(body["text"], "email_body"),
                         "has_attachments": body["has_attachments"],
                         "flags": flags,
                     }
@@ -984,8 +985,8 @@ class EmailTool(Tool):
                     # Create header dictionary
                     email_info = {
                         "id": email_id,
-                        "from": self._decode_header(headers.get("From", "")),
-                        "subject": self._decode_header(headers.get("Subject", "")),
+                        "from": wrap_untrusted(self._decode_header(headers.get("From", "")), "email_header"),
+                        "subject": wrap_untrusted(self._decode_header(headers.get("Subject", "")), "email_header"),
                         "date": self._decode_header(headers.get("Date", "")),
                         "flags": flags
                     }
@@ -1243,12 +1244,12 @@ class EmailTool(Tool):
                     # Create the result
                     result = {
                         "id": email_id,
-                        "from": self._decode_header(msg.get("From", "")),
+                        "from": wrap_untrusted(self._decode_header(msg.get("From", "")), "email_header"),
                         "to": self._decode_header(msg.get("To", "")),
                         "cc": self._decode_header(msg.get("Cc", "")),
-                        "subject": self._decode_header(msg.get("Subject", "")),
+                        "subject": wrap_untrusted(self._decode_header(msg.get("Subject", "")), "email_header"),
                         "date": self._decode_header(msg.get("Date", "")),
-                        "body_text": body["text"],
+                        "body_text": wrap_untrusted(body["text"], "email_body"),
                         "has_attachments": body["has_attachments"],
                         "flags": flags
                     }
