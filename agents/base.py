@@ -529,7 +529,11 @@ class SidebarAgent(ABC):
         """Run injection defense on raw_content, write sanitized_content back.
 
         Called when sanitize_untrusted_input is True, before the LLM loop.
-        Raises ValueError if content is rejected (agent exits cleanly).
+        Uses require_llm_detection=True: every payload gets full semantic
+        analysis (no length/pattern short-circuit, chunked up to 8000 chars)
+        and any gate failure — LLM unavailable, provider error, unparseable
+        verdict, or high-confidence detection — raises ValueError here so
+        the agent exits cleanly through _exit('rejected').
         """
         from utils.prompt_injection_defense import (
             PromptInjectionDefense,
