@@ -511,7 +511,7 @@ class LTMemoryDB:
                   AND (m.expires_at IS NULL OR m.expires_at > NOW())
                   AND m.is_archived = FALSE
                   AND m.embedding IS NOT NULL
-                  AND 1 - (m.embedding <=> %(query_embedding)s::vector) >= %(similarity_threshold)s
+                  AND (m.embedding <=> %(query_embedding)s::vector) <= %(max_distance)s
             )
             UNION ALL
             (
@@ -527,7 +527,7 @@ class LTMemoryDB:
                 FROM global_memories_runtime gm
                 WHERE gm.is_archived = FALSE
                   AND gm.embedding IS NOT NULL
-                  AND 1 - (gm.embedding <=> %(query_embedding)s::vector) >= %(similarity_threshold)s
+                  AND (gm.embedding <=> %(query_embedding)s::vector) <= %(max_distance)s
             )
             ORDER BY similarity_score DESC
             LIMIT %(limit)s
@@ -536,7 +536,11 @@ class LTMemoryDB:
             results = session.execute_query(query, {
                 'query_embedding': query_embedding,
                 'limit': limit,
-                'similarity_threshold': similarity_threshold,
+                # Distance spelling of the similarity threshold — algebraically
+                # identical (`1 - d >= t ⟺ d <= 1 - t`), one fewer computed
+                # expression in the WHERE clause; both forms filter after the
+                # scan, so neither is index-driven.
+                'max_distance': 1.0 - similarity_threshold,
                 'min_importance': min_importance
             })
 
@@ -1296,16 +1300,20 @@ class LTMemoryDB:
     def get_memories_for_entity(
         self,
         entity_id: UUID,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        limit: Optional[int] = None
     ) -> List[Memory]:
         """
-        Get all memories linking to an entity.
+        Get memories linking to an entity.
 
-        Queries memories.entity_links JSONB array.
+        Queries memories.entity_links JSONB array. When limit is given, the
+        cap is applied in SQL (ORDER BY created_at DESC LIMIT N) so unbounded
+        rows are never fetched then discarded.
 
         Args:
             entity_id: Entity UUID
             user_id: User ID (uses ambient context if None)
+            limit: Optional cap on rows returned (most recent first)
 
         Returns:
             List of Memory models
@@ -1323,7 +1331,12 @@ class LTMemoryDB:
             # JSONB containment query
             entity_filter = json.dumps([{"uuid": str(entity_id)}])
 
-            results = session.execute_query(query, (entity_filter,))
+            params: list = [entity_filter]
+            if limit is not None:
+                query += " LIMIT %s"
+                params.append(int(limit))
+
+            results = session.execute_query(query, tuple(params))
             return [Memory(**row) for row in results]
 
     def get_entity(

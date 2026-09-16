@@ -221,8 +221,9 @@ class MemoryTool(Tool):
         self._hybrid_searcher = HybridSearcher(self._memory_db)
         self._valkey = get_valkey_client()
 
-        # HubDiscoveryService is lazy-loaded only when search needs entity discovery
-        # It has its own EntityExtractor, but only loads when actually used
+        # HubDiscoveryService is lazy-loaded only when search needs entity
+        # discovery; the EntityExtractor it uses is constructed there
+        # (process-wide cached model) and the search feeds its entities directly
         self._hub_discovery = None
 
     def _get_hub_discovery(self):
@@ -319,8 +320,7 @@ class MemoryTool(Tool):
         # Extract entities from query for hub discovery (lazy-load EntityExtractor)
         extracted_entities = []
         if include_hub_discovery:
-            # Pre-warm the singleton; the value itself is unused
-            _ = self._get_hub_discovery()
+            self._get_hub_discovery()
             extracted_entities = list(self._entity_extractor.extract_entities(query))
 
         # Run parallel retrieval

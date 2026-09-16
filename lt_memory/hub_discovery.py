@@ -141,37 +141,52 @@ class HubDiscoveryService:
             Set of matched entity UUIDs
         """
         matched_ids: Set[UUID] = set()
+        if not entity_names:
+            return matched_ids
 
-        for name in entity_names:
-            with self.db.session_manager.get_session(get_current_user_id()) as session:
-                # Exact match first (fast path)
-                exact = session.execute_single(
-                    "SELECT id FROM entities WHERE name = %(name)s AND is_archived = FALSE LIMIT 1",
-                    {'name': name}
-                )
-                if exact:
-                    matched_ids.add(exact['id'])
-                    logger.debug(f"Exact matched entity '{name}'")
-                    continue
+        # One session and two statements total, regardless of how many entity
+        # names were extracted — the per-name loop cost a pool checkout plus a
+        # set_config RLS round-trip per name.
+        with self.db.session_manager.get_session(get_current_user_id()) as session:
+            # Exact matches in one statement. DISTINCT ON mirrors the old
+            # LIMIT 1: one row per name when duplicate names exist.
+            exact_rows = session.execute_query("""
+                SELECT DISTINCT ON (name) id, name
+                FROM entities
+                WHERE name = ANY(%(names)s)
+                  AND is_archived = FALSE
+            """, {'names': list(entity_names)})
+            exact_names: Set[str] = set()
+            for row in exact_rows:
+                matched_ids.add(row['id'])
+                exact_names.add(row['name'])
+                logger.debug(f"Exact matched entity '{row['name']}'")
 
-                # Trigram similarity fallback
-                fuzzy = session.execute_single("""
-                    SELECT id, name, similarity(name, %(name)s) AS sim_score
-                    FROM entities
-                    WHERE similarity(name, %(name)s) > %(threshold)s
-                      AND is_archived = FALSE
-                    ORDER BY sim_score DESC
-                    LIMIT 1
+            # Trigram similarity fallback: best match per unmatched name via
+            # a lateral join — one statement instead of one query per name.
+            remaining = [n for n in entity_names if n not in exact_names]
+            if remaining:
+                fuzzy_rows = session.execute_query("""
+                    SELECT n.name AS query_name, e.id, e.name,
+                           similarity(e.name, n.name) AS sim_score
+                    FROM unnest(%(names)s::text[]) AS n(name)
+                    JOIN LATERAL (
+                        SELECT id, name
+                        FROM entities
+                        WHERE similarity(name, n.name) > %(threshold)s
+                          AND is_archived = FALSE
+                        ORDER BY similarity(name, n.name) DESC
+                        LIMIT 1
+                    ) e ON TRUE
                 """, {
-                    'name': name,
+                    'names': remaining,
                     'threshold': similarity_threshold
                 })
-
-                if fuzzy:
-                    matched_ids.add(fuzzy['id'])
+                for row in fuzzy_rows:
+                    matched_ids.add(row['id'])
                     logger.debug(
-                        f"Fuzzy matched '{name}' → '{fuzzy['name']}' "
-                        f"(similarity: {fuzzy['sim_score']:.3f})"
+                        f"Fuzzy matched '{row['query_name']}' → '{row['name']}' "
+                        f"(similarity: {row['sim_score']:.3f})"
                     )
 
         return matched_ids
@@ -194,15 +209,34 @@ class HubDiscoveryService:
         Returns:
             Deduplicated list of Memory objects
         """
-        memories = []
+        memories: List[Memory] = []
         seen_ids: Set[UUID] = set()
+        if not entity_ids:
+            return memories
 
-        for entity_id in entity_ids:
-            entity_memories = self.db.get_memories_for_entity(entity_id)
-            # Cap per entity to prevent explosion
-            capped_memories = entity_memories[:limit_per_entity]
-
-            for memory in capped_memories:
+        # One batched statement: per-entity top-N via a lateral join. The
+        # previous loop fetched every memory linked to each entity (including
+        # 768-float embeddings) and sliced in Python.
+        with self.db.session_manager.get_session(get_current_user_id()) as session:
+            rows = session.execute_query("""
+                SELECT m.*
+                FROM unnest(%(ids)s::uuid[]) AS e(entity_id)
+                JOIN LATERAL (
+                    SELECT *
+                    FROM memories
+                    WHERE entity_links @> jsonb_build_array(
+                              jsonb_build_object('uuid', e.entity_id::text)
+                          )
+                      AND is_archived = FALSE
+                    ORDER BY created_at DESC
+                    LIMIT %(per_entity)s
+                ) m ON TRUE
+            """, {
+                'ids': [str(entity_id) for entity_id in entity_ids],
+                'per_entity': limit_per_entity
+            })
+            for row in rows:
+                memory = Memory(**row)
                 if memory.id not in seen_ids:
                     memories.append(memory)
                     seen_ids.add(memory.id)
@@ -231,6 +265,10 @@ class HubDiscoveryService:
         """
         scored_memories = []
 
+        # Hoisted query norm: recomputing it per memory is a wasted allocation
+        # and BLAS call per candidate row.
+        expansion_norm = np.linalg.norm(expansion_embedding)
+
         for memory in memories:
             if memory.embedding is None:
                 logger.debug(f"Memory {memory.id} has no embedding, skipping")
@@ -239,7 +277,7 @@ class HubDiscoveryService:
             # Cosine similarity between memory and expansion
             mem_embedding = np.array(memory.embedding)
             dot_product = np.dot(expansion_embedding, mem_embedding)
-            norm_product = np.linalg.norm(expansion_embedding) * np.linalg.norm(mem_embedding)
+            norm_product = expansion_norm * np.linalg.norm(mem_embedding)
             similarity = float(dot_product / (norm_product + 1e-9))
 
             # Store similarity for debugging/tracing

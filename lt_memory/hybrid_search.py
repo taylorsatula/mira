@@ -81,19 +81,33 @@ class HybridSearcher:
         min_importance = min_importance if min_importance is not None else HYBRID_DEFAULT_MIN_IMPORTANCE
         oversample = HYBRID_OVERSAMPLE_MULTIPLIER
 
-        # Run searches in parallel (would be async in production)
-        bm25_results = self._bm25_search(
-            query_text,
-            limit=limit * oversample,
-            min_importance=min_importance
-        )
+        # Run searches in parallel. BM25 (tsvector/GIN) and vector (pgvector)
+        # are independent Postgres round-trips; each opens its own pooled
+        # session, so no shared-connection hazard. Context is copied so RLS
+        # user scoping travels into the worker threads.
+        from concurrent.futures import ThreadPoolExecutor
+        from contextvars import copy_context
 
-        vector_results = self._vector_search(
-            query_embedding,
-            limit=limit * oversample,
-            similarity_threshold=similarity_threshold,
-            min_importance=min_importance
-        )
+        def _run_bm25():
+            return self._bm25_search(
+                query_text,
+                limit=limit * oversample,
+                min_importance=min_importance
+            )
+
+        def _run_vector():
+            return self._vector_search(
+                query_embedding,
+                limit=limit * oversample,
+                similarity_threshold=similarity_threshold,
+                min_importance=min_importance
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            bm25_future = executor.submit(copy_context().run, _run_bm25)
+            vector_future = executor.submit(copy_context().run, _run_vector)
+            bm25_results = bm25_future.result()
+            vector_results = vector_future.result()
 
         weights = {
             "recall": (INTENT_RECALL_BM25, INTENT_RECALL_VECTOR),
@@ -131,6 +145,10 @@ class HybridSearcher:
 
         Searches both personal memories (RLS-filtered) and global memories (no RLS)
         via UNION. Results are tagged with source='personal' or source='global'.
+        The embedding column is projected as NULL: the 768-float jsonb decode per
+        row is pure dead weight here — RRF fusion uses only ranks and scores,
+        and vector-sourced duplicates overwrite the map entry with the
+        vector-search row (which carries the embedding).
 
         Returns list of (Memory, score) tuples.
         """
@@ -139,7 +157,7 @@ class HybridSearcher:
         with self.db.session_manager.get_session(resolved_user_id) as session:
             query = """
             (
-                SELECT m.id, m.user_id, m.text, m.embedding, m.importance_score,
+                SELECT m.id, m.user_id, m.text, NULL::jsonb AS embedding, m.importance_score,
                        m.created_at, m.updated_at, m.expires_at, m.access_count,
                        m.mention_count, m.last_accessed, m.happens_at,
                        m.inbound_links, m.outbound_links, m.entity_links,
@@ -156,7 +174,7 @@ class HybridSearcher:
             )
             UNION ALL
             (
-                SELECT gm.id, NULL::uuid as user_id, gm.text, gm.embedding, gm.importance_score,
+                SELECT gm.id, NULL::uuid as user_id, gm.text, NULL::jsonb AS embedding, gm.importance_score,
                        gm.created_at, gm.updated_at, NULL::timestamptz as expires_at, 0 as access_count,
                        0 as mention_count, NULL::timestamptz as last_accessed, gm.happens_at,
                        gm.inbound_links, gm.outbound_links, gm.entity_links,

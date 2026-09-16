@@ -6,6 +6,7 @@ configuration (parser/lemmatizer disabled). Performs dynamic normalization
 and fuzzy clustering without hardcoded entity lists.
 """
 import logging
+import threading
 from typing import List, Dict, Set, Optional
 
 from lt_memory.models import NamedEntity
@@ -17,6 +18,37 @@ from rapidfuzz import fuzz
 from config import config
 
 logger = logging.getLogger(__name__)
+
+# Process-wide spaCy model cache. The Language object is a user-agnostic,
+# read-only resource; loading en_core_web_lg deserializes hundreds of MB from
+# disk (seconds). EntityExtractor is constructed per tool invocation (the tool
+# repository mints fresh tool instances per call), so without this cache every
+# memory search would reload the model. The lock guards first load against
+# concurrent tool threads and serializes NER inference, which spaCy does not
+# document as thread-safe.
+_NLP_MODEL = None
+_NLP_LOCK = threading.Lock()
+
+
+def _get_nlp_model():
+    """Load en_core_web_lg once per process."""
+    global _NLP_MODEL
+    if _NLP_MODEL is None:
+        with _NLP_LOCK:
+            if _NLP_MODEL is None:
+                try:
+                    _NLP_MODEL = spacy.load(
+                        "en_core_web_lg",
+                        disable=["parser", "lemmatizer", "textcat"]
+                    )
+                    logger.info("EntityExtractor initialized with en_core_web_lg (optimized)")
+                except OSError:
+                    logger.error(
+                        "en_core_web_lg not found. Install with: "
+                        "python -m spacy download en_core_web_lg"
+                    )
+                    raise
+    return _NLP_MODEL
 
 
 class EntityExtractor:
@@ -43,20 +75,8 @@ class EntityExtractor:
     }
 
     def __init__(self):
-        """Initialize entity extractor with optimized spaCy model."""
-        try:
-            # Load en_core_web_lg with disabled components for speed
-            self.nlp = spacy.load(
-                "en_core_web_lg",
-                disable=["parser", "lemmatizer", "textcat"]
-            )
-            logger.info("EntityExtractor initialized with en_core_web_lg (optimized)")
-        except OSError:
-            logger.error(
-                "en_core_web_lg not found. Install with: "
-                "python -m spacy download en_core_web_lg"
-            )
-            raise
+        """Initialize entity extractor with the shared spaCy model."""
+        self.nlp = _get_nlp_model()
 
     def extract_entities(self, text: str) -> Set[str]:
         """
@@ -74,7 +94,8 @@ class EntityExtractor:
         if not text or len(text) < 10:
             return set()
 
-        doc = self.nlp(text)
+        with _NLP_LOCK:
+            doc = self.nlp(text)
         entities = set()
 
         for ent in doc.ents:
@@ -109,7 +130,8 @@ class EntityExtractor:
         if not text or len(text) < 10:
             return []
 
-        doc = self.nlp(text)
+        with _NLP_LOCK:
+            doc = self.nlp(text)
         entities: List[NamedEntity] = []
 
         for ent in doc.ents:
@@ -144,9 +166,13 @@ class EntityExtractor:
         if not texts:
             return []
 
-        # Process in batch using spaCy pipe for efficiency
+        # Process in batch under the shared-model lock: nlp.pipe mutates
+        # internal pipeline state during batching and must not interleave with
+        # other inference on the same Language object.
         results = []
-        for doc in self.nlp.pipe(texts, batch_size=config.lt_memory.ner_batch_size):
+        with _NLP_LOCK:
+            docs = list(self.nlp.pipe(texts, batch_size=config.lt_memory.ner_batch_size))
+        for doc in docs:
             entities = set()
             for ent in doc.ents:
                 if ent.label_ in self.ENTITY_TYPES:

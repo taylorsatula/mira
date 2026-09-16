@@ -156,7 +156,7 @@ class Memory(BaseModel):
     id: UUID
     user_id: Optional[UUID] = None  # None for global memories
     text: str
-    embedding: Optional[List[float]] = None  # mdbr-leaf-ir-asym (768d)
+    embedding: Optional[List[float]] = None  # mdbr-leaf-ir-asym (768d); None on BM25-only hybrid-search results — do not consume on the fused-result path
     importance_score: float = Field(ge=0.0, le=1.0)
     created_at: datetime
     updated_at: Optional[datetime] = None
