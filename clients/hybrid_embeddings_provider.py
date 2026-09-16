@@ -114,10 +114,21 @@ class HybridEmbeddingsProvider:
         #    ingestion and encode_realtime() for queries. A replacement model must
         #    either be asymmetric with the same two-mode contract or every call
         #    site must be changed.
-        self.model = SentenceTransformer(
-            "MongoDB/mdbr-leaf-ir-asym",
-            cache_folder=None  # Uses default HuggingFace cache directory
-        )
+        # Offline-first load: when the model is already in the local HF cache
+        # this skips the Hub availability check (~2s network per process load,
+        # paid by both the POST gate child and the serving process). A cache miss
+        # falls back to the online load so fresh installs still download.
+        try:
+            self.model = SentenceTransformer(
+                "MongoDB/mdbr-leaf-ir-asym",
+                cache_folder=None,  # Uses default HuggingFace cache directory
+                local_files_only=True,
+            )
+        except Exception:
+            self.model = SentenceTransformer(
+                "MongoDB/mdbr-leaf-ir-asym",
+                cache_folder=None,
+            )
 
         # Initialize caches for query and document embeddings
         if cache_enabled:

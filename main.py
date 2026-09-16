@@ -126,6 +126,12 @@ async def lifespan(app: FastAPI):
         logger.critical(f"Failed to initialize LLMProvider: {e}")
         raise RuntimeError(f"llm_provider initialization failed - cannot start MIRA: {e}") from e
 
+    # Warm the dialect registry: importing every dialect module (including the
+    # anthropic SDK) costs hundreds of milliseconds; doing it lazily would land
+    # on the first LLM request of every fresh process instead of here at boot.
+    from clients.llm.dialect_registry import get_registry
+    get_registry().discover()
+
     # Initialize lt_memory factory following MIRA's singleton pattern
     logger.info("Initializing lt_memory factory...")
     try:
