@@ -24,6 +24,18 @@ from dateutil import parser
 
 logger = logging.getLogger(__name__)
 
+# Memoized host timezone: /etc reads are not free and this runs on hot paths
+_DEFAULT_TZ: Optional[str] = None
+
+# Validation result cache: available_timezones() walks the entire TZ database
+# directory, and validate_timezone runs per message during prompt composition.
+# Keyed by the exact candidate name; entries never change during process life.
+_VALID_TZ_CACHE: set[str] = set()
+_INVALID_TZ_CACHE: set[str] = set()
+
+# pytz.all_timezones as a set for O(1) membership
+_PYTZ_TIMEZONES: frozenset[str] = frozenset(pytz.all_timezones)
+
 # Dictionary mapping common abbreviations to IANA timezone names
 COMMON_TIMEZONE_ALIASES = {
     "EST": "America/New_York",
@@ -76,9 +88,16 @@ def validate_timezone(tz_name: str) -> str:
 
     # Check if it's a valid IANA timezone
     try:
-        # Try both pytz and zoneinfo to be thorough
-        if tz_name in available_timezones() or tz_name in pytz.all_timezones:
+        # Memoized check: available_timezones() walks the whole TZ database
+        # directory, and this validation runs per message during prompt
+        # composition, so the result is cached per candidate name.
+        if tz_name in _VALID_TZ_CACHE:
             return tz_name
+        if tz_name not in _INVALID_TZ_CACHE:
+            if tz_name in available_timezones() or tz_name in _PYTZ_TIMEZONES:
+                _VALID_TZ_CACHE.add(tz_name)
+                return tz_name
+            _INVALID_TZ_CACHE.add(tz_name)
     except (pytz.exceptions.UnknownTimeZoneError, LookupError):
         # Strict validation - if not in our alias list and not a valid IANA name, error
         logger.error(f"Timezone validation failed for '{tz_name}' - pytz lookup raised exception")
@@ -102,11 +121,22 @@ def get_default_timezone() -> str:
     Checks /etc/timezone (Debian-family) first, then the /etc/localtime
     symlink (macOS and most Linux distros embed the zoneinfo path in the
     link target). A detected name that fails IANA validation falls back to
-    UTC rather than poisoning downstream datetime handling.
+    UTC rather than poisoning downstream datetime handling. The result is
+    memoized: the host timezone cannot change during process life, and this
+    runs on message-formatting paths.
 
     Returns:
         IANA timezone name
     """
+    global _DEFAULT_TZ
+    if _DEFAULT_TZ is not None:
+        return _DEFAULT_TZ
+    tz = _detect_default_timezone()
+    _DEFAULT_TZ = tz
+    return tz
+
+
+def _detect_default_timezone() -> str:
     # Plain-name file: /etc/timezone holds a bare IANA name
     try:
         with open("/etc/timezone", "r") as f:
