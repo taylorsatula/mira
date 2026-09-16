@@ -93,6 +93,9 @@ ESSENTIAL_TOOLS = [
     "web_tool", "invokeother_tool", "continuum_tool", "reminder_tool",
     "memory_tool", "domaindoc_tool", "forage_tool", "sidebaragents_tool",
     "email_tool", "phoneafriend_tool",
+    # Host-access: the guardrailed shell tool is always loaded rather than
+    # invokeother-loaded.
+    "bash_tool",
     # Heartbeat wake cycle: the scheduler-initiated turn must always be able to
     # record its keepsleeping/breakout decision.
     "heartbeat_tool"

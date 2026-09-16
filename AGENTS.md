@@ -41,6 +41,7 @@ directory whose map is missing is a defect.
 | `lt_memory/` | Long-term memory: storage, scoring, retrieval, linking, entity services |
 | `lt_memory/processing/` | Extraction pipeline and consolidation |
 | `scripts/` | Operational CLI entry points run against a deployed service |
+| `tests/protected/` | Admission-gated permanent verification batteries; the exact-phrase authorization rule and the no-mock, no-drift, cannot-execute requirements |
 | `tests/tmp/` | Display exhibit for the disposable-probe pattern: autodeleted-on-sight test policy, one exemplary probe |
 | `tools/` | Tool framework: base class, repository, config registry |
 | `tools/implementations/` | All concrete LLM-callable tools |
@@ -224,6 +225,7 @@ Probes are production code: normal review discipline, the same credentials plumb
 
 `tests/tmp/` holds one exemplary disposable probe as a display exhibit of this pattern — any test file added there is autodeleted instantly; see `tests/tmp/AGENTS.md`.
 
+`tests/protected/` is the sole authorized exception to the test-file prohibition above: permanent, offline-runnable batteries admitted only when the user types the exact phrase `AUTHORIZE PROTECTED TEST SAVE`. Those files are never autodeleted — the `tests/tmp/` reflex does not apply there. The exception waives disposability only, never realism: no mocks, no stubs, no transcription of the code under test. Admission rule and battery requirements are owned by `tests/protected/AGENTS.md`.
 
 ### ⚡ Realtime verification loop (proportionate by behavioral surface)
 
