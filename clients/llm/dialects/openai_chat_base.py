@@ -233,6 +233,7 @@ class OpenAIChatBase(Dialect):
         usage: Usage | None = None
         detected_tool_ids: set[str] = set()
         saw_reasoning_delta = False
+        saw_done = False
 
         with http_client.stream(
             "POST",
@@ -258,6 +259,7 @@ class OpenAIChatBase(Dialect):
                 if isinstance(line, bytes):
                     line = line.decode("utf-8", errors="replace")
                 if line == "data: [DONE]":
+                    saw_done = True
                     break
                 if not line.startswith("data: "):
                     continue
@@ -429,6 +431,17 @@ class OpenAIChatBase(Dialect):
                             )
 
         self._active_response = None
+
+        # A stream that ends without [DONE] and without a finish_reason was cut
+        # mid-response (connection close, gateway fault). Parsing the partial
+        # accumulation would report truncated tool arguments as "missing required
+        # fields" or hand the user a silently truncated reply as complete.
+        if not saw_done and finish_reason is None:
+            raise ProviderProtocolError(
+                self.endpoint_url,
+                "streaming",
+                "Stream ended without [DONE] and without finish_reason — response truncated",
+            )
 
         if usage is None:
             logger.warning(
