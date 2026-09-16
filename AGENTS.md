@@ -57,153 +57,44 @@ file). The harness loads the full ancestor chain whenever a file in the
 directory is read, so those maps are present in context together with this
 one.
 
-**Section order:** `# <dir>/ — <role, one clause>` → `## Rules` → `## Files`
-→ `## Wiring` (omit if the directory has no cross-file edges) → at most one
-deep-dive titled with a domain term. Bullets everywhere; prose only inside
-`###` subsections and the deep-dive; `###` subsections may live inside
-`## Rules` and do not consume the deep-dive slot. A reader in another
-directory decides relevance from the title alone.
+**Shape, authoring rules, and audits:** the full map spec — fixed section order,
+the four Rule requirements, cross-map reciprocity (each fact has exactly one
+owning map; others cite it in one line), `## Files` and anchor conventions, the
+complete maintenance trigger table, and the two run-before-committing audits
+(path-anchor and reciprocity) — lives in `docs/AGENTS_MAP_SPEC.md`.
 
-**`## Rules` — each bullet must satisfy all four requirements:**
-1. Describes a constraint that is not visible from reading one file in this
-   directory.
-2. Does not restate global doctrine from this root file. Ancestor maps are
-   additional context, not repetition of it.
-3. Is understandable using only this map and its ancestor maps.
-4. Names the enforcing symbols or files in backticks. State the rule's
-   content here; use the anchor to locate the enforcement. Do not summarize
-   another map's rule — cite the map or symbol that owns it.
+The high-frequency obligations, binding in every session: map updates are part
+of the same commit as the triggering change — a new/deleted/renamed file updates
+its directory's `## Files` bullet; a behavior or contract change greps its map
+for the old statement; a wiring edge is stated fully by the owner map and cited
+one-line by every counterpart; a directory reaching the coverage gate gets a
+map. Every bullet must change agent behavior — delete on sight what doesn't
+(the requirement-5 gate and line budgets live in `docs/AGENTS_MAP_SPEC.md`).
+Run the audits in `docs/AGENTS_MAP_SPEC.md` before committing any change
+that touched source files or maps. When in doubt, update the map — an
+unnecessary edit costs a line; a missed one misleads every session.
 
-**Cross-map rules:**
-- Each fact is documented in exactly one of the maps that load together. A
-  constraint that applies at both parent and child level may appear in both;
-  the non-owning map states it in one line and cites the owning map.
-- **Reciprocity:** a cross-directory constraint is stated in full by the map
-  whose code enforces it; every other map it binds carries a one-line citation
-  naming the owner. Non-owning-only statements and citations to dead owners
-  are defects.
-- Adding a member to a registry, enum, or contract family requires
-  coordinated edits in several files. Document the full list once, in order,
-  with the file anchor and the consequence of skipping each step.
-- `## Wiring` documents edges where this directory is an endpoint, plus
-  ordering constraints within this directory. Data flows owned by ancestor
-  code are cited by owner, not restated.
-
-**`## Files`:** one bullet per file: what it owns, entry points (names an
-agent would search for), non-obvious gotchas. `Consumers:` (frontend maps:
-`Calls:`) only for files used across directory boundaries; those fields
-belong in `## Files` only — elsewhere, anchors go in prose. `__init__.py`
-and doc files get an honest entry; a stale doc gets a staleness Rule.
-
-**Anchors:** paths are repo-root-relative; bare file names in `## Files`
-resolve against the map's own directory. Do not cite line numbers; they
-change on the next edit of the target file.
-
-**Do not include:** restatements of root doctrine; change history ("we used
-to X"); content derivable from the file's own docstring; unspecific
-summaries; filler to lengthen a map. (Root itself may briefly restate
-cross-cutting patterns that maps also carry — the one-home rule applies
-between maps, not between root and a map.)
-
-**Maintenance (required — trigger table, not judgment):** map updates are
-part of the same commit as the triggering change. None of the actions below
-is optional. When in doubt, update the map — an unnecessary edit costs a
-line; a missed one misleads every session.
-
-| Event | Required action |
-|---|---|
-| New file in a mapped directory | Add its `## Files` bullet |
-| Deleted or renamed file | Update or remove its `## Files` bullet; fix any anchor citing the old path |
-| Behavior or contract change in a file | Grep that directory's map for the changed symbol; update the Rule, Files gotcha, or Wiring edge stating the old behavior |
-| New member of a registry, enum, or contract family | Update the blast-radius Rule in the owning map |
-| Directory reaches ≥2 source files, or gains an invariant its parent's map does not own | Create its `AGENTS.md` (shape above) |
-| File moved between directories | Update both maps' `## Files` sections |
-| New map created or removed | Update the parent map's `## Files` pointer |
-| Wiring edge added (import, event subscribe/publish, injected dependency, schema coupling, shared contract) | Owner map states it fully in `## Wiring`; counterpart map(s) get the one-line citation — same commit as the code. |
-| Wiring edge removed or renamed | Grep all maps for the edge's symbols (file, event class, function, key names); delete the owner statement and every citation to it. Same commit. |
-
-**Enforcement:** the audits below are the check that no trigger was missed.
-Run them before committing any change that touched source files or maps. A
-clean audit means no map action was skipped; a flagged anchor is a skipped
-trigger. For changes the audit cannot express, the grep-the-map step in the
-table is the check.
-
-**Audit before committing a map change:**
-
-    for m in **/AGENTS.md; do
-      d=$(dirname "$m")
-      # path anchors (repo-root-relative), taken from everything EXCEPT the
-      # ## Files section — Files names resolve against the map's directory,
-      # including subdirectory-qualified names like agents/base_system.txt:
-      awk '/^## Files/{s=1;next} /^## /{s=0} !s' "$m" \
-        | grep -ohE '`[^`]*\.(py|txt|sql|md|js|sh|hcl|html|css|json)(:[A-Za-z_][A-Za-z0-9_]*)?`' \
-        | sed 's/`//g; s/:[A-Za-z_][A-Za-z0-9_]*$//' | grep / | grep -v '^/' | grep -v '\\*' | grep -v ' ' | sort -u \
-        | while read p; do [ -e "$p" ] || echo "MISSING-PATH ($m): $p"; done
-      # (absolute paths like /opt/vault/... refer to the deploy host, not the
-      #  repo; the audit skips them)
-      # bare file names from ## Files only, sub-bullets included:
-      awk '/^## Files/{f=1;next} /^## /{f=0} f' "$m" \
-        | grep -ohE '^[[:space:]]*- `[^`]*`' | sed 's/^[[:space:]]*- `//; s/`$//' | sort -u \
-        | while read p; do [ -e "$d/$p" ] || echo "MISSING-FILE ($m): $p"; done
-    done
-
-The anchor audit above checks path existence. The reciprocity check below is
-the second half: every backticked file reference a map makes to a file outside
-its own subtree must be mentioned somewhere in that file's loading set (the
-file's ancestor maps) — otherwise the reference is invisible to anyone
-working on the target. Run it after the anchor audit; it prints one line per
-invisible reference.
-
-    python3 - <<'EOF'
-    import os, re, subprocess
-    repo = subprocess.run(["git","rev-parse","--show-toplevel"],capture_output=True,text=True).stdout.strip()
-    maps = [p for p in subprocess.run(["git","ls-files"],capture_output=True,text=True).stdout.splitlines() if p.endswith("AGENTS.md")]
-    TOK = re.compile(r"`([^`]*\.(?:py|txt|sql|md|js|sh|json)(?::[A-Za-z_][A-Za-z0-9_]*)?)`")
-    byd = {os.path.dirname(os.path.join(repo,p)) or repo: p for p in maps}
-    def loadset(d):
-        out,cur = [],repo
-        for part in os.path.relpath(d,repo).split(os.sep):
-            if cur in byd: out.append(byd[cur])
-            cur = os.path.join(cur,part)
-        if cur in byd: out.append(byd[cur])
-        return out
-    for mp in maps:
-        dm = os.path.dirname(os.path.join(repo,mp))
-        for tok in TOK.findall(open(os.path.join(repo,mp)).read()):
-            base = tok.split(":")[0]
-            if base.endswith("AGENTS.md"): continue
-            p = os.path.normpath(os.path.join(repo,base))
-            if not os.path.exists(p) or os.path.dirname(p) == dm: continue
-            if dm != repo and os.path.commonpath([dm, p]) == dm: continue  # own subtree
-            name = os.path.basename(base)
-            if not any(name in open(os.path.join(repo,m)).read() for m in loadset(os.path.dirname(p))):
-                print(f"INVISIBLE ({mp}): {base}")
-    EOF
 
 ## Repo root files
 
-- `main.py` — application entry point and wiring hub. Owns: router mounting
-  (`/v0/api` from `cns/api`, `/v0/auth` from `auth`, `websocket_chat` at `/v0`),
-  the middleware stack (`SecurityHeadersMiddleware`), the global `APIError` →
-  HTTP-status mapping, shutdown ordering (`websocket_chat.close_all_connections()`
-  awaited during shutdown), startup sequencing (`lifespan` performs first
-  construction of the LT_Memory factory; `create_cns_orchestrator()` builds the
-  CNS graph; `register_sidebar_dispatcher_job()` registers the sidebar scheduler;
-  `register_heartbeat_job()` registers the heartbeat wake cycle (interval + boot
-  tick, double-gated on `config.heartbeat.enabled`);
-  `load_announcement()` runs once), and the pre-server POST gate before the
-  server binds. The Valkey startup flush preserves `heartbeat:` alongside the
-  auth prefixes so an external heartbeat cancel survives restarts. Per-directory contracts citing these behaviors live in
+- `main.py` — application entry point and wiring hub: router mounts, the
+  middleware stack, the global `APIError` → HTTP-status mapping, lifespan
+  startup/shutdown ordering (LT_Memory factory → CNS graph → sidebar/heartbeat
+  jobs → announcement; `websocket_chat.close_all_connections()` awaited at
+  shutdown; Valkey flush preserves `heartbeat:` prefixes), and the pre-server
+  POST gate before bind. The per-directory contracts are owned by
   `cns/api/AGENTS.md`, `auth/AGENTS.md`, `cns/integration/AGENTS.md`,
   `agents/AGENTS.md`, `config/AGENTS.md`, `lt_memory/AGENTS.md`,
   `utils/AGENTS.md`, `web/AGENTS.md`.
-- `requirements.txt` — dependency pins. A package commented out of the optional
-  block here is invisible to `Dockerfile.base`, which installs from this file
-  (owning statement: `deploy/AGENTS.md`).
+- `requirements.txt` — dependency pins; the optional block's visibility to
+  `Dockerfile.base` is owned by `deploy/AGENTS.md`.
 - `VERSION` — release identity string, read by `cns/api/update.py:get_latest_version`
   and reported by `/health` (`cns/api/AGENTS.md`).
 - `README.md`, `license.txt`, `NEARFUTURE_FEATURES.md` — static repo documents;
   no runtime consumers.
+- `UPGRADE_PATH.md` — unimplemented design guide; its design-only status, the
+  no-upgrade-path doctrine, and the dead `--migrate` references are owned by
+  `deploy/AGENTS.md` and `docs/AGENTS.md`.
 
 ## 🚨 Critical Principles (Non-Negotiable)
 
@@ -282,6 +173,23 @@ Select the tier by behavioral surface touched, not by change size:
 - **Method Granularity Test**: if the docstring is longer than the code, inline the method.
 - **Hardcode Known Constraints**: don't parameterize what won't vary; constants with a comment explaining why.
 
+### Preventive Mechanism Rules
+
+These convert recurring failure modes into mandatory patterns. The banned forms are greppable — check for them during review. Each rule is an instruction, not advice: follow the pattern as written.
+
+- **No Per-Request State on Singletons**: values computed for one request, turn, or user never live on instance attributes of process-global singletons — they flow through parameters or a per-call context object. An event handler that must return a result is the wrong tool: call a function and use its return value; the event bus is notification, not call-and-return. Instance attributes are for construction-time wiring and explicitly-keyed process-wide caches only — anything mutated per turn and read back after a publish is state smuggling through the bus.
+- **Bounded Waits at Every Boundary**: any call crossing the asyncio↔thread or queue boundary carries a bound — `future.result(timeout=…)`, a queue put with an overflow policy (timeout, drop, or fail — never a bare unbounded `Queue.put`), `asyncio.wait_for` around every await that can stall. A possibly-unbounded blocking call placed between cancellation checks makes cancellation unreachable, which is a defect by itself.
+- **Guard Clauses Live in the Mutation**: for check-then-act on shared state, the precondition belongs in the write itself — `UPDATE/DELETE … WHERE <guard>`, compare-and-set, `GETDEL` — never in a preceding read. Destructive and status-changing writes re-verify their precondition inside the statement; a scan whose transaction commits before its action loop protects nothing.
+- **One Sanctioned Path per Hazard**: every recurring hazard has one mandatory mechanism — use it, never hand-roll a parallel one; raw forms behind a sanctioned wrapper are defects. The sanctioned mechanisms are enumerated in Codebase Patterns below (`load_prompt()`, timezone utils, the contextvar/RLS flow, Vault/`UserCredentialService`, event-bus coordination).
+- **External Content Crosses One Boundary**: anything sourced outside the system (fetched pages, email bodies, third-party API responses, user-supplied file content) passes through injection screening and untrusted-content wrapping before entering ANY model context — tool results, trinket content, agent work items, system prompts. Text interpolated into XML-like prompt structures is escaped at the interpolation point. A tool that returns external text "for the model to read" unwrapped violates this rule regardless of what any doc claims.
+- **Configure Structured Data — Never String-Patch It**: installers and provisioning set values via variables and parameterized statements. Never `sed`/grep-patch structured data (SQL, JSON, YAML) by matching literal strings from a previous revision — a non-matching literal is a silent no-op; a matching one is a fuse for the next edit. Where a literal must exist, generate it from the source that defines it. Installation is code: it gets a smoke run before release, same as any handler.
+- **Generated, Not Transcribed, Format Examples**: when a prompt instructs a model what to emit, the examples and format tokens are produced by the same code that parses the format (shared constants/formatters). Hand-written format examples drift from the parser — the model follows the example, the code follows the spec, and the mismatch is silent.
+- **Extract by Identity, Not Position or Shape**: data recovered from a probabilistic source (LLM output) or a lossy store is keyed by an identifier emitted alongside it — never "the last one", never "the first match". Persist explicit type tags; never infer structure from content shape (prefix/suffix sniffing). Storage round-trips must be lossless both ways.
+- **Derived State Self-Heals or Computes On Read**: counters and denormalizations incrementally maintained across multiple write paths will drift — one path forgets, another double-counts. Either recompute on read, or schedule a recompute job so drift decays on its own. "Every write path updates every derivation" is a checklist, not a mechanism.
+- **Degrade Only to Acceptable**: exception handling is positional first — critical request-path code propagates; fire-and-forget consumers log and swallow; background durability paths (collapse, extraction) tolerate-and-log because the model is off the call stack. Know which side you are on before writing a try/except. Then: a catch-and-continue site is legal only when the degraded result is still correct for its consumer. Every such site's log message states the user-visible consequence; if the degraded output would silently corrupt the deliverable (missing required sections, wrong shape, empty-required data), propagate instead. A log line is not a user interface.
+- **Retry Counters Never Gate Data on Infrastructure Failure**: attempt counters that trigger destructive or data-losing fallbacks (tombstones, abandons) count only failures the data caused; infrastructure/LLM outages are excluded. Three provider blips must not consume a data-bearing budget.
+- **Every Claimed Defense Has a Witness**: any sentence in this tree claiming something is "wrapped", "enforced", "atomic", or "verified" corresponds to a live path-probe. If writing the probe is impractical, delete the claim. Prose that promises an unwitnessed mechanism is where bugs hide longest.
+
 ## 🏗️ Architecture & Design
 
 ### User Context Management
@@ -320,24 +228,21 @@ Patterns that apply in every directory. Directory maps may restate these with lo
 - **Preview-before-save** for user-instructed revisions: candidate held in Valkey under an opaque `preview_id` with TTL, consumed delete-after-read — the client never round-trips stored text. (`cns/services/persona_service.py` et al.)
 - **Memory short IDs** (`mem_XXXXXXXX`) are irreversible prefixes of full UUIDs: short form for LLM-facing surfaces, full form for persistence and stamps. (`utils/tag_parser.py`)
 - **Use-day intervals** (`*_use_days`) are modular activity-day gates, not calendar cadences. (`utils/scheduled_tasks.py`)
-- **Exception policy is positional**: critical request-path code propagates; fire-and-forget consumers log and swallow; background durability paths (collapse, extraction) tolerate-and-log because the model is off the call stack. Know which side you are on before writing a try/except.
 - **Per-user tool config**: `config.<tool>_tool` merges the user's override fresh on every access over the global default; secret fields round-trip via the redaction sentinel. (`config/config_manager.py`, `utils/tool_config_store.py`)
 - **Prompt templates load via `load_prompt()`** — never `open()` a prompt file directly. (`config/prompts/loader.py`)
 - **Event handlers are synchronous**, registered by event class `__name__`; async work inside a handler spawns a thread with copied context. (`cns/integration/event_bus.py`)
-- **The LLM is an untrusted component**: escape, allowlist, and validate at every LLM boundary — tool arguments JSON-Schema-validated, untrusted content wrapped (`<untrusted_content>`), credentials injected server-side (the model names a credential it never sees), thinking signatures round-tripped untampered. (`clients/llm/`, `utils/prompt_injection_defense.py`, `tools/implementations/web_tool.py`)
+- **The LLM is an untrusted component**: escape, allowlist, and validate at every LLM boundary — tool arguments JSON-Schema-validated, credentials injected server-side (the model names a credential it never sees), thinking signatures round-tripped untampered. The external-content ingestion boundary itself is owned by Preventive Mechanism Rules above. (`clients/llm/`, `utils/prompt_injection_defense.py`)
 - **Inter-component coordination goes through the event bus**, not direct service calls: event taxonomy owned by `cns/core/events.py`, bus owned by `cns/integration/event_bus.py`. New features subscribe and publish.
 - **Trinket state is per-user**, keyed by the contextvar — trinket instances are process-global singletons shared across users; never store user state on instance attributes. (`working_memory/trinkets/base.py`)
 
 ### Activity Days & Use-Day Scheduling
-MIRA uses **use-day scheduling** — periodic jobs fire based on user activity days, not calendar time. A user who logs in Monday, skips Tuesday, returns Wednesday has their counter tick on Monday and Wednesday only. This prevents wasted work on inactive users and ensures jobs run at consistent engagement intervals.
-
-The mechanics — activity tracking, the `get_users_due_for_job(interval)` gate, job registration, and the current job list — are owned by `utils/AGENTS.md`; the `*_use_days` interval semantics are owned by `config/AGENTS.md`. Read those maps before adding or changing a use-day-gated job.
+Jobs fire on user activity days, not calendar time (log in Monday, skip Tuesday, return Wednesday → the counter ticks Monday and Wednesday only). Mechanics are owned by `utils/AGENTS.md`; `*_use_days` interval semantics by `config/AGENTS.md` — read both before adding or changing a use-day-gated job.
 
 ### Provider Stall Detection
-All live LLM transports run through `clients.llm.lifecycle.LLMLifecycle`, which enforces provider response timeouts and raises `ProviderStallError` on stall. There is no fallback route — a stall or provider failure propagates. The full policy (non-streaming vs streaming wrapping, route criticality, cost recording) is owned by `clients/llm/AGENTS.md` and `utils/AGENTS.md`. Provider-specific transports are dialects under `clients/llm/dialects/`; adding one is a multi-file blast radius documented in `clients/llm/dialects/AGENTS.md`.
+All live LLM transports run through `clients.llm.lifecycle.LLMLifecycle`; there is no fallback route — stalls (`ProviderStallError`) and provider failures propagate. Full policy owned by `clients/llm/AGENTS.md` and `utils/AGENTS.md`; dialects and the add-a-dialect blast radius by `clients/llm/dialects/AGENTS.md`.
 
 ### Power-On Self-Test
-MIRA uses POST checks in `utils/power_on_self_test.py`. The pre-server gate (`run_pre_server_post_gate`) runs before Hypercorn binds and launches checks in a subprocess so probe-side singletons cannot leak into the serving process. The gate is bounded: `PRE_SERVER_GATE_ATTEMPTS` rounds with `PRE_SERVER_GATE_RETRY_SECONDS` between failures, then it parks (sleeps forever, server never binds) rather than exiting — a restart-on-exit supervisor would otherwise turn gate failure into an unbounded loop of real, billed LLM probes. Set `MIRA_POST_GATE_FAILURE_ACTION=exit` to exit instead under supervisors like systemd where restart backoff is already sane. The in-process CLI remains operational (`python -m utils.power_on_self_test pre-server`); the post-server probe and its CLI shim are documented in `scripts/AGENTS.md`. POST checks must exercise real infrastructure and must not use mocks.
+POST checks live in `utils/power_on_self_test.py`. The pre-server gate runs in a subprocess before Hypercorn binds, is bounded (attempts then parks rather than exits — a restart-on-exit supervisor would loop real, billed LLM probes; `MIRA_POST_GATE_FAILURE_ACTION=exit` opts out), and the post-server probe/CLI are owned by `utils/AGENTS.md` and `scripts/AGENTS.md`. POST checks exercise real infrastructure, never mocks.
 
 ## ⚡ Performance & Tool Usage
 - **Synchronous Over Async**: prefer synchronous unless there is genuine I/O concurrency. Async overhead hurts without actual concurrency; sync is easier to debug and reason about.

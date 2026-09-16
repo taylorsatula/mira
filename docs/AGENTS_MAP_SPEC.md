@@ -72,7 +72,8 @@ may name the ultimate caller through an intermediate layer (state the path).
 Frontend maps use `Calls:` as the reciprocal field for backend endpoints and
 files called; both fields belong in ## Files only — outside that section,
 write the anchor in prose. DOC FILES get: what they cover plus trust status; a stale doc
-gets a corresponding staleness Rule in ## Rules. `__init__.py` always gets
+gets a staleness Rule in ## Rules as **debt to be repaid** — fix the doc or
+remove it; staleness Rules are not permanent furniture. `__init__.py` always gets
 an honest one-liner ("docstring only, no re-exports; registration happens in
 <anchor>" is real content). Subdirectories get one bullet pointing to their
 own map when one exists.
@@ -143,13 +144,23 @@ documented in an ancestor map. Otherwise its content folds into the parent's
         | grep -ohE '^[[:space:]]*- `[^`]*`' | sed 's/^[[:space:]]*- `//; s/`$//' | sort -u \
         | while read p; do [ -e "$d/$p" ] || echo "MISSING-FILE ($m): $p"; done
     done
+    # budget audit: over-target obligates consolidation this commit;
+    # over-ceiling is a defect (root AGENTS.md is exempt — the doctrine layer,
+    # pruned separately)
+    for m in <MAP>; do
+      case "$m" in AGENTS.md) continue;; esac
+      n=$(wc -l < "$m")
+      if [ "$n" -gt 80 ]; then echo "OVER-CEILING ($m): $n lines"
+      elif [ "$n" -gt 60 ]; then echo "OVER-TARGET ($m): $n lines"
+      fi
+    done
     # (sed, not `tr -d '`- '` — tr strips all hyphens and corrupts names
     #  like api-client.js)
     # Extensions: sh is included — shell scripts are first-class anchors.
     # Do not cite maps that do not exist yet; put planned parent changes in
     # the report's parent-migration notes instead.
 
-## Maintenance trigger table (mirrors root AGENTS.md)
+## Maintenance trigger table (full version; root AGENTS.md mirrors the high-frequency triggers and points here)
 
 Map updates are part of the same commit as the triggering change. Every
 event has a deterministic action:
@@ -158,16 +169,21 @@ event has a deterministic action:
 |---|---|
 | New file in a mapped directory | Add its ## Files bullet |
 | Deleted or renamed file | Update or remove its ## Files bullet; fix any anchor citing the old path |
-| Behavior or contract change in a file | Grep that directory's map for the changed symbol; update the Rule, Files gotcha, or Wiring edge stating the old behavior |
+| Behavior or contract change in a file | Grep that directory's map for the changed symbol; update the Rule, Files gotcha, or Wiring edge stating the old behavior — or **delete it if the behavior is gone**; never soften or annotate a statement of dead behavior |
+| Behavior removed from a file, or a Rule/gotcha whose enforcing anchor no longer exists | Delete the statement in the same commit; grep all maps for its symbols and delete every citation. A Rule citing a dead anchor is a defect on par with a missing Rule |
 | New member of a registry, enum, or contract family | Update the blast-radius Rule in the owning map |
 | Directory reaches >=2 source files, or gains an invariant its parent's map does not own | Create its AGENTS.md (shape above) |
 | File moved between directories | Update both maps' ## Files sections |
 | New map created or removed | Update the parent map's ## Files pointer |
+| A map crosses 60 lines | Consolidation pass in the same commit (merge bullets, cite owners, delete decoration); at 80, split with subdirectory maps instead |
 
-When in doubt, update the map. The anchor audits are the check that no
-trigger was missed: a clean audit means no map action was skipped; a
-flagged anchor is a skipped trigger. For changes the audit cannot express,
-the grep-the-map step is the check.
+When in doubt, update the map. Additions and deletions are symmetric: every
+deletion is recoverable from git history, while every unnecessary line costs
+a slice of every future session's attention, forever — bloat is the expensive
+option, deletion the cheap one. The anchor audits are the check that no
+trigger was missed: a clean audit means no map action was skipped; a flagged
+anchor is a skipped trigger. For changes the audit cannot express, the
+grep-the-map step is the check.
 
 ## Voice calibration exemplars
 
