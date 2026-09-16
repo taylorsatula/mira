@@ -75,22 +75,23 @@ class DomaindocTool(Tool):
         if labels:
             catalog_lines = "\n".join(f"- {lbl}" for lbl in labels)
             description = (
-                "Manage domain knowledge documents: browse, enable/disable, edit sections.\n\n"
+                "Manage domain knowledge documents: create, browse, enable/disable, edit sections.\n\n"
                 f"Available domaindocs:\n{catalog_lines}\n\n"
                 "Use 'overview' to preview a domaindoc's structure before enabling. Use 'enable'/'disable' "
-                "to control which are loaded into context. This tool cannot create or delete domaindocs — "
-                "direct the user to the MIRA app UI for lifecycle operations."
+                "to control which are loaded into context. Use 'create' to add a new domaindoc. "
+                "This tool cannot delete domaindocs — direct the user to the MIRA app UI for deletion."
             )
         else:
             description = (
-                "Manage domain knowledge documents: browse, enable/disable, edit sections.\n\n"
-                "No domaindocs available. Direct the user to create one via the MIRA app UI."
+                "Manage domain knowledge documents: create, browse, enable/disable, edit sections.\n\n"
+                "No domaindocs available yet. Use 'create' to add the first one when a topic earns "
+                "persistent structured reference."
             )
 
         # Build label property — constrain to valid labels when catalog is available
         label_prop: Dict[str, Any] = {
             "type": "string",
-            "description": "The domaindoc's label. Optional for search and request_create; required for all other operations"
+            "description": "The domaindoc's label. Required for all operations except 'search' and 'create' — 'create' takes new_label instead"
         }
         if labels:
             label_prop["enum"] = labels
@@ -104,7 +105,7 @@ class DomaindocTool(Tool):
                     "operation": {
                         "type": "string",
                         "enum": [
-                            "overview", "search", "enable", "disable",
+                            "overview", "search", "create", "enable", "disable",
                             "expand", "collapse", "set_expanded_by_default",
                             "pin", "unpin",
                             "create_section", "rename_section",
@@ -114,13 +115,13 @@ class DomaindocTool(Tool):
                         ],
                         "description": (
                             "Operation to perform. 'overview' previews a domaindoc's structure (works on disabled docs). "
-                            "'request_create' is a noop — do NOT call this operation. Instead, when the user asks to create "
-                            "a domaindoc, or when you recognize a topic with enough depth to warrant persistent structured "
-                            "reference (e.g., the user is deep in an ongoing project, extended summaries show sustained "
-                            "engagement with a domain, or the user keeps referencing the same complex information across "
-                            "conversations), tell the user directly: domaindocs are created via the MIRA app UI "
-                            "(Settings > Domain Documents > Create New). Suggest a label and description for them. "
-                            "Do not suggest creating domaindocs for transient topics or one-off questions. "
+                            "'create' makes a new domaindoc with its first section: new_label is a lowercase kebab "
+                            "identifier (letters, digits, hyphens, underscores; 64 chars max), description is an optional "
+                            "one-line summary, section and content are the first section's header and body. Reserve "
+                            "domaindocs for topics with enough depth to warrant persistent structured reference — an "
+                            "ongoing project, a domain the user keeps returning to across conversations — not transient "
+                            "topics or one-off questions. New docs start enabled. "
+                            "'request_create' is a noop — do NOT call this operation; use 'create' instead. "
                             "'request_delete' is a noop — do NOT call this operation. Instead, when the user asks to delete "
                             "a domaindoc, tell them directly: domaindocs are deleted via the MIRA app UI "
                             "(Settings > Domain Documents > [label] > Delete). Suggest 'disable' as a non-destructive "
@@ -128,6 +129,18 @@ class DomaindocTool(Tool):
                         )
                     },
                     "label": label_prop,
+                    "new_label": {
+                        "type": "string",
+                        "description": (
+                            "Label for the new domaindoc in 'create': lowercase letters, digits, "
+                            "hyphens, or underscores, starting with a letter or digit, 64 chars max. "
+                            "Must not match an existing label. Only for 'create'."
+                        )
+                    },
+                    "doc_description": {
+                        "type": "string",
+                        "description": "One-line summary of what the domaindoc covers, shown in listings. Optional; only for 'create'."
+                    },
                     "query": {
                         "type": "string",
                         "description": "Case-insensitive substring to match against section headers and content. Used with search"
@@ -363,7 +376,9 @@ class DomaindocTool(Tool):
         insert_after: Optional[str] = None,
         order: Optional[List[str]] = None,
         parent: Optional[str] = None,
-        expanded_by_default: Optional[bool] = None
+        expanded_by_default: Optional[bool] = None,
+        new_label: Optional[str] = None,
+        doc_description: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Execute an operation on a domaindoc. Use parent param to target subsections."""
         self._shared_doc_context = None
@@ -383,6 +398,8 @@ class DomaindocTool(Tool):
             if not label:
                 raise ValueError("overview requires 'label' parameter")
             return self._op_overview(label)
+        elif operation == "create":
+            return self._op_create(db, new_label, section, content, doc_description)
         elif operation == "request_create":
             return self._op_request_create(label)
         elif operation == "request_delete":
@@ -650,12 +667,66 @@ class DomaindocTool(Tool):
             "sections": section_tree
         }
 
+    def _op_create(
+        self,
+        db: UserDataManager,
+        new_label: Optional[str],
+        section: Optional[str],
+        content: Optional[str],
+        doc_description: Optional[str],
+    ) -> Dict[str, Any]:
+        """Create a new domaindoc with its first section, enabled immediately."""
+        import re
+
+        if not new_label or not new_label.strip():
+            raise ValueError("create requires 'new_label' (lowercase kebab identifier)")
+        label = new_label.strip()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", label):
+            raise ValueError(
+                f"new_label '{label}' is invalid: lowercase letters, digits, hyphens, or "
+                "underscores, starting with a letter or digit, 64 characters max"
+            )
+        if not section or not section.strip():
+            raise ValueError("create requires 'section' (the first section's header)")
+        if content is None or not content.strip():
+            raise ValueError("create requires 'content' (the first section's body)")
+
+        existing = db.select("domaindocs", "label = :label", {"label": label})
+        if existing:
+            raise ValueError(
+                f"Domaindoc '{label}' already exists. Use 'overview' to inspect it, "
+                "'create_section' to extend it, or pick a different label."
+            )
+
+        now = format_utc_iso(utc_now())
+        doc_id = db.insert("domaindocs", {
+            "label": label,
+            "encrypted__description": (doc_description or "").strip() or None,
+            "enabled": True,
+            "archived": False,
+            "created_at": now,
+            "updated_at": now,
+        })
+        doc_id = int(doc_id)
+
+        # First section starts expanded so the new doc renders with content.
+        self._op_create_section(
+            db, doc_id, section, content,
+            insert_after=None, parent=None, expanded_by_default=True,
+        )
+        self._record_version(db, doc_id, "create", {
+            "label": label,
+            "description": (doc_description or "").strip() or None,
+            **self._actor_suffix(),
+        })
+        return {"success": True, "label": label, "created": True, "enabled": True}
+
     def _op_request_create(self, label: str | None) -> Dict[str, Any]:
         """Noop fallback — the operation description already tells the LLM what to do."""
         return {
             "success": False,
             "operation": "request_create",
-            "error": "You called request_create, but the operation description says not to. Re-read the 'operation' parameter description and relay the directions to the user directly instead of calling this tool."
+            "error": "You called request_create, but the operation description says not to. Use the 'create' operation instead — this tool creates domaindocs directly."
         }
 
     def _op_request_delete(self, label: str) -> Dict[str, Any]:
