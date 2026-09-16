@@ -1048,6 +1048,7 @@ class ContinuumOrchestrator:
         segment_turn_number: int = 1,
         message_id: UUID | None = None,
         turn_id: UUID | None = None,
+        user_metadata_extra: MessageMetadata | None = None,
         _internal_continuation: bool = False,
     ) -> tuple[Continuum, str, TurnMetadata]:
         """
@@ -1071,6 +1072,9 @@ class ContinuumOrchestrator:
                         so the browser's optimistic id reconciles with the row.
             turn_id: Transport-assigned identity for this turn, stamped on every
                      durable message so frames and rows correlate.
+            user_metadata_extra: Extra metadata merged into the persisted user
+                        message (e.g. the heartbeat marker). Callers other than
+                        the heartbeat service leave it unset.
             _internal_continuation: Whether this is the transient provider prompt
                                   used after loading an on-demand tool.
 
@@ -1092,6 +1096,8 @@ class ContinuumOrchestrator:
         }
         if _internal_continuation:
             user_metadata["transient_system_scaffold"] = True
+        if user_metadata_extra:
+            user_metadata.update(user_metadata_extra)
 
         user_msg_obj, user_events = continuum.add_user_message(
             user_message,

@@ -252,6 +252,20 @@ class TurnErrorFrame(ProtocolModel):
     message: str
 
 
+class ProactiveMessageFrame(ProtocolModel):
+    """Server-initiated assistant message with no client turn behind it.
+
+    Emitted when a heartbeat breakout turn completes, so an open client sees
+    the message live instead of discovering it on the next history load.
+    """
+
+    type: Literal["proactive_message"]
+    message_id: UUID
+    turn_id: UUID | None = None
+    content: str
+    created_at: str
+
+
 ServerFrame = Annotated[
     AuthSuccessFrame
     | ServerShutdownFrame
@@ -264,7 +278,8 @@ ServerFrame = Annotated[
     | ModelErrorFrame
     | TurnCompleteFrame
     | TurnStoppedFrame
-    | TurnErrorFrame,
+    | TurnErrorFrame
+    | ProactiveMessageFrame,
     Field(discriminator="type"),
 ]
 SERVER_FRAME_ADAPTER = TypeAdapter(ServerFrame)
@@ -318,6 +333,7 @@ class ChatConnection:
 
     def __init__(self, websocket: WebSocket):
         self.websocket = websocket
+        self.user_id: str | None = None  # stamped after auth; used by proactive push
         self.inbound: asyncio.Queue[ClientFrame | ClientDisconnected] = asyncio.Queue(maxsize=32)
         self.outbound: asyncio.Queue[ServerFrame | StopWriter] = asyncio.Queue(maxsize=128)
         self.reader_task: asyncio.Task[None] | None = None
@@ -409,6 +425,42 @@ async def close_all_connections() -> None:
             pass
         await connection.close()
     _active_connections.clear()
+
+
+async def push_proactive_message(
+    user_id: str,
+    content: str,
+    message_id: str | None,
+    turn_id: str | None,
+    created_at: str | None,
+) -> int:
+    """Push one server-initiated assistant message to a user's open clients.
+
+    Called from the heartbeat service after a breakout turn commits. Returns
+    the number of connections the frame was queued for; zero simply means no
+    client is watching and the message remains visible via history on next
+    load (subject to the heartbeat history filter).
+    """
+    if not message_id:
+        logger.warning("Proactive push for user %s skipped: no final message id", user_id)
+        return 0
+    frame = ProactiveMessageFrame(
+        type="proactive_message",
+        message_id=UUID(message_id),
+        turn_id=UUID(turn_id) if turn_id else None,
+        content=content,
+        created_at=created_at or utc_now().isoformat(),
+    )
+    delivered = 0
+    for connection in list(_active_connections.values()):
+        if connection.user_id != user_id:
+            continue
+        try:
+            await connection.send(frame)
+            delivered += 1
+        except Exception as e:
+            logger.warning("Proactive push to one connection failed: %s", e)
+    return delivered
 
 
 class WebSocketChatHandler:
@@ -508,6 +560,7 @@ class WebSocketChatHandler:
             })
             return
 
+        connection.user_id = user_id  # stamped for proactive push fan-out
         await connection.send({"type": "auth_success", "user_id": user_id})
         try:
             await self._dispatch(connection, user_id)

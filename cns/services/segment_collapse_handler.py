@@ -488,13 +488,30 @@ class SegmentCollapseHandler:
         user_id = get_current_user_id()
         db = self.continuum_repo.get_user_db_client(user_id)
 
-        # Load messages after sentinel timestamp, excluding boundaries/system notifications
+        # Load messages after sentinel timestamp, excluding boundaries/system
+        # notifications and keepsleeping heartbeat turns (breakout heartbeat
+        # turns are real conversation and are summarized like any other).
         query = """
             SELECT * FROM messages
             WHERE continuum_id = %s
                 AND created_at > %s
                 AND COALESCE(metadata->>'is_segment_boundary', 'false') != 'true'
                 AND COALESCE(metadata->>'system_notification', 'false') != 'true'
+                AND NOT (
+                    COALESCE(metadata->>'heartbeat', 'false') = 'true'
+                    AND COALESCE(metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
+                )
+                AND (
+                    metadata->>'turn_id' IS NULL
+                    OR metadata->>'turn_id' NOT IN (
+                        SELECT other.metadata->>'turn_id'
+                        FROM messages other
+                        WHERE other.continuum_id = messages.continuum_id
+                            AND other.metadata->>'heartbeat' = 'true'
+                            AND COALESCE(other.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
+                            AND other.metadata->>'turn_id' IS NOT NULL
+                    )
+                )
             ORDER BY created_at ASC
         """
 

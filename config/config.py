@@ -7,7 +7,7 @@ feature flags, infrastructure coordinates, scheduling cadences, deployment setti
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -257,6 +257,64 @@ class SidebarDispatcherConfig(BaseModel):
     agent_timeout_overrides: Dict[str, int] = Field(
         default={"forage": 600, "memorycurator": 480, "whilethecatsaway": 14400},
         description="Per-agent wall-clock timeout overrides keyed by agent class name lowercased with the 'Agent' suffix stripped (e.g. ForageAgent -> 'forage')"
+    )
+
+
+class HeartbeatConfig(BaseModel):
+    """Heartbeat wake-cycle configuration.
+
+    The heartbeat scheduler wakes MIRA periodically with a synthetic stimulus;
+    MIRA decides via heartbeat_tool whether to keep sleeping or break out into
+    a full conversational turn. See cns/services/heartbeat_service.py.
+    """
+
+    enabled: bool = Field(default=True, description="Enable the heartbeat wake cycle")
+    interval_seconds: int = Field(
+        default=300, ge=30,
+        description=(
+            "Default seconds between heartbeat wakes — the delay applied when "
+            "MIRA confirms keepsleeping without requesting a custom sleep"
+        )
+    )
+    ticker_interval_seconds: int = Field(
+        default=60, ge=15,
+        description=(
+            "Scheduler cadence of the wake dispatcher. The dispatcher runs this "
+            "often but a user's tick only fires once now has reached the wake "
+            "time stamped on the segment sentinel (heartbeat_wake_at), so this "
+            "value sets wake-time precision, not wake frequency"
+        )
+    )
+    max_sleep_seconds: int = Field(
+        default=21600, ge=60,
+        description=(
+            "Ceiling on a MIRA-requested sleep (heartbeat_tool wake_in_seconds); "
+            "larger values are rejected, not clamped"
+        )
+    )
+    wake_grace_seconds: int = Field(
+        default=900, ge=0,
+        description=(
+            "Grace added to heartbeat_wake_at when the segment timeout service "
+            "checks staleness: collapse stays deferred until wake_at + grace so "
+            "a pending or in-flight wake turn is never treated as inactivity"
+        )
+    )
+    wake_mode: Literal["literal", "pregated"] = Field(
+        default="literal",
+        description=(
+            "literal: MIRA wakes and decides on every tick. pregated: the tick "
+            "first checks for new terminal sidebar-activity records since the "
+            "last wake and skips the LLM turn when nothing new appeared"
+        )
+    )
+    turn_lock_ttl_seconds: int = Field(
+        default=900, ge=60,
+        description=(
+            "TTL for the per-user request lock a heartbeat turn holds. Must "
+            "exceed the longest expected heartbeat turn; the lock is not "
+            "renewed mid-turn"
+        )
     )
 
 

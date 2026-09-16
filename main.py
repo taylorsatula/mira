@@ -34,6 +34,7 @@ from config.announcement import load_announcement
 from cns.api import data, actions, health, websocket_chat, tool_config, trigger_rules, update, federation as federation_api
 from cns.api import chat as chat_api
 from cns.api import files as files_api
+from cns.api import heartbeat_api
 from cns.api import location
 from cns.api.base import APIError, create_error_response, generate_request_id
 from utils.scheduler_service import scheduler_service
@@ -166,7 +167,7 @@ async def lifespan(app: FastAPI):
     try:
         valkey_client = get_valkey_client()
         flushed_count = valkey_client.flush_except_whitelist(
-            preserve_prefixes=["session:", "csrf:", "rate_limit:"]
+            preserve_prefixes=["session:", "csrf:", "rate_limit:", "heartbeat:"]
         )
     except Exception as e:
         logger.critical(f"Failed to flush Valkey caches on startup: {e}")
@@ -198,6 +199,11 @@ async def lifespan(app: FastAPI):
         register_sidebar_dispatcher_job(
             scheduler_service, orchestrator.tool_repo, orchestrator.event_bus
         )
+
+        # Register heartbeat wake cycle (double gate: registration skipped when
+        # disabled; the tick re-checks config every time it fires)
+        from cns.services.heartbeat_service import register_heartbeat_job
+        register_heartbeat_job(scheduler_service)
 
         scheduler_service.start()
     except Exception as e:
@@ -464,6 +470,7 @@ def create_app() -> FastAPI:
     app.include_router(trigger_rules.router, prefix="/v0/api", tags=["trigger_rules"])
     app.include_router(files_api.router, prefix="/v0/api", tags=["files"])
     app.include_router(location.router, prefix="/v0/api", tags=["location"])
+    app.include_router(heartbeat_api.router, prefix="/v0/api", tags=["heartbeat"])
     app.include_router(websocket_chat.router, prefix="/v0", tags=["websocket"])  # /v0/ws/chat
     if config.lattice.enabled:
         app.include_router(federation_api.router, prefix="/v0/api", tags=["federation"])

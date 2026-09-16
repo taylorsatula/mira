@@ -5,7 +5,7 @@ APScheduler job that runs every 5 minutes to find active segments
 that have exceeded their inactivity threshold and publishes SegmentTimeoutEvent.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, TypedDict
 
 from cns.core.events import SegmentTimeoutEvent
@@ -161,6 +161,31 @@ class SegmentTimeoutService:
         Returns:
             True if segment has timed out
         """
+        # A pending heartbeat wake is a liveness commitment: MIRA has been told
+        # to sleep until heartbeat_wake_at and will produce activity when the
+        # wake fires. Collapsing inside that window would compress the session
+        # out from under the sleep. The grace window also covers the wake turn
+        # itself: the stimulus commits when the turn completes, so there is a
+        # stretch after wake_at where the sleep has ended but no fresh message
+        # exists yet. A malformed or absent stamp changes nothing.
+        wake_at_str = segment['metadata'].get('heartbeat_wake_at')
+        if wake_at_str:
+            try:
+                wake_at = parse_utc_time_string(wake_at_str)
+            except (ValueError, TypeError):
+                wake_at = None
+                logger.warning(
+                    "Unparseable heartbeat_wake_at %r on segment %s; "
+                    "ignoring the wake guard",
+                    wake_at_str, segment['metadata'].get('segment_id'),
+                )
+            if wake_at is not None:
+                guard_until = wake_at + timedelta(
+                    seconds=config.heartbeat.wake_grace_seconds
+                )
+                if current_time < guard_until:
+                    return False
+
         # Query for last message in segment (avoids persisting end_time on every turn)
         end_time = self._get_last_message_time(
             segment['continuum_id'],

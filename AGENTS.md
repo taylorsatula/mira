@@ -188,8 +188,11 @@ invisible reference.
   awaited during shutdown), startup sequencing (`lifespan` performs first
   construction of the LT_Memory factory; `create_cns_orchestrator()` builds the
   CNS graph; `register_sidebar_dispatcher_job()` registers the sidebar scheduler;
+  `register_heartbeat_job()` registers the heartbeat wake cycle (interval + boot
+  tick, double-gated on `config.heartbeat.enabled`);
   `load_announcement()` runs once), and the pre-server POST gate before the
-  server binds. Per-directory contracts citing these behaviors live in
+  server binds. The Valkey startup flush preserves `heartbeat:` alongside the
+  auth prefixes so an external heartbeat cancel survives restarts. Per-directory contracts citing these behaviors live in
   `cns/api/AGENTS.md`, `auth/AGENTS.md`, `cns/integration/AGENTS.md`,
   `agents/AGENTS.md`, `config/AGENTS.md`, `lt_memory/AGENTS.md`,
   `utils/AGENTS.md`, `web/AGENTS.md`.
@@ -220,6 +223,7 @@ Quality guarantee: boot-survival plus path-probe coverage. A clean boot verifies
 Probes are production code: normal review discipline, the same credentials plumbing, production-identical failure behavior.
 
 `tests/tmp/` holds one exemplary disposable probe as a display exhibit of this pattern — any test file added there is autodeleted instantly; see `tests/tmp/AGENTS.md`.
+
 
 ### ⚡ Realtime verification loop (proportionate by behavioral surface)
 

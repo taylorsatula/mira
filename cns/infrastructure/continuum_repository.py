@@ -635,8 +635,24 @@ class ContinuumRepository:
             # Include all messages, no additional filter
             pass
         else:
-            # Default to regular messages (exclude system notifications)
+            # Default to regular messages (exclude system notifications and
+            # keepsleeping heartbeat turns; breakout heartbeat turns are real
+            # conversation the user must be able to read after the fact)
             where_conditions.append("COALESCE(metadata->>'system_notification', 'false') != 'true'")
+            where_conditions.append(
+                "NOT ("
+                "COALESCE(metadata->>'heartbeat', 'false') = 'true' "
+                "AND COALESCE(metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'"
+                ")"
+            )
+            where_conditions.append(
+                "(metadata->>'turn_id' IS NULL OR metadata->>'turn_id' NOT IN ("
+                "SELECT other.metadata->>'turn_id' FROM messages other "
+                "WHERE other.continuum_id = messages.continuum_id "
+                "AND other.metadata->>'heartbeat' = 'true' "
+                "AND COALESCE(other.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout' "
+                "AND other.metadata->>'turn_id' IS NOT NULL))"
+            )
         
         if start_date:
             where_conditions.append("created_at >= %s")
@@ -807,6 +823,43 @@ class ContinuumRepository:
         new_segment_id = str(uuid4())
         set_current_segment_id(new_segment_id)
         return IncrementSegmentTurnResult(1, new_segment_id)
+
+    def set_heartbeat_wake_at(self, continuum_id: str | UUID, user_id: str, wake_at: str) -> bool:
+        """
+        Stamp the next heartbeat wake time on the active segment sentinel.
+
+        The heartbeat service calls this after every confirm: keepsleeping
+        stamps ``now + requested delay`` (or the default interval), breakout
+        stamps ``now + default interval``. Two consumers read the stamp:
+        the heartbeat dispatcher skips users whose wake time is in the future,
+        and the segment timeout service defers collapse until wake_at plus a
+        grace window so a long sleep never collapses the session out from
+        under MIRA.
+
+        A stale stamp is inert: both consumers only honor a future timestamp,
+        so no cleanup pass is needed when MIRA breaks out or the heartbeat is
+        disabled.
+
+        Args:
+            continuum_id: Continuum ID
+            user_id: User ID
+            wake_at: UTC ISO timestamp (format_utc_iso) of the next wake
+
+        Returns:
+            True if an active segment sentinel was stamped, False if none exists
+        """
+        db = self.get_user_db_client(user_id)
+
+        query = """
+            UPDATE messages
+            SET metadata = jsonb_set(metadata, '{heartbeat_wake_at}', to_jsonb(%s::text))
+            WHERE continuum_id = %s
+                AND metadata->>'is_segment_boundary' = 'true'
+                AND metadata->>'status' = 'active'
+            RETURNING id
+        """
+        rows = db.execute_returning(query, (wake_at, str(continuum_id)))
+        return bool(rows)
 
     def pause_segment(self, continuum_id: str | UUID, user_id: str) -> bool:
         """
@@ -1063,7 +1116,9 @@ class ContinuumRepository:
             sentinel_time: Creation time of segment sentinel
 
         Returns:
-            List of messages in chronological order (excludes boundaries and system notifications)
+            List of messages in chronological order (excludes boundaries,
+            system notifications, and keepsleeping heartbeat turns; breakout
+            heartbeat turns are real conversation and stay in context)
         """
         db = self.get_user_db_client(user_id)
 
@@ -1073,6 +1128,21 @@ class ContinuumRepository:
                 AND created_at >= %s
                 AND COALESCE(metadata->>'is_segment_boundary', 'false') = 'false'
                 AND COALESCE(metadata->>'system_notification', 'false') = 'false'
+                AND NOT (
+                    COALESCE(metadata->>'heartbeat', 'false') = 'true'
+                    AND COALESCE(metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
+                )
+                AND (
+                    metadata->>'turn_id' IS NULL
+                    OR metadata->>'turn_id' NOT IN (
+                        SELECT other.metadata->>'turn_id'
+                        FROM messages other
+                        WHERE other.continuum_id = messages.continuum_id
+                            AND other.metadata->>'heartbeat' = 'true'
+                            AND COALESCE(other.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
+                            AND other.metadata->>'turn_id' IS NOT NULL
+                    )
+                )
             ORDER BY created_at ASC
         """
 

@@ -25,6 +25,7 @@ from config.config import (
     MemoryCuratorConfig,
     LatticeConfig,
     SidebarDispatcherConfig,
+    HeartbeatConfig,
 )
 
 # Import the registry from tools package
@@ -98,6 +99,7 @@ class AppConfig(BaseModel):
     worker_pools: WorkerPoolsConfig = Field(default_factory=WorkerPoolsConfig)
     lattice: LatticeConfig = Field(default_factory=LatticeConfig)
     sidebar_dispatcher: SidebarDispatcherConfig = Field(default_factory=SidebarDispatcherConfig)
+    heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     memory_curator: MemoryCuratorConfig = Field(default_factory=MemoryCuratorConfig)
 
 

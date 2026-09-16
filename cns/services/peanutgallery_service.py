@@ -67,6 +67,15 @@ class PeanutGalleryService:
         if event.segment_turn_number % PG_TRIGGER_INTERVAL != 0:
             return
 
+        # Heartbeat turns are scheduler-initiated; observing them would fire
+        # PeanutGallery on MIRA talking to itself. The stimulus is the most
+        # recent user message of the turn.
+        for message in reversed(event.continuum.messages):
+            if message.role == "user":
+                if message.metadata.get("heartbeat") == "true":
+                    return
+                break
+
         logger.debug(
             "Triggering Peanut Gallery observation at segment turn %d",
             event.segment_turn_number,

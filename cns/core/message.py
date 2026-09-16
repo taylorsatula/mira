@@ -138,6 +138,10 @@ class MessageMetadata(TypedDict, total=False):
     tool_calls: list[dict[str, object]]
     tool_name: str
     tool_arguments: dict[str, object]
+    # Heartbeat wake-cycle fields (cns/services/heartbeat_service.py)
+    heartbeat: str  # 'true' on a heartbeat stimulus user message
+    tick_id: str  # hb_ identifier tying the stimulus to its decision record
+    heartbeat_decision: str  # 'keepsleeping' | 'breakout', stamped post-turn
     tool_result_id: str
     tool_result_session_id: str
     tool_result_compacted: bool
