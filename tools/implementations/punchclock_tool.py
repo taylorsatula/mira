@@ -17,10 +17,6 @@ from utils.timezone_utils import (
 from utils.user_context import get_current_user_id, get_user_preferences
 from utils.userdata_manager import get_user_data_manager
 
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from working_memory.core import WorkingMemory
-
 logger = logging.getLogger(__name__)
 
 
@@ -190,9 +186,8 @@ class PunchclockTool(Tool):
             },
         }
 
-    def __init__(self, working_memory: Optional["WorkingMemory"] = None):
+    def __init__(self):
         super().__init__()
-        self._working_memory = working_memory
 
     # Public API -----------------------------------------------------------------
     def run(self, operation: str, **params: Any) -> Dict[str, Any]:
@@ -205,21 +200,13 @@ class PunchclockTool(Tool):
         payload = self._normalize_params(params)
 
         if operation == "punch_in":
-            result = self._handle_punch_in(payload)
-            self._publish_trinket_refresh()
-            return {"operation": "punch_in", **result}
+            return {"operation": "punch_in", **self._handle_punch_in(payload)}
         if operation == "pause":
-            result = self._handle_pause(payload)
-            self._publish_trinket_refresh()
-            return {"operation": "pause", **result}
+            return {"operation": "pause", **self._handle_pause(payload)}
         if operation == "resume":
-            result = self._handle_resume(payload)
-            self._publish_trinket_refresh()
-            return {"operation": "resume", **result}
+            return {"operation": "resume", **self._handle_resume(payload)}
         if operation == "punch_out":
-            result = self._handle_punch_out(payload)
-            self._publish_trinket_refresh()
-            return {"operation": "punch_out", **result}
+            return {"operation": "punch_out", **self._handle_punch_out(payload)}
         if operation == "status":
             return {"operation": "status", **self._handle_status(payload)}
 
@@ -548,16 +535,3 @@ class PunchclockTool(Tool):
             "paused": paused,
             "completed": completed,
         }
-
-    # Working memory integration -------------------------------------------------
-    def _publish_trinket_refresh(self) -> None:
-        if self._working_memory is None:
-            return
-
-        try:
-            self._working_memory.publish_trinket_update(
-                target_trinket="PunchclockTrinket",
-                context={},
-            )
-        except Exception as exc:
-            logger.debug("Failed to publish punchclock trinket update: %s", exc)

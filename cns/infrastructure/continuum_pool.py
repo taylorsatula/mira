@@ -28,16 +28,21 @@ class UnitOfWork:
     atomically to both database and cache.
     """
     
-    def __init__(self, continuum: Continuum, pool: 'ContinuumPool'):
+    def __init__(self, continuum: Continuum, pool: 'ContinuumPool',
+                 cache_epoch: int = 0):
         """
         Initialize unit of work.
 
         Args:
             continuum: Continuum being modified
             pool: Parent continuum pool for persistence operations
+            cache_epoch: Collapse epoch captured when the continuum was loaded;
+                used to skip the cache write on commit if a collapse invalidated
+                the cache in the meantime
         """
         self.continuum = continuum
         self.pool = pool
+        self.cache_epoch = cache_epoch
         self.pending_messages: list[Message] = []
         self.metadata_updated = False
         self._post_commit_callbacks: list[Callable[[], None]] = []
@@ -102,8 +107,14 @@ class UnitOfWork:
                 self.continuum.user_id
             )
 
-            # Update Valkey cache once with current continuum state
-            self.pool.valkey_cache.set_continuum(self.continuum.messages)
+            # Update Valkey cache once with current continuum state, but only
+            # if no segment collapse invalidated it since the continuum was
+            # loaded — a stale write would re-cache the pre-collapse message
+            # set. A skipped write is not an error: the cache stays empty and
+            # the next get_or_create() reloads collapse-correct state from DB.
+            self.pool.valkey_cache.set_continuum_if_epoch(
+                self.continuum.messages, self.cache_epoch
+            )
 
             logger.debug(f"Committed {len(self.pending_messages)} messages for continuum {self.continuum.id}")
 
@@ -153,6 +164,9 @@ class ContinuumPool:
         self.valkey_cache = ValkeyMessageCache()
         # Lock for thread-safe operations
         self._lock = threading.Lock()
+        # Collapse epoch captured at load, per user — consumed by begin_work()
+        # so UnitOfWork.commit() can compare-and-set against the live epoch.
+        self._loaded_epochs: dict[str, int] = {}
         
     def get_or_create(self) -> Continuum:
         """
@@ -167,8 +181,13 @@ class ContinuumPool:
         user_id = get_current_user_id()
 
         with self._lock:
-            # Check Valkey cache first
+            # Check Valkey cache first. The epoch is captured BEFORE the message
+            # read: any collapse that invalidates the messages we are about to
+            # read also bumps the epoch past what we capture, so the commit's
+            # compare-and-set skips the stale write.
+            epoch = self.valkey_cache.get_epoch()
             cached_messages = self.valkey_cache.get_continuum()
+            self._loaded_epochs[str(user_id)] = epoch
 
             # Get continuum structure from DB (must exist from signup)
             continuum = self.repository.get_continuum(user_id)
@@ -210,7 +229,11 @@ class ContinuumPool:
         Returns:
             UnitOfWork instance for accumulating and committing changes
         """
-        return UnitOfWork(continuum, self)
+        return UnitOfWork(
+            continuum,
+            self,
+            cache_epoch=self._loaded_epochs.get(str(continuum.user_id), 0),
+        )
 
     def invalidate(self) -> None:
         """

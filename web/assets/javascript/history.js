@@ -3,8 +3,7 @@
  *
  * PURPOSE:
  * Manages the conversation history system including loading, displaying, searching, and organizing
- * past conversations. Implements the calendar view for date-based navigation and temporal linking
- * functionality that allows linking specific days to the current conversation context.
+ * past conversations. Implements the calendar view for date-based navigation.
  *
  * RESPONSIBILITIES:
  * - Conversation history loading with infinite scroll pagination
@@ -12,7 +11,6 @@
  * - Search with text highlighting across conversations
  * - Calendar rendering with activity indicators
  * - Month-based conversation activity detection
- * - Temporal day linking/unlinking (attach historical context to current session)
  * - Conversation item creation and rendering
  * - Empty state handling (no conversations, no results)
  * - Scroll trigger management for lazy loading
@@ -24,7 +22,6 @@
  * - Advanced search features (filters, date ranges, metadata)
  * - Conversation tagging or categorization
  * - History management operations (delete, archive)
- * - Temporal linking enhancements (link multiple days, link date ranges)
  *
  * WHAT DOESN'T GO HERE:
  * - Message sending or receiving → messaging.js
@@ -49,7 +46,6 @@
  *   chronological page.
  * - IntersectionObserver for infinite scroll triggering
  * - Date key normalization (today/yesterday → YYYY-MM-DD)
- * - Temporal link state stored in button data attributes
  *
  * LOAD ORDER:
  * After core.js, can load alongside ui.js and messaging.js.
@@ -68,8 +64,6 @@ async function renderConversations() {
 		elements.historyContent.innerHTML = '<div class="loading-history">Loading conversations...</div>';
 
 		await loadConversations(0, 20);
-
-		await updateTemporalLinkStates();
 
 	} catch (error) {
 		console.error('Failed to load conversations:', error);
@@ -170,23 +164,7 @@ function renderMessageGroups(messageGroups, clearExisting = false) {
 			dateText.textContent = dateKey === 'today' ? 'Today' :
 								  dateKey === 'yesterday' ? 'Yesterday' : dateKey;
 
-			const linkButton = document.createElement('button');
-			linkButton.className = 'temporal-link-button';
-			linkButton.innerHTML = '<img src="/assets/images/icons/link.png" alt="Link day">';
-			linkButton.title = 'Link this day to current conversation';
-
-			linkButton.style.display = dateKey === 'today' ? 'none' : 'flex';
-
-			linkButton.dataset.dateKey = dateKey;
-			linkButton.dataset.archiveId = '';
-
-			linkButton.addEventListener('click', async (e) => {
-				e.stopPropagation();
-				await handleTemporalLink(linkButton, dateKey);
-			});
-
 			dateHeader.appendChild(dateText);
-			dateHeader.appendChild(linkButton);
 			dateGroup.appendChild(dateHeader);
 
 			elements.historyContent.appendChild(dateGroup);
@@ -490,124 +468,6 @@ async function selectDate(date) {
 		console.error('Failed to load conversations for date:', error);
 		elements.historyContent.innerHTML = `<div class="empty-state">Failed to load conversations for ${dateStr}</div>`;
 	}
-}
-
-// ========================================
-// TEMPORAL LINKING
-// ========================================
-
-function convertDateKeyToDateStr(dateKey) {
-	const now = new Date();
-
-	switch (dateKey) {
-		case 'today':
-			return now.toISOString().split('T')[0];
-		case 'yesterday':
-			const yesterday = new Date(now);
-			yesterday.setDate(yesterday.getDate() - 1);
-			return yesterday.toISOString().split('T')[0];
-		default:
-			if (/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
-				return dateKey;
-			}
-			const parsedDate = new Date(dateKey);
-			if (!isNaN(parsedDate.getTime())) {
-				return parsedDate.toISOString().split('T')[0];
-			}
-			return null;
-	}
-}
-
-async function handleTemporalLink(button, dateKey) {
-	const isLinked = button.classList.contains('linked');
-
-	if (isLinked) {
-		await unlinkTemporalDay(button.dataset.archiveId);
-		button.classList.remove('linked');
-		button.dataset.archiveId = '';
-		button.title = 'Link this day to current conversation';
-	} else {
-		const linkedDays = await getLinkedDays();
-		if (linkedDays.linked_days.length >= linkedDays.max_allowed) {
-			alert(`You can only link up to ${linkedDays.max_allowed} days at a time.`);
-			return;
-		}
-
-		const dateStr = convertDateKeyToDateStr(dateKey);
-		if (!dateStr) {
-			console.error('Cannot determine date string from dateKey:', dateKey);
-			return;
-		}
-
-		const archiveId = await linkTemporalDay(dateStr);
-		if (archiveId) {
-			button.classList.add('linked');
-			button.dataset.archiveId = archiveId;
-			button.title = 'Unlink this day from current conversation';
-		}
-	}
-}
-
-async function linkTemporalDay(dateStr) {
-	try {
-		const response = await AppState.apiClient.executeAction(
-			'conversation',
-			'link_day',
-			{ date: dateStr }
-		);
-
-		if (response.linked) {
-			console.log('Day linked successfully:', response.date);
-			return response.archive_id;
-		}
-		return null;
-	} catch (error) {
-		console.error('Failed to link day:', error);
-		alert('Failed to link day. Please try again.');
-		return null;
-	}
-}
-
-async function unlinkTemporalDay(archiveId) {
-	try {
-		const response = await AppState.apiClient.executeAction(
-			'conversation',
-			'unlink_day',
-			{ archive_id: archiveId }
-		);
-
-		if (response.unlinked) {
-			console.log('Day unlinked successfully');
-		}
-	} catch (error) {
-		console.error('Failed to unlink day:', error);
-		alert('Failed to unlink day. Please try again.');
-	}
-}
-
-async function getLinkedDays() {
-	try {
-		return await AppState.apiClient.data.getData('linked_days');
-	} catch (error) {
-		console.error('Failed to get linked days:', error);
-		return { linked_days: [], max_allowed: 0 };
-	}
-}
-
-async function updateTemporalLinkStates() {
-	const linkedDays = await getLinkedDays();
-	const linkedArchiveIds = linkedDays.linked_days.map(day => day.archive_id);
-
-	document.querySelectorAll('.temporal-link-button').forEach(button => {
-		if (button.dataset.archiveId && linkedArchiveIds.includes(button.dataset.archiveId)) {
-			button.classList.add('linked');
-			button.title = 'Unlink this day from current conversation';
-		} else {
-			button.classList.remove('linked');
-			button.dataset.archiveId = '';
-			button.title = 'Link this day to current conversation';
-		}
-	});
 }
 
 // ========================================

@@ -31,9 +31,11 @@ class MemoryFloorTrigger:
     trigger_id = "memory_floor"
     interface_name = "memory_curator_floor"
 
-    # agent_class is resolved lazily at class-access time to avoid an import
-    # cycle at module load (MemoryCuratorAgent -> tools.implementations.memory_tool
-    # -> ...). The dispatcher reads trigger.agent_class per dispatch.
+    # agent_class is resolved lazily at class-access time so registering this
+    # trigger does not eagerly initialize the heavy infra clients that
+    # MemoryCuratorAgent -> tools.implementations.memory_tool pull in at module
+    # load (hybrid embeddings, Valkey). The dispatcher reads trigger.agent_class
+    # per dispatch. There is no import cycle — lt_memory never imports agents/.
 
     def __init__(self):
         from utils.database_session_manager import get_shared_session_manager

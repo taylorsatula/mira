@@ -377,14 +377,6 @@ class MiraAPIClient {
             
             listReminders: async () => {
                 return this.actions.executeAction('reminder', 'list');
-            },
-            
-            linkTemporalDay: async (date) => {
-                return this.actions.executeAction('conversation', 'link_day', { date });
-            },
-            
-            unlinkTemporalDay: async (archiveId) => {
-                return this.actions.executeAction('conversation', 'unlink_day', { archive_id: archiveId });
             }
         };
         
@@ -395,10 +387,6 @@ class MiraAPIClient {
                 queryParams.append('type', dataType);
                 const response = await this._httpRequest(`/v0/api/data?${queryParams.toString()}`);
                 return response;
-            },
-            
-            getLinkedDays: async () => {
-                return this.data.getData('linked_days');
             }
         };
         

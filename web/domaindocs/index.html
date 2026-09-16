@@ -1291,7 +1291,7 @@ apiClient.auth.onAuthChange(async (event) => {
         selector.disabled = false;
         updateArchiveToggleStyle();
     } else if (event.type === 'logout') {
-        window.location.href = '/login';
+        window.location.href = '/';
     }
 });
 
@@ -1302,7 +1302,7 @@ async function initPage() {
         // If we get here, we're authenticated - validateToken emits login event
     } catch (e) {
         console.log('Not authenticated, redirecting to login');
-        window.location.href = '/login';
+        window.location.href = '/';
     }
 }
 

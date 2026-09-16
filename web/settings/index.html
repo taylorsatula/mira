@@ -1049,26 +1049,6 @@ document.addEventListener('DOMContentLoaded', () => {
 		});
 	}
 
-	const deleteHistoryBtn = document.getElementById('btn-delete-history');
-	if (deleteHistoryBtn) {
-		deleteHistoryBtn.addEventListener('click', async () => {
-			if (!window.miraAPI?.search?.clearSearchConversation) {
-				alert('Conversation history controls are not available yet.');
-				return;
-			}
-			if (!confirm('Delete your saved conversation history? This cannot be undone.')) {
-				return;
-			}
-			try {
-				await window.miraAPI.search.clearSearchContinuum();
-				alert('Conversation history cleared.');
-			} catch (error) {
-				console.error('Failed to clear history:', error);
-				alert('Could not clear conversation history. Please try again.');
-			}
-		});
-	}
-
 	const logoutBtn = document.getElementById('btn-logout');
 	if (logoutBtn) {
 		logoutBtn.addEventListener('click', async () => {
@@ -1155,7 +1135,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			console.error('Logout failed:', error);
 		} finally {
 			window.miraAPI?.auth?.clearToken?.();
-			window.location.href = '/login';
+			window.location.href = '/';
 		}
 	}
 });
@@ -1372,13 +1352,6 @@ document.addEventListener('DOMContentLoaded', () => {
 							<td class="setting-label">Memories</td>
 							<td class="setting-value">
 								<button id="btn-edit-memories" class="btn">Edit Memories</button>
-							</td>
-						</tr>
-						<tr>
-							<td class="setting-label">Conversation History</td>
-							<td class="setting-value">
-								<button id="btn-delete-history" class="btn btn-danger">Delete Conversation History</button>
-								<p style="margin-top: 8px; color: var(--text-inline-muted); font-size: 12px;">Removes chat history cached for search and review. This does not affect memories.</p>
 							</td>
 						</tr>
 					</tbody>

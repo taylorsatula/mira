@@ -356,7 +356,7 @@ class SettingsManager {
             if (this.apiClient && this.apiClient.auth) {
                 this.apiClient.auth.clearToken();
             }
-            window.location.href = '/login';
+            window.location.href = '/';
         }
     }
     

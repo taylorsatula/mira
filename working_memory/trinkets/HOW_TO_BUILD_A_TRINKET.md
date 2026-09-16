@@ -287,9 +287,9 @@ self.event_bus.publish(UpdateTrinketEvent.create(
 ))
 ```
 
-`target_trinket` is matched against registered **class names**. A name with no registered trinket is dropped with a warning and the refresh silently never happens — `punchclock_tool.py` publishes to `PunchclockTrinket`, which does not exist, and is a live example of that dead target. Verify the class name before shipping.
+`target_trinket` is matched against registered **class names**. A name with no registered trinket is dropped with a warning and the refresh silently never happens — `punchclock_tool.py` once published to `PunchclockTrinket`, which did not exist; the dead refresh was ablated, but the pitfall remains: verify the class name before shipping.
 
-Working Memory injection into a tool is signature-driven: declare `working_memory: Optional["WorkingMemory"] = None` in the tool's `__init__` and `ToolRepository.get_tool()` supplies it (see `tools/HOW_TO_BUILD_A_TOOL.md`).
+Working Memory injection into a tool is signature-driven: declare a required `working_memory: "WorkingMemory"` param in the tool's `__init__` and `ToolRepository.get_tool()` supplies it — a defaulted `Optional` param is deliberately skipped by DI (see `tools/HOW_TO_BUILD_A_TOOL.md`).
 
 ## Complete Example: Result-Feed Trinket
 

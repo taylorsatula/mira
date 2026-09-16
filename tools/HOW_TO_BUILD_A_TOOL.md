@@ -498,13 +498,15 @@ When your tool needs to make authenticated HTTP requests, you have two approache
 If your tool calls external APIs, leverage `web_tool`'s built-in credential injection. The LLM specifies credentials **by name only**—it never sees the actual values.
 
 ```python
-# In your tool's run() method:
-from tools.repo import get_tool_repository
+# Declare the repository as a required constructor param; ToolRepository's
+# DI injects itself by annotation when it instantiates your tool.
+def __init__(self, tool_repo: ToolRepository):
+    super().__init__()
+    self.tool_repo = tool_repo
 
 def _call_external_api(self, endpoint: str, credential_name: str) -> Dict[str, Any]:
     """Make authenticated API call using stored credential."""
-    tool_repo = get_tool_repository()
-    web_tool = tool_repo.get_tool("web_tool")
+    web_tool = self.tool_repo.get_tool("web_tool")
 
     return web_tool.run(
         operation="http",
@@ -712,7 +714,7 @@ class MyToolConfig(BaseModel):
 registry.register("my_tool", MyToolConfig)
 ```
 
-If you don't register a config, `Tool.__init__` fabricates one with `enabled: bool = True` via `registry.create_default` — an unregistered tool is therefore **auto-enabled**, the opposite of what a new tool wants. **A tool with custom config fields must register explicitly** or those fields silently do not exist — and the fabrication only wins the race if your module was imported before the config read. The reliable contract is always register-your-own, at module level. When probing the registry yourself: `get_or_create` returns the config **class**, not an instance — call it before instantiating.
+If you don't register a config, `Tool.__init__` (tools/repo.py) builds one inline — it constructs a pydantic `create_model` class with `enabled: bool = True` and registers it directly via `registry.register` — so an unregistered tool is **auto-enabled**, the opposite of what a new tool wants. (`registry.create_default` exists but is only reached through `registry.get_or_create`, not through tool instantiation.) **A tool with custom config fields must register explicitly** or those fields silently do not exist — and the fabrication only wins the race if your module was imported before the config read. The reliable contract is always register-your-own, at module level. When probing the registry yourself: `get_or_create` returns the config **class**, not an instance — call it before instantiating.
 
 ### Tool Descriptions
 
@@ -1006,8 +1008,11 @@ class MyTool(Tool):
         }
     }
 
-    def __init__(self):
+    def __init__(self, tool_repo: ToolRepository):
+        # ToolRepository's DI injects itself by annotation when instantiating
+        # the tool — no lookup call needed.
         super().__init__()
+        self.tool_repo = tool_repo
         self.logger = logging.getLogger(__name__)
 
         # Only create tables if user context is available -- __init__ also runs
@@ -1153,7 +1158,7 @@ For tools that call external APIs with stored credentials:
 import logging
 from typing import Dict, Any, Optional
 
-from tools.repo import Tool, get_tool_repository
+from tools.repo import Tool, ToolRepository
 from tools.registry import registry
 from pydantic import BaseModel, Field
 
@@ -1215,8 +1220,7 @@ class MyAPITool(Tool):
 
         The credential value is NEVER visible to the LLM - only referenced by name.
         """
-        tool_repo = get_tool_repository()
-        web_tool = tool_repo.get_tool("web_tool")
+        web_tool = self.tool_repo.get_tool("web_tool")
 
         return web_tool.run(
             operation="http",
@@ -1575,7 +1579,7 @@ End the change report with a verification state: **EXECUTED** (what ran) or **UN
 | Handler crashes on a sibling op's param | `TypeError: unexpected keyword argument` | `invoke_tool` passes every schema-declared param to every operation — filter or tolerate |
 | Infrastructure hedging | `try: db.query() except: return []` | Fail-fast; `[]` must mean "no data", never "query failed" |
 | Unverified code | Clean types, never executed | Boot gate + live execution, per the tier table |
-| Dead trinket target | Refresh published, nothing renders | `target_trinket` must be a registered class name (`punchclock_tool` publishes to a trinket that does not exist) |
+| Dead trinket target | Refresh published, nothing renders | `target_trinket` must be a registered class name (`punchclock_tool` used to publish to a trinket that did not exist; the dead refresh has since been removed) |
 
 ## Best Practices
 

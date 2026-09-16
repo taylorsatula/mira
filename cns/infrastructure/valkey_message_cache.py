@@ -53,6 +53,10 @@ class ValkeyMessageCache:
         """Generate cache key for user continuum messages."""
         return f"{self.key_prefix}:{user_id}:messages"
 
+    def _get_epoch_key(self, user_id: str) -> str:
+        """Generate the collapse-epoch counter key for a user."""
+        return f"{self.key_prefix}:{user_id}:epoch"
+
     def _serialize_messages(self, messages: list[Message]) -> str:
         """
         Serialize messages to JSON for storage.
@@ -88,6 +92,7 @@ class ValkeyMessageCache:
         Get continuum messages from Valkey cache.
 
         Cache miss indicates a new session (invalidated by segment timeout).
+        Epoch tracking for commit-time compare-and-set lives in get_epoch().
 
         Requires: Active user context (set via set_current_user_id during authentication)
 
@@ -109,9 +114,53 @@ class ValkeyMessageCache:
             logger.debug(f"No cached continuum found for user {user_id}")
             return None
 
+    def get_epoch(self) -> int:
+        """Read the current collapse epoch for the ambient user (missing = 0)."""
+        user_id = get_current_user_id()
+        value = self.valkey.get(self._get_epoch_key(user_id))
+        return int(value) if value else 0
+
+    def set_continuum_if_epoch(self, messages: list[Message], epoch: int) -> bool:
+        """
+        Store continuum messages in Valkey only if the collapse epoch is
+        unchanged since the continuum was loaded.
+
+        When a segment collapse invalidated the cache between the load and
+        this write, the passed epoch is stale and the write is skipped — the
+        cache stays empty and the next get_or_create() reloads collapse-
+        correct state from the database. A skipped write is not an error.
+
+        Args:
+            messages: List of messages to cache
+            epoch: Collapse epoch captured with the loaded continuum
+
+        Returns:
+            True if the cache write landed, False if it was skipped on epoch mismatch
+
+        Requires: Active user context (set via set_current_user_id during authentication)
+
+        Raises:
+            ValkeyError: If Valkey infrastructure is unavailable
+            RuntimeError: If no user context is set
+        """
+        user_id = get_current_user_id()
+        epoch_key = self._get_epoch_key(user_id)
+        key = self._get_key(user_id)
+        data = self._serialize_messages(messages)
+
+        written = self.valkey.set_if_counter_matches(epoch_key, epoch, key, data)
+        if written:
+            logger.debug(f"Cached continuum for user {user_id} (epoch {epoch})")
+        else:
+            logger.debug(
+                "Skipped continuum cache write for user %s — collapse epoch moved "
+                "past %d; next load rebuilds from database", user_id, epoch
+            )
+        return written
+
     def set_continuum(self, messages: list[Message]) -> None:
         """
-        Store continuum messages in Valkey.
+        Store continuum messages in Valkey unconditionally.
 
         Cache remains until explicitly invalidated by segment timeout handler.
 
@@ -218,6 +267,11 @@ class ValkeyMessageCache:
         messages_key = self._get_key(user_id)
 
         messages_result = self.valkey.delete(messages_key)
+
+        # Bump the collapse epoch so in-flight UnitOfWork commits carrying the
+        # pre-collapse epoch skip their cache write instead of re-caching the
+        # pre-collapse message set.
+        self.valkey.increment(self._get_epoch_key(user_id))
 
         if messages_result:
             logger.debug(f"Invalidated cached continuum for user {user_id}")

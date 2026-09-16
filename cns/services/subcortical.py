@@ -57,12 +57,17 @@ class SubcorticalResult:
         """
         Return the named effort level based on complexity assessment.
 
-        Maps subcortical complexity vocabulary to provider-neutral effort levels:
-        - "straightforward" → "medium" (simple questions, status updates, casual chat)
+        Maps subcortical complexity vocabulary to provider-neutral effort levels.
+        Only "low" and "high" are produced: both exist in every provider's effort
+        ladder, whereas "medium" is missing from several thinking-oriented models
+        (e.g. DeepSeek V4.1 accepts low/high/xhigh/max only), so deriving it here
+        causes a provider 400 on every straightforward turn.
+
+        - "straightforward" → "low" (simple questions, status updates, casual chat)
         - "complex" → "high" (multi-step reasoning, debugging, decision-making)
         """
         if self.complexity == "straightforward":
-            return "medium"
+            return "low"
         return "high"
 
 # Number of user/assistant pairs to include as context (3 pairs = 6 messages).

@@ -172,25 +172,20 @@ class OpenAIChatBase(Dialect):
 
     @staticmethod
     def _budget_to_effort_heuristic(budget_tokens: int) -> EffortLevel:
-        """Best-effort monotonic mapping of budget hint to effort category.
+        """Best-effort monotonic mapping of a budget hint to an effort category.
 
-        Heuristic — neither OpenAI nor Groq publish per-effort token budgets,
-        so this is a documented guess. Dialects whose provider DOES publish
+        Heuristic — neither OpenAI nor Groq publish per-effort token budgets, so
+        this is a documented guess. Dialects whose provider DOES publish
         thresholds should override this method with the documented values.
+
+        Only "low" and "high" are emitted: both exist in every provider on this
+        family, while "medium"/"xhigh"/"max" are provider-specific. A zero budget
+        cannot be honoured as "no reasoning" — thinking-only models have no such
+        level — so it maps to the lowest deliberating level.
         """
-        # A zero budget is not "a little reasoning", it is no reasoning, and every
-        # provider on this family rejects reasoning_effort below its lowest tier.
-        if budget_tokens <= 0:
-            return "none"
-        if budget_tokens <= 2048:
-            return "low"
         if budget_tokens <= 8192:
-            return "medium"
-        if budget_tokens <= 16000:
-            return "high"
-        if budget_tokens <= 32000:
-            return "xhigh"
-        return "max"
+            return "low"
+        return "high"
 
     # ------------------------------------------------------------------
     # Transport: non-streaming completion.

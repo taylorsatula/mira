@@ -300,6 +300,29 @@ class ValkeyClient:
         """
         return bool(self._client.eval(script, 1, key, expected_value, new_value))
 
+    def increment(self, key: str) -> int:
+        """Atomically increment a counter by one, creating it at 1 if missing."""
+        return int(self._client.incr(key))
+
+    def set_if_counter_matches(self, counter_key: str, expected_counter: int,
+                               value_key: str, value: str) -> bool:
+        """Atomically SET value_key only when counter_key equals expected_counter.
+
+        A missing counter_key reads as 0, so callers capturing the epoch before
+        the first invalidation can still compare-and-set. Returns False (no
+        write) when the counter has moved on.
+        """
+        script = """
+        local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+        if current ~= tonumber(ARGV[1]) then
+            return 0
+        end
+        redis.call('SET', KEYS[2], ARGV[2])
+        return 1
+        """
+        return bool(self._client.eval(script, 2, counter_key, value_key,
+                                     expected_counter, value))
+
     def scan_iter(self, match: Optional[str] = None) -> Iterator[str]:
         """Scan iterator for keys matching pattern."""
         return self._client.scan_iter(match=match)

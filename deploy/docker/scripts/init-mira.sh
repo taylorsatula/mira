@@ -249,14 +249,16 @@ init_vault() {
 
     # Store secrets in Vault
     print_step "Storing API credentials in Vault..."
-    # model_configs seeds 'fast' with api_key_name = subcortical_key and
-    # 'other'/'primary' with provider_key. The container collects one generic
-    # fast-inference key, so seed it under both names or the fast route
-    # resolves to a missing Vault field at runtime.
+    # model_configs seeds primary with an empty api_key_name (the unauthenticated
+    # local llama-server) and fast/batch/assessment/other with subcortical_key.
+    # Only subcortical_key is written here: the container UPDATE repoints
+    # dialect/endpoint/model but never api_key_name, so no seeded row can name
+    # provider_key. provider_key exists for the bare-metal installer
+    # (deploy/postgresql.sh, deploy/python.sh), which seeds primary against an
+    # authenticated outside chat provider — not this script.
     vault kv put secret/mira/api_keys \
         anthropic_key="$CONFIG_ANTHROPIC_KEY" \
         anthropic_batch_key="$CONFIG_ANTHROPIC_BATCH_KEY" \
-        provider_key="$CONFIG_PROVIDER_KEY" \
         subcortical_key="$CONFIG_PROVIDER_KEY" \
         kagi_api_key="$CONFIG_KAGI_KEY"
 

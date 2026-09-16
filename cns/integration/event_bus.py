@@ -7,12 +7,24 @@ Integrates CNS events with existing MIRA components for system coordination.
 from __future__ import annotations
 
 import logging
-import threading
 from collections.abc import Callable
 
 from ..core.events import ContinuumEvent
 
 logger = logging.getLogger(__name__)
+
+
+def _iter_event_names() -> set[str]:
+    """Return the __name__ of every ContinuumEvent subclass in cns.core.events."""
+    names = set()
+
+    def walk(cls: type) -> None:
+        for sub in cls.__subclasses__():
+            names.add(sub.__name__)
+            walk(sub)
+
+    walk(ContinuumEvent)
+    return names
 
 
 class EventBus:
@@ -27,16 +39,6 @@ class EventBus:
         """Initialize event bus."""
         self._subscribers: dict[str, list[Callable[[ContinuumEvent], None]]] = {}
 
-        # Shutdown event for cleanup
-        self._shutdown_event = threading.Event()
-
-        # Register built-in MIRA integrations
-        self._register_mira_integrations()
-
-    def _register_mira_integrations(self) -> None:
-        """Register built-in event handlers for MIRA component integration."""
-        logger.info("Registered built-in MIRA component integrations")
-
     def publish(self, event: object) -> None:
         """
         Publish an event to all subscribers.
@@ -44,9 +46,13 @@ class EventBus:
         Dispatch is structural on the event's class name; events are typically
         ContinuumEvents but any domain event object may be published.
 
-        Handles both sync and async callbacks appropriately:
-        - Sync callbacks are executed immediately
-        - Async callbacks are queued for processing in the event loop
+        Callbacks execute synchronously, inline, on the caller's thread. There
+        is no event loop or queue: handlers must be synchronous functions.
+        Async work inside a handler must spawn a thread with
+        contextvars.copy_context().run(fn) (see cns/services/tool_loop.py).
+
+        Passing an async function as a subscriber is a programming error: it
+        returns an un-awaited coroutine that silently never runs.
 
         Args:
             event: Domain event object to publish
@@ -61,7 +67,6 @@ class EventBus:
             # failed subscriber shows up in the logs; the remaining
             # subscribers still hear the event.
             for callback in self._subscribers[event_type]:
-                # Execute all callbacks synchronously
                 try:
                     callback(event)
                 except Exception:
@@ -74,9 +79,20 @@ class EventBus:
         Subscribe to events of a specific type.
 
         Args:
-            event_type: Name of event class to subscribe to
+            event_type: Name of an event class defined in cns/core/events.py
             callback: Function to call when event is published
+
+        Raises:
+            ValueError: if event_type is not the __name__ of a
+                ContinuumEvent subclass — this fails fast at subscribe()
+                time (graph construction/boot) rather than silently
+                stranding the subscriber when a class is renamed.
         """
+        if event_type not in _iter_event_names():
+            raise ValueError(
+                f"Unknown event type '{event_type}': not a ContinuumEvent "
+                "subclass in cns/core/events.py"
+            )
         if event_type not in self._subscribers:
             self._subscribers[event_type] = []
         self._subscribers[event_type].append(callback)
@@ -126,8 +142,4 @@ class EventBus:
     def shutdown(self) -> None:
         """Shutdown the event bus and clean up resources."""
         logger.info("Shutting down event bus")
-
-        # Signal processor to stop
-        self._shutdown_event.set()
-
         self.clear_subscribers()
