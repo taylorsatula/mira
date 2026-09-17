@@ -1,0 +1,30 @@
+# MIRA deployment configuration — dev-VM on the libvirt host (192.168.1.9).
+# Used by oneshot.sh: pushed to the VM and passed to deploy.sh via --config.
+# Keys mirror deploy/deploy-config.example.yml (every key required; "" = skip
+# with a placeholder — inject.sh replaces the Vault wholesale from the
+# sarcophagus, which carries the real lunaroute key, so no secrets live here).
+offline_mode: no
+build_llama_cpp: no
+llama_main_url: "http://localhost:3090/v1/chat/completions"
+llama_main_model: local-main
+llama_small_url: "http://localhost:3092/v1/chat/completions"
+llama_small_model: local-small
+local_model_choice: auto
+custom_gguf: ""
+chat_provider_type: generic
+chat_endpoint: "https://gw.lunaroute.com/v1/chat/completions"
+chat_api_key: ""
+chat_model: "glm-5.3"
+anthropic_key: ""
+anthropic_batch_key: ""
+subcortical_endpoint: "https://gw.lunaroute.com/v1/chat/completions"
+subcortical_api_key: ""
+subcortical_model: "glm-5.3-flash"
+kagi_api_key: ""
+db_password: ""
+timezone: America/Chicago
+install_playwright: yes
+install_systemd: yes
+start_mira_now: yes
+overwrite_existing: yes
+stop_occupied_ports: yes

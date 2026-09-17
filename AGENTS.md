@@ -297,3 +297,62 @@ Recurring mistakes kept as incident records — the examples are historical, the
 | Infrastructure hedging | `try: db.query() except: return []` | Fail-Fast Infrastructure above; silent degradation is diagnostic hell |
 | UUID mismatches at boundaries | `TypeError: Object of type UUID is not JSON serializable` | Native types internally; convert only at serialization boundaries; early conversion breaks comparisons |
 | Incomplete path replacement | Replacing `_generate_non_streaming()` but missing the buried `_write_firehose()` call | Trace ALL side effects — logging, metrics, state, events; verify by booting |
+
+## 🖥️ Dev-instance deployment — libvirt host (192.168.1.9)
+
+**The toolkit ships IN THIS REPO at `deploy/vm/`** — read `deploy/vm/README.md`
+first. Three modes, all exercised 2026-09-16/17 end-to-end: local libvirt (on the
+host), `--host admin@192.168.1.9` (orchestrated from this Mac, no local libvirt
+needed), and `--ip 192.168.65.2 --vm-user mira_service --vm-pass …` (plain ssh
+onto this Mac's own aarch64 VM: dev build deployed in 182 s, v3 sarcophagus
+restored, 9/9 facts PASS, chat-continuity confirmed from restored memories).
+`extract.sh` snapshots a live instance into a sealed sarcophagus the same way —
+validated against the Mac VM too (cross-arch, cross-user remap: units `User=`,
+credentials, and ownership follow `--vm-user`).
+
+**Reference host recipe** (run on the host, or from this Mac via `--host`):
+
+```bash
+ssh admin@192.168.1.9 \
+  /home/admin/mira_instance_snapshots/bin/oneshot.sh \
+  /home/admin/mira_instance_snapshots/mlfactory_v3_mira   # or another sarcophagus
+```
+
+That spawns a fresh VM from the host's default-state frozen base template, deploys a
+dev build from `/home/admin/mira-OSS-worktree` (a snapshot of this worktree), injects
+the sarcophagus (Postgres, user data incl. domaindocs, Vault with real keys, units),
+and verifies health + row counts against the sarcophagus's SNAPSHOT-FACTS.txt.
+`--fresh` rebuilds a running VM (old disk preserved); omit it to reuse a running one.
+Deploy-only (no instance state): the oneshot phases are just spawn → deploy; or run
+`deploy/deploy.sh --config <yml> --local` by hand inside a VM.
+
+**Refresh the host's source snapshot after changing this worktree** (the host deploys
+from its copy, not from here):
+
+```bash
+cd ~/Programming/GitHub/mira-OSS && tar --exclude=.git --exclude=data --exclude=logs \
+  --exclude=scratch --exclude=__pycache__ --exclude='*.pyc' --exclude=.env \
+  --exclude=venv --exclude=.claude -czf - . | \
+  ssh admin@192.168.1.9 'tar -C /home/admin/mira-OSS-worktree -xzf -'
+```
+
+**`deploy/deploy.sh --local` (added 2026-09-16):** installs MIRA from the CURRENT
+DIRECTORY (a mira-OSS checkout, typically with uncommitted dev changes) instead of
+wget-ing the main-branch tarball from GitHub — same target, ownership, and downstream
+steps. Run from the repo root. Excludes (parity with the GitHub tarball): `.git`,
+`venv`, `__pycache__`, `*.pyc`, `.env`, `.claude`, `.DS_Store`, `data`, `logs`,
+`scratch`. Note the deploy is greenfield-only: it installs the schema into an empty
+`mira_service` (drop the DB first on re-deploys — oneshot.sh does this for you).
+
+**Known drift in this worktree:** `deploy/mira_service_schema.sql` currently seeds the
+primary model row at the LAN llama-server while `deploy/python.sh` fail-fasts on the
+committed openrouter row — deploying the raw dirty tree aborts with "Could not find
+the seeded primary model_configs row". Either restore the committed row before
+deploying, or deploy from the host's staging copy (already patched; the host's
+`/home/admin/mira_instance_snapshots/AGENTS.md` records the exact patch).
+
+**Working with the deployed instance** (minting API tokens, chat endpoint, DB probing,
+turn-in-flight rules, memory/schema maps): read
+`/home/admin/mira_instance_snapshots/AGENTS.md` on the host — the full quickbook of
+validated commands lives there. Sarcophagi lineage (v1/v2/v3), extraction tooling, and
+restore contracts are documented there too.

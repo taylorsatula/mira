@@ -73,7 +73,7 @@ CREATE TABLE model_configs (
 -- and the repulsion rewriter ride 'batch'.
 INSERT INTO model_configs (name, model, dialect_name, endpoint_url, api_key_name, effort, max_tokens)
 VALUES
-    ('primary', 'Qwen3.8 27B Uncensored Q8_0', 'openai', 'http://192.168.1.9:3090/v1/chat/completions', '', 'high', 16000),
+    ('primary', 'openai/gpt-5.5', 'openrouter', 'https://openrouter.ai/api/v1/chat/completions', 'provider_key', 'high', 16000),
     ('fast', 'poolside/laguna-xs-2.1', 'openai', 'https://openrouter.ai/api/v1/chat/completions', 'subcortical_key', 'none', 4096),
     ('batch', 'poolside/laguna-s-2.1', 'openai', 'https://openrouter.ai/api/v1/chat/completions', 'subcortical_key', 'high', 16000),
     ('assessment', 'poolside/laguna-s-2.1', 'openai', 'https://openrouter.ai/api/v1/chat/completions', 'subcortical_key', 'none', 10000),

@@ -2,11 +2,20 @@
 # MIRA Deployment Orchestrator
 # This is the main entry point for deploying MIRA
 #
-# Usage: ./deploy/deploy.sh [--loud] [--config <file>]
+# Usage: ./deploy/deploy.sh [--loud] [--config <file>] [--local]
 #
 # --config bypasses the interactive interview entirely: copy
 # deploy/deploy-config.example.yml, fill in the placeholders, and run
 #   ./deploy/deploy.sh --config deploy-config.yml --loud
+#
+# --local installs the MIRA code from the CURRENT DIRECTORY (a mira-OSS
+# checkout, typically with uncommitted dev changes) instead of downloading
+# the main-branch tarball from GitHub. Run it from the repo root:
+#   cd /path/to/mira-OSS && ./deploy/deploy.sh --config deploy-config.yml --local --loud
+# Untracked runtime junk the GitHub tarball never contains is excluded
+# (.git, venv, __pycache__, *.pyc, .env, data, logs, scratch); everything
+# else — including uncommitted modifications — is installed to /opt/mira/app
+# with the same ownership and downstream steps as the GitHub path.
 #
 # Quick start (downloads and runs):
 #   git clone https://github.com/taylorsatula/mira-OSS.git /tmp/mira-install && /tmp/mira-install/deploy/deploy.sh
@@ -49,15 +58,21 @@ fi
 # Parse arguments
 LOUD_MODE=false
 CONFIG_FILE=""
+LOCAL_SOURCE="false"
 while [ $# -gt 0 ]; do
     case "$1" in
         --loud) LOUD_MODE=true ;;
+        --local)
+            # Capture cwd NOW, before any phase script changes directory:
+            # python.sh installs from this tree instead of wget-ing GitHub.
+            LOCAL_SOURCE="true"
+            LOCAL_SOURCE_DIR="$(pwd)" ;;
         --config)
             shift
             CONFIG_FILE="${1:?--config requires a file path}" ;;
         --config=*) CONFIG_FILE="${1#*=}" ;;
         *)
-            echo "Unknown option: $1 (supported: --loud, --config <file>)"
+            echo "Unknown option: $1 (supported: --loud, --local, --config <file>)"
             exit 1 ;;
     esac
     shift

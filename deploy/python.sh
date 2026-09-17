@@ -61,30 +61,50 @@ elif [ "$OS" = "macos" ]; then
     MIRA_GROUP="staff"
 fi
 
-# Download to /tmp to keep user's home directory clean
-cd /tmp
-
-# NOTE: Currently downloads from main branch for active development.
-# The stable-release procedure (tagged tarball install) lives in deploy/RELEASE.md.
-
-run_with_status "Downloading MIRA from main branch" \
-    wget -q -O mira-main.tar.gz https://github.com/taylorsatula/mira-OSS/archive/refs/heads/main.tar.gz
-
 run_with_status "Creating /opt/mira/app directory" \
     sudo mkdir -p /opt/mira/app
 
-run_with_status "Extracting archive" \
-    tar -xzf mira-main.tar.gz -C /tmp
+if [ "${LOCAL_SOURCE:-false}" = "true" ]; then
+    # --local: install from the repo checkout deploy.sh was invoked from
+    # (cwd captured at argument-parsing time) instead of wget-ing GitHub.
+    # Same target, ownership, and downstream steps as the tarball path.
+    LOCAL_SOURCE_DIR="${LOCAL_SOURCE_DIR:?--local requires the cwd captured by deploy.sh}"
+    for f in main.py requirements.txt deploy/deploy.sh; do
+        if [ ! -f "$LOCAL_SOURCE_DIR/$f" ]; then
+            print_error "--local: '$LOCAL_SOURCE_DIR' is not a mira-OSS checkout (missing $f)"
+            print_info "Run from the repo root: cd /path/to/mira-OSS && ./deploy/deploy.sh --local ..."
+            exit 1
+        fi
+    done
+    # Excludes are the untracked runtime junk the GitHub tarball never
+    # contains; everything else — including uncommitted modifications —
+    # is installed.
+    run_with_status "Installing MIRA from local tree ($LOCAL_SOURCE_DIR)" \
+        bash -c "sudo tar -C '$LOCAL_SOURCE_DIR' \\
+            --exclude=.git --exclude=venv --exclude=__pycache__ \\
+            --exclude='*.pyc' --exclude=.env --exclude=.claude --exclude=.DS_Store \\
+            --exclude=data --exclude=logs --exclude=scratch \\
+            -cf - . | sudo tar -C /opt/mira/app -xf -"
+else
+    # Download to /tmp to keep user's home directory clean
+    cd /tmp
 
-run_with_status "Copying files to /opt/mira/app" \
-    sudo cp -r /tmp/mira-OSS-main/* /opt/mira/app/
+    run_with_status "Downloading MIRA from main branch" \
+        wget -q -O mira-main.tar.gz https://github.com/taylorsatula/mira-OSS/archive/refs/heads/main.tar.gz
+
+    run_with_status "Extracting archive" \
+        tar -xzf mira-main.tar.gz -C /tmp
+
+    run_with_status "Copying files to /opt/mira/app" \
+        sudo cp -r /tmp/mira-OSS-main/* /opt/mira/app/
+
+    # Clean up immediately after copying
+    run_quiet rm -f /tmp/mira-main.tar.gz
+    run_quiet rm -rf /tmp/mira-OSS-main
+fi
 
 run_with_status "Setting ownership to $MIRA_USER:$MIRA_GROUP" \
     sudo chown -R $MIRA_USER:$MIRA_GROUP /opt/mira
-
-# Clean up immediately after copying
-run_quiet rm -f /tmp/mira-main.tar.gz
-run_quiet rm -rf /tmp/mira-OSS-main
 
 print_success "MIRA installed to /opt/mira/app"
 
