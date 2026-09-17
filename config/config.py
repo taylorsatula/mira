@@ -260,6 +260,31 @@ class SidebarDispatcherConfig(BaseModel):
     )
 
 
+class DevicePowerBindingConfig(BaseModel):
+    """Optional binding site connecting the heartbeat wake cycle to the
+    physical device's power management. The dispatcher publishes the earliest
+    next wake obligation here; a deployer-supplied shim bridges to the C++
+    layer that actually enters low power. See utils/device_binding.py."""
+
+    module_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Filesystem path to a deployer-supplied Python module exposing "
+            "arm_low_power(wake_at_utc: str, wake_lead_seconds: int, "
+            "metadata: HeartbeatSleepMetadata) -> None; see "
+            "utils/device_binding.py for the contract. None (the default) "
+            "leaves the device at full power — the unbound behavior"
+        )
+    )
+    wake_lead_seconds: int = Field(
+        default=30, ge=0,
+        description=(
+            "Seconds before the published wake time the device should be back "
+            "at full power so the dispatcher tick fires on time"
+        )
+    )
+
+
 class HeartbeatConfig(BaseModel):
     """Heartbeat wake-cycle configuration.
 
@@ -314,6 +339,14 @@ class HeartbeatConfig(BaseModel):
             "TTL for the per-user request lock a heartbeat turn holds. Must "
             "exceed the longest expected heartbeat turn; the lock is not "
             "renewed mid-turn"
+        )
+    )
+    device_power_binding: DevicePowerBindingConfig = Field(
+        default_factory=DevicePowerBindingConfig,
+        description=(
+            "Low-power device binding for the wake cycle: publishes the "
+            "earliest next wake time to a deployer-supplied shim so the "
+            "metal can sleep between wakes (utils/device_binding.py)"
         )
     )
 

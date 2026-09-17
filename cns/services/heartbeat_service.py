@@ -46,6 +46,7 @@ from config.config_manager import config as app_config
 from utils.distributed_lock import UserRequestLock
 from utils.timezone_utils import parse_utc_time_string, utc_now
 from utils.user_context import set_current_segment_id, set_current_user_id
+from utils.device_binding import HeartbeatSleepMetadata, notify_heartbeat_sleep
 
 logger = logging.getLogger(__name__)
 
@@ -356,7 +357,14 @@ def _execute_heartbeat_turn(
 
 
 async def heartbeat_tick() -> None:
-    """Scheduler entry point: one wake cycle across all users with active segments."""
+    """Scheduler entry point: one wake cycle across all users with active segments.
+
+    Device binding: the pass aggregates the earliest next wake obligation
+    across all users (min heartbeat_wake_at, freshly stamped stamps included)
+    and publishes it to utils.device_binding.notify_heartbeat_sleep so the
+    physical device can sleep until then. Users that force the device awake —
+    mid-turn (lock held), pregated-out, breakout, cancelled, failed turn — set
+    stay_awake and suppress arming for the whole pass."""
     if not app_config.heartbeat.enabled:
         return
 
@@ -364,6 +372,18 @@ async def heartbeat_tick() -> None:
 
     repo = get_continuum_pool().repository
     segments = repo.find_all_active_segments_admin()
+
+    # Device-binding aggregation state. earliest_wake_dt is comparable UTC
+    # time; earliest_wake_str is the original sentinel stamp handed to the
+    # binding unmodified. wake_by_user is the per-user schedule composing the
+    # aggregate — it rides along as the binding's metadata field so the far
+    # side can route on it. stay_awake marks any branch that obligates the
+    # device to full power now (mid-turn, breakout, failure) — when set, the
+    # pass publishes nothing and the device stays awake until the next pass.
+    earliest_wake_dt = None
+    earliest_wake_str = None
+    wake_by_user: dict[str, str] = {}
+    stay_awake = False
 
     loop = asyncio.get_running_loop()
     for segment in segments:
@@ -379,6 +399,9 @@ async def heartbeat_tick() -> None:
                 except (ValueError, TypeError):
                     wake_dt = None
                 if wake_dt is not None and utc_now() < wake_dt:
+                    wake_by_user[user_id] = wake_at_str
+                    if earliest_wake_dt is None or wake_dt < earliest_wake_dt:
+                        earliest_wake_dt, earliest_wake_str = wake_dt, wake_at_str
                     continue
 
             if await loop.run_in_executor(None, _is_paused, user_id):
@@ -387,6 +410,8 @@ async def heartbeat_tick() -> None:
 
             lock_token = await loop.run_in_executor(None, _get_lock().acquire, user_id)
             if lock_token is None:
+                # User mid-turn: the box is actively serving, device stays awake.
+                stay_awake = True
                 logger.debug("Heartbeat skipped for user %s: request lock held", user_id)
                 continue
 
@@ -395,6 +420,9 @@ async def heartbeat_tick() -> None:
                 if mode == "pregated" and not await loop.run_in_executor(
                     None, _pregate_check, user_id
                 ):
+                    # Due now but nothing new: the next pass re-checks at ticker
+                    # cadence, so the obligation is ticker-bounded — stay awake.
+                    stay_awake = True
                     logger.debug("Heartbeat pregated out for user %s", user_id)
                     continue
 
@@ -412,26 +440,62 @@ async def heartbeat_tick() -> None:
                     "Heartbeat tick %s for user %s decided %s",
                     tick_id, user_id, result["decision"],
                 )
-                if result["decision"] == "breakout" and result.get("response_text"):
-                    from cns.api.websocket_chat import push_proactive_message
+                if result["decision"] == "breakout":
+                    # A breakout means MIRA acted and Taylor may now engage; the
+                    # device must be awake to serve that.
+                    stay_awake = True
+                    if result.get("response_text"):
+                        from cns.api.websocket_chat import push_proactive_message
 
-                    await push_proactive_message(
-                        user_id=user_id,
-                        message_id=result.get("final_message_id"),
-                        turn_id=result.get("turn_id"),
-                        content=result["response_text"],
-                        created_at=result.get("final_message_created_at"),
-                    )
+                        await push_proactive_message(
+                            user_id=user_id,
+                            message_id=result.get("final_message_id"),
+                            turn_id=result.get("turn_id"),
+                            content=result["response_text"],
+                            created_at=result.get("final_message_created_at"),
+                        )
+                elif result.get("wake_at"):
+                    # keepsleeping: the fresh stamp is this user's next wake
+                    # obligation. (breakout also stamps, but stay_awake already
+                    # suppresses the pass.)
+                    stamped_dt = parse_utc_time_string(result["wake_at"])
+                    wake_by_user[user_id] = result["wake_at"]
+                    if earliest_wake_dt is None or stamped_dt < earliest_wake_dt:
+                        earliest_wake_dt, earliest_wake_str = stamped_dt, result["wake_at"]
+                else:
+                    # Turn completed but the wake stamp failed: the next pass
+                    # retries at ticker cadence — stay awake.
+                    stay_awake = True
             finally:
                 await loop.run_in_executor(None, _get_lock().release, user_id, lock_token)
         except GenerationCancelled:
+            # Cancelled externally: someone is actively steering the user —
+            # the device stays awake.
+            stay_awake = True
             logger.info("Heartbeat turn for user %s cancelled externally", user_id)
             continue
         except Exception as e:
+            # A failed turn leaves the obligation at ticker cadence (the
+            # except-path stamp may itself have failed) — stay awake.
+            stay_awake = True
             logger.error(
                 "Heartbeat tick failed for user %s: %s", user_id, e, exc_info=True
             )
             continue
+
+    # Publish the device-binding fact for this pass (no-op with no shim
+    # configured). All-future stamps → sleep until the earliest wake; any
+    # stay_awake branch → publish nothing, the device stays at full power.
+    # The metadata field carries the per-user wake schedule so the far side
+    # can route the ping (see HeartbeatSleepMetadata).
+    if not stay_awake and earliest_wake_str is not None:
+        metadata: HeartbeatSleepMetadata = {
+            "kind": "heartbeat_sleep",
+            "user_wake_times": wake_by_user,
+        }
+        await loop.run_in_executor(
+            None, notify_heartbeat_sleep, earliest_wake_str, metadata
+        )
 
 
 def _pregate_check(user_id: str) -> bool:
