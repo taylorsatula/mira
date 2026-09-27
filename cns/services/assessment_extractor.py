@@ -5,6 +5,7 @@ Evaluates conversation segments against Mira's behavioral contract (system promp
 producing section-anchored signals (alignment, misalignment, contextual_pass) with
 specific evidence. Replaces the old blind feedback extraction approach.
 """
+import html
 import logging
 import re
 from dataclasses import dataclass
@@ -196,16 +197,16 @@ class AssessmentExtractor:
 
                 if msg.role == "assistant":
                     if thinking_parts:
-                        parts.append(f"<think>{''.join(thinking_parts)}</think>")
+                        parts.append(f"<think>{html.escape(''.join(thinking_parts), quote=False)}</think>")
                     if text_parts:
-                        parts.append(f"<assistant>{' '.join(text_parts)}</assistant>")
+                        parts.append(f"<assistant>{html.escape(' '.join(text_parts), quote=False)}</assistant>")
                 else:
                     if text_parts:
-                        parts.append(f"<user>{' '.join(text_parts)}</user>")
+                        parts.append(f"<user>{html.escape(' '.join(text_parts), quote=False)}</user>")
 
             elif isinstance(content, str):
                 tag = "assistant" if msg.role == "assistant" else "user"
-                parts.append(f"<{tag}>{content}</{tag}>")
+                parts.append(f"<{tag}>{html.escape(content, quote=False)}</{tag}>")
 
         return "\n\n".join(parts)
 

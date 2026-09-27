@@ -167,8 +167,13 @@ class SidebarAgent(ABC):
     Optional features (set the relevant attribute to activate):
         sentry_model_config_name -- cheap pre-filter; see build_sentry_message()
         overwatch_model_config_name -- passive iteration observer
-        sanitize_untrusted_input -- injection defense before main loop
         max_retries              -- dispatcher retry-on-failure threshold
+
+    Injection gate (fail closed, ON by default):
+        sanitize_untrusted_input -- screens work_item.context['raw_content']
+            through utils.untrusted_content.screen_untrusted before the LLM
+            loop. Override to False ONLY for agents whose work items carry
+            no external/untrusted content.
 
     Completion publishing:
         Override _get_completion_trinket() and _build_completion_context()
@@ -199,7 +204,12 @@ class SidebarAgent(ABC):
     # Optional -- subclasses override as needed
     inherit_base_prompt: bool = True
     max_iterations: int = 5
-    sanitize_untrusted_input: bool = False
+    # Injection gate is ON by default (fail closed): any work item carrying
+    # untrusted 'raw_content' must pass semantic screening before the LLM
+    # loop; a rejection exits 'rejected', a screen outage fails the run — it
+    # is never passed through unscreened. Subagents with only trusted
+    # internal data opt out explicitly (see MemoryCuratorAgent).
+    sanitize_untrusted_input: bool = True
     max_retries: int = 0  # 0 = fire-and-forget, no retry on failure
 
     # Per-tool schema overrides. Maps tool name → custom tool_schema.
@@ -526,33 +536,22 @@ class SidebarAgent(ABC):
     # ------------------------------------------------------------------
 
     def _sanitize_work_item(self, work_item: 'WorkItem') -> None:
-        """Run injection defense on raw_content, write sanitized_content back.
+        """Screen raw_content, write the wrapped sanitized_content back.
 
         Called when sanitize_untrusted_input is True, before the LLM loop.
-        Uses require_llm_detection=True: every payload gets full semantic
-        analysis (no length/pattern short-circuit, chunked up to 8000 chars)
-        and any gate failure — LLM unavailable, provider error, unparseable
-        verdict, or high-confidence detection — raises ValueError here so
-        the agent exits cleanly through _exit('rejected').
+        raw_content is truncated to 8000 chars first, so the screen judges
+        exactly what reaches the agent and the wrapper's closing tag survives.
+        A rejection raises InjectionRejected so the agent exits through
+        _exit('rejected'); every other error (screen outage, missing
+        credential) propagates to run() and exits 'failed' — never passed
+        through unscreened.
         """
-        from utils.prompt_injection_defense import (
-            PromptInjectionDefense,
-            TrustLevel,
-        )
+        from utils.untrusted_content import screen_untrusted
 
         raw = work_item.context.get("raw_content", "")
-        defense = PromptInjectionDefense()
-        sanitized, metadata = defense.sanitize_untrusted_content(
-            content=raw,
-            source=work_item.interface_name,
-            trust_level=TrustLevel.UNTRUSTED,
-            require_llm_detection=True,
-        )
-        if len(sanitized) > 8000:
-            sanitized = sanitized[:8000] + "\n[truncated]"
-
-        work_item.context["sanitized_content"] = sanitized
-        work_item.context["injection_warnings"] = metadata.warnings or []
+        if len(raw) > 8000:
+            raw = raw[:8000] + "\n[truncated]"
+        work_item.context["sanitized_content"] = screen_untrusted(raw, work_item.interface_name)
 
     # ------------------------------------------------------------------
     # Tool schema assembly
@@ -688,10 +687,12 @@ class SidebarAgent(ABC):
         """Run injection defense if enabled. Returns True to proceed, False to exit."""
         if not self.sanitize_untrusted_input:
             return True
+        from utils.untrusted_content import InjectionRejected
+
         try:
             self._sanitize_work_item(work_item)
             return True
-        except ValueError as e:
+        except InjectionRejected as e:
             logger.warning("%s: Input rejected: %s", self.agent_id, e)
             self._exit('rejected', f'Input rejected: {e}')
             return False

@@ -24,6 +24,7 @@ from config.config import (
     WorkerPoolsConfig,
     MemoryCuratorConfig,
     LatticeConfig,
+    SystemOneConfig,
     SidebarDispatcherConfig,
     HeartbeatConfig,
 )
@@ -98,6 +99,7 @@ class AppConfig(BaseModel):
     scheduled_jobs: ScheduledJobsConfig = Field(default_factory=ScheduledJobsConfig)
     worker_pools: WorkerPoolsConfig = Field(default_factory=WorkerPoolsConfig)
     lattice: LatticeConfig = Field(default_factory=LatticeConfig)
+    systemone: SystemOneConfig = Field(default_factory=SystemOneConfig)
     sidebar_dispatcher: SidebarDispatcherConfig = Field(default_factory=SidebarDispatcherConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     memory_curator: MemoryCuratorConfig = Field(default_factory=MemoryCuratorConfig)

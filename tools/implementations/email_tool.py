@@ -22,7 +22,13 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from tools.repo import Tool
 from tools.registry import registry
-from utils.prompt_injection_defense import wrap_untrusted
+from utils.untrusted_content import wrap_untrusted
+
+# KNOWN GAP (design decision, fix soon — not critical): all screening below
+# is structural-only (wrap_untrusted); attacker-controlled email content
+# never crosses the semantic screen (utils.untrusted_content.screen_untrusted).
+# The boundary wrapping plus model-side injection resistance makes this a
+# low-urgency exposure, not a closed one.
 
 # Define configuration class for EmailTool
 class EmailToolConfig(BaseModel):
@@ -754,8 +760,10 @@ class EmailTool(Tool):
                     if filename:
                         payload = part.get_payload(decode=True)
                         attachment_info = {
-                            "filename": filename,
-                            "content_type": content_type,
+                            # Filename and content type are attacker-controlled
+                            # header text (RFC2047/RFC2231) — wrap like sibling fields.
+                            "filename": wrap_untrusted(filename, "email_header"),
+                            "content_type": wrap_untrusted(content_type, "email_header"),
                             "size": len(payload) if payload else 0
                         }
                         result["attachments"].append(attachment_info)
@@ -949,10 +957,10 @@ class EmailTool(Tool):
                     email_info = {
                         "id": email_id,
                         "from": wrap_untrusted(self._decode_header(msg.get("From", "")), "email_header"),
-                        "to": self._decode_header(msg.get("To", "")),
-                        "cc": self._decode_header(msg.get("Cc", "")),
+                        "to": wrap_untrusted(self._decode_header(msg.get("To", "")), "email_header"),
+                        "cc": wrap_untrusted(self._decode_header(msg.get("Cc", "")), "email_header"),
                         "subject": wrap_untrusted(self._decode_header(msg.get("Subject", "")), "email_header"),
-                        "date": self._decode_header(msg.get("Date", "")),
+                        "date": wrap_untrusted(self._decode_header(msg.get("Date", "")), "email_header"),
                         "body_text": wrap_untrusted(body["text"], "email_body"),
                         "has_attachments": body["has_attachments"],
                         "flags": flags,
@@ -987,7 +995,7 @@ class EmailTool(Tool):
                         "id": email_id,
                         "from": wrap_untrusted(self._decode_header(headers.get("From", "")), "email_header"),
                         "subject": wrap_untrusted(self._decode_header(headers.get("Subject", "")), "email_header"),
-                        "date": self._decode_header(headers.get("Date", "")),
+                        "date": wrap_untrusted(self._decode_header(headers.get("Date", "")), "email_header"),
                         "flags": flags
                     }
 
@@ -1245,10 +1253,10 @@ class EmailTool(Tool):
                     result = {
                         "id": email_id,
                         "from": wrap_untrusted(self._decode_header(msg.get("From", "")), "email_header"),
-                        "to": self._decode_header(msg.get("To", "")),
-                        "cc": self._decode_header(msg.get("Cc", "")),
+                        "to": wrap_untrusted(self._decode_header(msg.get("To", "")), "email_header"),
+                        "cc": wrap_untrusted(self._decode_header(msg.get("Cc", "")), "email_header"),
                         "subject": wrap_untrusted(self._decode_header(msg.get("Subject", "")), "email_header"),
-                        "date": self._decode_header(msg.get("Date", "")),
+                        "date": wrap_untrusted(self._decode_header(msg.get("Date", "")), "email_header"),
                         "body_text": wrap_untrusted(body["text"], "email_body"),
                         "has_attachments": body["has_attachments"],
                         "flags": flags
@@ -1581,7 +1589,7 @@ class EmailTool(Tool):
                     return {
                         "success": True,
                         "replied_to": email_id,
-                        "subject": msg["Subject"],
+                        "subject": wrap_untrusted(self._decode_header(str(msg["Subject"])), "email_header"),
                         "operation": "reply_to_email"
                     }
                 except Exception as e:
@@ -1783,9 +1791,9 @@ class EmailTool(Tool):
                             # Create header dictionary
                             email_info = {
                                 "id": eid,
-                                "from": self._decode_header(headers.get("From", "")),
-                                "subject": self._decode_header(headers.get("Subject", "")),
-                                "date": self._decode_header(headers.get("Date", "")),
+                                "from": wrap_untrusted(self._decode_header(headers.get("From", "")), "email_header"),
+                                "subject": wrap_untrusted(self._decode_header(headers.get("Subject", "")), "email_header"),
+                                "date": wrap_untrusted(self._decode_header(headers.get("Date", "")), "email_header"),
                                 "flags": flags
                             }
 

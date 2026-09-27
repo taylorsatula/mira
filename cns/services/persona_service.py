@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 from uuid import UUID, uuid4
@@ -371,7 +372,9 @@ class PersonaService:
             if content.image_count:
                 text = f"[{content.image_count} image(s)] {text}".strip()
             if text:
-                rendered.append(f"<{message.role}>{text}</{message.role}>")
+                rendered.append(
+                    f"<{message.role}>{html.escape(text, quote=False)}</{message.role}>"
+                )
         return "\n".join(rendered)
 
     @staticmethod

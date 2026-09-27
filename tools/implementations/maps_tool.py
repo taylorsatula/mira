@@ -182,6 +182,14 @@ class MapsTool(Tool):
     @staticmethod
     def _process_nominatim_result(result: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize a Nominatim result dict into the tool's output shape."""
+        # Security note: OSM/map-provider
+        # response text (display_name, tags, etc.) is deliberately returned
+        # unwrapped. These responses come from deeply trusted map providers
+        # (the configured provider surface: Nominatim/Overpass), and the
+        # exploit path was assessed as very implausible. The wrap_untrusted
+        # boundary used elsewhere (e.g. pager_tool) was considered and
+        # deliberately not applied here — do not add the wrapper without
+        # revisiting that trust decision.
         processed = {
             "formatted_address": result.get("display_name", ""),
             "place_id": nominatim_client.osm_place_id(result.get("osm_type", ""), result.get("osm_id")),
@@ -238,6 +246,8 @@ class MapsTool(Tool):
                 input.lat, input.lng, input.radius,
                 place_type=input.type, keyword=input.keyword,
             )
+            # Overpass tag text below is likewise returned unwrapped — see the
+            # security note in _process_nominatim_result.
             processed_results = []
 
             for element in elements:

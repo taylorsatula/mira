@@ -33,6 +33,7 @@ Design constraints honored here:
 """
 import asyncio
 import contextvars
+import html
 import json
 import logging
 import threading
@@ -77,7 +78,7 @@ said is in this turn. Your only job is the heartbeat decision:
 def _build_stimulus(tick_id: str, digest: str) -> str:
     return (
         f"Heartbeat tick {tick_id} (automatic; not from Taylor).\n\n"
-        f"<heartbeat_digest>\n{digest}\n</heartbeat_digest>\n\n"
+        f"<heartbeat_digest>\n{html.escape(digest, quote=False)}\n</heartbeat_digest>\n\n"
         "Decide keepsleeping or breakout via heartbeat_tool confirm, per the "
         "heartbeat_mode instructions in your system prompt."
     )

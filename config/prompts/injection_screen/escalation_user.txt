@@ -1,0 +1,5 @@
+Screening scores that made this case uncertain (probability that each statement holds for the content):
+{suspicions}
+
+The content:
+{content}

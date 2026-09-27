@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from tools.repo import Tool
 from tools.registry import registry
 from config.config_manager import config
+from utils.untrusted_content import wrap_untrusted
 from utils.timezone_utils import (
     get_default_timezone,
     format_datetime, utc_now
@@ -315,7 +316,8 @@ class PagerTool(Tool):
 
         Args:
             from_address: Federated sender address (e.g., "user@remote-server")
-            content: Message content (already filtered for prompt injection)
+            content: Message content (stored verbatim; untrusted-content wrapping is applied
+                when received messages are returned into model context, not before storage)
             priority: Message priority (0=normal, 1=high, 2=urgent)
             metadata: Optional metadata dict (location, etc.)
 
@@ -1117,6 +1119,16 @@ class PagerTool(Tool):
                 msg['sender_fingerprint']
             )
             msg_dict['trust_status'] = trust_status
+
+            # Wrap remote-authored text fields in an untrusted-content boundary at the
+            # model-context boundary (storage keeps the verbatim content).
+            # KNOWN GAP (design decision, fix soon — not critical): structural wrap
+            # only; no semantic screening on remote content. Boundary plus model-side
+            # injection resistance keeps this low-urgency. Same gap as email_tool.
+            msg_dict['content'] = wrap_untrusted(msg_dict.get('content'), "federated_message_content")
+            msg_dict['original_content'] = wrap_untrusted(msg_dict.get('original_content'), "federated_message_content")
+            msg_dict['sender_name'] = wrap_untrusted(msg_dict.get('sender_name'), "federated_sender")
+            msg_dict['location'] = wrap_untrusted(msg_dict.get('location'), "federated_location")
             
             # Note: Conflicted messages will never reach here as they're rejected during send
             message_list.append(msg_dict)

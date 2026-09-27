@@ -11,6 +11,7 @@ Consolidates all prompt building, context loading, and message formatting:
 This module handles WHAT to extract and HOW to ask the LLM.
 MemoryProcessor handles parsing the LLM's response.
 """
+import html
 import logging
 from typing import List, Dict, Any, Tuple
 from uuid import UUID
@@ -296,6 +297,9 @@ class ExtractionEngine:
             if preprocessed.image_count > 0:
                 content = f"[{preprocessed.image_count} image(s) shared] {content}".strip()
 
+            # Escape untrusted content so it cannot forge XML turn boundaries
+            content = html.escape(content, quote=False)
+
             # Format with XML tags matching system prompt style
             if role == "user":
                 formatted_lines.append(f"<user>{content}</user>")
@@ -345,6 +349,7 @@ class ExtractionEngine:
                 continue
             text = memory_texts.get(ref_id)
             if text:
+                text = html.escape(text, quote=False)
                 short_id = format_memory_id(ref_id)
                 lines.append(f'<references_memory id="{short_id}">{text}</references_memory>')
 

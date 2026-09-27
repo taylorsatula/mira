@@ -38,6 +38,7 @@ from config.config import InboxToolConfig
 
 from tools.repo import Tool
 from tools.registry import registry
+from utils.untrusted_content import wrap_untrusted
 from utils.timezone_utils import utc_now, format_utc_iso
 
 logger = logging.getLogger(__name__)
@@ -216,7 +217,7 @@ class InboxTool(Tool):
             kind = self._kind(mime)
             mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
             entries.append({
-                "filename": p.name,
+                "filename": wrap_untrusted(p.name, "inbox_listing"),
                 "size_bytes": stat.st_size,
                 "size_human": _human_size(stat.st_size),
                 "mime": mime,
@@ -288,7 +289,7 @@ class InboxTool(Tool):
             "returned_chars": len(excerpt),
             "truncated": truncated,
             "next_offset": end if truncated else None,
-            "content": excerpt,
+            "content": wrap_untrusted(excerpt, "inbox_file"),
         }
         if effective_chars != requested_chars:
             result["chars_capped"] = True

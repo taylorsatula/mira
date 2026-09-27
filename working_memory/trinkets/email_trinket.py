@@ -7,9 +7,9 @@ via UpdateTrinketEvent events, stores it in memory, renders XML. Cleared
 automatically on segment collapse via WorkingMemory._flush_stateful_trinkets().
 """
 import logging
-import re
 from typing import Any, Dict, TYPE_CHECKING
 
+from utils.untrusted_content import wrap_untrusted
 from working_memory.trinkets.base import StatefulTrinket
 from utils.user_context import get_current_user_id
 
@@ -46,37 +46,30 @@ class EmailTrinket(StatefulTrinket):
         super().handle_update_request(event)
 
     def generate_content(self, context: Dict[str, Any]) -> str:
-        """Render inbox snapshot as XML for the HUD."""
+        """Render inbox snapshot for the HUD.
+
+        Every per-email field is mail-server-supplied, so the whole listing
+        crosses the untrusted-content boundary ONCE — one `wrap_untrusted`
+        region with one treat-as-data directive — inside the trusted
+        `<inbox_status>` frame. Wrapping each header separately would repeat
+        the directive up to three times per email on every turn.
+        """
         snapshot = self._inbox_snapshots.get(get_current_user_id(), [])
         if not snapshot:
             return ""
 
-        count = len(snapshot)
+        listing = "\n".join(_format_email_line(em) for em in snapshot)
         lines = [
             '<inbox_status>',
             '<instruction>You have unread emails. Mention them to the user '
             'when the conversation permits — they cannot see this data unless '
             'you surface it. If they don\'t act, these will continue appearing.'
             '</instruction>',
-            f'<unread count="{count}">',
+            f'<unread count="{len(snapshot)}">',
+            wrap_untrusted(listing, "email_header"),
+            '</unread>',
+            '</inbox_status>',
         ]
-
-        for em in snapshot:
-            # Attacker-controlled headers render into the primary system
-            # prompt as XML attributes — screen for injection text, cap length,
-            # then escape XML-sensitive chars.
-            from_attr = _xml_attr_escape(screen_headers(em.get('from_addr', '')))
-            subject_attr = _xml_attr_escape(screen_headers(em.get('subject', '')))
-            date_attr = _xml_attr_escape(screen_headers(em.get('date', '')))
-            uid_attr = _xml_attr_escape(em.get('uid', ''))
-
-            lines.append(
-                f'<email uid="{uid_attr}" from="{from_attr}" '
-                f'subject="{subject_attr}" date="{date_attr}"/>'
-            )
-
-        lines.append('</unread>')
-        lines.append('</inbox_status>')
 
         return '\n'.join(lines)
 
@@ -95,39 +88,26 @@ class EmailTrinket(StatefulTrinket):
 
 
 _MAX_HEADER_CHARS = 120
-_HEADER_ATTACK_MARKERS = (
-    re.compile(r"ignore\s+(all\s+)?(previous|prior|above)\s+instructions?", re.IGNORECASE),
-    re.compile(r"<\s*/?\s*(system|assistant|instruction|inbox_status|untrusted_content)", re.IGNORECASE),
-    re.compile(r"(system|developer)\s+prompt", re.IGNORECASE),
-    re.compile(r"disregard\s+(the\s+)?(above|all|instructions)", re.IGNORECASE),
-    re.compile(r"\[\s*(SYSTEM|INST)\s*\]", re.IGNORECASE),
-)
-_SCREEN_MARKER = "[header withheld: suspicious content]"
 
 
-def screen_headers(value: str) -> str:
-    """Neutralize an attacker-controlled email header before HUD rendering.
+def _header_value(value: Any) -> str:
+    """One header value for the listing: whitespace folded, length capped.
 
-    Returns a marker for headers matching obvious injection patterns and
-    caps length otherwise. Rendering callers still apply XML attribute
-    escaping — this screens semantics, not syntax.
+    Folding CR/LF keeps one email on one listing line (a folded or hostile
+    header cannot start a fake entry). Escaping is not done here — the whole
+    listing is escaped once by `wrap_untrusted` in `generate_content`.
     """
-    if not value:
-        return value
-    for pattern in _HEADER_ATTACK_MARKERS:
-        if pattern.search(value):
-            return _SCREEN_MARKER
-    if len(value) <= _MAX_HEADER_CHARS:
-        return value
-    return value[:_MAX_HEADER_CHARS] + "…"
+    text = " ".join(str(value or "").split())
+    if len(text) > _MAX_HEADER_CHARS:
+        text = text[:_MAX_HEADER_CHARS] + "…"
+    return text
 
 
-def _xml_attr_escape(value: str) -> str:
-    """Escape a string for safe use inside an XML attribute value."""
+def _format_email_line(email: Dict[str, Any]) -> str:
+    """One listing line per unread email."""
     return (
-        value
-        .replace('&', '&amp;')
-        .replace('"', '&quot;')
-        .replace('<', '&lt;')
-        .replace('>', '&gt;')
+        f"- uid: {_header_value(email.get('uid'))}"
+        f" | from: {_header_value(email.get('from_addr'))}"
+        f" | subject: {_header_value(email.get('subject'))}"
+        f" | date: {_header_value(email.get('date'))}"
     )

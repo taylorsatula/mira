@@ -235,6 +235,34 @@ class LatticeConfig(BaseModel):
     timeout: int = Field(default=30, description="HTTP request timeout in seconds")
 
 
+class SystemOneConfig(BaseModel):
+    """System One decision-model endpoint (TypeSafe `/v1/systemone` wire format).
+
+    Any server speaking that contract works: hosted Jev, the lunaroute
+    gateway's djev, or a self-hosted Kev. Consumer: clients/systemone_client.py.
+    """
+
+    endpoint_url: str = Field(
+        default="https://gw.lunaroute.com/v1/systemone",
+        description="Full URL of the POST /v1/systemone endpoint",
+    )
+    model: str = Field(default="djev", description="Model identifier sent in every request")
+    api_key_name: str = Field(
+        default="systemone_key",
+        description="Vault key name under mira/api_keys holding the endpoint's bearer token",
+    )
+    timeout: int = Field(
+        default=10,
+        gt=0,
+        description="HTTP request timeout in seconds. Observed djev latency: median 0.44 s, max 1.18 s over 46 requests at 8-way concurrency (2026-09-26)",
+    )
+    max_concurrent_requests: int = Field(
+        default=11,
+        gt=0,
+        description="Requests one process keeps in flight to the endpoint; the lunaroute key allows 11 and answers HTTP 429 beyond it. The cap is per process: N server workers can reach N times this",
+    )
+
+
 class SidebarDispatcherConfig(BaseModel):
     """Sidebar agent dispatcher configuration."""
 

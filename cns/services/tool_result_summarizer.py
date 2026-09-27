@@ -1,4 +1,17 @@
 """Asynchronously compact committed tool results in the hot Valkey cache."""
+
+# DESIGN DEBT — pending summarization-path rework (anchor note).
+#
+# This module is a known design-debt area: the summarization/compaction path
+# needs an updated design. The approaches that grew up around it (JSON-target
+# selection, LLM decision validation, cache patching) are convoluted and should
+# be smoothed over as one coherent redesign rather than extended piecemeal.
+#
+# Known symptom of that pending rework: text-mode compaction strips the
+# <untrusted_content> wrapper from a tool result while keeping the wrapped
+# content, so untrusted content loses its wrapper through compaction. See the
+# DESIGN DEBT comment in ToolResultSummarizer._summarize_one for the site.
+
 from __future__ import annotations
 
 import json
@@ -213,6 +226,12 @@ class ToolResultSummarizer:
         if not response_text:
             return None
 
+        # DESIGN DEBT: in text mode (no JSON target) the model's summary
+        # replaces the original content verbatim, which strips the
+        # <untrusted_content> wrapper from the tool output while keeping the
+        # wrapped content. This is a known symptom of the pending
+        # summarization-path rework — see the module-level DESIGN DEBT anchor
+        # note at the top of this file. Do not fix by narrow-patching here.
         compacted = (
             self._apply_json_decision(parsed_json, target, response_text)
             if parsed_json is not None and target is not None

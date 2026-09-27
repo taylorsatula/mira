@@ -20,6 +20,16 @@ from clients.llm_provider import LLMProvider
 logger = logging.getLogger(__name__)
 
 
+def _escape(value: str) -> str:
+    """Escape XML-like delimiters so external text cannot break prompt containers."""
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+
 @dataclass
 class PeanutGalleryResult:
     """Result from the Peanut Gallery observer evaluation."""
@@ -275,13 +285,6 @@ class PeanutGalleryModel:
         if not tool_activity:
             tool_activity.append("none observed")
 
-        def _escape(value: str) -> str:
-            return (
-                value.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-            )
-
         trace_parts = [
             "<execution_trace>",
             f"<latest_user_request>{_escape(latest_user_request)}</latest_user_request>",
@@ -369,6 +372,6 @@ class PeanutGalleryModel:
         for msg in messages:
             msg_id = str(msg.id)[:8]
             content = self._render_message_content(msg)
-            lines.append(f"[ID:{msg_id}] {msg.role}: {content}")
+            lines.append(f"[ID:{msg_id}] {msg.role}: {_escape(content)}")
 
         return "\n".join(lines)

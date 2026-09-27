@@ -1,4 +1,5 @@
 """Proactive memory trinket for displaying relevant long-term memories."""
+import html
 import logging
 from typing import List, Dict, Any, TYPE_CHECKING
 
@@ -105,7 +106,7 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
             attrs.append(f'relevance="{int(similarity * 100)}"')
 
         parts = [f"<memory {' '.join(attrs)}>"]
-        parts.append(f"<text>{text}</text>")
+        parts.append(f"<text>{html.escape(text)}</text>")
 
         # Created time
         if memory.get('created_at'):
@@ -133,12 +134,13 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
             for ann in annotations:
                 text = ann.get('text', '')
                 created = ann.get('created_at', '')
+                escaped_text = html.escape(text)
                 if created:
                     ann_dt = parse_time_string(created)
                     relative = format_relative_time(ann_dt)
-                    parts.append(f'<note added="{relative}">{text}</note>')
+                    parts.append(f'<note added="{relative}">{escaped_text}</note>')
                 else:
-                    parts.append(f'<note>{text}</note>')
+                    parts.append(f'<note>{escaped_text}</note>')
             parts.append("</annotations>")
 
         # Linked memories as compact inline context
@@ -189,6 +191,6 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
             bond = link_meta.get('bond', '')
             id_suffix = f", {formatted_id}" if formatted_id else ""
             bond_suffix = f" — {bond}" if bond else ""
-            lines.append(f"Also: {text} ({link_type}{id_suffix}{bond_suffix})")
+            lines.append(f"Also: {html.escape(text)} ({link_type}{id_suffix}{bond_suffix})")
 
         return "<context>\n" + "\n".join(lines) + "\n</context>"

@@ -12,6 +12,7 @@ Also handles memory retention decisions - evaluating which previously
 surfaced memories should remain in context based on conversation trajectory.
 """
 import contextvars
+import html
 import json
 import logging
 import re
@@ -294,7 +295,7 @@ class SubcorticalLayer:
             _collapse(conversation_turns)
         ).replace(
             "{user_message}",
-            _collapse(current_user_message)
+            _collapse(html.escape(current_user_message, quote=False))
         ).replace(
             "{previous_memories}",
             _collapse(memories_block)
@@ -437,9 +438,9 @@ class SubcorticalLayer:
                 text = " ".join(words[:max_passage_words]) + "..."
 
             if text and formatted_id:
-                lines.append(f"{formatted_id} [{dots}] - {text}")
+                lines.append(f"{formatted_id} [{dots}] - {html.escape(text, quote=False)}")
             elif text:
-                lines.append(f"[{dots}] - {text}")
+                lines.append(f"[{dots}] - {html.escape(text, quote=False)}")
 
         return "\n".join(lines)
 
@@ -642,8 +643,19 @@ class SubcorticalLayer:
             # Strip all <mira:*> internal tags (emotion emojis, memory refs, etc.)
             # — rare-token attention sinks that waste budget without contributing
             # to entity/expansion/passage tasks.
-            user_content = self._extract_text_content(user_msg.content)[:2000]
-            assistant_content = _MIRA_TAG_PATTERN.sub('', str(assistant_msg.content))[:2000]
+            user_content = html.escape(
+                self._extract_text_content(user_msg.content)[:2000], quote=False
+            )
+            # Strip mira tags BEFORE escaping so legitimate <mira:memory …/> tags in
+            # assistant content still match the pattern; then escape whatever remains.
+            # Structured content (tool calls, reasoning blocks, lists) is rendered to
+            # natural labeled text first — never str() of a raw structure.
+            assistant_content = html.escape(
+                _MIRA_TAG_PATTERN.sub(
+                    '', self._extract_text_content(assistant_msg.content)
+                )[:2000],
+                quote=False
+            )
             lines.insert(0, f"<turn speaker=\"assistant\" time=\"{assistant_time}\">{assistant_content}</turn>")
             lines.insert(0, f"<turn speaker=\"user\" time=\"{user_time}\">{user_content}</turn>")
             pairs_found += 1

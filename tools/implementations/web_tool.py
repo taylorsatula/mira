@@ -6,6 +6,7 @@ Three operations:
 - fetch: Extract webpage content via trafilatura (HTTP first, Playwright escalation for JS-heavy pages)
 - http: Make direct HTTP requests to APIs
 """
+import json
 import re
 from dataclasses import dataclass
 from typing import Dict, Any, List, Literal, Optional
@@ -17,7 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 from tools.repo import Tool
 from tools.registry import registry
 from utils import http_client
-from utils.prompt_injection_defense import wrap_untrusted
+from utils.untrusted_content import wrap_untrusted
 from utils.url_safety import (
     MAX_REDIRECT_HOPS,
     ValidatedURL,
@@ -541,7 +542,7 @@ class WebTool(Tool):
 
         if format_type == "json":
             try:
-                result["data"] = response.json()
+                result["data"] = wrap_untrusted(json.dumps(response.json()), "http_response")
             except ValueError:
                 result["data"] = wrap_untrusted(response.text, "http_response")
                 result["warning"] = "Response is not valid JSON"
@@ -551,13 +552,14 @@ class WebTool(Tool):
             result["data"] = wrap_untrusted(response.text, "http_response")
             # Sanitize headers - remove sensitive ones to prevent credential leakage
             sanitized_headers = {
-                k: v for k, v in response.headers.items()
+                k: wrap_untrusted(v, "http_response_header")
+                for k, v in response.headers.items()
                 if k.lower() not in self._SENSITIVE_RESPONSE_HEADERS
                 and not (injected_credential_header and k.lower() == injected_credential_header.lower())
             }
             result["headers"] = sanitized_headers
             try:
-                result["json"] = response.json()
+                result["json"] = wrap_untrusted(json.dumps(response.json()), "http_response")
             except ValueError:
                 pass
 

@@ -1,4 +1,5 @@
 """Location context trinket — injects user's location, sunrise/sunset, and 2-hour forecast into system prompt."""
+import html
 import json
 import logging
 from typing import Dict, Any
@@ -41,7 +42,7 @@ class LocationTrinket(EventAwareTrinket):
         lines = ["=== Location Context ==="]
 
         if location_name:
-            lines.append(f"Location: {location_name}")
+            lines.append(f"Location: {html.escape(location_name)}")
 
         if sunrise and sunset:
             lines.append(f"Sunrise: {sunrise} / Sunset: {sunset}")
@@ -57,7 +58,7 @@ class LocationTrinket(EventAwareTrinket):
             lines.append("Forecast (next 2 hours):")
             for entry in forecast:
                 lines.append(
-                    f"- {entry['hour']}: {entry['temp']}, {entry['condition']}, "
+                    f"- {entry['hour']}: {entry['temp']}, {html.escape(entry['condition'])}, "
                     f"{entry['precip_pct']}% chance of rain"
                 )
 
@@ -70,9 +71,9 @@ class LocationTrinket(EventAwareTrinket):
                 if "high" in day and "low" in day:
                     parts.append(f"{day['high']}/{day['low']}")
                 if "condition" in day:
-                    parts.append(day["condition"])
+                    parts.append(html.escape(day["condition"]))
                 if "precipitation" in day:
                     parts.append(f"{day['precipitation']} precip")
-                lines.append(f"- {day['day_label']}: {', '.join(parts)}")
+                lines.append(f"- {html.escape(day['day_label'])}: {', '.join(parts)}")
 
         return "\n".join(lines)
