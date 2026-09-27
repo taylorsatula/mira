@@ -316,11 +316,11 @@ Overwatch is a passive observer: a cheap one-shot LLM call in a daemon thread (w
 
 ```python
 class MyAgent(SidebarAgent):
-    overwatch_model_config_name = "primary"   # route name; None disables
-    overwatch_max_tokens = 80                 # per-request ceiling -- load-bearing
+    overwatch_model_config_name = "fast"     # route name; None disables
+    overwatch_max_tokens = 80                # per-request ceiling -- load-bearing
 ```
 
-`overwatch_max_tokens` is not a hint: `primary`'s row ceiling is far larger, and this per-request override is the only thing keeping the observer to one summary line.
+`overwatch_max_tokens` is not a hint: the observer's route row ceiling is generous (4096 on `fast`, 16000 on `batch`/`primary`), and this per-request override is the only thing keeping the observer to one summary line.
 
 Overwatch is **observability, not results**. Publish failures must be swallowed at `debug` (`forage_agent.py:on_overwatch_update`) -- an observer that raises into the loop turns a progress display into an agent failure. Late-arriving summaries must not downgrade a terminal trinket state; the receiving trinket owns that guard.
 
@@ -418,7 +418,7 @@ Add to `AppConfig` and `config_manager.py`.
 |---|---|
 | `agent_timeout_seconds` | Shared wall-clock default (120) |
 | `agent_timeout_overrides` | Per-agent override, keyed by class name minus the `Agent` suffix, lowercased: `MyAgent` -> `"myagent"` |
-| `agent_iteration_timeout_seconds` | Ceiling for a single LLM iteration (45) |
+| `agent_iteration_timeout_seconds` | Ceiling for a single LLM iteration (300) |
 
 ```python
 agent_timeout_overrides = {"forage": 600, "memorycurator": 480, "whilethecatsaway": 14400, "myagent": 900}
@@ -462,7 +462,7 @@ class MyAgent(SidebarAgent):
     max_retries = 1  # one retry: two total attempts, third poll skips
 ```
 
-The retry decision (`agents/sidebar.py:_dispatch_decision`) is exact: `status == 'failed' and run_count <= max_retries`. With `run_count` starting at 1, `max_retries=1` gives run 1 → retry (run 2) → skip. A `timeout` or `dismissed` status is terminal, not retryable. `run_count` itself is dispatcher-managed: it sets `work_item.context['run_count']` before spawn and `_exit()` writes it back — your agent never touches it.
+The retry decision (`agents/sidebar.py:_dispatch_decision`) is exact: `status == 'failed' and run_count <= max_retries`. With `run_count` starting at 1, `max_retries=1` gives run 1 → retry (run 2) → skip. `timeout` never retries either — `dismissed` is terminal (`_TERMINAL_STATUSES`: `handled`/`escalated`/`resolved`/`dismissed`), while `timeout` simply falls through to `skip`. `run_count` itself is dispatcher-managed: it sets `work_item.context['run_count']` before spawn and `_exit()` writes it back — your agent never touches it.
 
 `prior_run` is the `sidebar_activity` row **restricted to two fields** — `_get_prior_run()` selects only `status` and `run_count`. There is no `summary`, no `agent_id`, no timestamp; indexing anything else raises `KeyError`:
 
@@ -574,7 +574,7 @@ Sidebar agents run without a human in the loop. Every agent that processes untru
 
 If your agent processes content from strangers (email, webhooks, public APIs):
 
-1. **Set `sanitize_untrusted_input = True`** on your agent class. The base class runs `PromptInjectionDefense.sanitize_untrusted_content()` with `trust_level=TrustLevel.UNTRUSTED` and `require_llm_detection=True` *before* the LLM loop starts, truncating the sanitized result at 8000 chars. `require_llm_detection=True` is fail-closed: every payload gets full semantic analysis (chunked for long content, no length or pattern short-circuit), and an unavailable or erroring detection LLM rejects the content rather than letting it pass unsanitized. Dangerous content never enters the agent's LLM context; on rejection the agent exits through `_exit('rejected')` with no main-loop tokens burned. Your trigger stores content as `"raw_content"` in the WorkItem context; the base class writes `"sanitized_content"` and `"injection_warnings"` back after defense passes -- your `build_initial_message()` must read the **sanitized** key, not the raw one. **Derived content counts as untrusted**: if one mode's input is produced from untrusted material (a digest summarizing triaged files, a report quoting scraped text), that derived content rides in `raw_content` too, so it passes the same gate — an agent-written summary of a hostile file is still the hostile file's words.
+1. **Set `sanitize_untrusted_input = True`** on your agent class. The base class truncates `raw_content` to 8000 chars and runs `utils.untrusted_content.screen_untrusted()` on it *before* the LLM loop starts. The screen is fail-closed: a System One pass judges every payload (chunked, no length short-circuit), uncertain payloads escalate to an LLM, and a screen outage or unparseable verdict fails the run rather than letting content pass unscreened. Dangerous content never enters the agent's LLM context; on rejection the agent exits through `_exit('rejected')` with no main-loop tokens burned. Your trigger stores content as `"raw_content"` in the WorkItem context; the base class writes the wrapped `"sanitized_content"` back after the screen passes -- your `build_initial_message()` must read the **sanitized** key, not the raw one. **Derived content counts as untrusted**: if one mode's input is produced from untrusted material (a digest summarizing triaged files, a report quoting scraped text), that derived content rides in `raw_content` too, so it passes the same gate — an agent-written summary of a hostile file is still the hostile file's words.
 
    **Know what the gate does NOT cover.** It runs once, pre-loop, over `raw_content` only. Two large classes of untrusted content never pass through it: **mid-loop tool results** (every web-using agent receives fetched pages inside the loop — the defenses there are the tool's own wrapping of untrusted content plus your restricted schema, not the gate) and **main-conversation-trusted content** (a collapsed segment's transcript is trust-equivalent to what the primary model already processes; the extraction pipeline consumes segments ungated, and a collapse-spawned agent may do the same — with the honest caveat that a hostile quote inside a segment reaches the loop unsanitized). Size is the other axis: the gate truncates at 8000 chars, so segment-scale input cannot ride `raw_content` at all. Corollary: a sentry gate cannot filter content of any kind — it runs before the loop and before any tool call, so it never sees what the content is; content-shape filtering belongs in the trigger's deterministic discovery.
 2. **Triggers must be cheap** -- discovery (polling, dedup, content extraction) should involve no LLM calls. All LLM work belongs in the agent, gated by the dispatch decision. This prevents wasted calls on items that get capped or concurrency-blocked by the dispatcher.
@@ -608,8 +608,8 @@ The base class `run()` loop (do not override):
     - empty schema list -> _exit('failed', 'No tools available')
 3.  _resolve_llm() -- model_configs route from model_config_name
 4.  _run_injection_gate()   [only if sanitize_untrusted_input]
-    - rejected -> _exit('rejected'); no LLM tokens burned
-    - passed   -> writes sanitized_content + injection_warnings into work_item.context
+    - rejected -> _exit('rejected'); no main-loop tokens burned
+    - passed   -> writes sanitized_content into work_item.context
 5.  _run_sentry_gate()      [only if sentry_model_config_name set]
     - skip -> _exit('skipped', reason, activity_status='dismissed')
     - LLM or parse error -> fail OPEN, proceed

@@ -1541,7 +1541,7 @@ End the change report with a verification state: **EXECUTED** (what ran) or **UN
 **Security**
 - [ ] Credentials via `UserCredentialService` or `web_tool` `credential_name` injection — never env vars, never defaults, never returned to the model
 - [ ] Missing credentials raise with user-facing setup guidance
-- [ ] Untrusted content passed through `utils.prompt_injection_defense.wrap_untrusted(content, source)` before entering any return envelope; arguments JSON-Schema-validated
+- [ ] Untrusted content passed through `utils.untrusted_content.wrap_untrusted(content, source)` before entering any return envelope; arguments JSON-Schema-validated
 - [ ] Response headers/payloads sanitized of anything secret
 
 **Failure behavior**

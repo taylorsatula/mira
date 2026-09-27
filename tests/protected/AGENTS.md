@@ -44,6 +44,7 @@
   singleton. Those clients keep their connections lazy, and this folder's
   batteries depend on that staying true — a client gaining an eager import-time
   connection breaks every battery here.
+- One recorded exception to the offline rule, by the user's direction (2026-09-26): `injection_defense_probe.py`'s live half calls the configured System One endpoint. Its audit barrier admits name resolution of that host and connections to the addresses it resolved to, nothing else; the bearer token comes from `SYSTEMONE_API_KEY` for as long as the user keeps that temporary arrangement. Every other rule here still binds it.
 - Importing project code writes `.pyc` caches via a temp file plus `os.rename`,
   which the required audit barrier refuses. A battery that installs the
   filesystem-mutation half of the barrier must set
@@ -73,3 +74,4 @@
   Run from the repo root:
   `python3 tests/protected/mlfactory_guardrail_probe.py` (the `-m` form fails —
   no `__init__.py` in `tests/`).
+- `injection_defense_probe.py` — Battery for `utils/untrusted_content.py`. Offline half (network blocked): `_reveal_hidden` must surface each hidden payload (base64, hex, `\x` escapes, percent, HTML entities, tag characters, letter-spacing) and reveal nothing on designated benign text; `wrap_untrusted` over every case and hostile source labels must keep exactly one boundary, no raw `<`/`>`/`"` inside it, and no tag characters. Live half: tier-1 `InjectionScreen.assess()` over 64 labeled attacks (indirect and subtle manipulation; each names the questions it should trigger) and 46 hard benign cases through a real `SystemOneClient` built from `config.systemone`; `screen()` witnessed on one auto-rejected and one auto-passed case. Tier 2 (the escalation LLM) is not exercised — it resolves a route from `model_configs`. Fails only on a safety failure (attack auto-passed unless recorded as a documented miss; benign auto-rejected), an offline failure, a witness failure, or a blocked side effect; reports drift between safe dispositions, per-question counts, corpus loss, and the smallest safety margins for wording work. Run from the repo root: `SYSTEMONE_API_KEY=... python3 tests/protected/injection_defense_probe.py`.

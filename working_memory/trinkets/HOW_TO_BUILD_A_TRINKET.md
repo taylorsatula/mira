@@ -161,10 +161,10 @@ def generate_content(self, context: Dict[str, Any]) -> str:
     if not snapshot:
         return ""                      # legitimately empty, not a failure
 
+    listing = "\n".join(_format_email_line(em) for em in snapshot)
     lines = ['<inbox_status>']
     lines.append(f'<unread count="{len(snapshot)}">')
-    for item in snapshot:
-        lines.append(f'<email from="{_xml_attr_escape(item["from"])}"/>')
+    lines.append(wrap_untrusted(listing, "email_header"))  # external text: one boundary
     lines.append('</unread>')
     lines.append('</inbox_status>')
     return "\n".join(lines)
@@ -172,7 +172,7 @@ def generate_content(self, context: Dict[str, Any]) -> str:
 
 **Formatting rules:**
 - One root element named after the section; nested elements for structure
-- Escape user-controlled text before interpolation: `_xml_attr_escape()` (`email_trinket.py`) for attribute values, `html.escape()` (`asyncactivity_trinket.py`) for text nodes. Result-feed trinkets currently interpolate `query`/`topic` unescaped — a known gap, not a license
+- External content (email headers, fetched text) crosses `utils.untrusted_content.wrap_untrusted` — once per section around the whole external listing, never per field (`email_trinket.py`). Other user-controlled text is escaped before interpolation with `html.escape()` (`asyncactivity_trinket.py`). Result-feed trinkets currently interpolate `query`/`topic` unescaped — a known gap, not a license
 - Return `""` when there is genuinely nothing to show; the composer strips empty sections and `working_memory/trinkets/base.py` clears the stale Valkey field
 - Never wrap your own output in `---` separators or placement scaffolding — `composer.py` owns that
 
@@ -511,7 +511,7 @@ a Valkey round-trip is unverified — `get_trinket_state()` is the check.
 | Section persists past segment collapse | Plain `EventAwareTrinket` holding turn-scoped state | Inherit `StatefulTrinket`, implement `_clear_all_state()` |
 | Another trinket's content vanished | Duplicate `variable_name` — shared Valkey hash field | Pick a unique slot name |
 | Outage looks like "no data" | `try/except: return ""` around the fetch | Let infrastructure failures propagate; `core.py` isolates |
-| Model acts on garbage in your section | Unescaped user-controlled text in XML | `_xml_attr_escape()` / `html.escape()` |
+| Model acts on garbage in your section | Unescaped user-controlled text in XML | `wrap_untrusted()` for external text / `html.escape()` |
 
 ## Best Practices
 
@@ -535,7 +535,7 @@ a Valkey round-trip is unverified — `get_trinket_state()` is the check.
 | `domaindoc_trinket.py` | plain | `cache_policy=True`, section-tree render, cross-user share reads |
 | `asyncactivity_trinket.py` | plain | Reads SQLite per render (no in-memory state), `html.escape` |
 | `reminder_manager.py` | plain | Invokes a tool directly (`ReminderTool.run()`) |
-| `email_trinket.py` | stateful | Snapshot store, `_xml_attr_escape`, `_expire_items()` returns `False` |
+| `email_trinket.py` | stateful | Snapshot store, one `wrap_untrusted` boundary around the listing, `_expire_items()` returns `False` |
 | `forage_trinket.py` | stateful | Task-status state machine, terminal-state guard, per-iteration summary stacking |
 | `whilethecatsaway_trinket.py` | stateful | Same machine, all results TTL-expire, no dismiss path |
 | `peanutgallery_trinket.py` | stateful | TTL-in-turns expiry, constructor arg beyond the base two |
