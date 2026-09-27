@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
         logger.critical(f"Failed to load announcement config: {e}")
         raise RuntimeError(f"announcement loading failed - cannot start MIRA: {e}") from e
 
-    # Initialize embeddings provider (loads mdbr-leaf-ir-asym 768d model)
+    # Initialize the embeddings provider named by the embedding_config row
     from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
     try:
         embeddings_provider = get_hybrid_embeddings_provider()

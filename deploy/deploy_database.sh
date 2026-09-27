@@ -79,9 +79,33 @@ psql -U $SUPERUSER -h localhost -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABA
 echo ""
 echo "Step 4: Deploying mira_service schema..."
 
-psql -U $SUPERUSER -h localhost -d mira_service -v ON_ERROR_STOP=1 -f "${SCRIPT_DIR}/mira_service_schema.sql" > /dev/null 2>&1
+# The schema sizes its vector columns from the embedding model. Local by
+# default; for a remote OpenAI-compatible endpoint set
+# MIRA_EMBEDDING_PROVIDER=remote, MIRA_EMBEDDING_ENDPOINT, MIRA_EMBEDDING_MODEL
+# (the bearer token is read from the terminal). MIRA_PYTHON must have MIRA's
+# requirements installed (default: the checkout's venv, else python3).
+source "${SCRIPT_DIR}/lib/embedding_config.sh"
+APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+if [ -z "${MIRA_PYTHON:-}" ]; then
+    if [ -x "${APP_DIR}/venv/bin/python3" ]; then MIRA_PYTHON="${APP_DIR}/venv/bin/python3"; else MIRA_PYTHON="python3"; fi
+fi
+EMBEDDING_PROVIDER="${MIRA_EMBEDDING_PROVIDER:-local}"
+EMBEDDING_API_KEY=""
+if [ "$EMBEDDING_PROVIDER" = "remote" ]; then
+    read -r -s -p "Embedding endpoint bearer token (Enter for none): " EMBEDDING_API_KEY
+    echo ""
+fi
+resolve_embedding_schema_args "$MIRA_PYTHON" "$APP_DIR" "$EMBEDDING_PROVIDER" \
+    "${MIRA_EMBEDDING_ENDPOINT:-}" "${MIRA_EMBEDDING_MODEL:-}" "$EMBEDDING_API_KEY"
+echo "✓ Embedding model ${EMBEDDING_MODEL}, ${EMBEDDING_DIMENSIONS} dimensions"
+if [ -n "$EMBEDDING_API_KEY" ]; then
+    echo "  Store the token in Vault as secret/mira/api_keys ${EMBEDDING_VAULT_KEY_NAME}=<token>"
+fi
 
-if [ $? -eq 0 ]; then
+SCHEMA_STATUS=0
+psql -U $SUPERUSER -h localhost -d mira_service -v ON_ERROR_STOP=1 "${EMBEDDING_SCHEMA_ARGS[@]}" -f "${SCRIPT_DIR}/mira_service_schema.sql" > /dev/null 2>&1 || SCHEMA_STATUS=$?
+
+if [ $SCHEMA_STATUS -eq 0 ]; then
     echo "✓ Schema deployed successfully"
 else
     echo "✗ Schema deployment failed"

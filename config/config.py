@@ -181,8 +181,7 @@ class CacheConfig(BaseModel):
 class LtMemoryConfig(BaseModel):
     """LT_Memory ML-tuning knobs (batch sizes and worker counts)."""
 
-    embeddings_batch_size: int = Field(default=32, ge=1, description="Texts per SentenceTransformer encoding batch in the hybrid embeddings provider")
-    ner_batch_size: int = Field(default=50, ge=1, description="Texts per spaCy NER pipeline batch in entity extraction")
+    embeddings_batch_size: int = Field(default=32, ge=1, description="Texts per embedding batch: one SentenceTransformer encode batch (local provider) or one POST /v1/embeddings request (remote provider)")
     proactive_search_workers: int = Field(default=2, ge=1, description="Parallel proactive-memory search fan-out workers")
     entity_merge_candidate_limit: int = Field(default=500, ge=1, description="Maximum pg_trgm duplicate-entity candidate pairs returned per entity-merge sweep")
 

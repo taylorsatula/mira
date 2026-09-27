@@ -65,7 +65,7 @@ class HubDiscoveryService:
 
         Args:
             extracted_entities: Entity names from subcortical layer
-            expansion_embedding: 768d embedding for memory ranking
+            expansion_embedding: Query embedding for memory ranking
             limit_per_entity: Max memories to collect per matched entity
             max_matched_entities: Max entities to match
             entity_similarity_threshold: Minimum trigram similarity threshold
@@ -216,7 +216,7 @@ class HubDiscoveryService:
 
         # One batched statement: per-entity top-N via a lateral join. The
         # previous loop fetched every memory linked to each entity (including
-        # 768-float embeddings) and sliced in Python.
+        # full embeddings) and sliced in Python.
         with self.db.session_manager.get_session(get_current_user_id()) as session:
             rows = session.execute_query("""
                 SELECT m.*
@@ -257,7 +257,7 @@ class HubDiscoveryService:
 
         Args:
             memories: Candidate memories to rank
-            expansion_embedding: 768d query embedding
+            expansion_embedding: Query embedding
             top_n: Number of memories to return
 
         Returns:

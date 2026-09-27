@@ -788,17 +788,81 @@ def _check_valkey() -> dict[str, Any]:
         valkey_client.delete(key)
 
 
+# Vector columns the schema sizes from embedding_config.dimensions.
+_EMBEDDING_COLUMNS = (
+    ("messages", "segment_embedding"),
+    ("memories", "embedding"),
+    ("global_memories", "embedding"),
+)
+_EMBEDDING_CONFIG_LOCK_TRIGGER = "embedding_config_locked_once_vectors_exist"
+
+
 def _check_embeddings() -> dict[str, Any]:
     import numpy as np
 
-    from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
+    from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider, load_embedding_config
+    from clients.postgres_client import PostgresClient
 
+    embedding_config = load_embedding_config()
     provider = get_hybrid_embeddings_provider()
+    dimensions = provider.dimensions
+
+    admin_db = PostgresClient("mira_service", admin=True)
+    column_rows = admin_db.execute_query(
+        """
+        SELECT c.relname AS table_name,
+               a.attname AS column_name,
+               format_type(a.atttypid, a.atttypmod) AS column_type
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND NOT a.attisdropped
+          AND c.relname = ANY(%(tables)s)
+          AND a.attname = ANY(%(columns)s)
+        """,
+        {
+            "tables": [table for table, _ in _EMBEDDING_COLUMNS],
+            "columns": [column for _, column in _EMBEDDING_COLUMNS],
+        },
+    )
+    column_types = {(row["table_name"], row["column_name"]): row["column_type"] for row in column_rows}
+    expected_type = f"vector({dimensions})"
+    mismatched = {
+        f"{table}.{column}": column_types.get((table, column))
+        for table, column in _EMBEDDING_COLUMNS
+        if column_types.get((table, column)) != expected_type
+    }
+    if mismatched:
+        raise RuntimeError(
+            f"embedding_config fixes {dimensions} dimensions ({embedding_config.provider} "
+            f"{embedding_config.model}), but these vector columns disagree: {mismatched}"
+        )
+
+    lock_rows = admin_db.execute_query(
+        """
+        SELECT t.tgenabled
+        FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname = 'embedding_config'
+          AND t.tgname = %(trigger)s
+          AND NOT t.tgisinternal
+        """,
+        {"trigger": _EMBEDDING_CONFIG_LOCK_TRIGGER},
+    )
+    if len(lock_rows) != 1 or lock_rows[0]["tgenabled"] == "D":
+        raise RuntimeError(
+            f"Trigger {_EMBEDDING_CONFIG_LOCK_TRIGGER} on embedding_config is missing or disabled; "
+            "without it the embedding model can change underneath stored vectors"
+        )
+
     embedding = provider.encode_realtime(POST_PROBE_TEXT)
     if not isinstance(embedding, np.ndarray):
         raise RuntimeError(f"Embedding result is {type(embedding).__name__}, not ndarray")
-    if embedding.shape != (768,):
-        raise RuntimeError(f"Embedding shape {embedding.shape} does not match (768,)")
+    if embedding.shape != (dimensions,):
+        raise RuntimeError(f"Embedding shape {embedding.shape} does not match ({dimensions},)")
     if embedding.dtype != np.float16:
         raise RuntimeError(f"Embedding dtype {embedding.dtype} does not match float16")
     if not np.isfinite(embedding).all():
@@ -807,7 +871,7 @@ def _check_embeddings() -> dict[str, Any]:
     cache_hit = False
     if provider.query_cache is not None:
         cached = provider.query_cache.get(POST_PROBE_TEXT)
-        cache_hit = cached is not None and cached.shape == (768,)
+        cache_hit = cached is not None and cached.shape == (dimensions,)
         cache_key = provider.query_cache._get_cache_key(POST_PROBE_TEXT)
         provider.query_cache.valkey.valkey_binary.delete(cache_key)
         if not cache_hit:
@@ -815,7 +879,10 @@ def _check_embeddings() -> dict[str, Any]:
 
     return {
         "provider": type(provider).__name__,
-        "shape": list(embedding.shape),
+        "model": embedding_config.model,
+        "dimensions": dimensions,
+        "vector_columns_verified": len(_EMBEDDING_COLUMNS),
+        "config_lock_trigger": _EMBEDDING_CONFIG_LOCK_TRIGGER,
         "dtype": str(embedding.dtype),
         "query_cache_verified": cache_hit,
     }

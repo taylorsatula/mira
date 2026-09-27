@@ -6,7 +6,7 @@ the long-term memory system. Wraps ProactiveService from lt_memory.
 
 CNS Integration Points:
 - get_relevant_memories(query_expansion, expansion_embedding, extracted_entities) -> List[Dict]
-- Uses pre-computed 768d embeddings (no redundant embedding generation)
+- Uses pre-computed embeddings (no redundant embedding generation)
 - Supports hub-based discovery via extracted entities
 - Returns hierarchical memory structures with link metadata
 """
@@ -25,7 +25,7 @@ class MemoryRelevanceService:
     CNS service for memory relevance scoring.
 
     Wraps the lt_memory ProactiveService to provide memory surfacing for continuums.
-    Uses pre-computed 768d expansion embeddings from CNS.
+    Uses pre-computed expansion embeddings from CNS.
     """
 
     def __init__(self, proactive_service: ProactiveService):
@@ -54,7 +54,7 @@ class MemoryRelevanceService:
 
         Args:
             query_expansion: Expanded retrieval-optimized query
-            expansion_embedding: Pre-computed 768d embedding of query expansion
+            expansion_embedding: Pre-computed embedding of query expansion
             limit: Maximum memories to return (default: 10)
             extracted_entities: Entity names for hub-based discovery (optional)
 
@@ -79,9 +79,6 @@ class MemoryRelevanceService:
         # Validate embedding
         if expansion_embedding is None:
             raise ValueError("expansion_embedding is required")
-
-        if len(expansion_embedding) != 768:
-            raise ValueError(f"Expected 768d embedding, got {len(expansion_embedding)}d")
 
         # Delegate to ProactiveService with extracted entities for hub discovery
         memories = self.proactive.search_with_embedding(

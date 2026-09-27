@@ -38,10 +38,12 @@ venv/bin/pip install --upgrade pip
 venv/bin/pip install -r requirements.txt
 ```
 
-After installing Python dependencies, download the spaCy model:
+For the local embedding model (the default), install PyTorch's CPU wheel and
+sentence-transformers. Skip this for a remote embedding endpoint:
 
 ```bash
-venv/bin/python -m spacy download en_core_web_lg
+venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+venv/bin/pip install sentence-transformers
 ```
 
 For web rendering support, install the Playwright package and browser. Neither
@@ -62,11 +64,17 @@ venv/bin/pip install python-docx openpyxl
 
 ## Database
 
-Create the `mira_service` database and load the current schema:
+Create the `mira_service` database and load the current schema. The schema
+sizes its vector columns from the embedding model, so resolve that first with
+`deploy/lib/embedding_config.sh` (local model shown; for a remote
+OpenAI-compatible endpoint pass `remote <endpoint_url> <model> <token>` and
+store the token in Vault as `secret/mira/api_keys` `embeddings_key`):
 
 ```bash
 createdb mira_service
-psql -U postgres -h localhost -d mira_service -f deploy/mira_service_schema.sql
+source deploy/lib/embedding_config.sh
+resolve_embedding_schema_args venv/bin/python "$PWD" local "" "" ""
+psql -U postgres -h localhost -d mira_service "${EMBEDDING_SCHEMA_ARGS[@]}" -f deploy/mira_service_schema.sql
 ```
 
 Vault stores service credentials and provider keys. The deploy scripts in `deploy/vault.sh` and `deploy/postgresql.sh` are the source of truth for the exact key names used by the automated path.

@@ -6,9 +6,8 @@ This tool gives full domain ownership over memory operations, replacing the
 memory search functionality previously in continuum_tool.
 
 Memory creation is deferred: create_memory() queues memories to Valkey for
-processing at segment collapse. This keeps tool initialization lightweight
-(no spaCy model loading) and moves heavy operations (embedding generation,
-entity extraction) to the existing extraction pipeline.
+processing at segment collapse, which moves heavy operations (embedding
+generation, entity extraction) to the existing extraction pipeline.
 """
 
 import copy
@@ -80,8 +79,7 @@ class MemoryTool(Tool):
 
     Architecture note: Memory creation is queued (not immediate). The tool
     stores pending memories in Valkey, which are processed at segment collapse
-    by the existing LT_Memory pipeline. This keeps initialization lightweight
-    (no EntityExtractor/spaCy) and defers heavy operations appropriately.
+    by the existing LT_Memory pipeline.
     """
 
     name = "memory_tool"
@@ -125,6 +123,16 @@ class MemoryTool(Tool):
                     "type": "integer",
                     "minimum": 1,
                     "description": "Page number for pagination, default 1"
+                },
+                "entities": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Names of specific people, places, organizations, or products the search is about, "
+                        "spelled and capitalized as they would appear in the memory (e.g. ['Nana Ruth', 'Honda Civic']). "
+                        "Each name is fuzzy-matched against the entity names stored with memories, and memories linked "
+                        "to a matched entity join the results. Omit when the query names none. Used by 'search' only"
+                    )
                 },
                 # Create memory parameters
                 "content": {
@@ -200,12 +208,7 @@ class MemoryTool(Tool):
     }
 
     def __init__(self):
-        """
-        Initialize the memory tool with lightweight services only.
-
-        No EntityExtractor (spaCy) loading here - entity extraction happens
-        at segment collapse via the existing LT_Memory pipeline.
-        """
+        """Initialize the memory tool with lightweight services only."""
         super().__init__()
         self.logger = logging.getLogger(__name__)
 
@@ -214,25 +217,20 @@ class MemoryTool(Tool):
 
         self._config = config.get_tool_config("memory_tool")
 
-        # Lightweight service initialization (no spaCy)
         self._embeddings_provider = get_hybrid_embeddings_provider()
         session_manager = get_shared_session_manager()
         self._memory_db = LTMemoryDB(session_manager)
         self._hybrid_searcher = HybridSearcher(self._memory_db)
         self._valkey = get_valkey_client()
 
-        # HubDiscoveryService is lazy-loaded only when search needs entity
-        # discovery; the EntityExtractor it uses is constructed there
-        # (process-wide cached model) and the search feeds its entities directly
+        # HubDiscoveryService is lazy-loaded only when a search supplies entities
         self._hub_discovery = None
 
     def _get_hub_discovery(self):
         """Lazy-load HubDiscoveryService for search operations."""
         if self._hub_discovery is None:
             from lt_memory.hub_discovery import HubDiscoveryService
-            from lt_memory.entity_extraction import EntityExtractor
 
-            self._entity_extractor = EntityExtractor()
             self._hub_discovery = HubDiscoveryService(
                 db=self._memory_db,
             )
@@ -281,7 +279,7 @@ class MemoryTool(Tool):
         query: str,
         max_results: int = 10,
         page: int = 1,
-        include_hub_discovery: bool = True,
+        entities: Optional[List[str]] = None,
         include_link_traversal: bool = True,
         traversal_depth: int = 1,
         **kwargs  # Accept extra params gracefully
@@ -296,7 +294,8 @@ class MemoryTool(Tool):
             query: Natural language search query
             max_results: Number of primary results (default 10)
             page: Page number for pagination (default 1)
-            include_hub_discovery: Include entity-linked memories (default true)
+            entities: Entity names supplied by the calling model; hub discovery
+                runs only when at least one is given
             include_link_traversal: Traverse links on top results (default true)
             traversal_depth: How many link hops to follow (default 1)
 
@@ -314,14 +313,9 @@ class MemoryTool(Tool):
         limit = min(max_results, self._config.max_search_results)
         offset = (page - 1) * limit
 
-        # Generate query embedding (768d realtime encoder)
         query_embedding = self._embeddings_provider.encode_realtime(query)
 
-        # Extract entities from query for hub discovery (lazy-load EntityExtractor)
-        extracted_entities = []
-        if include_hub_discovery:
-            self._get_hub_discovery()
-            extracted_entities = list(self._entity_extractor.extract_entities(query))
+        extracted_entities = [name.strip() for name in entities or [] if name and name.strip()]
 
         # Run parallel retrieval
         def _fetch_similarity_pool():
@@ -337,7 +331,7 @@ class MemoryTool(Tool):
 
         def _fetch_hub_pool():
             """Fetch hub-derived memories via entity navigation."""
-            if not include_hub_discovery or not extracted_entities:
+            if not extracted_entities:
                 return []
             hub_discovery = self._get_hub_discovery()
             return hub_discovery.discover_hub_memories(

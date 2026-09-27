@@ -1,7 +1,7 @@
 """
 Vector operations for LT_Memory system.
 
-Handles embedding generation and storage using mdbr-leaf-ir-asym (768d) embeddings.
+Handles embedding generation and storage through the install's embeddings provider.
 Singleton service that wraps the embeddings provider and database access.
 """
 import logging
@@ -14,7 +14,7 @@ from lt_memory.db_access import LTMemoryDB
 from lt_memory.hybrid_search import HybridSearcher
 
 if TYPE_CHECKING:
-    from clients.hybrid_embeddings_provider import HybridEmbeddingsProvider
+    from clients.hybrid_embeddings_provider import EmbeddingsProvider
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +27,12 @@ class VectorOps:
     """
     Vector operations service for embedding generation and similarity search.
 
-    Uses mdbr-leaf-ir-asym (768d) for document embeddings.
+    Document embeddings come from the install's embeddings provider.
     """
 
     def __init__(
         self,
-        embeddings_provider: 'HybridEmbeddingsProvider',
+        embeddings_provider: 'EmbeddingsProvider',
         db: LTMemoryDB,
     ):
         self.embeddings_provider = embeddings_provider
@@ -41,7 +41,7 @@ class VectorOps:
 
     def generate_embedding(self, text: str) -> List[float]:
         """
-        Generate document embedding (768d) for memory storage.
+        Generate document embedding for memory storage.
 
         Args:
             text: Text to embed
@@ -114,7 +114,7 @@ class VectorOps:
         Internal method that performs vector similarity search.
 
         Args:
-            query_embedding: Embedding vector (768d)
+            query_embedding: Embedding vector
             limit: Maximum results to return
             similarity_threshold: Minimum cosine similarity (0-1)
             min_importance: Minimum importance score filter
@@ -210,7 +210,7 @@ class VectorOps:
         Find similar memories using pre-computed embedding.
 
         Args:
-            query_embedding: Pre-computed embedding vector (768d)
+            query_embedding: Pre-computed embedding vector at the install's dimensionality
             limit: Maximum results to return
             similarity_threshold: Minimum cosine similarity (0-1)
             min_importance: Minimum importance score filter
@@ -223,9 +223,10 @@ class VectorOps:
             query_embedding = query_embedding.tolist()
 
         # Validate dimensions
-        if len(query_embedding) != 768:
+        if len(query_embedding) != self.embeddings_provider.dimensions:
             raise ValueError(
-                f"Expected 768-dimensional embedding, got {len(query_embedding)}"
+                f"Expected {self.embeddings_provider.dimensions}-dimensional embedding, "
+                f"got {len(query_embedding)}"
             )
 
         return self._search_with_embedding(

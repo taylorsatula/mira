@@ -118,7 +118,7 @@ class ProactiveService:
         2. Hub-Derived Pool: Entity-driven discovery via hub navigation
 
         Args:
-            embedding: Pre-computed 768d expansion embedding
+            embedding: Pre-computed expansion embedding
             query_expansion: Expanded query text (for BM25 and reranking)
             limit: Maximum number of memories to return
             extracted_entities: Entity names from subcortical layer for hub discovery

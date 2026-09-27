@@ -24,7 +24,7 @@ from ..infrastructure.continuum_pool import get_continuum_pool, initialize_conti
 from ..infrastructure.valkey_message_cache import ValkeyMessageCache
 
 if TYPE_CHECKING:
-    from clients.hybrid_embeddings_provider import HybridEmbeddingsProvider
+    from clients.hybrid_embeddings_provider import EmbeddingsProvider
     from cns.services.memory_relevance_service import MemoryRelevanceService
     from cns.services.subcortical import SubcorticalLayer
     from cns.services.peanutgallery_service import PeanutGalleryService
@@ -47,7 +47,7 @@ class CNSIntegrationFactory:
             config_instance: MIRA configuration instance. If None, will use global config.
         """
         self.config = config_instance or config
-        self._embedding_model: HybridEmbeddingsProvider | None = None
+        self._embedding_model: EmbeddingsProvider | None = None
         self._llm_provider: LLMProvider | None = None
         self._working_memory: WorkingMemory | None = None
         self._tool_repo: ToolRepository | None = None
@@ -154,7 +154,7 @@ class CNSIntegrationFactory:
         logger.info("CNS orchestrator initialized successfully with full integration")
         return orchestrator
         
-    def _get_embedding_model(self) -> HybridEmbeddingsProvider:
+    def _get_embedding_model(self) -> EmbeddingsProvider:
         """Get or create hybrid embedding provider instance."""
         if self._embedding_model is None:
             logger.info("Initializing hybrid embedding provider")

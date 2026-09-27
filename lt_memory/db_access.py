@@ -483,7 +483,7 @@ class LTMemoryDB:
         via UNION. Results are tagged with source='personal' or source='global'.
 
         Args:
-            query_embedding: Query vector (768d mdbr-leaf-ir-asym)
+            query_embedding: Query vector from the install's embeddings provider
             limit: Maximum results to return
             similarity_threshold: Minimum cosine similarity (0-1)
             min_importance: Minimum importance score filter (personal only)

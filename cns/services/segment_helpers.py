@@ -94,7 +94,7 @@ def collapse_segment_sentinel(
         summary: Generated telegraphic summary
         precis: 2-sentence compressed summary
         display_title: Short telegraphic title for manifest display
-        embedding: 768-dim embedding of summary
+        embedding: Document embedding of the summary
         inactive_duration_minutes: Minutes of inactivity that triggered collapse
         processing_failed: True if summary generation failed and fallback was used
         tools_used: Tools used in segment (extracted from messages)

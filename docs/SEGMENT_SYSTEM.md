@@ -21,7 +21,7 @@ The collapsed segment is represented by a sentinel message. The sentinel carries
 
 ## Embeddings
 
-`messages.segment_embedding` stores a 768-dimensional mdbr-leaf-ir-asym embedding for collapsed segment sentinels. The embedding supports semantic search over collapsed conversation history without loading full message bodies into context.
+`messages.segment_embedding` stores a document embedding from the install's embedding model (vector length fixed at install by `embedding_config`) for collapsed segment sentinels. The embedding supports semantic search over collapsed conversation history without loading full message bodies into context.
 
 ## Boundaries
 

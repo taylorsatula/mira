@@ -2,7 +2,7 @@
 Client modules for external service integrations.
 """
 
-from .hybrid_embeddings_provider import get_hybrid_embeddings_provider, HybridEmbeddingsProvider
+from .hybrid_embeddings_provider import get_hybrid_embeddings_provider, EmbeddingsProvider
 from .postgres_client import PostgresClient
 from .sqlite_client import SQLiteClient
 from .valkey_client import ValkeyClient, get_valkey, get_valkey_client
@@ -16,7 +16,7 @@ def __getattr__(name):
     raise AttributeError(name)
 
 __all__ = [
-    'HybridEmbeddingsProvider',
+    'EmbeddingsProvider',
     'get_hybrid_embeddings_provider',
     'LLMProvider',
     'PostgresClient',

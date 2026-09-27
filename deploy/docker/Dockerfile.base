@@ -52,9 +52,6 @@ RUN pip install --no-cache-dir sentence-transformers
 # provides that CLI is installed explicitly here.
 RUN pip install --no-cache-dir playwright
 
-# Download spaCy model
-RUN python -m spacy download en_core_web_lg
-
 # Install TOAST log level into venv site-packages (.pth runs at interpreter startup)
 COPY deploy/_mira_log_levels.py /tmp/_mira_log_levels.py
 RUN SITE_PKG=$(python -c "import sysconfig; print(sysconfig.get_path('purelib'))") \

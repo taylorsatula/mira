@@ -33,7 +33,7 @@ from cns.core.message import Message
 from cns.services.segment_helpers import collapse_segment_sentinel
 from cns.services.summary_generator import SummaryGenerator, SummaryResult, SummaryType
 from cns.infrastructure.continuum_repository import ContinuumRepository
-from clients.hybrid_embeddings_provider import HybridEmbeddingsProvider
+from clients.hybrid_embeddings_provider import EmbeddingsProvider
 from clients.valkey_client import get_valkey_client
 from cns.integration.event_bus import EventBus
 from utils.timezone_utils import utc_now, parse_time_string, ensure_utc, validate_timezone
@@ -126,7 +126,7 @@ class SegmentCollapseHandler:
         self,
         continuum_repo: ContinuumRepository,
         summary_generator: SummaryGenerator,
-        embeddings_provider: HybridEmbeddingsProvider,
+        embeddings_provider: EmbeddingsProvider,
         event_bus: EventBus,
         continuum_pool: ContinuumPool,
         lt_memory_factory: LTMemoryFactory,
@@ -305,7 +305,7 @@ class SegmentCollapseHandler:
                 summary="[Segment collapse failed after maximum retry attempts]",
                 precis="[Collapse Failed]",
                 display_title="[Collapse Failed]",
-                embedding=[0.0] * 768,
+                embedding=[0.0] * self.embeddings_provider.dimensions,
                 inactive_duration_minutes=event.inactive_duration_minutes,
                 processing_failed=True,
                 tools_used=sentinel.metadata.get('tools_used', []),
@@ -737,7 +737,7 @@ class SegmentCollapseHandler:
 
         for mem in all_pending:
             try:
-                # Generate embedding (768d deep encoder)
+                # Document embedding (deep encoder)
                 embedding = embeddings_provider.encode_deep([mem.text])[0].tolist()
 
                 # Parse temporal fields in the user's timezone — these strings are

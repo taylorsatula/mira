@@ -234,7 +234,7 @@ class ContinuumRepository:
             db.execute_query(
                 """
                 INSERT INTO messages (id, continuum_id, user_id, role, content, metadata, created_at, tool_call_id, is_error, segment_embedding)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector(768))
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector)
                 ON CONFLICT (id) DO UPDATE SET
                     content = EXCLUDED.content,
                     metadata = EXCLUDED.metadata,
@@ -436,7 +436,7 @@ class ContinuumRepository:
                 db.execute_query(
                     """
                     INSERT INTO messages (id, continuum_id, user_id, role, content, metadata, created_at, tool_call_id, is_error, segment_embedding)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector(768))
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector)
                     """,
                     base_tuple + (segment_embedding_value,)
                 )

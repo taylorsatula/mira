@@ -1655,7 +1655,12 @@ class ContinuumOrchestrator:
             expansion_embedding = self.embeddings_provider.encode_realtime(query_expansion)
             return expansion_embedding, None
 
-        with ThreadPoolExecutor(max_workers=config.worker_pools.orchestrator_encode_workers) as executor:
+        # Both encodes run concurrently, so each gets the provider's full
+        # single-encode bound. shutdown(wait=False) keeps a timed-out encode
+        # from holding the turn at executor exit.
+        wait_seconds = self.embeddings_provider.max_encode_seconds
+        executor = ThreadPoolExecutor(max_workers=config.worker_pools.orchestrator_encode_workers)
+        try:
             ctx_expansion = copy_context()
             ctx_assistant = copy_context()
             expansion_future = executor.submit(
@@ -1666,8 +1671,16 @@ class ContinuumOrchestrator:
                 ctx_assistant.run,
                 lambda: self.embeddings_provider.encode_realtime(assistant_text)
             )
-            expansion_embedding = expansion_future.result()
-            assistant_embedding = assistant_future.result()
+            try:
+                expansion_embedding = expansion_future.result(timeout=wait_seconds)
+                assistant_embedding = assistant_future.result(timeout=wait_seconds)
+            except TimeoutError as e:
+                raise TimeoutError(
+                    f"Memory-surfacing embeddings exceeded the {wait_seconds}s bound of "
+                    f"{type(self.embeddings_provider).__name__}"
+                ) from e
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         return expansion_embedding, assistant_embedding
 

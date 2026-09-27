@@ -346,7 +346,7 @@ class MemoryDomainHandler(BaseDomainHandler):
             from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
             from lt_memory.models import ExtractedMemory
             embeddings_provider = get_hybrid_embeddings_provider()  # Use singleton
-            # Use deep embeddings for memory storage (768d document encoding)
+            # Document encoding for memory storage
             embedding = embeddings_provider.encode_deep(content)
 
             # Convert ndarray to list for database storage (serialization boundary)

@@ -145,7 +145,7 @@ class HybridSearcher:
 
         Searches both personal memories (RLS-filtered) and global memories (no RLS)
         via UNION. Results are tagged with source='personal' or source='global'.
-        The embedding column is projected as NULL: the 768-float jsonb decode per
+        The embedding column is projected as NULL: the per-row embedding jsonb decode per
         row is pure dead weight here — RRF fusion uses only ranks and scores,
         and vector-sourced duplicates overwrite the map entry with the
         vector-search row (which carries the embedding).
