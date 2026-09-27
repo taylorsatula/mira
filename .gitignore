@@ -53,5 +53,11 @@ tools/implementations/crm_billing_tool.py
 # Local scratch / staging area (not shipped)
 scratch/
 
+# Fine-tuning training data (extracted from deployed instances; local only)
+training_data/
+
 # Session working documents (plans, handoffs, registers - local only)
 .pi/plans/
+.pi/subagent-schedules/
+.pi/subagents.json
+/.pi/plans
