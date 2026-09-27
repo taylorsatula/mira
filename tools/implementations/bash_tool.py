@@ -1,11 +1,11 @@
 """
-Guardrailed remote shell execution on a configured remote host.
+Guardrailed local shell execution on the machine MIRA runs on.
 
-MIRA runs where its tools' remote targets are not mounted. This tool runs
-shell commands on a configured remote host over a dedicated SSH connection,
-starting from a configured project root. Every command is validated against a two-layer destructive-command
-guardrail before anything executes; a match is a hard refusal and the command
-never reaches the host.
+This tool runs shell commands LOCALLY on the machine MIRA runs on (a VM,
+container, or host) via subprocess — no network transport. Commands execute as the service
+user from a configured project root. Every command is validated against a
+two-layer destructive-command guardrail before anything executes; a match is
+a hard refusal and the command never reaches the shell.
 
 The two layers cover what the other cannot:
 
@@ -29,10 +29,12 @@ around — every refusal message says so explicitly.
 
 import inspect
 import logging
+import os
 import posixpath
 import re
 import shlex
 import subprocess
+from pathlib import Path
 from typing import Any, Dict, FrozenSet, Iterable, List, NoReturn, Optional, Tuple
 
 from pydantic import BaseModel, Field
@@ -42,25 +44,36 @@ from tools.registry import registry
 from utils.timezone_utils import utc_now
 
 
+# Home directory of the user MIRA runs as, whatever it is named. Path.home()
+# raises when no home can be determined — a loud import failure, never a
+# silently wrong working directory.
+_SERVICE_HOME = str(Path.home())
+
+
 class BashToolConfig(BaseModel):
     """Configuration for bash_tool."""
     enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
     root: str = Field(
-        default="/home/admin/mlfactory",
-        description="Absolute remote directory used as the default working directory for every command.",
-    )
-    host_alias: str = Field(
-        default="mlfactory-host",
-        description="SSH host alias (from ~/.ssh/config) identifying the configured remote host.",
+        default=_SERVICE_HOME,
+        description=(
+            "Absolute local directory used as the default working directory for every command. "
+            "Defaults to the home directory of the user MIRA runs as."
+        ),
     )
     log_dir: str = Field(
-        default="/home/admin/mlfactory/.mira_logs",
+        default=posixpath.join(_SERVICE_HOME, ".mira_logs"),
         description="Directory for run_background logs. Must resolve inside root.",
     )
     default_timeout_seconds: int = Field(default=120, description="Timeout applied when the caller gives none.")
     max_timeout_seconds: int = Field(default=1800, description="Ceiling a caller-supplied timeout is clamped to.")
     max_output_bytes: int = Field(default=100_000, description="Per-stream cap on returned stdout/stderr bytes.")
-    ssh_connect_timeout_seconds: int = Field(default=30, description="SSH channel timeout in seconds.")
+    background_start_timeout_seconds: int = Field(
+        default=30,
+        description=(
+            "Budget for run_background's start sequence only (mkdir/cd/nohup launch). "
+            "The detached job's own lifetime is never bounded by it."
+        ),
+    )
 
 
 registry.register("bash_tool", BashToolConfig)
@@ -178,7 +191,7 @@ _DESTRUCTIVE_PATTERNS: List[Tuple[str, "re.Pattern[str]", str]] = [
     ),
     (
         "sudoers-write",
-        re.compile(r"[^\n]*(?:/etc/sudoers|/etc/sudoers\.d|\bvisudo\b)"),
+        re.compile(r"(?:/etc/sudoers|/etc/sudoers\.d|\bvisudo\b)"),
         "modifying sudo privileges",
     ),
     (
@@ -619,13 +632,78 @@ def _find_exec_deletes(args: List[str]) -> bool:
     return False
 
 
+def _find_narrows(args: List[str]) -> bool:
+    """
+    True when the find expression carries a predicate that provably narrows.
+
+    The deletion carve-out needs a demonstrated constraint, not the mere
+    presence of a predicate flag: `-name '*'` matches every entry, and a
+    predicate with no value is unparseable. Anything this walk cannot prove
+    narrows returns False, keeping the deletion on the guarded-refusal path.
+    """
+    narrowed = False
+    match_all = False
+    disjoined = False
+    negated = False
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg in ("!", "-not"):
+            negated = True
+        elif arg == ",":
+            # The expression-list operator: `find . -name '*.pyc' , -delete`
+            # unions the narrowed match with the un-narrowed walk, so the
+            # delete applies to everything. Presence of a comma can never be
+            # proven narrowing — refuse the carve-out.
+            return False
+        elif arg in ("(", ")", "-a", "-and"):
+            pass
+        elif arg in ("-o", "-or"):
+            disjoined = True
+        elif arg == "-empty":
+            if not negated:
+                narrowed = True
+            negated = False
+        elif arg in _FIND_NARROWING:
+            if index + 1 >= len(args):
+                return False
+            value = args[index + 1]
+            if value in _FIND_NARROWING or value in (
+                "-delete", "-exec", "-execdir", "-ok", "-okdir", "(", ")", "!", ",",
+            ):
+                return False
+            index += 1
+            if arg in ("-name", "-iname", "-path", "-ipath", "-wholename"):
+                pattern = value.strip("'\"")
+                if "*" in pattern and set(pattern) <= {"*", "?"}:
+                    if not negated:
+                        match_all = True
+                elif not negated:
+                    narrowed = True
+            elif arg in ("-regex", "-iregex"):
+                if value.strip("'\"") in _MATCH_ALL_REGEXES:
+                    if not negated:
+                        match_all = True
+                elif not negated:
+                    narrowed = True
+            elif not negated:
+                narrowed = True
+            negated = False
+        index += 1
+    if match_all and disjoined:
+        return False
+    return narrowed
+
+
 def _check_find(args: List[str], cwd: str, root: str, ancestors: FrozenSet[str]) -> None:
     """
     Refuse a find that deletes without a narrowing predicate over a safe tree.
 
     `find . -name '*.pyc' -delete` inside the project root is ordinary cleanup.
     `find . -delete` from the same directory removes the whole harness, and
-    `find / ...` walks off the project tree entirely.
+    `find / ...` walks off the project tree entirely. A predicate only earns
+    the carve-out when it demonstrably narrows: `-name '*'` matches everything
+    and does not count, and neither does an unparseable expression.
     """
     if "-delete" not in args and not _find_exec_deletes(args):
         return
@@ -634,7 +712,7 @@ def _check_find(args: List[str], cwd: str, root: str, ancestors: FrozenSet[str])
         if arg.startswith("-") or arg in ("!", "(", ")", ","):
             break
         starts.append(arg)
-    narrowed = any(arg in _FIND_NARROWING for arg in args)
+    narrowed = _find_narrows(args)
     for start in starts or ["."]:
         if any(char in start for char in _EXPANSION_CHARS):
             _refuse("unverifiable-expansion", _RULE_REASONS["unverifiable-expansion"], f"find {start}")
@@ -671,6 +749,71 @@ def _check_path_verbs(
 def _looks_nested(token: str) -> bool:
     """True when a token is itself a command line rather than a single word."""
     return any(char in token for char in _NESTING_CHARS)
+
+
+def _dollar_bodies(text: str) -> List[str]:
+    """Bodies of every `$( ... )` substitution in `text`, nested parens honored."""
+    bodies: List[str] = []
+    index = 0
+    while True:
+        start = text.find("$(", index)
+        if start == -1:
+            return bodies
+        depth = 0
+        end = -1
+        for pos in range(start + 1, len(text)):
+            if text[pos] == "(":
+                depth += 1
+            elif text[pos] == ")":
+                depth -= 1
+                if depth == 0:
+                    end = pos
+                    break
+        if end == -1:
+            # Unterminated inside these tokens. Unquoted `$(` is split by
+            # shlex into separate `$` and `(` tokens and the plain segment
+            # walk already analyzes the body, so no fallback is needed here.
+            return bodies
+        bodies.append(text[start + 2 : end])
+        index = end + 1
+
+
+def _backtick_bodies(text: str) -> List[str]:
+    """
+    Bodies of every backtick substitution in `text`.
+
+    An unterminated trailing backtick is dropped: bash rejects that line
+    outright, so nothing inside it executes.
+    """
+    parts = text.split("`")
+    return [parts[i] for i in range(1, len(parts) - 1, 2)]
+
+
+def _analyze_substitutions(
+    tokens: List[str],
+    cwd: str,
+    root: str,
+    ancestors: FrozenSet[str],
+    depth: int,
+) -> None:
+    """
+    Re-run the full argument layer over every command substitution body.
+
+    shlex keeps a quoted substitution inside one token (`echo "$(rm -rf .)"`
+    tokenizes to `['echo', '$(rm -rf .)']`), and backticks stay glued to the
+    words they wrap (`` echo `rm -rf .` `` → `` ['echo', '`rm', '-rf', '.`'] ``),
+    so the plain segment walk never sees the body as a command. Extract each
+    body and analyze it as its own command line — benign substitutions
+    (`wc -l $(find . -name '*.py')`) keep passing, and unquoted `$( ... )`,
+    which the tokenizer splits at the parens, keeps its existing path.
+    """
+    if depth >= _MAX_NESTING:
+        return
+    joined = " ".join(tokens)
+    if "$(" not in joined and "`" not in joined:
+        return
+    for body in _dollar_bodies(joined) + _backtick_bodies(joined):
+        _analyze_command(body, cwd, root, ancestors, depth + 1)
 
 
 def _strip_wrapper_args(verb: str, rest: List[str]) -> List[str]:
@@ -749,6 +892,10 @@ def _analyze_segment(
     """
     if depth > _MAX_NESTING or not tokens:
         return cwd
+
+    # A substitution body is a command line in every token position — not
+    # just under a wrapper verb — so analyze it before the verb-specific walk.
+    _analyze_substitutions(tokens, cwd, root, ancestors, depth)
 
     index = 0
     while index < len(tokens) and _ENV_ASSIGNMENT.match(tokens[index]):
@@ -865,17 +1012,17 @@ def _validate_command(command: str, root: str, cwd: Optional[str] = None) -> Non
 
 
 class BashTool(Tool):
-    """Run guardrailed shell commands on the configured remote host over SSH."""
+    """Run guardrailed shell commands locally on the machine MIRA runs on."""
 
     name = "bash_tool"
     # Any shell command may mutate host state — no per-operation gating
     parallel_safe = False
 
-    simple_description = "Run shell commands on the configured remote host; destructive patterns are refused."
+    simple_description = "Run shell commands locally on this machine; destructive patterns are refused."
 
     tool_schema = {
         "name": "bash_tool",
-        "description": "Run shell commands on the configured remote host; destructive patterns are refused.",
+        "description": "Run shell commands locally on this machine; destructive patterns are refused.",
         "input_schema": {
             "type": "object",
             "additionalProperties": False,
@@ -892,7 +1039,7 @@ class BashTool(Tool):
                 "command": {
                     "type": "string",
                     "description": (
-                        "Shell command executed with `bash -lc` on the configured host as the "
+                        "Shell command executed with `bash -lc` locally on this machine as the service "
                         "user, from cwd (default the project root). Validated against a "
                         "destructive-command guardrail first; a blocked command is refused "
                         "with the matched rule and nothing runs. A refusal means stop: do not "
@@ -900,7 +1047,7 @@ class BashTool(Tool):
                         "needs an operation the guardrail refuses, stop work and wait for a "
                         "human. Paths that depend on shell expansion ($VAR, ~, backticks) are "
                         "refused for destructive verbs — pass explicit literal paths. Not "
-                        "sandboxed: it can read the whole host filesystem, but "
+                        "sandboxed: it can read the whole machine's filesystem, but "
                         "system-destructive operations are refused."
                     ),
                 },
@@ -914,10 +1061,12 @@ class BashTool(Tool):
                 },
                 "timeout_seconds": {
                     "type": "integer",
+                    "minimum": 1,
                     "description": (
-                        "Kill the command after this many seconds (SIGTERM, then SIGKILL ten "
-                        "seconds later). Defaults to 120 and is clamped to the configured "
-                        "maximum. Ignored by run_background."
+                        "Required. Kill the command after this many seconds (SIGTERM, then "
+                        "SIGKILL ten seconds later), clamped to the configured maximum. "
+                        "Ignored by run_background, which uses its own start timeout — still "
+                        "pass a value; it is not acted on there."
                     ),
                 },
                 "log_name": {
@@ -928,7 +1077,7 @@ class BashTool(Tool):
                     ),
                 },
             },
-            "required": ["operation", "command"],
+            "required": ["operation", "command", "timeout_seconds"],
         },
     }
 
@@ -954,30 +1103,29 @@ class BashTool(Tool):
             )
         return resolved
 
-    def _ssh(
+    def _execute_local(
         self,
         cfg: BashToolConfig,
-        remote_command: str,
+        shell_command: str,
         *,
         timeout_seconds: Optional[float] = None,
     ) -> subprocess.CompletedProcess:
-        effective = timeout_seconds or float(cfg.ssh_connect_timeout_seconds)
+        """Run a composed shell command locally via subprocess."""
+        effective = timeout_seconds or float(cfg.default_timeout_seconds)
         try:
             return subprocess.run(
-                ["ssh", cfg.host_alias, remote_command],
+                ["bash", "-c", shell_command],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=effective,
             )
         except subprocess.TimeoutExpired as exc:
             raise ValueError(
-                f"SSH command to '{cfg.host_alias}' exceeded {effective:.0f}s and was killed. "
-                f"The remote process may still be running."
+                f"Command exceeded {effective:.0f}s and was killed. "
+                f"The process may still be running."
             ) from exc
         except OSError as exc:
-            raise ValueError(
-                f"Could not launch ssh for host alias '{cfg.host_alias}': {exc}"
-            ) from exc
+            raise ValueError(f"Could not launch the local shell: {exc}") from exc
 
     @staticmethod
     def _decode(raw: bytes) -> str:
@@ -998,11 +1146,11 @@ class BashTool(Tool):
 
     def run(self, operation: str, command: str, **kwargs) -> Dict[str, Any]:
         """
-        Execute a shell command on the configured remote host.
+        Execute a shell command locally on the machine MIRA runs on.
 
         Args:
             operation: "run" to execute and wait, "run_background" to detach with nohup.
-            command: Shell command run with bash -lc on the host.
+            command: Shell command run with bash -lc on the local machine.
             **kwargs: cwd, timeout_seconds, log_name as applicable.
 
         Returns:
@@ -1011,7 +1159,8 @@ class BashTool(Tool):
 
         Raises:
             ValueError: If the operation is unknown, a path escapes the root, the
-                command is refused by the destructive-command guardrail, or SSH fails.
+                command is refused by the destructive-command guardrail, or shell
+                execution fails.
         """
         from config.config_manager import config
 
@@ -1044,11 +1193,11 @@ class BashTool(Tool):
         workdir = self._resolve(cfg, cwd) if cwd else posixpath.normpath(cfg.root)
         _validate_command(command, cfg.root, workdir)
         timeout = self._clamp_timeout(cfg, timeout_seconds)
-        remote = (
+        composed = (
             f"cd {shlex.quote(workdir)} && "
             f"timeout -k 10s {timeout}s bash -lc {shlex.quote(command)}"
         )
-        result = self._ssh(cfg, remote, timeout_seconds=timeout + 20)
+        result = self._execute_local(cfg, composed, timeout_seconds=timeout + 20)
         stdout, stdout_truncated = self._truncate(result.stdout, cfg.max_output_bytes)
         stderr, stderr_truncated = self._truncate(result.stderr, cfg.max_output_bytes)
         return {
@@ -1070,17 +1219,38 @@ class BashTool(Tool):
         log_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         workdir = self._resolve(cfg, cwd) if cwd else posixpath.normpath(cfg.root)
+        # Start-failure site 1 — cwd not a directory: refuse it at resolve
+        # time, before anything is composed. The check sits beside `_resolve`
+        # rather than inside it because `_run` must keep its contract of
+        # surfacing a bad cwd as the shell's nonzero exit code.
+        if not os.path.isdir(workdir):
+            raise ValueError(
+                f"run_background failed to start: cwd '{workdir}' is not a directory"
+            )
         _validate_command(command, cfg.root, workdir)
         log_dir = self._resolve(cfg, cfg.log_dir)
         stamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
         slug = re.sub(r"[^A-Za-z0-9._-]+", "_", log_name or "job").strip("_")[:60] or "job"
         log_path = posixpath.join(log_dir, f"{stamp}-{slug}.log")
-        remote = (
-            f"mkdir -p {shlex.quote(log_dir)} && cd {shlex.quote(workdir)} && "
-            f"nohup bash -lc {shlex.quote(command)} > {shlex.quote(log_path)} 2>&1 </dev/null & "
+        # `mkdir` and `cd` run in the FOREGROUND, so a start failure
+        # (log_dir not creatable at runtime, a cwd that vanished between the
+        # check above and the cd) lands in this process's exit status instead
+        # of dying unseen inside a backgrounded subshell. Only the nohup'd job
+        # is backgrounded, and every one of its descriptors points at the log
+        # or /dev/null — no long-lived process holds the inherited stdout
+        # pipe, so `_execute_local` returns as soon as PID/LOG print and `$!`
+        # is the survivable job process itself, not a wrapper subshell.
+        composed = (
+            f"mkdir -p {shlex.quote(log_dir)} && cd {shlex.quote(workdir)} || exit 1; "
+            f"nohup bash -lc {shlex.quote(command)} "
+            f"> {shlex.quote(log_path)} 2>&1 </dev/null & "
             f"child=$!; echo \"PID:$child\"; echo \"LOG:{log_path}\""
         )
-        result = self._ssh(cfg, remote, timeout_seconds=30)
+        result = self._execute_local(
+            cfg,
+            composed,
+            timeout_seconds=float(cfg.background_start_timeout_seconds),
+        )
         if result.returncode != 0:
             stderr = self._decode(result.stderr).strip()
             raise ValueError(
