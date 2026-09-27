@@ -37,14 +37,17 @@ directory whose map is missing is a defect.
 | `deploy/` | Host-metal and Docker deployment tooling |
 | `deploy/docker/scripts/` | Container bootstrap and supervision scripts |
 | `deploy/lib/` | Shared bash helper libraries, Vault state machine |
-| `docs/` | Operator-facing documentation |
+| `docs/` | Operator documentation, plus two cited authorities: `AGENTS_MAP_SPEC.md` (map shape) and `REGISTER.md` (writing register for any text a model reads) |
 | `lt_memory/` | Long-term memory: storage, scoring, retrieval, linking, entity services |
 | `lt_memory/processing/` | Extraction pipeline and consolidation |
 | `scripts/` | Operational CLI entry points run against a deployed service |
+| `tests/` | Probe-artifact homes: disposable exhibit, shared real-infra fixtures, admission-gated batteries — not a suite |
+| `tests/fixtures/` | Reusable probe scaffolding: real-infrastructure setup/teardown, claim-free, no simulation |
 | `tests/protected/` | Admission-gated permanent verification batteries; the exact-phrase authorization rule and the no-mock, no-drift, cannot-execute requirements |
 | `tests/tmp/` | Display exhibit for the disposable-probe pattern: autodeleted-on-sight test policy, one exemplary probe |
 | `tools/` | Tool framework: base class, repository, config registry |
 | `tools/implementations/` | All concrete LLM-callable tools |
+| `tui/` | Minimal terminal chat client: sync-REST REPL brick, retained (unused) WS stack, display-filter mirror of the web client, endpoint store, headless token bootstrap, config-file settings |
 | `utils/` | Cross-cutting infrastructure: identity, scheduling, storage, security, observability |
 | `web/` | Browser UI pages, serving contract, load manifests |
 | `web/assets/javascript/` | Client JS modules, client side of the WebSocket turn protocol |
@@ -81,7 +84,7 @@ unnecessary edit costs a line; a missed one misleads every session.
   middleware stack, the global `APIError` → HTTP-status mapping, lifespan
   startup/shutdown ordering (LT_Memory factory → CNS graph → sidebar/heartbeat
   jobs → announcement; `websocket_chat.close_all_connections()` awaited at
-  shutdown; Valkey flush preserves `heartbeat:` prefixes), and the pre-server
+  shutdown; Valkey flush preserves `heartbeat:` and `pending_memories:`/`pending_memories_done:`/`pending_memories_attempts:` prefixes — the pending-memory queue is the durable record of user-confirmed memories and must survive restarts), and the pre-server
   POST gate before bind. The per-directory contracts are owned by
   `cns/api/AGENTS.md`, `auth/AGENTS.md`, `cns/integration/AGENTS.md`,
   `agents/AGENTS.md`, `config/AGENTS.md`, `lt_memory/AGENTS.md`,
@@ -102,21 +105,25 @@ unnecessary edit costs a line; a missed one misleads every session.
 
 Prohibited: test files, pytest fixtures, mock objects, stubs, fakes, offline test databases, and any check that runs against simulated infrastructure. A passing mock-based check provides no information about this system.
 
-Every line in this tree is agent-written; no human has traced any path. Type-clean, pyflakes-clean code that has never executed is the standard failure product of this workflow and has shipped here before. Verification is therefore mechanical and live, never assumed.
+Every line in this tree is agent-written; no human has traced any path. Type-clean, pyflakes-clean code that has never executed is the standard failure product of this workflow and has shipped here before. Verification is therefore mechanical and live, never assumed. A test is what a probe becomes when its answer must never change again — not a starting artifact.
 
 Required verification, in the POST tradition:
 - **Boot gate** — probes Vault, Postgres, and model routes against live infrastructure before the server binds.
 - **Path-probes** — invoke critical runtime paths against the live system exactly as production would.
 
-Probe-surface membership (standing rule): any path whose failure would report incorrect data to users, lose data, or degrade silently — reads, writes, searches, auth flows, failure paths. If a required probe cannot run against live infrastructure, fix the code until it can; do not simulate.
+**Probe-surface membership (standing rule):** any path whose failure would report incorrect data to users, lose data, or degrade silently — reads, writes, searches, auth flows, failure paths. If a required probe cannot run against live infrastructure, fix the code until it can; do not simulate.
 
-Quality guarantee: boot-survival plus path-probe coverage. A clean boot verifies the wiring; a passed path-probe verifies the handler. Code covered by neither is unverified — flag it in review. A bug found in unprobed code is fixed together with the probe that covers it.
+Quality guarantee: boot-survival plus path-probe coverage. A clean boot verifies the wiring; a passed path-probe verifies the handler. Code covered by neither is unverified — flag it in review. A bug found in unprobed code is fixed together with the probe that covers it. Path-probes are production code: normal review discipline, the same credentials plumbing, production-identical failure behavior.
 
-Probes are production code: normal review discipline, the same credentials plumbing, production-identical failure behavior.
+### Load the `writing-probes` skill before you probe
 
-`tests/tmp/` holds one exemplary disposable probe as a display exhibit of this pattern — any test file added there is autodeleted instantly; see `tests/tmp/AGENTS.md`.
+This section owns the doctrine; the skill owns the craft. Load `writing-probes`, every time, before:
+- writing, running, or reviewing a probe;
+- reproducing a defect live, or answering "does this actually work?";
+- deciding whether a check earns permanence — `CheckSpec` path-probe, `tests/protected/`, or discard;
+- diagnosing a probe that failed — code bug or probe bug?
 
-`tests/protected/` is the sole authorized exception to the test-file prohibition above: permanent, offline-runnable batteries admitted only when the user types the exact phrase `AUTHORIZE PROTECTED TEST SAVE`. Those files are never autodeleted — the `tests/tmp/` reflex does not apply there. The exception waives disposability only, never realism: no mocks, no stubs, no transcription of the code under test. Admission rule and battery requirements are owned by `tests/protected/AGENTS.md`.
+It carries the anatomy and the static scaffold, the shape catalog, the fake rule, the EXECUTED/UNVERIFIED contract, the probe-bug taxonomy, and how to shape code so it is probe-able.
 
 ### ⚡ Realtime verification loop (proportionate by behavioral surface)
 
@@ -124,25 +131,18 @@ Models are pretrained to verify by writing tests. When that reflex fires during 
 
 Select the tier by behavioral surface touched, not by change size:
 
-**Tier 0 — no behavioral surface.** Comments, docstrings, formatting, import regrouping, verified-mechanical renames, documentation. Run `py_compile` and pyflakes on touched files. No further verification required.
+- **Tier 0 — no behavioral surface.** Comments, docstrings, formatting, import regrouping, verified-mechanical renames, documentation. `py_compile` + pyflakes on touched files. No further verification required.
+- **Tier 1 — behavioral edits within surface already covered by boot or probes.** Execute the changed path once against live infrastructure; re-read the diff against the invariants (every failure path reports the failure truthfully, nothing silently degraded, no assertion of behavior not executed); end the change report with **EXECUTED** (what ran) or **UNVERIFIED** (why not, and which probe would cover it).
+- **Tier 2 — new behavioral surface or elevated stakes.** New feature, endpoint, or path; schema or data-migration change; failure-behavior, security, or auth change; new dependency. Tier 1 plus: persistence round-trip against dev infrastructure (write, read back, verify, clean up — RLS and constraints included); register the path-probe where membership hits; a second agent re-derives the diff (skip it only when one-shot execution covers the change, and say so).
 
-**Tier 1 — behavioral edits within surface already covered by boot or probes.** Bug fixes, small logic changes, contract-preserving refactors, config wiring of existing behavior.
-1. Execute the changed path once against live infrastructure: `python3 -c` with the real store, or a request against the running dev server.
-2. Re-read the diff against the doctrine invariants: (a) does every failure path report the failure truthfully, (b) is any failure silently degraded, (c) does the diff assert behavior it has not executed.
-3. End the change report with a verification state: EXECUTED (what ran) or UNVERIFIED (why not, and which probe would cover it).
-
-**Tier 2 — new behavioral surface or elevated stakes.** New features, endpoints, or paths; schema or data-migration changes; failure-behavior, security, or auth changes; new dependencies. Tier 1 steps, plus where applicable:
-- Persistence changes: round-trip against dev infrastructure — write, read back, verify, clean up. RLS and database constraints are part of the check.
-- Paths meeting the probe-surface membership rule: add the path-probe.
-- Adversarial pass: a second agent independently re-derives the diff. Recommended for new-surface and failure-behavior changes; when one-shot execution covers the change, skip the pass and state the skip.
-
-**Probe surface:** path-probes are production code registered alongside the POST gate — same credentials plumbing, same failure behavior, same review discipline. Membership follows the standing rule above.
+The verification homes are indexed in the map registry above; their admission, cleanup, and realism policies are owned by `tests/tmp/AGENTS.md`, `tests/fixtures/AGENTS.md`, and `tests/protected/AGENTS.md`, and the skill's promote-or-discard moment owns the choice among them.
 
 ### Technical Integrity
 - **No Shortcuts**: never substitute a cheaper check for the required one — no mock-based verification, no skipped probe, no "improvements" during extraction, no deferred path-probe. Shortcuts ship as silent breakage.
 - **Verify Contracts Before Building On Them**: verify an unfamiliar helper's or internal API's contract at the boundary you depend on — inputs, outputs, types, side effects, failure modes — with the smallest direct probe or existing reference usage before building on it. Most preventable slipups come from trusting names or remembered APIs.
 - **Evidence-Based Position Integrity**: form assessments from evidence and hold them under pushback. Do not adjust conclusions to match the human's apparent preference; when their proposal contradicts the assessment, push back and say why.
 - **Blunt Technical Communication**: reject technically unsound ideas directly — "bad", "infeasible" — and correct wrong assumptions about code or constraints immediately ("That's wrong"). After rejection or correction, provide the working alternative or the accurate facts.
+- **Plain Speech by Audience**: explanations written for Taylor lead in plain English — what the thing does, in ordinary words, symbols and metric names attached only if the subject is the code itself or he asks for them. Precision rules still govern artifacts (code, docs, commit messages) and any statement about specific files. Dense terminology in a human-facing explanation is a communication failure even when every word is accurate.
 - **Concrete Code Communication**: name exact methods, files, and snippets — "the `extract_topic_changed_tag()` method that calls `tag_parser.extract_topic_changed()`", not "the tag processing logic". No vague referents.
 - **Numeric Precision**: no invented numbers. Qualitative language unless the figure comes from measurement, benchmark, requirement, or calculation.
 - **No Tech-Bro Evangelism**: describe work accurately — a feature is a feature, a fix is a fix. No "revolutionary"/"fundamental shift" framing or buzzwords.
@@ -231,7 +231,7 @@ Patterns that apply in every directory. Directory maps may restate these with lo
 - **Per-user tool config**: `config.<tool>_tool` merges the user's override fresh on every access over the global default; secret fields round-trip via the redaction sentinel. (`config/config_manager.py`, `utils/tool_config_store.py`)
 - **Prompt templates load via `load_prompt()`** — never `open()` a prompt file directly. (`config/prompts/loader.py`)
 - **Event handlers are synchronous**, registered by event class `__name__`; async work inside a handler spawns a thread with copied context. (`cns/integration/event_bus.py`)
-- **The LLM is an untrusted component**: escape, allowlist, and validate at every LLM boundary — tool arguments JSON-Schema-validated, credentials injected server-side (the model names a credential it never sees), thinking signatures round-tripped untampered. The external-content ingestion boundary itself is owned by Preventive Mechanism Rules above. (`clients/llm/`, `utils/prompt_injection_defense.py`)
+- **The LLM is an untrusted component**: escape, allowlist, and validate at every LLM boundary — tool arguments JSON-Schema-validated, credentials injected server-side (the model names a credential it never sees), thinking signatures round-tripped untampered. The external-content ingestion boundary itself is owned by Preventive Mechanism Rules above. (`clients/llm/`, `utils/untrusted_content.py`)
 - **Inter-component coordination goes through the event bus**, not direct service calls: event taxonomy owned by `cns/core/events.py`, bus owned by `cns/integration/event_bus.py`. New features subscribe and publish.
 - **Trinket state is per-user**, keyed by the contextvar — trinket instances are process-global singletons shared across users; never store user state on instance attributes. (`working_memory/trinkets/base.py`)
 
@@ -265,7 +265,8 @@ Ordinary implementation plans stay concise. ADRs only for durable architecture d
 ## 📚 Reference Material
 
 ### Commands
-- **Database**: Always use `psql -U postgres -h localhost -d mira_service` - postgres is the superuser, mira_service is the primary database
+- **Database**: On a deployed instance, `psql -U postgres -h localhost -d mira_service` (postgres superuser, `mira_service` the primary DB). A development checkout may have no `mira_service` database: for a schema-backed scratch DB call `tests/fixtures/scratch_db.py:scratch_database(user=<local superuser>, host="localhost")`, which applies the shipped schema and drops the DB on exit.
+- **Local dev infrastructure**: gate a probe with `tests/fixtures/live_infra.py:require` — it reports BLOCKED when Postgres (5432), Valkey (6379), or Vault (8200) is not listening. The app's Vault client authenticates only via AppRole (`VAULT_ADDR` + `VAULT_ROLE_ID`/`VAULT_SECRET_ID`); a `~/.vault-token` authenticates the `vault` CLI, not the app. Without AppRole credentials `clients.vault_client` raises, so Vault-backed paths report UNVERIFIED on such a checkout.
 
 ### Git Workflow
 - Commit only when the user explicitly asks.
@@ -302,20 +303,20 @@ Recurring mistakes kept as incident records — the examples are historical, the
 
 **The toolkit ships IN THIS REPO at `deploy/vm/`** — read `deploy/vm/README.md`
 first. Three modes, all exercised 2026-09-16/17 end-to-end: local libvirt (on the
-host), `--host admin@192.168.1.9` (orchestrated from this Mac, no local libvirt
+host), `--host admin@192.168.1.9` (orchestrated from a workstation, no local libvirt
 needed), and `--ip 192.168.65.2 --vm-user mira_service --vm-pass …` (plain ssh
-onto this Mac's own aarch64 VM: dev build deployed in 182 s, v3 sarcophagus
+onto an existing VM — validated on an aarch64 workstation VM: dev build deployed in 182 s, v3 sarcophagus
 restored, 9/9 facts PASS, chat-continuity confirmed from restored memories).
 `extract.sh` snapshots a live instance into a sealed sarcophagus the same way —
-validated against the Mac VM too (cross-arch, cross-user remap: units `User=`,
+validated against that aarch64 VM too (cross-arch, cross-user remap: units `User=`,
 credentials, and ownership follow `--vm-user`).
 
-**Reference host recipe** (run on the host, or from this Mac via `--host`):
+**Reference host recipe** (run on the host, or from a workstation via `--host`):
 
 ```bash
 ssh admin@192.168.1.9 \
   /home/admin/mira_instance_snapshots/bin/oneshot.sh \
-  /home/admin/mira_instance_snapshots/mlfactory_v3_mira   # or another sarcophagus
+  /home/admin/mira_instance_snapshots/mlfactory_v4_mira   # or another sarcophagus
 ```
 
 That spawns a fresh VM from the host's default-state frozen base template, deploys a
@@ -323,8 +324,13 @@ dev build from `/home/admin/mira-OSS-worktree` (a snapshot of this worktree), in
 the sarcophagus (Postgres, user data incl. domaindocs, Vault with real keys, units),
 and verifies health + row counts against the sarcophagus's SNAPSHOT-FACTS.txt.
 `--fresh` rebuilds a running VM (old disk preserved); omit it to reuse a running one.
-Deploy-only (no instance state): the oneshot phases are just spawn → deploy; or run
-`deploy/deploy.sh --config <yml> --local` by hand inside a VM.
+Deploy-only on a fresh VM (no instance state): `oneshot.sh` mandates a sarcophagus by
+design, so run its phases 1–4 without inject — the validated driver is
+`bin/deploy-only.sh` on the reference host (2026-09-18: template spawn + dev deploy,
+healthy in 152 s). Give the config real `chat_api_key`/`subcortical_api_key` and the
+deploy seeds them into Vault (`deploy/postgresql.sh` Step 14), so the instance comes
+up healthy with live model routes and no inject. To redeploy onto an already-running
+VM, run `deploy/deploy.sh --config <yml> --local` by hand inside it.
 
 **Refresh the host's source snapshot after changing this worktree** (the host deploys
 from its copy, not from here):
@@ -344,12 +350,16 @@ steps. Run from the repo root. Excludes (parity with the GitHub tarball): `.git`
 `scratch`. Note the deploy is greenfield-only: it installs the schema into an empty
 `mira_service` (drop the DB first on re-deploys — oneshot.sh does this for you).
 
-**Known drift in this worktree:** `deploy/mira_service_schema.sql` currently seeds the
-primary model row at the LAN llama-server while `deploy/python.sh` fail-fasts on the
-committed openrouter row — deploying the raw dirty tree aborts with "Could not find
-the seeded primary model_configs row". Either restore the committed row before
-deploying, or deploy from the host's staging copy (already patched; the host's
-`/home/admin/mira_instance_snapshots/AGENTS.md` records the exact patch).
+**Deploy model-route defaults (lunaroute):** `deploy/mira_service_schema.sql` seeds all
+five `model_configs` routes at the lunaroute gateway — `primary` on `glm-5.3`
+(`provider_key`), the four aux routes on the `glm-5.3-flash` family (`subcortical_key`).
+`deploy/python.sh` no longer string-patches the schema; hosted installs apply the seed
+rows and then `deploy/postgresql.sh` rewrites `primary` from the chat config and the aux
+routes from the subcortical config with UPDATEs after application (same mechanism as
+OFFLINE_SQL), so a default (lunaroute) config leaves the seed untouched and any departure
+is applied live. `chat_provider_type` takes `openai` (any OpenAI-compatible endpoint) or
+`anthropic`; the old value `generic` is gone (breaking, no alias). The mechanism is owned
+by `deploy/AGENTS.md`; a staging-copy refresh needs no patch.
 
 **Working with the deployed instance** (minting API tokens, chat endpoint, DB probing,
 turn-in-flight rules, memory/schema maps): read

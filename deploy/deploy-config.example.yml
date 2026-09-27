@@ -43,26 +43,46 @@ local_model_choice: auto
 custom_gguf: ""
 
 # Only used when offline_mode: no —
-# chat_provider_type: anthropic or generic (any OpenAI-compatible endpoint).
-chat_provider_type: anthropic
-# Generic-provider fields (required when chat_provider_type: generic).
-chat_endpoint: "https://openrouter.ai/api/v1/chat/completions"
+# chat_provider_type: openai (any OpenAI-compatible endpoint) or anthropic.
+# The defaults below are the lunaroute gateway, which the schema also seeds;
+# one lunaroute key works for both the chat and subcortical tiers.
+chat_provider_type: openai
+# OpenAI-provider fields (required when chat_provider_type: openai).
+chat_endpoint: "https://gw.lunaroute.com/v1/chat/completions"
 chat_api_key: __SET_ME__
-chat_model: "claude-opus-4-6"
-# Anthropic fields (required when chat_provider_type: anthropic).
-anthropic_key: __SET_ME__
+chat_model: "glm-5.3"
+# Anthropic fields (required when chat_provider_type: anthropic; set to ""
+# otherwise). chat_model above is then the Anthropic model (e.g.
+# claude-opus-4-6) and chat_endpoint is ignored.
+anthropic_key: ""
 # "" = use the same key for batch operations.
 anthropic_batch_key: ""
-# Fast subcortical inference (runs on every message): Groq recommended.
-subcortical_endpoint: "https://api.groq.com/openai/v1/chat/completions"
+# Fast subcortical inference (runs on every message). Default: the lunaroute
+# gateway; the chat_api_key value works here too.
+subcortical_endpoint: "https://gw.lunaroute.com/v1/chat/completions"
 subcortical_api_key: __SET_ME__
-subcortical_model: "qwen/qwen3.6-27b"
+subcortical_model: "glm-5.3-flash"
 
 # ---------------------------------------------------------------------------
 # Optional integrations
 # ---------------------------------------------------------------------------
 # "" = web search stays limited (web_tool skips Kagi-only features).
 kagi_api_key: ""
+
+# ---------------------------------------------------------------------------
+# Embeddings
+# ---------------------------------------------------------------------------
+# local  = MongoDB/mdbr-leaf-ir-asym, downloaded with PyTorch during install.
+# remote = any OpenAI-compatible POST /v1/embeddings endpoint; the installer
+#          skips PyTorch and probes the endpoint for its vector length, which
+#          sizes the database's vector columns. Permanent for this install:
+#          stored memories are only comparable with the model that made them.
+embedding_provider: local
+# Remote only (leave "" for local): full URL ending in /v1/embeddings, the
+# model name the endpoint serves, and its bearer token ("" if it takes none).
+embedding_endpoint: ""
+embedding_model: ""
+embedding_api_key: ""
 
 # ---------------------------------------------------------------------------
 # Database

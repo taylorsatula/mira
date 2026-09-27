@@ -120,9 +120,8 @@ elif [ "${CONFIG_INSTALL_SYSTEMD}" = "no" ]; then
 fi
 
 # macOS: write a launcher that exports Vault env vars before starting MIRA.
-# On Linux these vars are baked into the systemd unit; macOS has no equivalent
-# so without this wrapper `main.py` crashes at import with
-# `ValueError: VAULT_ADDR environment variable is required`.
+# On Linux these vars are baked into the systemd unit; macOS has no equivalent,
+# and the server itself reads Vault at startup (POST gate, preload_secrets).
 if [ "$OS" = "macos" ]; then
     print_header "Step 15b: MIRA Launcher Script"
 
@@ -296,12 +295,13 @@ else
             echo -e "  Batch Key:       ${CHECKMARK} Separate key"
         fi
     else
-        echo -e "  Batch Key:       ${DIM}Not set (generic chat mode)${RESET}"
+        echo -e "  Batch Key:       ${DIM}Not set (openai chat mode)${RESET}"
     fi
     echo -e "  Subcortical:     ${STATUS_SUBCORTICAL}"
     echo -e "  Subcortical Mdl: ${CYAN}${CONFIG_SUBCORTICAL_MODEL}${RESET}"
     echo -e "  Subcortical Key: ${STATUS_SUBCORTICAL_KEY}"
     echo -e "  Kagi:            ${STATUS_KAGI}"
+    echo -e "  Embeddings:      ${STATUS_EMBEDDINGS}"
 
     if [ "${CONFIG_CHAT_API_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ] || [ "${CONFIG_CHAT_API_KEY}" = "PLACEHOLDER_NOT_CONFIGURED" ] || [ "${CONFIG_SUBCORTICAL_API_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ]; then
         echo ""
@@ -313,7 +313,7 @@ else
         echo -e "${DIM}    vault kv put secret/mira/api_keys \\${RESET}"
         echo -e "${DIM}      anthropic_key=\"sk-ant-your-key\" \\${RESET}"
         echo -e "${DIM}      anthropic_batch_key=\"sk-ant-your-key\" \\${RESET}"
-        echo -e "${DIM}      subcortical_key=\"gsk_your-groq-key\" \\${RESET}"
+        echo -e "${DIM}      subcortical_key=\"your-lunaroute-key\" \\${RESET}"
         echo -e "${DIM}      provider_key=\"your-chat-provider-key\" \\${RESET}"
         echo -e "${DIM}      kagi_api_key=\"your-kagi-key\"${RESET}"
     fi
@@ -398,10 +398,10 @@ if [ "${CONFIG_SUBCORTICAL_API_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ]; then
     print_info "will silently no-op on every conversation turn — memory"
     print_info "retrieval will be noticeably less accurate."
     echo ""
-    print_info "To enable, store your Groq key in Vault:"
+    print_info "To enable, store your subcortical provider key in Vault (default: lunaroute):"
     echo -e "${DIM}    export VAULT_ADDR='http://127.0.0.1:8200'${RESET}"
     echo -e "${DIM}    vault login \$(grep 'Initial Root Token' /opt/vault/init-keys.txt | awk '{print \$NF}')${RESET}"
-    echo -e "${DIM}    vault kv patch secret/mira/api_keys subcortical_key=\"gsk_...\"${RESET}"
+    echo -e "${DIM}    vault kv patch secret/mira/api_keys subcortical_key=\"your-lunaroute-key\"${RESET}"
     echo ""
     print_info "Then restart MIRA to pick up the new key."
 fi

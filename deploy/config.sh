@@ -28,11 +28,16 @@ CONFIG_SUBCORTICAL_API_KEY=""
 CONFIG_SUBCORTICAL_MODEL=""
 CONFIG_BUILD_LLAMA_CPP=""
 CONFIG_TIMEZONE=""                   # IANA name; empty = this host's system timezone
+CONFIG_EMBEDDING_PROVIDER=""         # local / remote
+CONFIG_EMBEDDING_ENDPOINT=""         # remote only: POST /v1/embeddings URL
+CONFIG_EMBEDDING_MODEL=""            # remote only
+CONFIG_EMBEDDING_API_KEY=""          # remote only; empty for an endpoint that takes none
 STATUS_CHAT_PROVIDER=""
 STATUS_CHAT_KEY=""
 STATUS_SUBCORTICAL=""
 STATUS_SUBCORTICAL_KEY=""
 STATUS_KAGI=""
+STATUS_EMBEDDINGS=""
 STATUS_DB_PASSWORD=""
 STATUS_TIMEZONE=""
 STATUS_PLAYWRIGHT=""
@@ -77,8 +82,12 @@ print_header "Pre-flight Checks"
 
 # Check available disk space (need at least 10GB)
 echo -ne "${DIM}${ARROW}${RESET} Checking disk space... "
-AVAILABLE_SPACE=$(df /opt 2>/dev/null | awk 'NR==2 {print $4}' || df / | awk 'NR==2 {print $4}')
-REQUIRED_SPACE=10485760  # 10GB in KB
+AVAILABLE_SPACE=$(df -k /opt 2>/dev/null | awk 'NR==2 {print $4}')
+if [ -z "$AVAILABLE_SPACE" ]; then
+    # /opt is absent on most macOS hosts; fall back to the root filesystem.
+    AVAILABLE_SPACE=$(df -k / | awk 'NR==2 {print $4}')
+fi
+REQUIRED_SPACE=10485760  # 10GB in KB (df -k reports 1K blocks on every platform)
 if [ "$AVAILABLE_SPACE" -lt "$REQUIRED_SPACE" ]; then
     echo -e "${ERROR}"
     print_error "Insufficient disk space. Need at least 10GB free, found $(($AVAILABLE_SPACE / 1024 / 1024))GB"
@@ -186,6 +195,13 @@ for PORT in 1993 8200 6379 5432; do
         if netstat -an | grep -q "LISTEN.*:$PORT"; then
             PORTS_IN_USE="$PORTS_IN_USE $PORT"
         fi
+    else
+        # Indeterminate check must never report a false pass: neither lsof
+        # nor netstat is available, so port occupancy cannot be verified.
+        echo -e "${ERROR}"
+        print_error "Port check indeterminate: neither lsof nor netstat is installed."
+        print_info "Install lsof (or netstat) so port availability can be verified, then re-run."
+        exit 1
     fi
 done
 
@@ -343,18 +359,18 @@ else
     # Chat Provider
     echo -e "${BOLD}${BLUE}1. Chat Provider${RESET}"
     echo -e "${DIM}   Pick your main chat provider:${RESET}"
-    echo "     1. Anthropic (default)"
-    echo "     2. Other (OpenAI-compatible endpoint)"
+    echo "     1. OpenAI-compatible endpoint (default — lunaroute gateway)"
+    echo "     2. Anthropic"
     read -p "$(echo -e ${CYAN}Select provider${RESET}) [1-2, default=1]: " CHAT_PROVIDER_CHOICE
 
     case "${CHAT_PROVIDER_CHOICE:-1}" in
-        2)
-            CONFIG_CHAT_PROVIDER_TYPE="generic"
+        1)
+            CONFIG_CHAT_PROVIDER_TYPE="openai"
 
-            # Generic endpoint URL
+            # OpenAI-compatible endpoint URL
             echo ""
-            read -p "$(echo -e ${CYAN}Endpoint URL${RESET}) [default: https://openrouter.ai/api/v1/chat/completions]: " CHAT_ENDPOINT_INPUT
-            CONFIG_CHAT_ENDPOINT="${CHAT_ENDPOINT_INPUT:-https://openrouter.ai/api/v1/chat/completions}"
+            read -p "$(echo -e ${CYAN}Endpoint URL${RESET}) [default: https://gw.lunaroute.com/v1/chat/completions]: " CHAT_ENDPOINT_INPUT
+            CONFIG_CHAT_ENDPOINT="${CHAT_ENDPOINT_INPUT:-https://gw.lunaroute.com/v1/chat/completions}"
 
             # API key
             echo -e "${BOLD}${BLUE}   Chat API Key${RESET}"
@@ -371,14 +387,14 @@ else
             done
 
             # Model
-            read -p "$(echo -e ${CYAN}Model name${RESET}) [default: z-ai/glm-5.2]: " CHAT_MODEL_INPUT
-            CONFIG_CHAT_MODEL="${CHAT_MODEL_INPUT:-z-ai/glm-5.2}"
+            read -p "$(echo -e ${CYAN}Model name${RESET}) [default: glm-5.3]: " CHAT_MODEL_INPUT
+            CONFIG_CHAT_MODEL="${CHAT_MODEL_INPUT:-glm-5.3}"
 
             # Anthropic placeholders (background tasks won't work without real keys)
             CONFIG_ANTHROPIC_KEY="PLACEHOLDER_NOT_CONFIGURED"
             CONFIG_ANTHROPIC_BATCH_KEY="PLACEHOLDER_NOT_CONFIGURED"
 
-            STATUS_CHAT_PROVIDER="${CHECKMARK} Generic (${CONFIG_CHAT_ENDPOINT})"
+            STATUS_CHAT_PROVIDER="${CHECKMARK} OpenAI-compatible (${CONFIG_CHAT_ENDPOINT})"
 
             ;;
         *)
@@ -457,10 +473,11 @@ else
     # Subcortical
     echo -e "${BOLD}${BLUE}2. Subcortical${RESET}"
     echo -e "${DIM}   Runs on every message for memory retrieval (query expansion, entity extraction).${RESET}"
-    echo -e "${DIM}   A fast inference provider like Groq works best here.${RESET}"
+    echo -e "${DIM}   A fast inference provider works best here; the default is the lunaroute${RESET}"
+    echo -e "${DIM}   gateway serving glm-5.3-flash (the same key as the chat tier works).${RESET}"
     echo ""
-    read -p "$(echo -e ${CYAN}Endpoint URL${RESET}) [default: https://api.groq.com/openai/v1/chat/completions]: " SUBCORTICAL_ENDPOINT_INPUT
-    CONFIG_SUBCORTICAL_ENDPOINT="${SUBCORTICAL_ENDPOINT_INPUT:-https://api.groq.com/openai/v1/chat/completions}"
+    read -p "$(echo -e ${CYAN}Endpoint URL${RESET}) [default: https://gw.lunaroute.com/v1/chat/completions]: " SUBCORTICAL_ENDPOINT_INPUT
+    CONFIG_SUBCORTICAL_ENDPOINT="${SUBCORTICAL_ENDPOINT_INPUT:-https://gw.lunaroute.com/v1/chat/completions}"
     STATUS_SUBCORTICAL="${CHECKMARK} ${CONFIG_SUBCORTICAL_ENDPOINT}"
 
     # Subcortical API Key
@@ -491,8 +508,8 @@ else
     done
 
     # Subcortical Model
-    read -p "$(echo -e ${CYAN}Model${RESET}) [default: qwen/qwen3.6-27b]: " SUBCORTICAL_MODEL_INPUT
-    CONFIG_SUBCORTICAL_MODEL="${SUBCORTICAL_MODEL_INPUT:-qwen/qwen3.6-27b}"
+    read -p "$(echo -e ${CYAN}Model${RESET}) [default: glm-5.3-flash]: " SUBCORTICAL_MODEL_INPUT
+    CONFIG_SUBCORTICAL_MODEL="${SUBCORTICAL_MODEL_INPUT:-glm-5.3-flash}"
 fi
 
 # Kagi Search API Key (optional — works with any provider)
@@ -506,8 +523,28 @@ else
     STATUS_KAGI="${CHECKMARK} Configured"
 fi
 
+# Embeddings (local model by default)
+echo -e "${BOLD}${BLUE}4. Embeddings${RESET} ${DIM}(default: local model, downloaded during install)${RESET}"
+echo -e "${DIM}   A remote OpenAI-compatible POST /v1/embeddings endpoint skips the local PyTorch model.${RESET}"
+echo -e "${DIM}   The installer probes it for its vector length. The choice is permanent for this install.${RESET}"
+read -p "$(echo -e ${CYAN}Use a remote embedding endpoint?${RESET}) (y/n, default=n): " REMOTE_EMBEDDINGS_INPUT
+if [[ "$REMOTE_EMBEDDINGS_INPUT" =~ ^[Yy](es)?$ ]]; then
+    CONFIG_EMBEDDING_PROVIDER="remote"
+    while [ -z "$CONFIG_EMBEDDING_ENDPOINT" ]; do
+        read -p "$(echo -e ${CYAN}Endpoint URL${RESET}) (full URL ending in /v1/embeddings): " CONFIG_EMBEDDING_ENDPOINT
+    done
+    while [ -z "$CONFIG_EMBEDDING_MODEL" ]; do
+        read -p "$(echo -e ${CYAN}Model${RESET}): " CONFIG_EMBEDDING_MODEL
+    done
+    read -p "$(echo -e ${CYAN}API key${RESET}) (or Enter for an endpoint that takes none): " CONFIG_EMBEDDING_API_KEY
+    STATUS_EMBEDDINGS="${CHECKMARK} Remote: ${CONFIG_EMBEDDING_MODEL} at ${CONFIG_EMBEDDING_ENDPOINT}"
+else
+    CONFIG_EMBEDDING_PROVIDER="local"
+    STATUS_EMBEDDINGS="${CHECKMARK} Local model"
+fi
+
 # Database Password (optional - defaults to changethisifdeployingpwd)
-echo -e "${BOLD}${BLUE}4. Database Password${RESET} ${DIM}(OPTIONAL - default: changethisifdeployingpwd)${RESET}"
+echo -e "${BOLD}${BLUE}5. Database Password${RESET} ${DIM}(OPTIONAL - default: changethisifdeployingpwd)${RESET}"
 read -p "$(echo -e ${CYAN}Enter password${RESET}) (or Enter for default): " DB_PASSWORD_INPUT
 if [ -z "$DB_PASSWORD_INPUT" ]; then
     CONFIG_DB_PASSWORD="changethisifdeployingpwd"
@@ -519,7 +556,7 @@ fi
 
 # Timezone (defaults to this machine's system timezone; the app validates
 # the IANA name at boot and fails fast on garbage)
-echo -e "${BOLD}${BLUE}5. Timezone${RESET} ${DIM}(IANA name — Enter uses this machine's: ${SYSTEM_TIMEZONE})${RESET}"
+echo -e "${BOLD}${BLUE}6. Timezone${RESET} ${DIM}(IANA name — Enter uses this machine's: ${SYSTEM_TIMEZONE})${RESET}"
 read -p "$(echo -e ${CYAN}Timezone${RESET}): " TIMEZONE_INPUT
 if [ -z "$TIMEZONE_INPUT" ]; then
     CONFIG_TIMEZONE="$SYSTEM_TIMEZONE"
@@ -529,7 +566,7 @@ fi
 STATUS_TIMEZONE="${CHECKMARK} ${CONFIG_TIMEZONE}"
 
 # Playwright Browser Installation (optional)
-echo -e "${BOLD}${BLUE}6. Playwright Browser${RESET} ${DIM}(OPTIONAL - for JS-heavy webpage extraction)${RESET}"
+echo -e "${BOLD}${BLUE}7. Playwright Browser${RESET} ${DIM}(OPTIONAL - for JS-heavy webpage extraction)${RESET}"
 read -p "$(echo -e ${CYAN}Install Playwright?${RESET}) (y/n, default=y): " PLAYWRIGHT_INPUT
 # Default to yes if user just presses Enter
 if [ -z "$PLAYWRIGHT_INPUT" ]; then
@@ -544,7 +581,7 @@ else
 fi
 
 # Systemd service option (Linux only)
-echo -e "${BOLD}${BLUE}7. Systemd Service${RESET} ${DIM}(OPTIONAL - Linux only, auto-start on boot)${RESET}"
+echo -e "${BOLD}${BLUE}8. Systemd Service${RESET} ${DIM}(OPTIONAL - Linux only, auto-start on boot)${RESET}"
 if [ "$OS" = "linux" ]; then
     read -p "$(echo -e ${CYAN}Install as systemd service?${RESET}) (y/n): " SYSTEMD_INPUT
     if [[ "$SYSTEMD_INPUT" =~ ^[Yy](es)?$ ]]; then
@@ -598,6 +635,7 @@ else
     echo -e "  Subcortical Mdl: ${CYAN}${CONFIG_SUBCORTICAL_MODEL}${RESET}"
 fi
 echo -e "  Kagi:            ${STATUS_KAGI}"
+echo -e "  Embeddings:      ${STATUS_EMBEDDINGS}"
 echo -e "  DB Password:     ${STATUS_DB_PASSWORD}"
 echo -e "  Timezone:        ${STATUS_TIMEZONE}"
 echo -e "  Playwright:      ${STATUS_PLAYWRIGHT}"

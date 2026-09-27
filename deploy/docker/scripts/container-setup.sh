@@ -84,66 +84,74 @@ else
     print_success "Separate batch key configured"
 fi
 
-# Generic Provider Selection
-echo -e "${BOLD}${BLUE}2. Generic Provider${RESET} ${DIM}(for fast inference - OpenAI-compatible)${RESET}"
+# OpenAI-compatible Provider Selection
+echo -e "${BOLD}${BLUE}2. Fast Inference Provider${RESET} ${DIM}(OpenAI-compatible)${RESET}"
 echo ""
 echo -e "${DIM}   Select your preferred provider:${RESET}"
-echo "     1. Groq (default, recommended for speed)"
-echo "     2. OpenRouter"
-echo "     3. Together AI"
-echo "     4. Fireworks AI"
-echo "     5. Cerebras"
-echo "     6. SambaNova"
-echo "     7. Other (custom endpoint)"
-read -p "$(echo -e ${CYAN}Select provider${RESET}) [1-7, default=1]: " PROVIDER_CHOICE
+echo "     1. Lunaroute (default — OpenAI-compatible gateway)"
+echo "     2. Groq"
+echo "     3. OpenRouter"
+echo "     4. Together AI"
+echo "     5. Fireworks AI"
+echo "     6. Cerebras"
+echo "     7. SambaNova"
+echo "     8. Other (custom endpoint)"
+read -p "$(echo -e ${CYAN}Select provider${RESET}) [1-8, default=1]: " PROVIDER_CHOICE
 
 case "${PROVIDER_CHOICE:-1}" in
     1)
+        CONFIG_PROVIDER_NAME="Lunaroute"
+        CONFIG_PROVIDER_ENDPOINT="https://gw.lunaroute.com/v1/chat/completions"
+        CONFIG_PROVIDER_KEY_PREFIX=""
+        ;;
+    2)
         CONFIG_PROVIDER_NAME="Groq"
         CONFIG_PROVIDER_ENDPOINT="https://api.groq.com/openai/v1/chat/completions"
         CONFIG_PROVIDER_KEY_PREFIX="gsk_"
         ;;
-    2)
+    3)
         CONFIG_PROVIDER_NAME="OpenRouter"
         CONFIG_PROVIDER_ENDPOINT="https://openrouter.ai/api/v1/chat/completions"
         CONFIG_PROVIDER_KEY_PREFIX="sk-or-"
         ;;
-    3)
+    4)
         CONFIG_PROVIDER_NAME="Together AI"
         CONFIG_PROVIDER_ENDPOINT="https://api.together.xyz/v1/chat/completions"
         CONFIG_PROVIDER_KEY_PREFIX=""
         ;;
-    4)
+    5)
         CONFIG_PROVIDER_NAME="Fireworks AI"
         CONFIG_PROVIDER_ENDPOINT="https://api.fireworks.ai/inference/v1/chat/completions"
         CONFIG_PROVIDER_KEY_PREFIX=""
         ;;
-    5)
+    6)
         CONFIG_PROVIDER_NAME="Cerebras"
         CONFIG_PROVIDER_ENDPOINT="https://api.cerebras.ai/v1/chat/completions"
         CONFIG_PROVIDER_KEY_PREFIX=""
         ;;
-    6)
+    7)
         CONFIG_PROVIDER_NAME="SambaNova"
         CONFIG_PROVIDER_ENDPOINT="https://api.sambanova.ai/v1/chat/completions"
         CONFIG_PROVIDER_KEY_PREFIX=""
         ;;
-    7)
+    8)
         CONFIG_PROVIDER_NAME="Custom"
         read -p "$(echo -e ${CYAN}Enter custom endpoint URL${RESET}): " CONFIG_PROVIDER_ENDPOINT
         CONFIG_PROVIDER_KEY_PREFIX=""
         ;;
     *)
-        CONFIG_PROVIDER_NAME="Groq"
-        CONFIG_PROVIDER_ENDPOINT="https://api.groq.com/openai/v1/chat/completions"
-        CONFIG_PROVIDER_KEY_PREFIX="gsk_"
+        CONFIG_PROVIDER_NAME="Lunaroute"
+        CONFIG_PROVIDER_ENDPOINT="https://gw.lunaroute.com/v1/chat/completions"
+        CONFIG_PROVIDER_KEY_PREFIX=""
         ;;
 esac
 
 print_success "Provider: $CONFIG_PROVIDER_NAME"
 
-# For non-Groq providers, prompt for model name
-if [ "$CONFIG_PROVIDER_NAME" != "Groq" ]; then
+# Providers whose models list needs the API key (Lunaroute, Groq) confirm their
+# model AFTER key entry (step 2b) via prefill_provider_model; skip the pre-key
+# prompt for them. Everyone else prompts here with a per-provider default.
+if [ "$CONFIG_PROVIDER_NAME" != "Groq" ] && [ "$CONFIG_PROVIDER_NAME" != "Lunaroute" ]; then
     echo ""
     print_info "MIRA needs a model name compatible with ${CONFIG_PROVIDER_NAME}."
     case "$CONFIG_PROVIDER_NAME" in
@@ -178,7 +186,7 @@ if [ "$CONFIG_PROVIDER_NAME" != "Groq" ]; then
     fi
 fi
 
-# Generic Provider API Key (required)
+# Provider API Key (required)
 echo -e "${BOLD}${BLUE}2b. ${CONFIG_PROVIDER_NAME} API Key${RESET} ${DIM}(REQUIRED)${RESET}"
 while true; do
     read -p "$(echo -e ${CYAN}Enter key${RESET}): " PROVIDER_KEY_INPUT
@@ -208,9 +216,12 @@ while true; do
     fi
 done
 
-# Groq prompts for no model above: the key (collected in 2b) is required for its models-list check, so prefill-or-leave-unset happens here.
+# Lunaroute/Groq prompts for no model above: the key (collected in 2b) is
+# required for their models-list check, so prefill-or-leave-unset happens here.
 if [ "$CONFIG_PROVIDER_NAME" = "Groq" ]; then
     prefill_provider_model "qwen/qwen3.6-27b"
+elif [ "$CONFIG_PROVIDER_NAME" = "Lunaroute" ]; then
+    prefill_provider_model "glm-5.3-flash"
 fi
 
 # Kagi API Key (optional)
@@ -259,7 +270,12 @@ echo ""
 read -p "$(echo -e ${CYAN}Proceed with this configuration?${RESET}) (y/n): " CONFIRM
 if [[ ! "$CONFIRM" =~ ^[Yy](es)?$ ]]; then
     print_error "Configuration cancelled. Restarting setup..."
-    exec /opt/mira/container-setup.sh
+    # This script is sourced into the PID-1 shell (init-mira.sh); exec would
+    # replace the entrypoint and end the container before provisioning. Call
+    # a fresh pass normally, then return from this pass so control unwinds to
+    # init-mira.sh with the accepted CONFIG_* exports intact.
+    source /opt/mira/container-setup.sh
+    return
 fi
 
 # Export configuration for init-mira.sh to use

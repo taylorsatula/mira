@@ -11,7 +11,7 @@ llama_small_url: "http://localhost:3092/v1/chat/completions"
 llama_small_model: local-small
 local_model_choice: auto
 custom_gguf: ""
-chat_provider_type: generic
+chat_provider_type: openai
 chat_endpoint: "https://gw.lunaroute.com/v1/chat/completions"
 chat_api_key: ""
 chat_model: "glm-5.3"
@@ -21,6 +21,10 @@ subcortical_endpoint: "https://gw.lunaroute.com/v1/chat/completions"
 subcortical_api_key: ""
 subcortical_model: "glm-5.3-flash"
 kagi_api_key: ""
+embedding_provider: local
+embedding_endpoint: ""
+embedding_model: ""
+embedding_api_key: ""
 db_password: ""
 timezone: America/Chicago
 install_playwright: yes

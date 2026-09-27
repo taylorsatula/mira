@@ -122,58 +122,13 @@ if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
     echo ""
 fi
 
-# Patch schema for user's configured providers (primary route + fast route)
+# Hosted-install route configuration is a database concern, not a schema-text
+# concern: postgresql.sh rewrites the seeded model_configs rows with UPDATEs
+# after applying the schema (the same mechanism OFFLINE_SQL uses), matching
+# the config's chat + subcortical providers. The seed rows in
+# mira_service_schema.sql are the lunaroute defaults; nothing string-patches
+# them here anymore.
 if [ "$CONFIG_OFFLINE_MODE" != "yes" ]; then
-    SCHEMA="/opt/mira/app/deploy/mira_service_schema.sql"
-    PRIMARY_ROW="('primary', 'openai/gpt-5.5', 'openrouter', 'https://openrouter.ai/api/v1/chat/completions', 'provider_key', 'high', 16000)"
-
-    # --- Chat tier: rewrite the primary row's dialect, endpoint and key ---
-    if [ "$CONFIG_CHAT_PROVIDER_TYPE" = "generic" ]; then
-        echo -ne "${DIM}${ARROW}${RESET} Configuring chat tier (OpenAI-compatible: ${CONFIG_CHAT_MODEL})... "
-        REPLACEMENT="('primary', '${CONFIG_CHAT_MODEL}', 'openai', '${CONFIG_CHAT_ENDPOINT}', 'provider_key', 'high', 16000)"
-    elif [ "$CONFIG_CHAT_MODEL" != "openai/gpt-5.5" ] && [ -n "$CONFIG_CHAT_MODEL" ]; then
-        echo -ne "${DIM}${ARROW}${RESET} Configuring chat tier (Anthropic: ${CONFIG_CHAT_MODEL})... "
-        REPLACEMENT="('primary', '${CONFIG_CHAT_MODEL}', 'anthropic', 'https://api.anthropic.com/v1/messages', 'anthropic_key', 'high', 16000)"
-    else
-        REPLACEMENT=""
-    fi
-    if [ -n "$REPLACEMENT" ]; then
-        if [ "$OS" = "macos" ]; then
-            sed -i '' "s|${PRIMARY_ROW}|${REPLACEMENT}|" "$SCHEMA"
-        else
-            sed -i "s|${PRIMARY_ROW}|${REPLACEMENT}|" "$SCHEMA"
-        fi
-        # sed exits 0 when the pattern never matches, which would silently
-        # leave the stock openrouter row installed. Fail fast instead.
-        if ! grep -qF "$REPLACEMENT" "$SCHEMA"; then
-            echo -e "${ERROR}"
-            print_error "Could not find the seeded primary model_configs row in $SCHEMA"
-            print_info "deploy/python.sh is out of sync with the installed schema; refusing to continue"
-            exit 1
-        fi
-        echo -e "${CHECKMARK}"
-    fi
-
-    # --- Subcortical: patch endpoint + model if non-default ---
-    if [ "$CONFIG_SUBCORTICAL_ENDPOINT" != "https://api.groq.com/openai/v1/chat/completions" ] && [ -n "$CONFIG_SUBCORTICAL_ENDPOINT" ]; then
-        echo -ne "${DIM}${ARROW}${RESET} Patching subcortical endpoint... "
-        if [ "$OS" = "macos" ]; then
-            sed -i '' "s|https://api.groq.com/openai/v1/chat/completions|${CONFIG_SUBCORTICAL_ENDPOINT}|g" "$SCHEMA"
-        else
-            sed -i "s|https://api.groq.com/openai/v1/chat/completions|${CONFIG_SUBCORTICAL_ENDPOINT}|g" "$SCHEMA"
-        fi
-        echo -e "${CHECKMARK}"
-    fi
-    if [ "$CONFIG_SUBCORTICAL_MODEL" != "qwen/qwen3.6-27b" ] && [ -n "$CONFIG_SUBCORTICAL_MODEL" ]; then
-        echo -ne "${DIM}${ARROW}${RESET} Patching subcortical model (${CONFIG_SUBCORTICAL_MODEL})... "
-        if [ "$OS" = "macos" ]; then
-            sed -i '' "s|qwen/qwen3.6-27b|${CONFIG_SUBCORTICAL_MODEL}|g" "$SCHEMA"
-        else
-            sed -i "s|qwen/qwen3.6-27b|${CONFIG_SUBCORTICAL_MODEL}|g" "$SCHEMA"
-        fi
-        echo -e "${CHECKMARK}"
-    fi
-
     echo ""
     echo -e "${DIM}NOTE: Tools (web_tool, forage_tool) use hardcoded LLM configs.${RESET}"
     echo -e "${DIM}For custom providers, edit the tool config classes directly:${RESET}"
@@ -201,20 +156,24 @@ else
         venv/bin/python3 -m ensurepip
 fi
 
-echo -ne "${DIM}${ARROW}${RESET} Checking PyTorch installation... "
-if check_exists package torch; then
-    TORCH_VERSION=$(venv/bin/pip3 show torch | grep Version | awk '{print $2}')
-    echo -e "${CHECKMARK} ${DIM}$TORCH_VERSION (existing)${RESET}"
-    print_info "Note: If you have CUDA-enabled PyTorch, it will be preserved"
-else
-    echo -e "${DIM}(not installed yet)${RESET}"
-    if [ "$LOUD_MODE" = true ]; then
-        print_step "Installing PyTorch CPU-only version..."
-        venv/bin/pip3 install torch --index-url https://download.pytorch.org/whl/cpu
+if [ "$CONFIG_EMBEDDING_PROVIDER" = "local" ]; then
+    echo -ne "${DIM}${ARROW}${RESET} Checking PyTorch installation... "
+    if check_exists package torch; then
+        TORCH_VERSION=$(venv/bin/pip3 show torch | grep Version | awk '{print $2}')
+        echo -e "${CHECKMARK} ${DIM}$TORCH_VERSION (existing)${RESET}"
+        print_info "Note: If you have CUDA-enabled PyTorch, it will be preserved"
     else
-        (venv/bin/pip3 install -q torch --index-url https://download.pytorch.org/whl/cpu) &
-        show_progress $! "Installing PyTorch CPU-only"
+        echo -e "${DIM}(not installed yet)${RESET}"
+        if [ "$LOUD_MODE" = true ]; then
+            print_step "Installing PyTorch CPU-only version..."
+            venv/bin/pip3 install torch --index-url https://download.pytorch.org/whl/cpu
+        else
+            (venv/bin/pip3 install -q torch --index-url https://download.pytorch.org/whl/cpu) &
+            show_progress $! "Installing PyTorch CPU-only"
+        fi
     fi
+else
+    print_info "Remote embeddings: skipping PyTorch"
 fi
 
 print_header "Step 5: Python Dependencies"
@@ -237,50 +196,23 @@ else
     fi
 fi
 
-# Install sentence-transformers separately to ensure proper dependency resolution
-# (torch is installed first so deployments use the CPU wheel)
-echo -ne "${DIM}${ARROW}${RESET} Checking sentence-transformers... "
-if ! check_exists package sentence-transformers; then
-    echo ""
-    install_python_package sentence-transformers
-    if [ $? -ne 0 ]; then
-        print_error "Failed to install sentence-transformers"
-        print_info "Run with --loud flag to see detailed error output"
-        exit 1
-    fi
-else
-    install_python_package sentence-transformers  # This will show version if already installed
-fi
-
-echo -ne "${DIM}${ARROW}${RESET} Checking spaCy language model... "
-if venv/bin/python3 -c "import spacy.util; exit(0 if spacy.util.is_package('en_core_web_lg') else 1)" 2>/dev/null; then
-    echo -e "${CHECKMARK} ${DIM}(already installed)${RESET}"
-else
-    echo -e "${DIM}(not found)${RESET}"
-    # spacy >=3.8.12 gates download on shutil.which("pip") — fails in venvs
-    # where only pip3 exists (common with ensurepip). Resolve the compatible
-    # model URL via spacy's own compatibility API, then pip-install directly.
-    SPACY_MODEL_URL=$(venv/bin/python3 -c "
-from spacy.cli.download import get_compatibility, get_version, get_model_filename
-from spacy import about
-compat = get_compatibility()
-version = get_version('en_core_web_lg', compat)
-filename = get_model_filename('en_core_web_lg', version, sdist=False)
-base = about.__download_url__.rstrip('/') + '/'
-print(base + filename)
-")
-    if [ "$LOUD_MODE" = true ]; then
-        print_step "Installing spaCy language model..."
-        venv/bin/python3 -m pip install "${SPACY_MODEL_URL}"
-    else
-        (venv/bin/python3 -m pip install -q "${SPACY_MODEL_URL}") &
-        show_progress $! "Installing spaCy language model"
+if [ "$CONFIG_EMBEDDING_PROVIDER" = "local" ]; then
+    # Install sentence-transformers separately to ensure proper dependency resolution
+    # (torch is installed first so deployments use the CPU wheel)
+    echo -ne "${DIM}${ARROW}${RESET} Checking sentence-transformers... "
+    if ! check_exists package sentence-transformers; then
+        echo ""
+        install_python_package sentence-transformers
         if [ $? -ne 0 ]; then
-            print_error "Failed to install spaCy language model (en-core-web-lg)"
+            print_error "Failed to install sentence-transformers"
             print_info "Run with --loud flag to see detailed error output"
             exit 1
         fi
+    else
+        install_python_package sentence-transformers  # This will show version if already installed
     fi
+else
+    print_info "Remote embeddings: skipping sentence-transformers"
 fi
 
 print_success "Python dependencies installed"
@@ -293,10 +225,11 @@ echo "import _mira_log_levels" > "$SITE_PACKAGES/mira-log-levels.pth"
 echo -e "${CHECKMARK}"
 
 print_header "Step 6: Embedding Model Download"
+if [ "$CONFIG_EMBEDDING_PROVIDER" = "local" ]; then
 
-# Download MongoDB leaf embedding model (768d asymmetric retrieval)
-echo -ne "${DIM}${ARROW}${RESET} Checking embedding model cache... "
-MODEL_CACHED=$(venv/bin/python3 << 'EOF'
+    # Download MongoDB leaf embedding model (768d asymmetric retrieval)
+    echo -ne "${DIM}${ARROW}${RESET} Checking embedding model cache... "
+    MODEL_CACHED=$(venv/bin/python3 << 'EOF'
 from pathlib import Path
 
 cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
@@ -324,32 +257,35 @@ if check_model_cached("mdbr-leaf-ir-asym"):
 else:
     print("not_cached")
 EOF
-)
+    )
 
-if [ "$MODEL_CACHED" = "cached" ]; then
-    echo -e "${CHECKMARK} ${DIM}(MongoDB/mdbr-leaf-ir-asym already cached)${RESET}"
-    print_info "To re-download: rm -rf ~/.cache/huggingface/hub/*mdbr-leaf*"
-else
-    echo -e "${DIM}(not found)${RESET}"
-    if [ "$LOUD_MODE" = true ]; then
-        print_step "Downloading MongoDB/mdbr-leaf-ir-asym embedding model..."
-        venv/bin/python3 << 'EOF'
+    if [ "$MODEL_CACHED" = "cached" ]; then
+        echo -e "${CHECKMARK} ${DIM}(MongoDB/mdbr-leaf-ir-asym already cached)${RESET}"
+        print_info "To re-download: rm -rf ~/.cache/huggingface/hub/*mdbr-leaf*"
+    else
+        echo -e "${DIM}(not found)${RESET}"
+        if [ "$LOUD_MODE" = true ]; then
+            print_step "Downloading MongoDB/mdbr-leaf-ir-asym embedding model..."
+            venv/bin/python3 << 'EOF'
 from sentence_transformers import SentenceTransformer
 print("→ Loading/downloading MongoDB/mdbr-leaf-ir-asym (768d)...")
 SentenceTransformer("MongoDB/mdbr-leaf-ir-asym")
 print("✓ mdbr-leaf-ir-asym ready")
 EOF
-    else
-        (venv/bin/python3 << 'EOF'
+        else
+            (venv/bin/python3 << 'EOF'
 from sentence_transformers import SentenceTransformer
 SentenceTransformer("MongoDB/mdbr-leaf-ir-asym")
 EOF
-) &
-        show_progress $! "Downloading MongoDB/mdbr-leaf-ir-asym embedding model"
+    ) &
+            show_progress $! "Downloading MongoDB/mdbr-leaf-ir-asym embedding model"
+        fi
     fi
-fi
 
-print_success "Embedding model ready"
+    print_success "Embedding model ready"
+else
+    print_info "Remote embeddings (${CONFIG_EMBEDDING_MODEL}): no local embedding model to download"
+fi
 
 print_header "Step 7: Playwright Browser Setup"
 

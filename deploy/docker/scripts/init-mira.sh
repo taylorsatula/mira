@@ -11,6 +11,7 @@ set -e
 # Source helper libraries for consistent formatting and utility functions
 source /opt/mira/app/deploy/lib/output.sh
 source /opt/mira/app/deploy/lib/services.sh
+source /opt/mira/app/deploy/lib/embedding_config.sh
 LOUD_MODE=false
 
 # =============================================================================
@@ -47,13 +48,13 @@ check_env_vars() {
         print_info ""
         print_info "Required environment variables for non-interactive setup:"
         print_info "  MIRA_ANTHROPIC_KEY    - Your Anthropic API key (sk-ant-...)"
-        print_info "  MIRA_PROVIDER_KEY     - OpenAI-compatible provider API key (e.g., Groq)"
+        print_info "  MIRA_PROVIDER_KEY     - OpenAI-compatible provider API key (e.g., Lunaroute)"
         print_info ""
         print_info "Optional environment variables:"
         print_info "  MIRA_ANTHROPIC_BATCH_KEY  - Separate batch API key (defaults to main key)"
-        print_info "  MIRA_PROVIDER_NAME        - Provider name (default: Groq)"
+        print_info "  MIRA_PROVIDER_NAME        - Provider name (default: Lunaroute)"
         print_info "  MIRA_PROVIDER_ENDPOINT    - Custom endpoint URL"
-        print_info "  MIRA_PROVIDER_MODEL       - Model name for non-Groq providers"
+        print_info "  MIRA_PROVIDER_MODEL       - Model name (defaults are verified live per provider)"
         print_info "  MIRA_KAGI_KEY             - Kagi search API key"
         print_info "  MIRA_DB_PASSWORD          - Database password"
         print_info ""
@@ -70,7 +71,7 @@ setup_from_env_vars() {
     export CONFIG_ANTHROPIC_KEY="$MIRA_ANTHROPIC_KEY"
     export CONFIG_ANTHROPIC_BATCH_KEY="${MIRA_ANTHROPIC_BATCH_KEY:-$MIRA_ANTHROPIC_KEY}"
     export CONFIG_PROVIDER_KEY="$MIRA_PROVIDER_KEY"
-    export CONFIG_PROVIDER_NAME="${MIRA_PROVIDER_NAME:-Groq}"
+    export CONFIG_PROVIDER_NAME="${MIRA_PROVIDER_NAME:-Lunaroute}"
     export CONFIG_KAGI_KEY="${MIRA_KAGI_KEY:-}"
     export CONFIG_DB_PASSWORD="${MIRA_DB_PASSWORD:-changethisifdeployingpwd}"
     export CONFIG_OFFLINE_MODE="no"
@@ -78,6 +79,9 @@ setup_from_env_vars() {
     # Set provider endpoint based on name if not explicitly provided
     if [ -z "$MIRA_PROVIDER_ENDPOINT" ]; then
         case "$CONFIG_PROVIDER_NAME" in
+            Lunaroute)
+                export CONFIG_PROVIDER_ENDPOINT="https://gw.lunaroute.com/v1/chat/completions"
+                ;;
             Groq)
                 export CONFIG_PROVIDER_ENDPOINT="https://api.groq.com/openai/v1/chat/completions"
                 ;;
@@ -97,7 +101,7 @@ setup_from_env_vars() {
                 export CONFIG_PROVIDER_ENDPOINT="https://api.sambanova.ai/v1/chat/completions"
                 ;;
             *)
-                export CONFIG_PROVIDER_ENDPOINT="${MIRA_PROVIDER_ENDPOINT:-https://api.groq.com/openai/v1/chat/completions}"
+                export CONFIG_PROVIDER_ENDPOINT="${MIRA_PROVIDER_ENDPOINT:-https://gw.lunaroute.com/v1/chat/completions}"
                 ;;
         esac
     else
@@ -111,6 +115,9 @@ setup_from_env_vars() {
     # otherwise leave it unset so the empty-model guard in init_postgresql
     # aborts with guidance instead of installing dead routes.
     case "$CONFIG_PROVIDER_NAME" in
+        Lunaroute)
+            prefill_provider_model "glm-5.3-flash"
+            ;;
         Groq)
             prefill_provider_model "qwen/qwen3.6-27b"
             ;;
@@ -195,18 +202,21 @@ EOF
         sudo -u postgres createdb -O mira_admin mira_service
     fi
 
-    # Apply schema
+    # Apply schema. The image ships the local embedding model, so the
+    # container install is always local; the app reports its model and
+    # vector length (deploy/lib/embedding_config.sh).
     print_step "Applying database schema..."
-    sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 -f /opt/mira/app/deploy/mira_service_schema.sql
+    resolve_embedding_schema_args /opt/mira/venv/bin/python /opt/mira/app local "" "" ""
+    sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 "${EMBEDDING_SCHEMA_ARGS[@]}" -f /opt/mira/app/deploy/mira_service_schema.sql
 
     # Repoint all five seeded routes at the provider the wizard collected.
     # Postgres is running here, so the rewrite happens at once — there is no
     # deferred s6 step. A container install collects ONE generic provider key
     # and model, so every route shares it (mirrors the offline-install
     # rewrite in deploy/postgresql.sh). Every route needs the credential,
-    # so all five are bound to subcortical_key — the seeded primary row ships
-    # with an empty api_key_name (the unauthenticated llama-server) that would
-    # 401 against the collected provider.
+    # so all five are bound to subcortical_key — the schema seeds primary
+    # against 'provider_key' (the bare-metal chat-tier credential), which
+    # init_vault below never stores in a container.
     if [ -z "$CONFIG_PROVIDER_MODEL" ]; then
         print_error "Provider '$CONFIG_PROVIDER_NAME' needs a model name (MIRA_PROVIDER_MODEL, or answer the wizard prompt); refusing to install routes that cannot resolve. Visit your provider's website to pick a model it currently serves."
         exit 1
@@ -259,22 +269,32 @@ init_vault() {
 
     # Store secrets in Vault
     print_step "Storing API credentials in Vault..."
-    # model_configs seeds primary with an empty api_key_name (the unauthenticated
-    # local llama-server) and fast/batch/assessment/other with subcortical_key.
-    # Only subcortical_key is written here: the container UPDATE binds all five
-    # routes to it, so no row can name provider_key. provider_key exists for the
-    # bare-metal installer (deploy/postgresql.sh, deploy/python.sh), which
-    # seeds primary against an authenticated outside chat provider — not this
-    # script.
+    # The schema seeds primary against 'provider_key' and the auxiliary routes
+    # against 'subcortical_key', but the container UPDATE above binds all five
+    # routes to subcortical_key, so no row can name provider_key. Only
+    # subcortical_key is written here. provider_key exists for the bare-metal
+    # installer (deploy/postgresql.sh), which keeps primary on the chat-tier
+    # credential — not this script.
     vault kv put secret/mira/api_keys \
         anthropic_key="$CONFIG_ANTHROPIC_KEY" \
         anthropic_batch_key="$CONFIG_ANTHROPIC_BATCH_KEY" \
         subcortical_key="$CONFIG_PROVIDER_KEY" \
         kagi_api_key="$CONFIG_KAGI_KEY"
 
+    # Percent-encode reserved characters so the embedded password forms
+    # a valid URL credential (standard URL parsers percent-decode userinfo).
+    DB_PASSWORD_URL_ENC=""
+    local _pw="${CONFIG_DB_PASSWORD}" _i _c
+    for ((_i = 0; _i < ${#_pw}; _i++)); do
+        _c=${_pw:_i:1}
+        case "$_c" in
+            [A-Za-z0-9._~-]) DB_PASSWORD_URL_ENC+="$_c" ;;
+            *) printf -v _c '%%%02X' "'$_c"; DB_PASSWORD_URL_ENC+="$_c" ;;
+        esac
+    done
     vault kv put secret/mira/database \
-        admin_url="postgresql://mira_admin:${CONFIG_DB_PASSWORD}@localhost:5432/mira_service" \
-        service_url="postgresql://mira_dbuser:${CONFIG_DB_PASSWORD}@localhost:5432/mira_service" \
+        admin_url="postgresql://mira_admin:${DB_PASSWORD_URL_ENC}@localhost:5432/mira_service" \
+        service_url="postgresql://mira_dbuser:${DB_PASSWORD_URL_ENC}@localhost:5432/mira_service" \
         username="mira_dbuser" \
         password="$CONFIG_DB_PASSWORD"
 

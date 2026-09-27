@@ -5,10 +5,33 @@
 --   * Provision mira_admin and mira_dbuser, including credentials and BYPASSRLS
 --     for mira_admin, through Vault-backed deployment tooling before this file.
 --     deploy/postgresql.sh performs both steps.
+--   * Apply with psql and the five embedding_* variables described at the
+--     embedding_config table (deploy/lib/embedding_config.sh builds them). The
+--     guard below fails the apply before any DDL runs when one is missing.
 --
 -- This is deliberately not a migration. It contains no compatibility DDL,
 -- embedded credentials, database creation, or default privileges.
 -- mira-OSS 2.0 is a fresh install: 1.x -> 2.0 is a reinstall, not an upgrade.
+
+\if :{?embedding_provider}
+\if :{?embedding_model}
+\if :{?embedding_endpoint_url}
+\if :{?embedding_api_key_name}
+\if :{?embedding_dimensions}
+\set embedding_variables_present true
+\endif
+\endif
+\endif
+\endif
+\endif
+\if :{?embedding_variables_present}
+\else
+DO $missing_embedding_variables$
+BEGIN
+    RAISE EXCEPTION 'mira_service_schema.sql needs psql variables embedding_provider, embedding_model, embedding_endpoint_url, embedding_api_key_name, and embedding_dimensions (deploy/lib/embedding_config.sh builds them)';
+END
+$missing_embedding_variables$;
+\endif
 
 DO $schema_precondition$
 BEGIN
@@ -59,25 +82,87 @@ CREATE TABLE model_configs (
     max_tokens INTEGER NOT NULL CHECK (max_tokens > 0)
 );
 
--- Seed values match the reference deployment: main chat (primary) is the
--- only consumer of the local llama-server (single KV-cache slot), so no
--- async subsystem call can evict the main conversation's cached prefix
--- between turns; every auxiliary route goes to poolside models on
--- OpenRouter, sharing the 'subcortical_key' credential at
--- secret/mira/api_keys. primary needs no credential ('' — the local
--- llama-server is unauthenticated). Truly offline installs can still rewrite
--- endpoint_url/model through the OFFLINE_SQL block in deploy/postgresql.sh.
+-- Seed values are the deployment defaults: every route goes to the lunaroute
+-- gateway. primary serves glm-5.3 under the 'provider_key' credential (the
+-- deploy config's chat_api_key); the four auxiliary routes serve the
+-- glm-5.3-flash family under 'subcortical_key' (the config's
+-- subcortical_api_key), both at secret/mira/api_keys. Hosted installs whose
+-- config differs from these defaults are rewritten by deploy/postgresql.sh
+-- with UPDATEs after application (same mechanism as OFFLINE_SQL for truly
+-- offline installs) — the seed rows are not string-patched.
 -- Route assignments live in the cns/services call sites: peanut gallery,
 -- forage overwatch, and domaindoc descriptor expansion ride 'fast';
 -- summaries, compaction, persona/portrait/LoRA/user-model, memory curator,
 -- and the repulsion rewriter ride 'batch'.
 INSERT INTO model_configs (name, model, dialect_name, endpoint_url, api_key_name, effort, max_tokens)
 VALUES
-    ('primary', 'openai/gpt-5.5', 'openrouter', 'https://openrouter.ai/api/v1/chat/completions', 'provider_key', 'high', 16000),
-    ('fast', 'poolside/laguna-xs-2.1', 'openai', 'https://openrouter.ai/api/v1/chat/completions', 'subcortical_key', 'none', 4096),
-    ('batch', 'poolside/laguna-s-2.1', 'openai', 'https://openrouter.ai/api/v1/chat/completions', 'subcortical_key', 'high', 16000),
-    ('assessment', 'poolside/laguna-s-2.1', 'openai', 'https://openrouter.ai/api/v1/chat/completions', 'subcortical_key', 'none', 10000),
-    ('other', 'poolside/laguna-s-2.1', 'openai', 'https://openrouter.ai/api/v1/chat/completions', 'subcortical_key', 'high', 10000);
+    ('primary', 'glm-5.3', 'openai', 'https://gw.lunaroute.com/v1/chat/completions', 'provider_key', 'high', 16000),
+    ('fast', 'glm-5.3-flash', 'openai', 'https://gw.lunaroute.com/v1/chat/completions', 'subcortical_key', 'none', 4096),
+    ('batch', 'glm-5.3-flash-background', 'openai', 'https://gw.lunaroute.com/v1/chat/completions', 'subcortical_key', 'high', 16000),
+    ('assessment', 'glm-5.3-flash', 'openai', 'https://gw.lunaroute.com/v1/chat/completions', 'subcortical_key', 'none', 10000),
+    ('other', 'glm-5.3-flash', 'openai', 'https://gw.lunaroute.com/v1/chat/completions', 'subcortical_key', 'high', 10000);
+
+-- ---------------------------------------------------------------------------
+-- Embedding space
+-- ---------------------------------------------------------------------------
+
+-- The one embedding model this install uses, fixed at install time. The
+-- installer supplies these psql variables, deriving model and dimensions from
+-- clients/hybrid_embeddings_provider.py:describe_for_installer, which probes a
+-- remote endpoint for its vector length:
+--   embedding_provider      'local' or 'remote'
+--   embedding_model         model name ('MongoDB/mdbr-leaf-ir-asym' for local)
+--   embedding_endpoint_url  POST /v1/embeddings URL; '' for local
+--   embedding_api_key_name  key name under secret/mira/api_keys; '' for none
+--   embedding_dimensions    vector length; also sizes every vector(...) column
+-- 2000 is pgvector's dimension ceiling for HNSW and IVFFlat indexes.
+CREATE TABLE embedding_config (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    provider TEXT NOT NULL CHECK (provider IN ('local', 'remote')),
+    model TEXT NOT NULL CHECK (model <> ''),
+    endpoint_url TEXT,
+    api_key_name TEXT,
+    dimensions INTEGER NOT NULL CHECK (dimensions BETWEEN 1 AND 2000),
+    CHECK (
+        (provider = 'local' AND endpoint_url IS NULL AND api_key_name IS NULL)
+        OR (provider = 'remote' AND endpoint_url IS NOT NULL)
+    )
+);
+
+INSERT INTO embedding_config (provider, model, endpoint_url, api_key_name, dimensions)
+VALUES (
+    :'embedding_provider',
+    :'embedding_model',
+    NULLIF(:'embedding_endpoint_url', ''),
+    NULLIF(:'embedding_api_key_name', ''),
+    :embedding_dimensions
+);
+
+-- Vectors from different models are not comparable, so UPDATE or DELETE of
+-- the row is refused once any vector is stored. SECURITY DEFINER so the
+-- existence checks see every user's rows regardless of RLS. PL/pgSQL resolves
+-- the tables below at first execution, after they exist.
+CREATE FUNCTION embedding_config_refuse_change_with_vectors()
+RETURNS TRIGGER
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+LANGUAGE plpgsql
+AS $function$
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.memories WHERE embedding IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM public.global_memories WHERE embedding IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM public.messages WHERE segment_embedding IS NOT NULL)
+    THEN
+        RAISE EXCEPTION 'embedding_config is fixed: stored vectors were made by % (% dimensions) and cannot be compared with another model''s. Changing providers means regenerating every stored vector or reinstalling.',
+            OLD.model, OLD.dimensions;
+    END IF;
+    RETURN COALESCE(NEW, OLD);
+END
+$function$;
+
+CREATE TRIGGER embedding_config_locked_once_vectors_exist
+BEFORE UPDATE OR DELETE ON embedding_config
+FOR EACH ROW EXECUTE FUNCTION embedding_config_refuse_change_with_vectors();
 
 -- ---------------------------------------------------------------------------
 -- Cost visibility
@@ -98,16 +183,16 @@ CREATE TABLE usage_pricing (
 
 INSERT INTO usage_pricing (name, input_price_per_mtok, output_price_per_mtok)
 VALUES ('__default__', 5.000000, 25.000000);
--- Poolside prices are OpenRouter's published rates (USD per Mtok, 2026-09):
--- laguna-xs-2.1 0.06/0.12, laguna-s-2.1 0.09/0.18. primary (local
--- llama-server) is seeded unpriced: marginal cost ~0, and NULL fields fall
--- through to the fallback tiers per utils/cost_accumulator.py.
+-- No lunaroute glm prices are seeded: unknown gateway pricing must not be
+-- invented, and NULL fields fall through to the fallback tiers per
+-- utils/cost_accumulator.py, which flags fallback-priced usage explicitly
+-- instead of silently reporting wrong rates.
 INSERT INTO usage_pricing (name, input_price_per_mtok, output_price_per_mtok) VALUES
     ('primary', NULL, NULL),
-    ('fast', 0.060000, 0.120000),
-    ('batch', 0.090000, 0.180000),
-    ('assessment', 0.090000, 0.180000),
-    ('other', 0.090000, 0.180000);
+    ('fast', NULL, NULL),
+    ('batch', NULL, NULL),
+    ('assessment', NULL, NULL),
+    ('other', NULL, NULL);
 
 -- ---------------------------------------------------------------------------
 -- Accounts and authentication-ready contracts
@@ -288,7 +373,7 @@ CREATE TABLE messages (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     tool_call_id TEXT,
     is_error BOOLEAN NOT NULL DEFAULT FALSE,
-    segment_embedding vector(768),
+    segment_embedding vector(:embedding_dimensions),
     FOREIGN KEY (continuum_id, user_id)
         REFERENCES continuums(id, user_id) ON DELETE CASCADE
 );
@@ -321,7 +406,7 @@ CREATE TABLE memories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     text TEXT COMPRESSION lz4 NOT NULL,
-    embedding vector(768),
+    embedding vector(:embedding_dimensions),
     search_vector tsvector,
     importance_score NUMERIC(5,3) NOT NULL DEFAULT 0.5
         CHECK (importance_score BETWEEN 0 AND 1),
@@ -367,7 +452,7 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TABLE global_memories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     text TEXT COMPRESSION lz4 NOT NULL,
-    embedding vector(768),
+    embedding vector(:embedding_dimensions),
     search_vector tsvector,
     importance_score NUMERIC(5,3) NOT NULL DEFAULT 1.0
         CHECK (importance_score BETWEEN 0 AND 1),
@@ -734,6 +819,7 @@ GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO mira_admin;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO mira_admin;
 
 GRANT SELECT ON model_configs TO mira_dbuser;
+GRANT SELECT ON embedding_config TO mira_dbuser;
 GRANT SELECT ON usage_pricing TO mira_dbuser;
 GRANT SELECT, UPDATE ON users TO mira_dbuser;
 GRANT SELECT, INSERT, UPDATE, DELETE ON magic_links, api_tokens TO mira_dbuser;
@@ -763,6 +849,7 @@ REVOKE ALL ON global_memories FROM mira_dbuser;
 
 REVOKE EXECUTE ON FUNCTION set_updated_at() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION set_search_vector() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION embedding_config_refuse_change_with_vectors() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION can_read_global_memories() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION provision_baseline_persona() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION resolve_active_user_identity(text) FROM PUBLIC;
@@ -772,7 +859,8 @@ REVOKE EXECUTE ON FUNCTION active_user_identity(uuid) FROM PUBLIC;
 -- Comments
 -- ---------------------------------------------------------------------------
 
-COMMENT ON TABLE model_configs IS 'Exactly five required MIRA routes, each owning dialect, model, endpoint, Vault key, default effort, and output ceiling: primary (main chat only — the sole consumer of the local llama-server, so async subsystem calls cannot evict its KV-cache prefix), fast (latency-critical small turns: subcortical analysis, peanut gallery, forage overwatch, descriptor expansion), batch (bulk background work: segment summaries, live-context compaction, persona/portrait/LoRA/user-model synthesis, memory curator, forage, while-the-cat-is-away, repulsion rewriter), assessment (assessment extraction), other (a sidebar turn routed to an outside model, deliberately a different vendor from primary).';
+COMMENT ON TABLE model_configs IS 'Exactly five required MIRA routes, each owning dialect, model, endpoint, Vault key, default effort, and output ceiling: primary (main chat only — never shared with async subsystem calls, so background work cannot contend with the main conversation), fast (latency-critical small turns: subcortical analysis, peanut gallery, forage overwatch, descriptor expansion), batch (bulk background work: segment summaries, live-context compaction, persona/portrait/LoRA/user-model synthesis, memory curator, forage, while-the-cat-is-away, repulsion rewriter), assessment (assessment extraction), other (a sidebar turn routed to an outside model, deliberately a different vendor from primary).';
+COMMENT ON TABLE embedding_config IS 'The install''s one embedding model (local mdbr-leaf-ir-asym or a remote OpenAI-compatible endpoint) and its vector length, fixed at install; UPDATE/DELETE refused once any vector is stored.';
 COMMENT ON TABLE usage_pricing IS 'Per-route cost lookup keyed by model_configs name; __default__ is the reserved fallback pair.';
 COMMENT ON TABLE users IS 'MIRA account. subject_kind admits member and demo; only member is provisioned today.';
 COMMENT ON TABLE persona_revisions IS 'Immutable Persona directive history.';

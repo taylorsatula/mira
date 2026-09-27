@@ -84,6 +84,7 @@ done
 source "${SCRIPT_DIR}/lib/output.sh"
 source "${SCRIPT_DIR}/lib/services.sh"
 source "${SCRIPT_DIR}/lib/vault.sh"
+source "${SCRIPT_DIR}/lib/embedding_config.sh"
 
 # ============================================================================
 # Phase 1: Configuration Gathering
@@ -120,7 +121,6 @@ source "${SCRIPT_DIR}/dependencies.sh"
 # python.sh handles:
 #   - Python verification
 #   - MIRA download and installation
-#   - Config patching for offline/custom providers
 #   - Virtual environment and dependencies
 #   - Embedding model download
 #   - Playwright browser setup
@@ -144,6 +144,7 @@ source "${SCRIPT_DIR}/vault.sh"
 #   - Starting services (macOS)
 #   - PostgreSQL readiness check
 #   - Schema deployment
+#   - model_configs route rewrite (offline OFFLINE_SQL, or hosted chat+subcortical)
 #   - Password updates
 #   - Vault credential storage
 source "${SCRIPT_DIR}/postgresql.sh"

@@ -62,7 +62,7 @@ parse_yaml_config() {
             "'"*) value="${value#\'}"; value="${value%\'}" ;;
         esac
         case "$key" in
-            offline_mode|local_model_choice|custom_gguf|build_llama_cpp|llama_main_url|llama_small_url|llama_main_model|llama_small_model|chat_provider_type|chat_endpoint|chat_api_key|chat_model|anthropic_key|anthropic_batch_key|subcortical_endpoint|subcortical_api_key|subcortical_model|kagi_api_key|timezone|db_password|install_playwright|install_systemd|start_mira_now|overwrite_existing|stop_occupied_ports)
+            offline_mode|local_model_choice|custom_gguf|build_llama_cpp|llama_main_url|llama_small_url|llama_main_model|llama_small_model|chat_provider_type|chat_endpoint|chat_api_key|chat_model|anthropic_key|anthropic_batch_key|subcortical_endpoint|subcortical_api_key|subcortical_model|kagi_api_key|embedding_provider|embedding_endpoint|embedding_model|embedding_api_key|timezone|db_password|install_playwright|install_systemd|start_mira_now|overwrite_existing|stop_occupied_ports)
                 yaml_store "$key" "$value" ;;
             *) yaml_fail "Unknown config key: '$key' (see deploy-config.example.yml)" ;;
         esac
@@ -71,7 +71,7 @@ parse_yaml_config() {
     # every key is required — the template ships one line per key, so a
     # missing key means the file was hand-edited badly; name it.
     local k
-    for k in offline_mode local_model_choice custom_gguf build_llama_cpp llama_main_url llama_small_url llama_main_model llama_small_model chat_provider_type chat_endpoint chat_api_key chat_model anthropic_key anthropic_batch_key subcortical_endpoint subcortical_api_key subcortical_model kagi_api_key timezone db_password install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports; do
+    for k in offline_mode local_model_choice custom_gguf build_llama_cpp llama_main_url llama_small_url llama_main_model llama_small_model chat_provider_type chat_endpoint chat_api_key chat_model anthropic_key anthropic_batch_key subcortical_endpoint subcortical_api_key subcortical_model kagi_api_key embedding_provider embedding_endpoint embedding_model embedding_api_key timezone db_password install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports; do
         case ",$YAML_SEEN_KEYS," in
             *",$k,"*) : ;;
             *) yaml_fail "Config file is missing required key: '$k'" ;;
@@ -80,7 +80,7 @@ parse_yaml_config() {
 
     # unfilled template placeholders abort before sudo is requested
     local bad="" v
-    for k in offline_mode local_model_choice custom_gguf build_llama_cpp llama_main_url llama_small_url llama_main_model llama_small_model chat_provider_type chat_endpoint chat_api_key chat_model anthropic_key anthropic_batch_key subcortical_endpoint subcortical_api_key subcortical_model kagi_api_key timezone db_password install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports; do
+    for k in offline_mode local_model_choice custom_gguf build_llama_cpp llama_main_url llama_small_url llama_main_model llama_small_model chat_provider_type chat_endpoint chat_api_key chat_model anthropic_key anthropic_batch_key subcortical_endpoint subcortical_api_key subcortical_model kagi_api_key embedding_provider embedding_endpoint embedding_model embedding_api_key timezone db_password install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports; do
         eval "v=\"\$YAML_$k\""
         [ "$v" = "__SET_ME__" ] && bad="$bad $k"
     done
@@ -89,12 +89,16 @@ parse_yaml_config() {
     # enum validation
     [ "$YAML_offline_mode" = "yes" ] || [ "$YAML_offline_mode" = "no" ] || yaml_fail "offline_mode must be yes or no"
     if [ "$YAML_offline_mode" = "no" ]; then
-        [ "$YAML_chat_provider_type" = "anthropic" ] || [ "$YAML_chat_provider_type" = "generic" ] || yaml_fail "chat_provider_type must be anthropic or generic"
+        [ "$YAML_chat_provider_type" = "anthropic" ] || [ "$YAML_chat_provider_type" = "openai" ] || yaml_fail "chat_provider_type must be anthropic or openai"
         [ -n "$YAML_subcortical_endpoint" ] || yaml_fail "subcortical_endpoint must not be empty"
         [ -n "$YAML_subcortical_model" ] || yaml_fail "subcortical_model must not be empty"
-        if [ "$YAML_chat_provider_type" = "generic" ]; then
-            [ -n "$YAML_chat_endpoint" ] || yaml_fail "chat_endpoint must not be empty for a generic provider"
-            [ -n "$YAML_chat_model" ] || yaml_fail "chat_model must not be empty for a generic provider"
+        if [ "$YAML_chat_provider_type" = "openai" ]; then
+            [ -n "$YAML_chat_endpoint" ] || yaml_fail "chat_endpoint must not be empty for an openai provider"
+            [ -n "$YAML_chat_model" ] || yaml_fail "chat_model must not be empty for an openai provider"
+        else
+            # The primary route is rewritten from chat_model at Step 13; an
+            # empty value would install a route with no model.
+            [ -n "$YAML_chat_model" ] || yaml_fail "chat_model must not be empty for an anthropic provider (e.g. claude-opus-4-6)"
         fi
     else
         [ "$YAML_local_model_choice" = "auto" ] || [ "$YAML_local_model_choice" = "custom" ] || yaml_fail "local_model_choice must be auto or custom"
@@ -105,6 +109,13 @@ parse_yaml_config() {
         if [ "$YAML_local_model_choice" = "custom" ] && [ -z "$YAML_custom_gguf" ]; then
             yaml_fail "custom_gguf must not be empty when local_model_choice is custom"
         fi
+    fi
+    [ "$YAML_embedding_provider" = "local" ] || [ "$YAML_embedding_provider" = "remote" ] || yaml_fail "embedding_provider must be local or remote"
+    if [ "$YAML_embedding_provider" = "remote" ]; then
+        [ -n "$YAML_embedding_endpoint" ] || yaml_fail "embedding_endpoint must not be empty when embedding_provider is remote"
+        [ -n "$YAML_embedding_model" ] || yaml_fail "embedding_model must not be empty when embedding_provider is remote"
+    elif [ -n "$YAML_embedding_endpoint$YAML_embedding_model$YAML_embedding_api_key" ]; then
+        yaml_fail "embedding_endpoint, embedding_model, and embedding_api_key apply only when embedding_provider is remote; set them to \"\""
     fi
     local k2 v2
     for k2 in build_llama_cpp install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports; do
@@ -137,7 +148,7 @@ apply_yaml_config() {
         STATUS_SUBCORTICAL_KEY="${DIM}N/A (local)${RESET}"
     else
         CONFIG_CHAT_PROVIDER_TYPE="$YAML_chat_provider_type"
-        if [ "$CONFIG_CHAT_PROVIDER_TYPE" = "generic" ]; then
+        if [ "$CONFIG_CHAT_PROVIDER_TYPE" = "openai" ]; then
             CONFIG_CHAT_ENDPOINT="$YAML_chat_endpoint"
             CONFIG_CHAT_MODEL="$YAML_chat_model"
             if [ -z "$YAML_chat_api_key" ]; then
@@ -150,7 +161,7 @@ apply_yaml_config() {
             # Interview parity: background Anthropic routes get placeholders
             CONFIG_ANTHROPIC_KEY="PLACEHOLDER_NOT_CONFIGURED"
             CONFIG_ANTHROPIC_BATCH_KEY="PLACEHOLDER_NOT_CONFIGURED"
-            STATUS_CHAT_PROVIDER="${CHECKMARK} Generic (${CONFIG_CHAT_ENDPOINT})"
+            STATUS_CHAT_PROVIDER="${CHECKMARK} OpenAI-compatible (${CONFIG_CHAT_ENDPOINT})"
         else
             CONFIG_CHAT_MODEL="$YAML_chat_model"
             if [ -z "$YAML_anthropic_key" ]; then
@@ -186,6 +197,15 @@ apply_yaml_config() {
     else
         CONFIG_KAGI_KEY="$YAML_kagi_api_key"
         STATUS_KAGI="${CHECKMARK} Configured"
+    fi
+    CONFIG_EMBEDDING_PROVIDER="$YAML_embedding_provider"
+    CONFIG_EMBEDDING_ENDPOINT="$YAML_embedding_endpoint"
+    CONFIG_EMBEDDING_MODEL="$YAML_embedding_model"
+    CONFIG_EMBEDDING_API_KEY="$YAML_embedding_api_key"
+    if [ "$CONFIG_EMBEDDING_PROVIDER" = "remote" ]; then
+        STATUS_EMBEDDINGS="${CHECKMARK} Remote: ${CONFIG_EMBEDDING_MODEL} at ${CONFIG_EMBEDDING_ENDPOINT}"
+    else
+        STATUS_EMBEDDINGS="${CHECKMARK} Local model"
     fi
     if [ -z "$YAML_db_password" ]; then
         CONFIG_DB_PASSWORD="changethisifdeployingpwd"

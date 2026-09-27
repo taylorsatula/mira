@@ -14,23 +14,24 @@ forker-facing guide with the full command quickbook is `README.md`.
 - Password bootstrap (`lib.sh:bootstrap_ip`) uses a single-stdin `sudo -S` form: dash has no herestrings, and a heredoc on the same command as the password pipe overrides the pipe, so sudo would read the sudoers line as the password.
 - Transport mode is finalized only after argument parsing (`finish_flags` in `lib.sh`): `--ip` cannot be known at source time, so `IS_LIBVIRT` must not be derived there.
 - The deploy is greenfield-only: `oneshot.sh` gates on the valkey `user_lock:*` scan, stops mira, terminates Postgres backends, and drops `mira_service` before re-deploying — an active connection silently blocks `DROP DATABASE` behind any `2>/dev/null`.
-- Placeholder API keys park the mira POST gate by design; a healthy endpoint comes from `inject.sh` (real Vault/routes arrive with the sarcophagus), never from a fresh deploy.
+- `""`-key deploy configs park the mira POST gate by design; a healthy endpoint comes from `inject.sh` (real Vault/routes arrive with the sarcophagus). Exception: a config carrying real keys is seeded into Vault at deploy time (`deploy/postgresql.sh` Step 14: openai chat mode maps `chat_api_key`→`provider_key`, `subcortical_api_key`→`subcortical_key`), so a no-inject deploy can come up healthy with live routes — validated 2026-09-18 by the deploy-only flow (fresh template spawn + dev deploy, driver preserved on the reference host as `bin/deploy-only.sh`).
 - Sarcophagi are sealed and append-only: `extract.sh` refuses an existing output directory, and any post-seal edit must regenerate `MANIFEST.sha256` and say so.
+- `inject-restore-vm.sh` restores the whole dump (drop + recreate + `pg_restore`), so the restored schema is the sarcophagus's, not the deployed build's. A sarcophagus extracted before the `embedding_config` table existed restores without it, and the app then fails at boot on `load_embedding_config` (`clients/AGENTS.md`); its vectors are `mdbr-leaf-ir-asym`/768. Re-extract from an instance running current code before relying on such a sarcophagus.
 - Restores remap the VM user: `inject-restore-vm.sh` rewrites `User=`/`Group=` in the captured units and relocates `MIRA_credentials.txt`/`.vault-token` to the actual user; the captured `authorized_keys` is deliberately not restored (the operator's own access is bootstrapped).
 - `talktomira.sh` mints and abandons an `api_tokens` row per invocation (name `talktomira-cli-<ts>`); prune them periodically.
 
 ## Files
 
 - `lib.sh` — shared config, transports, and helpers; owns every cross-file rule above. `VIRSH`, `vmssh`, `vmstream`, `vmcp_from`, `vmcp_to`, `vmexec`, `vmip`, `wait_guest_agent`, `bootstrap_ssh`, `bootstrap_ip`, `turn_lock_gate`, `resolve_sarc`, `set_common`, `finish_flags`.
-- `oneshot.sh` — the whole flow: sarcophagus resolve → spawn/reuse VM → bootstrap ssh → push source + config → deploy → mira-service poll → exec `inject.sh`.
-- `extract.sh` — live instance → sealed sarcophagus; writes `SNAPSHOT-FACTS.txt` and `MANIFEST.sha256`, verifies VM↔caller byte parity and caller-side sqlite integrity.
+- `oneshot.sh` — the whole flow: sarcophagus resolve → spawn/reuse VM → bootstrap ssh → push source + config → deploy → mira-service poll → exec `inject.sh`. The sarcophagus arg is mandatory (deploy-only is not a flag); for a fresh-template deploy-only run, replicate phases 1–4 without inject — reference host's `bin/deploy-only.sh` is the validated driver (README quickstart D).
+- `extract.sh` — live instance → sealed sarcophagus; writes `SNAPSHOT-FACTS.txt` and `MANIFEST.sha256`, verifies VM↔caller byte parity and caller-side sqlite integrity. Materializes on the caller's `--snap-dir`; the two-homes sync + post-seal README/manifest steps are the README sarcophagus contract.
 - `extract-stage-vm.sh` — in-VM staging half of `extract.sh` (pg_dump, sqlite `.backup()` snapshots, quiescent tars).
 - `inject.sh` — restore driver: quiesce gate, payload push, run `inject-restore-vm.sh`, verify facts.
 - `inject-restore-vm.sh` — in-VM restore half: app overlay, Postgres drop/recreate/`pg_restore --no-owner`, user data, Vault, credential remap, unit `User=` rewrite, health poll.
 - `vm-exec.sh` — CLI for `lib.sh:vmexec` (guest-agent root exec; libvirt modes only).
 - `make-base-template.sh` — EXPERIMENTAL: builds a default-state base template qcow2 from an Ubuntu cloud image via cloud-init seed.
 - `base-vm.xml` — domain skeleton with `__DOMAIN__`/`__DISK__` placeholders; carries the qemu-guest-agent channel `oneshot.sh` bootstraps through.
-- `deploy-config-dev-vm.yml` — non-interactive deploy answers; API keys ship as `""` placeholders that inject replaces with the real Vault.
+- `deploy-config-dev-vm.yml` — non-interactive deploy answers; API keys ship as `""` placeholders that inject replaces with the real Vault. A copy with real keys set is the deploy-only exception: it seeds Vault directly and yields a healthy no-inject deploy — generate such a config from a sarcophagus Vault, never commit one, keep it 0600 and delete it after the deploy.
 - `talktomira.sh` — one-liner chat with a deployed instance from any machine: resolves the VM IP on the libvirt host, mints a Bearer token, posts to `/v0/api/chat` with `--max-time 900`.
 - `README.md` — forkers' guide: modes, prerequisites, sarcophagus contract, MIRA API quickbook, and the gotcha list.
 

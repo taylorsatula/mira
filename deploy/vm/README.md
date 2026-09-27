@@ -32,20 +32,39 @@ defaults to the repo containing this toolkit, **including uncommitted changes**)
 
 ```bash
 # A. New VM from template + dev build + instance restored + verified
-./oneshot.sh mlfactory_v3_mira                  # local libvirt
-./oneshot.sh --host admin@192.168.1.9 mlfactory_v3_mira   # orchestrated remotely
-./oneshot.sh --ip 192.168.65.2 --vm-user mira_service --vm-pass '…' mlfactory_v3_mira
-./oneshot.sh mlfactory_v3_mira --fresh          # rebuild a running VM (gated on
+./oneshot.sh mlfactory_v4_mira                  # local libvirt
+./oneshot.sh --host admin@192.168.1.9 mlfactory_v4_mira   # orchestrated remotely
+./oneshot.sh --ip 192.168.65.2 --vm-user mira_service --vm-pass '…' mlfactory_v4_mira
+./oneshot.sh mlfactory_v4_mira --fresh          # rebuild a running VM (gated on
                                                  # no in-flight MIRA turn; old disk
                                                  # kept as <disk>.pre-oneshot-<ts>)
 
 # B. Save a live instance before destroying its VM — always do this first
 ./extract.sh my-instance-$(date +%F)
+#    In --host mode the sarcophagus materializes on the CALLER (--snap-dir);
+#    sync it to the host lineage dir and verify MANIFEST.sha256 on both ends.
+#    Two mandatory post-extract steps: replace the placeholder README-RESTORE.md
+#    header with a real orientation (delta vs the previous sarcophagus), then
+#    regenerate MANIFEST.sha256 (the contract for post-seal edits).
 
-# C. Deploy a dev build only (no instance state): run the repo deploy
-#    directly inside the VM — from the repo root of the checkout on the VM:
+# C. Redeploy the dev build onto an already-running VM (no instance state) —
+#    from the repo root of the checkout on the VM:
 #    ./deploy/deploy.sh --config deploy-config.yml --local --loud
 #    (that is exactly oneshot's phase 4; oneshot always pairs it with a restore)
+
+# D. Fresh VM from the template + dev build only — no sarcophagus, no inject
+#    (validated 2026-09-18): oneshot.sh mandates a sarcophagus arg by design,
+#    so drive its phases 1–4 minus inject. The validated driver is the
+#    reference host's bin/deploy-only.sh: turn-lock gate → graceful shutdown
+#    with the old disk preserved as <disk>.pre-oneshot-<ts> → template →
+#    fresh disk → bootstrap → push → deploy → service + health poll.
+#    Keys decide health: with "" placeholder keys the POST gate parks by
+#    design (inject is what installs real Vault/routes); with real
+#    chat_api_key + subcortical_api_key in the config, deploy/postgresql.sh
+#    seeds them into Vault and the instance comes up healthy with live model
+#    routes and no inject. Generate the key-bearing config from a
+#    sarcophagus Vault (never a literal in a committed file), keep it 0600,
+#    delete it after the deploy.
 ```
 
 **Prerequisites:** for libvirt modes — a frozen **base template** qcow2
@@ -67,6 +86,14 @@ contains instance credentials), `systemd/` (units + valkey.conf), `system-info/`
 `SNAPSHOT-FACTS.txt`, `MANIFEST.sha256`. inject refuses manifest mismatch,
 missing facts, or an in-flight MIRA turn. Never edit a sealed one without
 regenerating its manifest and saying so.
+
+Two homes for every sarcophagus: `extract.sh` writes the caller's `--snap-dir`
+(default `~/mira-snapshots`); in `--host` mode that is the orchestrating machine,
+so sync the sealed dir to the host lineage root and verify `MANIFEST.sha256` on
+both ends before destroying the VM it came from. The lineage table (v1/v2/v3/…
+facts and what changed) lives in the host lineage dir's `AGENTS.md` — add a row
+per extraction, after replacing the placeholder `README-RESTORE.md` header with a
+real orientation and regenerating the manifest.
 
 ## Talking to the deployed instance (validated commands — don't re-derive)
 
@@ -97,8 +124,14 @@ Cookie-auth POSTs need `X-CSRF-Token`; Bearer does not. Probe health first:
    `||` fallback — normalize state explicitly.
 4. The deploy is **greenfield-only** (installs schema into an empty
    `mira_service`) — drop the DB before re-deploys (oneshot does).
-5. Placeholder API keys **park the POST gate by design** — health comes from
-   inject (real Vault/routes), not from a fresh deploy.
+5. `""`-key deploy configs **park the POST gate by design** — health comes from
+   inject (real Vault/routes from the sarcophagus). Exception: a config carrying real
+   keys is seeded into Vault at deploy time (`deploy/postgresql.sh` Step 14 maps
+   `chat_api_key`→`provider_key` and `subcortical_api_key`→`subcortical_key` in
+   openai chat mode), so a no-inject deploy can be fully healthy with live routes — that
+   is how quickstart D runs. `model_configs.api_key_name` names a field inside
+   `secret/mira/api_keys`: it just has to exist there (a restored instance may use a
+   different field name, e.g. `lunaroute_key`).
 6. `/etc/valkey` is root-only — staging as a normal user silently drops
    valkey.conf behind `2>/dev/null`; fail loudly instead (a silent gap broke
    the first production inject).
@@ -115,17 +148,22 @@ Cookie-auth POSTs need `X-CSRF-Token`; Bearer does not. Probe health first:
 13. `deploy.sh --local` installs from the *invocation cwd* — run it from the
     repo root; it excludes `.git, venv, __pycache__, *.pyc, .env, .claude,
     .DS_Store, data, logs, scratch` (parity with the GitHub tarball).
-14. `deploy/python.sh` fail-fasts if the schema's seeded primary model row
-    drifts from its expected string — keep worktree schema and deploy script
-    in sync (the reference host carries a documented patch).
+14. `deploy/python.sh` no longer string-patches the schema. Hosted installs
+    apply the seeded (lunaroute-default) `model_configs` rows, then
+    `deploy/postgresql.sh` rewrites `primary` from the chat config and the four
+    aux routes from the subcortical config with UPDATEs after application (the
+    same mechanism as OFFLINE_SQL) — a chat_model that is empty in anthropic
+    mode, or empty chat_model/chat_endpoint in openai mode, aborts the install
+    (guarded in `deploy/lib/config_file.sh` pre-sudo and again at Step 13).
 
 ## Reference deployment
 
 The canonical deployment lives on host `192.168.1.9` (libvirt, Ubuntu 26.04):
 domain `ubuntu_vm`, base template `/home/admin/virtual_machine/ubuntu_vm-template.qcow2`
-(default-state, purged + verified), sarcophagi v1/v2/v3 under
+(default-state, purged + verified), sarcophagi v1–v4 under
 `/home/admin/mira_instance_snapshots/` (see that dir's AGENTS.md for the full
-instance lineage and operational history). `make-base-template.sh` is
+instance lineage and operational history), plus `bin/deploy-only.sh` — the
+validated fresh-template deploy-only driver (quickstart D). `make-base-template.sh` is
 EXPERIMENTAL — not yet exercised end-to-end; the reference template was built
 by hand. The same-named toolkit under `/home/admin/mira_instance_snapshots/bin/`
 is the tuned operational original; this directory is its generalized descendant.
