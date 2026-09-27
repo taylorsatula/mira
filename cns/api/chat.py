@@ -12,7 +12,6 @@ from typing import Any
 from cns.core.message import ContentBlock
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from auth.api import get_current_user
@@ -26,8 +25,8 @@ from utils.image_compression import compress_image, CompressedImage
 from utils.text_sanitizer import sanitize_message_content
 from utils.timezone_utils import utc_now, format_utc_iso
 
-from .base import BaseHandler, SuccessResponse, ValidationError, create_success_response
-from cns.services.orchestrator import get_orchestrator
+from .base import PropagatingHandler, SuccessResponse, ValidationError, create_success_response
+from cns.services.orchestrator import get_orchestrator, MAX_LOCAL_TOOL_CALLS_PER_TURN
 from cns.infrastructure.continuum_pool import get_continuum_pool
 
 
@@ -41,10 +40,30 @@ SUPPORTED_IMAGE_FORMATS = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 MAX_IMAGE_SIZE_MB = 5
 
 # Text message size limit - prevents context overflow in summarization
+#
+# Deliberately tighter than the WebSocket gate (MAX_CONTENT_LENGTH = 100_000 in
+# cns/api/websocket_chat.py). A WS turn streams content continuously, so it can
+# afford a more permissive bound; this HTTP endpoint must hold the connection
+# open for the full synchronous request, so the tighter limit protects request
+# duration, not model input. Do not "fix" the inconsistency by aligning them.
 MAX_TEXT_MESSAGE_LENGTH = 20000
 
+# Structural worst-case bound on one HTTP chat turn: the tool loop admits up
+# to MAX_LOCAL_TOOL_CALLS_PER_TURN model steps, each bounded by the provider
+# HTTP/stall timeouts, plus a final generation step. The lock TTL must exceed
+# the worst legal turn plus margin — approximating it downward lets a long
+# turn outlive the lock and admit a concurrent second turn on the same
+# segment. Background renewal (start_renewal, cadence TTL/3) keeps a live
+# turn's TTL refreshed, so the TTL is a crash backstop, not a turn-length
+# estimate.
+_HTTP_TURN_LOCK_TTL_SECONDS = (
+    (MAX_LOCAL_TOOL_CALLS_PER_TURN + 1)
+    * max(app_config.api.timeout, app_config.api.provider_response_timeout)
+    * 2
+)
+
 # Distributed per-user request lock (coordinates across workers)
-_user_request_lock = UserRequestLock(ttl=60)
+_user_request_lock = UserRequestLock(ttl=_HTTP_TURN_LOCK_TTL_SECONDS)
 
 
 class ChatRequest(BaseModel):
@@ -58,7 +77,7 @@ class ChatRequest(BaseModel):
     show_cost: bool = Field(False, description="Include per-request token usage and USD cost in the response under `data.cost`")
 
 
-class ChatEndpoint(BaseHandler):
+class ChatEndpoint(PropagatingHandler):
     """Handler for HTTP chat requests (non-streaming)."""
 
     def process_request(
@@ -93,6 +112,11 @@ class ChatEndpoint(BaseHandler):
         if lock_token is None:
             # Use a validation error to preserve consistent error envelope
             raise ValidationError("Another chat request is already in progress for this user")
+
+        # Background renewal: one renewal every TTL/3 — safely inside the
+        # TTL — so a turn of any legal length cannot outlive its own lock
+        # and admit a concurrent second turn on the same segment.
+        renewal_stop = _user_request_lock.start_renewal(user_id, lock_token)
 
         try:
             # Check message length - reject oversized messages with friendly assistant response
@@ -247,16 +271,27 @@ class ChatEndpoint(BaseHandler):
                 from utils import cost_accumulator
                 cost_accumulator.start()
 
-            continuum, response_text, metadata = orchestrator.process_message(
-                continuum,
-                inference_content,
-                app_config.system_prompt,
-                stream=True,           # orchestrator currently streams internally
-                stream_callback=None,   # no external streaming for HTTP endpoint
-                unit_of_work=uow,
-                storage_content=storage_content,  # 512px WebP for persistence
-                segment_turn_number=segment_turn_number,  # Turn count within segment
-            )
+            try:
+                continuum, response_text, metadata = orchestrator.process_message(
+                    continuum,
+                    inference_content,
+                    app_config.system_prompt,
+                    stream=True,           # orchestrator currently streams internally
+                    stream_callback=None,   # no external streaming for HTTP endpoint
+                    unit_of_work=uow,
+                    storage_content=storage_content,  # 512px WebP for persistence
+                    segment_turn_number=segment_turn_number,  # Turn count within segment
+                )
+            except Exception:
+                # process_message stages the accepted user message before model
+                # work begins, so a failure after acceptance must still commit
+                # what the user was told was received — the HTTP analogue of the
+                # websocket turn path. Commit the staged rows, then let the
+                # exception propagate to the error response (the outer finally
+                # still releases the request lock).
+                if uow.pending_messages:
+                    uow.commit()
+                raise
 
             # Renew before committing so a long turn cannot race lock expiry
             # against its own commit; a lost renewal (expired + re-acquired)
@@ -299,6 +334,7 @@ class ChatEndpoint(BaseHandler):
             )
 
         finally:
+            renewal_stop.set()
             _user_request_lock.release(user_id, lock_token)
 
 
@@ -311,41 +347,18 @@ def chat_endpoint(
 
     Deliberately sync (not async def) so Starlette runs it in a threadpool
     instead of blocking the event loop during the multi-round tool execution.
+    Handler errors propagate to main.py's global exception handlers, which
+    assign the HTTP status and build the standard error body.
     """
-    try:
-        handler = ChatEndpoint()
-        response = handler.handle_request(
-            user_id=current_user.user_id,
-            message=request.message,
-            image=request.image,
-            image_type=request.image_type,
-            document=request.document,
-            document_type=request.document_type,
-            include_thinking=request.include_thinking,
-            show_cost=request.show_cost,
-        )
-        return response.to_dict()
-
-    except ValidationError as e:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "success": False,
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": e.message
-                }
-            }
-        )
-    except Exception as e:
-        logger.error(f"Chat endpoint error: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={
-                "success": False,
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "Chat processing failed"
-                }
-            }
-        )
+    handler = ChatEndpoint()
+    response = handler.handle_request(
+        user_id=current_user.user_id,
+        message=request.message,
+        image=request.image,
+        image_type=request.image_type,
+        document=request.document,
+        document_type=request.document_type,
+        include_thinking=request.include_thinking,
+        show_cost=request.show_cost,
+    )
+    return response.to_dict()

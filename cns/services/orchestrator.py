@@ -843,6 +843,12 @@ class ContinuumOrchestrator:
         from clients.valkey_client import get_valkey
         valkey = get_valkey()
 
+        # Input tokens reported by intermediate model steps of this turn; the
+        # terminal CompleteEvent carries usage accumulated across every step,
+        # so this running total lets the accounting recover the last step's
+        # own input tokens (the live context size) from that sum.
+        intermediate_input_tokens = 0
+
         for event in stream_events:
             # A tool invocation that has already started is allowed to finish.
             # Record its terminal event before honoring a concurrent Halt.
@@ -1035,7 +1041,18 @@ class ContinuumOrchestrator:
                 # Log provider cache metrics and track input tokens for next turn.
                 if event.response.usage:
                     usage = event.response.usage
-                    self._last_turn_usage[continuum_id] = usage.input_tokens
+                    if isinstance(event, ModelStepCompletedEvent):
+                        # Intermediate step: usage is this step's own bill.
+                        intermediate_input_tokens += usage.input_tokens
+                        self._last_turn_usage[continuum_id] = usage.input_tokens
+                    else:
+                        # Terminal event: usage is accumulated across every
+                        # step of the turn. The compaction baseline must
+                        # measure the turn's context size, so store the final
+                        # step's input tokens (last-value), not the sum.
+                        self._last_turn_usage[continuum_id] = (
+                            usage.input_tokens - intermediate_input_tokens
+                        )
                     cache_created = usage.cache_creation_input_tokens
                     cache_read = usage.cache_read_input_tokens
                     if cache_created > 0:

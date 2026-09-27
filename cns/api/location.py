@@ -16,7 +16,7 @@ from utils.database_session_manager import get_shared_session_manager
 from utils.timezone_utils import utc_now
 from utils.user_context import set_current_user_id, get_user_preferences
 
-from .base import BaseHandler
+from .base import PropagatingHandler
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +225,7 @@ def _fetch_forecast(
         return None
 
 
-class LocationHandler(BaseHandler):
+class LocationHandler(PropagatingHandler):
     def process_request(self, *, user_id: str, latitude: float, longitude: float) -> dict:
         set_current_user_id(user_id)
 
@@ -256,10 +256,13 @@ class LocationHandler(BaseHandler):
 
 
 @router.post("/location")
-async def location_endpoint(
+def location_endpoint(
     request: LocationRequest,
     current_user: SessionData | APITokenContext = Depends(get_current_user),
 ):
+    """Deliberately sync (not async def) so Starlette runs it in a threadpool
+    instead of blocking the event loop during the blocking geocode/forecast
+    HTTP round-trips and Postgres/Valkey access."""
     handler = LocationHandler()
     response = handler.handle_request(
         user_id=current_user.user_id,

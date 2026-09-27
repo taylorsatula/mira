@@ -227,7 +227,7 @@ class PersonaRepository:
                 # mira-OSS carries no audit_events journal -- the greenfield schema
                 # omits it deliberately and this codebase logs diagnostics instead. The
                 # revision row is itself append-only history, so the actor attribution
-                # crm stored in a journal row is logged here instead.
+                # that a journal row would have carried is logged here instead.
                 logger.info(
                     "PERSONA REVISION action=persona.%s actor=%s subject=%s revision=%s "
                     "parent=%s evidence=%d details=%s",

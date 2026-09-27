@@ -130,6 +130,7 @@ class LTMemorySessionManager:
                         timeout=30,
                         max_lifetime=3600,  # Recycle connections after 1 hour
                         max_idle=300,       # Close idle connections after 5 minutes
+                        check=ConnectionPool.check_connection,
                         kwargs={'options': f'-c statement_timeout={config.database.statement_timeout_ms}'}
                     )
 
@@ -196,7 +197,18 @@ class LTMemorySession:
     def __enter__(self):
         """Enter session context - acquire and setup connection."""
         self._conn = self._acquire_connection_with_timeout()
-        self._setup_connection()
+        try:
+            self._setup_connection()
+        except:
+            # Setup failed (e.g. a connection that died while idle in the
+            # pool). Return the connection so the pool slot is not stranded,
+            # then neutralize the session so a later stray __exit__ cannot
+            # touch an already-returned connection. The exception itself
+            # propagates unchanged (required-infrastructure doctrine).
+            self.pool.putconn(self._conn)
+            self._conn = None
+            self._closed = True
+            raise
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -213,7 +225,18 @@ class LTMemorySession:
                 # PostgreSQL connection pool requires explicit commits
                 self._conn.commit()
         except Exception as e:
-            logger.error(f"Error during session cleanup: {e}")
+            if exc_type:
+                # An exception is already propagating to the caller; a failed
+                # rollback must not mask it. Log for observability only.
+                logger.error(f"Error during session cleanup: {e}")
+            else:
+                # The commit failed: surface it. Every caller that reports
+                # success or runs follow-ups after this block must see the
+                # failure, never a clean exit. Log context, then re-raise the
+                # original error so its type (e.g. a psycopg errors subclass)
+                # survives for callers that classify it.
+                logger.error(f"Database commit failed during session cleanup: {e}")
+                raise
         finally:
             if self._conn:
                 self.pool.putconn(self._conn)
@@ -424,7 +447,17 @@ class AdminSession:
     def __enter__(self):
         """Enter session context - acquire and setup connection."""
         self._conn = self._acquire_connection_with_timeout()
-        self._setup_connection()
+        try:
+            self._setup_connection()
+        except:
+            # Same leak guard as LTMemorySession.__enter__: return the
+            # connection to the pool on any setup failure, mark the session
+            # closed so a later stray __exit__ is a no-op, and let the
+            # exception propagate to the caller.
+            self.pool.putconn(self._conn)
+            self._conn = None
+            self._closed = True
+            raise
         return self
 
     def _setup_connection(self):
@@ -446,7 +479,16 @@ class AdminSession:
             else:
                 self._conn.commit()
         except Exception as e:
-            logger.error(f"Error during admin session cleanup: {e}")
+            if exc_type:
+                # An exception is already propagating; a failed rollback must
+                # not mask it. Log for observability only.
+                logger.error(f"Error during admin session cleanup: {e}")
+            else:
+                # The commit failed: surface it (same contract as
+                # LTMemorySession.__exit__) so no caller reports success or
+                # runs destructive follow-ups over data that never persisted.
+                logger.error(f"Database commit failed during admin session cleanup: {e}")
+                raise
         finally:
             if self._conn:
                 self.pool.putconn(self._conn)

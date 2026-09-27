@@ -369,25 +369,75 @@ So, now that that's out of the way: What do you want to chat about first? I can 
 
         logger.debug("Prepopulated welcome content: 5 messages")
 
-    def update_webauthn_credentials(self, user_id: str, credentials: dict) -> bool:
-        """Update user's WebAuthn credentials.
+    def add_webauthn_credential(
+        self,
+        user_id: str,
+        credential_id: str,
+        credential_data: dict
+    ) -> bool:
+        """Atomically add one WebAuthn credential to the user's JSONB map.
+
+        Single-statement UPDATE guarded on the expected current state (the
+        credential ID is not yet present), so concurrent registrations or a
+        registration racing a removal cannot be silently lost via a
+        read-modify-write of the whole column. A duplicate credential ID
+        yields zero rows and returns False.
 
         Args:
             user_id: User ID to update
-            credentials: Dictionary of WebAuthn credentials
+            credential_id: Base64url credential ID (the JSONB object key)
+            credential_data: Credential record to store under that key
 
         Returns:
-            True if update was successful
+            True if the credential was added, False if the user was not
+            found or the credential ID already exists
         """
         import json
         with self.session_manager.get_admin_session() as session:
             rows_updated = session.execute_update("""
                 UPDATE users
-                SET webauthn_credentials = %(credentials)s::jsonb
+                SET webauthn_credentials = jsonb_set(
+                        COALESCE(webauthn_credentials, '{}'::jsonb),
+                        %(credential_path)s,
+                        %(credential_data)s::jsonb
+                    )
                 WHERE id = %(user_id)s
+                  AND NOT jsonb_exists(
+                        COALESCE(webauthn_credentials, '{}'::jsonb),
+                        %(credential_id)s
+                    )
             """, {
                 'user_id': user_id,
-                'credentials': json.dumps(credentials)
+                'credential_path': [credential_id],
+                'credential_id': credential_id,
+                'credential_data': json.dumps(credential_data)
+            })
+            return rows_updated > 0
+
+    def remove_webauthn_credential(self, user_id: str, credential_id: str) -> bool:
+        """Atomically remove one WebAuthn credential from the user's JSONB map.
+
+        Single-statement UPDATE guarded on the expected current state (the
+        credential ID is present), so a removal racing a registration cannot
+        be silently lost via a read-modify-write of the whole column.
+
+        Args:
+            user_id: User ID to update
+            credential_id: Base64url credential ID (the JSONB object key)
+
+        Returns:
+            True if the credential was removed, False if the user was not
+            found or the credential ID is not registered
+        """
+        with self.session_manager.get_admin_session() as session:
+            rows_updated = session.execute_update("""
+                UPDATE users
+                SET webauthn_credentials = webauthn_credentials - %(credential_id)s::text
+                WHERE id = %(user_id)s
+                  AND jsonb_exists(webauthn_credentials, %(credential_id)s)
+            """, {
+                'user_id': user_id,
+                'credential_id': credential_id
             })
             return rows_updated > 0
 

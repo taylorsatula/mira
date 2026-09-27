@@ -46,6 +46,20 @@ finish_flags
 [ -n "$SARC" ] || { echo "usage: oneshot.sh [flags] <sarcophagus> [--fresh]" >&2; exit 2; }
 DISK="$VMIMG_DIR/$DOMAIN.qcow2"
 
+# hostfs — run a disk/template filesystem operation where the storage actually
+# lives: on the libvirt host in --host mode (same ssh channel VIRSH uses in
+# lib.sh), locally otherwise. Like VIRSH, the remote path re-parses through
+# the ssh shell hop — %q-escape every argument.
+hostfs() {
+  if [ -n "$REMOTE_HOST" ]; then
+    local _q _a=()
+    for _q in "$@"; do printf -v _q '%q' "$_q"; _a+=("$_q"); done
+    ssh -n "$REMOTE_HOST" "${_a[@]}"
+  else
+    "$@"
+  fi
+}
+
 echo "== 0. preflight =="
 [ -f "$SRC/main.py" ] && [ -f "$SRC/deploy/deploy.sh" ] \
   || { echo "FATAL: --source '$SRC' is not a mira-OSS checkout" >&2; exit 1; }
@@ -60,22 +74,31 @@ if [ "$IS_LIBVIRT" = 1 ]; then
   [ -n "$STATE" ] || STATE=undefined
   if [ "$STATE" = "running" ] && [ "$FRESH" = 1 ]; then
     turn_lock_gate || exit 1
-    [ "$(readlink -f "$DISK" 2>/dev/null)" = "$(readlink -f "$TEMPLATE")" ] \
+    [ "$(hostfs readlink -f "$DISK" 2>/dev/null)" = "$(hostfs readlink -f "$TEMPLATE" 2>/dev/null)" ] \
       && { echo "FATAL: live disk IS the template — refusing to clobber the base" >&2; exit 1; }
     echo "--fresh: shutting down $DOMAIN"
     VIRSH shutdown "$DOMAIN"
     for _ in $(seq 1 90); do [ "$(VIRSH domstate "$DOMAIN")" = "shut off" ] && break; sleep 2; done
     [ "$(VIRSH domstate "$DOMAIN")" = "shut off" ] || { echo "FATAL: shutdown timed out" >&2; exit 1; }
-    [ -f "$DISK" ] && mv "$DISK" "$DISK.pre-oneshot-$(date +%Y%m%d-%H%M%S)"
+    hostfs test -f "$DISK" && hostfs mv "$DISK" "$DISK.pre-oneshot-$(date +%Y%m%d-%H%M%S)"
     STATE=shutoff
   fi
   if [ "$STATE" != "running" ]; then
-    [ -f "$TEMPLATE" ] || { echo "FATAL: base template missing: $TEMPLATE (see make-base-template.sh)" >&2; exit 1; }
-    [ -f "$DISK" ] || { echo "fresh disk: copying base template"; cp --reflink=auto "$TEMPLATE" "$DISK"; }
+    hostfs test -f "$TEMPLATE" || { echo "FATAL: base template missing: $TEMPLATE (see make-base-template.sh)" >&2; exit 1; }
+    hostfs test -f "$DISK" || { echo "fresh disk: copying base template"; hostfs cp --reflink=auto "$TEMPLATE" "$DISK"; }
     if [ "$STATE" = "undefined" ]; then
       echo "defining domain $DOMAIN from $VM_XML"
-      sed -e "s|__DOMAIN__|$DOMAIN|g" -e "s|__DISK__|$DISK|g" "$VM_XML" > "/tmp/oneshot-$DOMAIN.xml"
-      VIRSH define "/tmp/oneshot-$DOMAIN.xml"; rm -f "/tmp/oneshot-$DOMAIN.xml"
+      if [ -n "$REMOTE_HOST" ]; then
+        # skeleton XML is local (next to the caller's lib.sh); stream the
+        # rendered define XML to the host, where VIRSH define reads it
+        sed -e "s|__DOMAIN__|$DOMAIN|g" -e "s|__DISK__|$DISK|g" "$VM_XML" \
+          | ssh "$REMOTE_HOST" "cat > $(printf '%q' "/tmp/oneshot-$DOMAIN.xml")"
+        VIRSH define "/tmp/oneshot-$DOMAIN.xml"
+        ssh -n "$REMOTE_HOST" "rm -f $(printf '%q' "/tmp/oneshot-$DOMAIN.xml")"
+      else
+        sed -e "s|__DOMAIN__|$DOMAIN|g" -e "s|__DISK__|$DISK|g" "$VM_XML" > "/tmp/oneshot-$DOMAIN.xml"
+        VIRSH define "/tmp/oneshot-$DOMAIN.xml"; rm -f "/tmp/oneshot-$DOMAIN.xml"
+      fi
     fi
     VIRSH start "$DOMAIN"
   else
@@ -101,7 +124,7 @@ echo "== 4. deploy (dev build; log: VM /tmp/deploy.log) =="
 # drop the DB (deploy is greenfield-only). Active connections silently block
 # DROP DATABASE otherwise — that collision is what the 2>/dev/null would hide.
 turn_lock_gate || exit 1
-vmssh "$IP" 'sudo -n systemctl stop mira 2>/dev/null; sudo -n -u postgres psql -qc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='mira_service' AND pid <> pg_backend_pid()" >/dev/null 2>&1; sudo -n -u postgres psql -qc "DROP DATABASE IF EXISTS mira_service" >/dev/null 2>&1; true' >/dev/null
+vmssh "$IP" 'sudo -n systemctl stop mira 2>/dev/null; sudo -n -u postgres psql -qc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='\''mira_service'\'' AND pid <> pg_backend_pid()" >/dev/null 2>&1; sudo -n -u postgres psql -qc "DROP DATABASE IF EXISTS mira_service" >/dev/null 2>&1; true' >/dev/null
 vmssh "$IP" 'rm -f /tmp/deploy.exit /tmp/deploy.log; nohup bash -c "cd ~/mira-OSS && ./deploy/deploy.sh --config ~/deploy-config.yml --local --loud > /tmp/deploy.log 2>&1; echo \$? > /tmp/deploy.exit" >/dev/null 2>&1 & echo started'
 T0=$(date +%s)
 while [ "$(vmssh "$IP" 'test -f /tmp/deploy.exit && cat /tmp/deploy.exit || echo running')" = "running" ]; do
@@ -123,8 +146,19 @@ done
 echo "mira.service active"
 
 echo "== 6. inject sarcophagus + verify =="
-"$HERE/inject.sh" $( [ -n "$REMOTE_HOST" ] && echo --host "$REMOTE_HOST" ) \
-                   $( [ "$IS_LIBVIRT" = 0 ] && echo --ip "$VMIP" ${VMPASS:+--vm-pass "$VMPASS"} ) \
+# Phase-6 flags for inject.sh — accumulated as a quoted array: a command
+# substitution, quoted or not, cannot carry both --ip/--vm-pass values safely
+# (unquoted = word-splitting+globbing of $VMPASS; quoted = flags merge into
+# one argument inject.sh rejects). Seeded with the script path so the array is
+# never empty: bash 3.2 (macOS /bin/bash, a supported caller) treats an empty
+# array expansion under set -u as an unbound variable.
+INJ_FLAGS=("$HERE/inject.sh")
+[ -n "$REMOTE_HOST" ] && INJ_FLAGS+=(--host "$REMOTE_HOST")
+if [ "$IS_LIBVIRT" = 0 ]; then
+  INJ_FLAGS+=(--ip "$VMIP")
+  [ -n "$VMPASS" ] && INJ_FLAGS+=(--vm-pass "$VMPASS")
+fi
+"${INJ_FLAGS[@]}" \
                    --domain "$DOMAIN" --vm-user "$VM_USER" "$SARC"
 
 echo "== DONE: $DOMAIN at $IP — dev build + $SARC restored and verified =="

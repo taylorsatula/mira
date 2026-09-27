@@ -92,21 +92,54 @@ def store_and_tend_extraction(
     db: LTMemoryDB,
     linking: LinkingService,
 ) -> list[UUID]:
-    """Store extraction output and notify the integration curator."""
+    """Store extraction output and notify the integration curator.
+
+    Commit-after-store ordering: store_memories is a plain INSERT, not
+    idempotent, and the retry sweep marks a segment processed only after this
+    whole call returns. Any raise from the post-store steps below would leave
+    the segment unmarked, so the sweep would re-enter and duplicate the rows.
+    The memories are the deliverable and are durable once stored; failures in
+    the tending steps are tolerated-and-logged and never propagate.
+    """
     memory_ids = vector_ops.store_memories_with_embeddings(memories)
-    _persist_llm_entities(user_id, memories, memory_ids, db)
-    candidate_hints = _build_candidate_hints(memories, memory_ids, linking)
 
-    from lt_memory.factory import get_lt_memory_factory
+    try:
+        _persist_llm_entities(user_id, memories, memory_ids, db)
+    except Exception:
+        logger.exception(
+            "Entity persistence failed after %d memories were stored; "
+            "memories remain durable, entity links skipped for this run",
+            len(memory_ids),
+        )
 
-    callback = get_lt_memory_factory().on_memories_stored
-    if callback:
-        callback(
-            user_id=user_id,
-            segment_id=segment_id,
-            memory_ids=memory_ids,
-            memories=memories,
-            candidate_hints=candidate_hints,
+    candidate_hints: dict[str, list[dict]] = {}
+    try:
+        candidate_hints = _build_candidate_hints(memories, memory_ids, linking)
+    except Exception:
+        logger.warning(
+            "Candidate hint discovery failed after %d memories were stored; "
+            "memories remain durable, discovery-based hints skipped for this run",
+            len(memory_ids),
+            exc_info=True,
+        )
+
+    try:
+        from lt_memory.factory import get_lt_memory_factory
+
+        callback = get_lt_memory_factory().on_memories_stored
+        if callback:
+            callback(
+                user_id=user_id,
+                segment_id=segment_id,
+                memory_ids=memory_ids,
+                memories=memories,
+                candidate_hints=candidate_hints,
+            )
+    except Exception:
+        logger.exception(
+            "on_memories_stored callback failed after %d memories were stored; "
+            "memories remain durable, curator skipped for this run",
+            len(memory_ids),
         )
     return memory_ids
 

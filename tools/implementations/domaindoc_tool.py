@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from tools.repo import Tool
 from tools.registry import registry
 from utils.timezone_utils import utc_now, format_utc_iso
-from utils.userdata_manager import UserDataManager
+from utils.userdata_manager import UserDataManager, get_user_data_manager
 from utils.domaindoc_shares import resolve_domaindoc, get_accepted_shares, invalidate_domaindoc_cache
 
 
@@ -467,8 +467,8 @@ class DomaindocTool(Tool):
     ) -> Dict[str, Any]:
         """Search for content within domaindocs.
 
-        If label is provided, searches only that domaindoc.
-        If no label, searches all enabled domaindocs.
+        If label is provided, searches only that domaindoc (own or shared).
+        If no label, searches all enabled domaindocs (own plus accepted shares).
         Returns matches with section context and content snippets.
         """
         if not query:
@@ -477,27 +477,63 @@ class DomaindocTool(Tool):
         query_lower = query.lower()
         matches: List[Dict[str, Any]] = []
 
+        # Each entry: (db, decrypted doc, AcceptedShare or None)
+        docs_to_search: List[tuple] = []
+        # Collaborator labels of shared domaindocs whose owner store could not be read
+        skipped_shared: List[str] = []
+
         if label:
-            # Search specific domaindoc (must be enabled)
-            doc = self._get_domaindoc(db, label)
-            docs_to_search = [doc]
+            # Search specific domaindoc — own or shared (via _shared suffix),
+            # must be enabled. Mirrors the resolver path used by the other ops.
+            resolved = resolve_domaindoc(self.user_id, label)
+            share = None
+            if resolved.is_shared:
+                # Share lookup is required infrastructure (PostgreSQL): a
+                # failure propagates rather than mislabeling the results.
+                for s in get_accepted_shares(self.user_id):
+                    if s.collaborator_label == label:
+                        share = s
+                        break
+            docs_to_search.append((resolved.db, resolved.doc, share))
         else:
-            # Search all enabled, non-archived domaindocs
-            docs_to_search = db.fetchall(
+            # Search all enabled, non-archived domaindocs (own + accepted shares)
+            own_docs = db.fetchall(
                 "SELECT * FROM domaindocs WHERE enabled = TRUE AND archived = FALSE"
             )
-            docs_to_search = [db._decrypt_dict(d) for d in docs_to_search]
+            docs_to_search = [(db, db._decrypt_dict(d), None) for d in own_docs]
 
-        for doc in docs_to_search:
+            # Required infrastructure: a failed share lookup propagates — never
+            # a silent own-docs-only search reported as complete.
+            shares = get_accepted_shares(self.user_id)
+
+            for share in shares:
+                # One owner's unreadable store must not sink the whole search,
+                # but the skip is reported in the result, never silent.
+                try:
+                    owner_db = get_user_data_manager(share.owner_user_id)
+                    owner_docs = owner_db.fetchall(
+                        "SELECT * FROM domaindocs WHERE label = :label AND enabled = TRUE AND archived = FALSE",
+                        {"label": share.domaindoc_label}
+                    )
+                    if owner_docs:
+                        docs_to_search.append((owner_db, owner_db._decrypt_dict(owner_docs[0]), share))
+                except Exception:
+                    logger.warning(
+                        f"Failed to load shared domaindoc '{share.domaindoc_label}' from owner {share.owner_user_id}",
+                        exc_info=True
+                    )
+                    skipped_shared.append(share.collaborator_label)
+
+        for doc_db, doc, share in docs_to_search:
             domaindoc_id = doc["id"]
-            doc_label = doc["label"]
+            doc_label = share.collaborator_label if share else doc["label"]
 
             # Get all sections for this domaindoc (top-level and subsections)
-            all_sections = db.fetchall(
+            all_sections = doc_db.fetchall(
                 "SELECT * FROM domaindoc_sections WHERE domaindoc_id = :doc_id ORDER BY parent_section_id NULLS FIRST, sort_order",
                 {"doc_id": domaindoc_id}
             )
-            all_sections = [db._decrypt_dict(s) for s in all_sections]
+            all_sections = [doc_db._decrypt_dict(s) for s in all_sections]
 
             # Build parent lookup for subsection context
             section_by_id = {s["id"]: s for s in all_sections}
@@ -525,6 +561,10 @@ class DomaindocTool(Tool):
                         "match_in": []
                     }
 
+                    if share:
+                        match_entry["shared"] = True
+                        match_entry["shared_by"] = share.owner_display_name
+
                     if parent_header:
                         match_entry["parent"] = parent_header
 
@@ -546,13 +586,23 @@ class DomaindocTool(Tool):
 
                     matches.append(match_entry)
 
-        return {
+        result: Dict[str, Any] = {
             "success": True,
             "query": query,
-            "searched_domaindocs": [d["label"] for d in docs_to_search],
+            "searched_domaindocs": [
+                (share.collaborator_label if share else doc["label"])
+                for _, doc, share in docs_to_search
+            ],
             "matches": matches,
             "total_matches": len(matches)
         }
+        if skipped_shared:
+            result["skipped_shared_domaindocs"] = skipped_shared
+            result["warning"] = (
+                f"{len(skipped_shared)} shared domaindoc(s) could not be read and "
+                f"were NOT searched: {', '.join(skipped_shared)}. Results are incomplete."
+            )
+        return result
 
     def _op_enable(self, db: UserDataManager, label: str) -> Dict[str, Any]:
         """Enable a disabled domaindoc."""
@@ -931,25 +981,22 @@ class DomaindocTool(Tool):
                     {"doc_id": domaindoc_id, "header": self._normalize_section_name(parent)}
                 )
                 if subsec_check and subsec_check.get("parent_section_id") is not None:
-                    # Parent is a subsection - check if it's already at depth 2
-                    grandparent = db.fetchone(
-                        "SELECT parent_section_id FROM domaindoc_sections WHERE id = :id",
-                        {"id": subsec_check["parent_section_id"]}
+                    # Parent is a subsection (depth 2) - a child under it would be at
+                    # depth 3, which is unreachable in render/traversal (bound: depth 2)
+                    raise ValueError(
+                        f"Maximum nesting depth is 2. '{parent}' is already a subsection; "
+                        "a subsection under it (depth 3) would be unreachable."
                     )
-                    if grandparent and grandparent.get("parent_section_id") is not None:
-                        raise ValueError(f"Maximum nesting depth is 2. '{parent}' is already a sub-subsection.")
-                    parent_sec = subsec_check  # Use subsection as parent
                 else:
                     raise  # Section truly not found
 
-            # Depth check: if parent has a parent, check grandparent depth
+            # Depth check: refuse if the parent is itself a subsection — the new
+            # section would land at depth 3, beyond the reachable bound of 2
             if parent_sec.get("parent_section_id") is not None:
-                grandparent = db.fetchone(
-                    "SELECT parent_section_id FROM domaindoc_sections WHERE id = :id",
-                    {"id": parent_sec["parent_section_id"]}
+                raise ValueError(
+                    f"Maximum nesting depth is 2. '{parent}' is already a subsection; "
+                    "a subsection under it (depth 3) would be unreachable."
                 )
-                if grandparent and grandparent.get("parent_section_id") is not None:
-                    raise ValueError(f"Maximum nesting depth is 2. '{parent}' is already a sub-subsection.")
 
             parent_section_id = parent_sec["id"]
             # Get siblings for ordering

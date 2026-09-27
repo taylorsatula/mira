@@ -10,6 +10,7 @@ Discovery uses three axes:
 3. TF-IDF term overlap — catches orphan memories the embedding model smooths over
 """
 import logging
+from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
@@ -33,11 +34,24 @@ TFIDF_MAX_CANDIDATES = 10
 class _TfidfState:
     """TF-IDF matrix state scoped to a single user."""
 
-    def __init__(self, vectorizer, matrix, memory_ids: List[UUID], memory_count: int):
+    def __init__(
+        self,
+        vectorizer,
+        matrix,
+        memory_ids: List[UUID],
+        memory_count: int,
+        freshness_stamp: Optional[datetime]
+    ):
         self.vectorizer = vectorizer
         self.matrix = matrix
         self.memory_ids = memory_ids
         self.memory_count = memory_count
+        # Non-count freshness signal — the max write timestamp
+        # (updated_at, falling back to created_at) over the active corpus.
+        # Count-preserving churn (text rewritten, one archived + one added)
+        # changes this stamp even when memory_count does not, so a stale
+        # matrix can never be served to the curator.
+        self.freshness_stamp = freshness_stamp
 
 
 def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
@@ -198,7 +212,13 @@ class LinkingService:
         return candidates
 
     def _ensure_tfidf(self) -> _TfidfState:
-        """Rebuild TF-IDF matrix for the current user if stale or uninitialized."""
+        """Rebuild TF-IDF matrix for the current user if stale or uninitialized.
+
+        Falls back to a disabled state (warning logged) when the corpus is
+        too small or too sparse for the vectorizer — never raises into the
+        extraction storage path. A disabled state is cached like a fresh one
+        and rebuilt once the corpus grows.
+        """
         user_id = get_current_user_id()
         state = self._tfidf_states.get(user_id)
 
@@ -210,24 +230,81 @@ class LinkingService:
             and not m.is_archived
         ]
 
-        if state is not None and len(active) == state.memory_count:
-            return state  # still fresh
+        # Freshness key = (active count, max write timestamp). The
+        # count alone misses count-preserving churn — a rewritten text or an
+        # archive-plus-add pair keeps len(active) identical and would serve
+        # the stale matrix (including archived memories) to the curator. The
+        # stamp is computed in the same pass over `active` and compared in
+        # O(1) against the cached state.
+        freshness_stamp = max(
+            (m.updated_at or m.created_at for m in active),
+            default=None,
+        )
 
-        from sklearn.feature_extraction.text import TfidfVectorizer
+        if (
+            state is not None
+            and len(active) == state.memory_count
+            and freshness_stamp == state.freshness_stamp
+        ):
+            return state  # still fresh
 
         memory_ids = [m.id for m in active]
         texts = [m.text for m in active]
 
+        # Small-corpus guard: TfidfVectorizer(min_df=2) cannot fit a
+        # corpus with fewer than two documents — sklearn raises and the raise
+        # would abort extraction storage downstream (fresh accounts hit this
+        # on their first memory). Skip TF-IDF scoring for this run instead.
+        if len(texts) < 2:
+            logger.warning(
+                "TF-IDF corpus too small to fit (%d active memories); "
+                "TF-IDF discovery falls back to embedding and entity axes "
+                "for this run",
+                len(texts),
+            )
+            state = _TfidfState(
+                vectorizer=None,
+                matrix=None,
+                memory_ids=[],
+                memory_count=len(active),
+                freshness_stamp=freshness_stamp,
+            )
+            self._tfidf_states[user_id] = state
+            return state
+
+        from sklearn.feature_extraction.text import TfidfVectorizer
+
         vectorizer = TfidfVectorizer(
             max_features=10000, stop_words='english', min_df=2, max_df=0.8
         )
-        matrix = vectorizer.fit_transform(texts)
+        try:
+            matrix = vectorizer.fit_transform(texts)
+        except ValueError as exc:
+            # Same hazard at >= 2 documents: min_df/max_df pruning can empty
+            # the vocabulary (guaranteed for a 2-document corpus). Fall back
+            # rather than raise into the extraction storage path.
+            logger.warning(
+                "TF-IDF fit failed on %d-memory corpus (%s); "
+                "TF-IDF discovery falls back to embedding and entity axes "
+                "for this run",
+                len(texts), exc,
+            )
+            state = _TfidfState(
+                vectorizer=None,
+                matrix=None,
+                memory_ids=[],
+                memory_count=len(active),
+                freshness_stamp=freshness_stamp,
+            )
+            self._tfidf_states[user_id] = state
+            return state
 
         state = _TfidfState(
             vectorizer=vectorizer,
             matrix=matrix,
             memory_ids=memory_ids,
             memory_count=len(active),
+            freshness_stamp=freshness_stamp,
         )
         self._tfidf_states[user_id] = state
         logger.info(f"Rebuilt TF-IDF matrix: {len(active)} memories, {len(vectorizer.vocabulary_)} terms")

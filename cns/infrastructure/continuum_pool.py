@@ -100,12 +100,29 @@ class UnitOfWork:
         Segment creation now happens automatically in repository.save_message().
         """
         if self.pending_messages:
-            # Batch save to database
-            self.pool.repository.save_messages_batch(
-                self.pending_messages,
-                self.continuum.id,
-                self.continuum.user_id
-            )
+            # Batch save to database. The batch lands in a single transaction,
+            # so a mid-batch failure rolls back atomically — but the cached
+            # copy must not survive the failure either: invalidate it so no
+            # stale-cache/stale-disk divergence keeps serving the old whole.
+            try:
+                self.pool.repository.save_messages_batch(
+                    self.pending_messages,
+                    self.continuum.id,
+                    self.continuum.user_id
+                )
+            except Exception:
+                try:
+                    self.pool.valkey_cache.invalidate_continuum()
+                except Exception:
+                    logger.critical(
+                        "Valkey cache invalidation failed for continuum %s after a "
+                        "failed message-batch save; stale cache may serve until the "
+                        "next collapse forces a reload. The failed batch was rolled "
+                        "back, so the database holds no partial turn.",
+                        self.continuum.id,
+                        exc_info=True,
+                    )
+                raise
 
             # Update Valkey cache once with current continuum state, but only
             # if no segment collapse invalidated it since the continuum was

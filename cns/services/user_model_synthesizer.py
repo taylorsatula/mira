@@ -21,6 +21,15 @@ logger = logging.getLogger(__name__)
 CRITIC_MAX_ATTEMPTS = 3
 
 
+class CriticExhaustedError(Exception):
+    """Synthesis ended with no candidate accepted by the critic.
+
+    Raised so callers can distinguish exhaustion from success and skip
+    their destructive post-synthesis steps (marking signals synthesized,
+    consuming check-in feedback) — inputs stay intact for a later retry.
+    """
+
+
 @dataclass
 class UserObservation:
     """A parsed observation from the user model."""
@@ -100,7 +109,10 @@ class UserModelSynthesizer:
             SynthesisResult with observations, checkin topics, and raw XML
 
         Raises:
-            Exception: On synthesis failure (caller handles)
+            CriticExhaustedError: The critic accepted no candidate after
+                CRITIC_MAX_ATTEMPTS — inputs (signals, check-in feedback) are
+                preserved for retry; nothing is published.
+            Exception: On other synthesis failure (caller handles)
         """
         signals = self.feedback_repo.get_unsynthesized_signals(user_id)
 
@@ -108,9 +120,13 @@ class UserModelSynthesizer:
             logger.info("No signals or existing model for user %s", user_id)
             return SynthesisResult(observations=[], checkin_topics=[], raw_xml="")
 
-        # Fetch and consume any pending check-in feedback (atomically cleared)
+        # Peek at any pending check-in feedback without consuming it.
+        # The destructive consume (get_and_clear_checkin_response) is deferred
+        # until after the synthesis LLM call, the critic validation loop, and
+        # XML parsing have all succeeded — any raise on that path leaves the
+        # user's check-in response intact instead of permanently losing it.
         tracker = FeedbackTracker()
-        checkin_feedback = tracker.get_and_clear_checkin_response(user_id)
+        checkin_feedback = tracker.get_checkin_response(user_id)
 
         # Format signals grouped by section
         signals_text = self._format_signals_by_section(signals) if signals else "No new signals."
@@ -134,17 +150,32 @@ class UserModelSynthesizer:
                     critic.feedback, signals_text, current_model_text, checkin_feedback
                 )
         else:
-            # Circuit breaker: fall back to previous model rather than injecting
-            # a candidate that failed critic validation (known-suspect content).
-            # The user model stays stale for one more cycle but remains correct.
+            # Circuit breaker: the critic never accepted any candidate, so this
+            # is a distinct failure status, not a success. Raising follows the
+            # method's existing failure contract ("Raises: Exception — caller
+            # handles"): the caller's except path skips mark_synthesized and
+            # mark_signals_synthesized, and the destructive check-in consume
+            # below is never reached (consume-after-acceptance). Signals
+            # and check-in feedback are preserved for the next synthesis run;
+            # no known-suspect candidate or stale model is published as new.
             logger.warning(
-                "Critic validation exhausted %d attempts, keeping previous model", CRITIC_MAX_ATTEMPTS
+                "Critic validation exhausted %d attempts for user %s, aborting synthesis",
+                CRITIC_MAX_ATTEMPTS, user_id
             )
-            if current_model_xml:
-                candidate_xml = current_model_xml
-            # If no previous model exists, we have no choice but to use the candidate
+            raise CriticExhaustedError(
+                f"Critic validation exhausted {CRITIC_MAX_ATTEMPTS} attempts; "
+                "no candidate accepted. Inputs preserved for retry."
+            )
 
         result = self._parse_user_model_xml(candidate_xml)
+
+        # Synthesis fully succeeded (LLM call, critic loop, and parsing all
+        # complete): now atomically consume the check-in feedback that was
+        # incorporated. Past this point no raise on the synthesis path can
+        # orphan the data, and the single-consume UPDATE ... RETURNING + NULL
+        # semantics are preserved.
+        tracker.get_and_clear_checkin_response(user_id)
+
         logger.info(
             "Synthesized user model: %d observations, %d checkin topics",
             len(result.observations), len(result.checkin_topics)
@@ -206,8 +237,20 @@ class UserModelSynthesizer:
         # Parse critic result
         status_match = re.search(r'<mira:critic_review\s+status="(\w+)"', raw_output)
         if not status_match:
-            logger.warning("Could not parse critic output, treating as pass")
-            return CriticResult(passed=True, feedback="")
+            # Fail closed: an unparseable critic verdict is a validation failure,
+            # never a pass — the loop retries with the feedback below and the
+            # exhaustion branch raises. The critic is the only quality gate
+            # before auto-publish; unreadable output must not auto-publish.
+            logger.warning("Could not parse critic output, failing validation")
+            return CriticResult(
+                passed=False,
+                feedback=(
+                    "The quality critic returned an unparseable response (no "
+                    "verdict could be extracted). Regenerate the user model, "
+                    "ensuring observations are section-anchored, evidence-grounded, "
+                    "free of personality labels, and internally consistent."
+                )
+            )
 
         status = status_match.group(1)
 

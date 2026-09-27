@@ -31,23 +31,25 @@ Deliberately owned by this module, not by `auth/config.py`:
 `auth/config.py` exposes only `APP_URL` and plain constants, and the private
 deployment's email-gateway Vault key names are scrubbed from this
 codebase — they map a security topology that is not shipped.
-Each setting resolves **environment first, then Vault**
-(`secret/mira/services`), matching this deployment's Vault-only-credentials
-posture while keeping a container or an interactive dev shell usable with
-no Vault write:
+Each setting resolves **from Vault only** (`secret/mira/services`),
+matching the doctrine's one-sanctioned-path rule. The `MIRA_SMTP_*`
+environment variables are deploy-script *inputs* — `init-mira.sh` and
+`postgresql.sh` persist them into Vault at provision time — and are never
+read at runtime: an environment variable must not be a parallel source
+that silently wins over the credential store.
 
-    MIRA_SMTP_HOST       / smtp_host        Relay hostname. Unset everywhere
-                                            => no mailer is configured.
-    MIRA_SMTP_PORT       / smtp_port        Default 587 (submission+STARTTLS).
-    MIRA_SMTP_USER       / smtp_user        Optional; relay without auth.
-    MIRA_SMTP_PASSWORD   / smtp_password    Optional; never logged.
-    MIRA_SMTP_FROM       / smtp_from        Required once a host is set.
-    MIRA_SMTP_STARTTLS   / smtp_starttls    Default enabled; strictly parsed
-                                            ("1"/"true"/"yes" or
-                                            "0"/"false"/"no", anything else
-                                            raises — a typo in a transport
-                                            security toggle must not
-                                            silently downgrade it).
+    smtp_host        Relay hostname. Unset in Vault
+                     => no mailer is configured.
+    smtp_port        Default 587 (submission+STARTTLS).
+    smtp_user        Optional; relay without auth.
+    smtp_password    Optional; never logged.
+    smtp_from        Required once a host is set.
+    smtp_starttls    Default enabled; strictly parsed
+                     ("1"/"true"/"yes" or
+                     "0"/"false"/"no", anything else
+                     raises — a typo in a transport
+                     security toggle must not
+                     silently downgrade it).
 
 No mode reads any of this at import or at startup. `single` and `dev` boot
 and serve with nothing configured (`get_mail_sender()` simply returns
@@ -59,7 +61,6 @@ which `utils/power_on_self_test.py` does in `multi` mode only.
 from __future__ import annotations
 
 import logging
-import os
 import smtplib
 import ssl
 from dataclasses import dataclass
@@ -83,18 +84,18 @@ class MailSender(Protocol):
         ...
 
 
-def _first_configured(env_name: str, vault_field: str) -> Optional[str]:
-    """Resolve one setting: environment first, then Vault service config.
+def _vault_config(vault_field: str) -> Optional[str]:
+    """Resolve one SMTP setting from Vault (`secret/mira/services`) only.
 
-    An empty string counts as unset. A Vault read that raises is *not*
-    swallowed — callers only reach this function when the environment did
-    not answer, and "Vault is down" is a different failure from "not
-    configured", with a different fix. A missing *field* in an existing
-    `mira/services` secret (KeyError) is "not configured".
+    Vault is the sanctioned source; the `MIRA_SMTP_*` environment variables
+    are deploy-script inputs that the deploy scripts persist into Vault at
+    provision time, and reading them here would let a stale environment
+    value silently win over the credential store. An empty string counts
+    as unset. A Vault read that raises is *not* swallowed — "Vault is down"
+    is a different failure from "not configured", with a different fix. A
+    missing *field* in an existing `mira/services` secret (KeyError) is
+    "not configured".
     """
-    value = os.environ.get(env_name)
-    if value:
-        return value
     from clients.vault_client import get_service_config
 
     try:
@@ -118,8 +119,8 @@ def _parse_starttls(raw: Optional[str]) -> bool:
     if lowered in _FALSE_VALUES:
         return False
     raise ValueError(
-        "MIRA_SMTP_STARTTLS must be one of 1, true, yes, 0, false, no "
-        f"(or unset); got {raw!r}"
+        "Vault mira/services smtp_starttls must be one of 1, true, yes, 0, "
+        f"false, no (or unset); got {raw!r}"
     )
 
 
@@ -135,36 +136,38 @@ class SmtpSettings:
     starttls: bool
 
     @classmethod
-    def from_environment(cls) -> Optional["SmtpSettings"]:
-        """Resolve the relay configuration, or None when nothing is configured.
+    def from_vault(cls) -> Optional["SmtpSettings"]:
+        """Resolve the relay configuration from Vault, or None when unset.
 
-        "Configured" means a host is present in the environment or Vault. A
-        present-but-invalid configuration raises rather than degrading to
-        None: an operator who set MIRA_SMTP_PORT=abc wants that named, not a
-        silent "no mailer configured" on the next magic link.
+        "Configured" means `smtp_host` is present in Vault
+        `secret/mira/services`. A present-but-invalid configuration raises
+        rather than degrading to None: an operator who wrote a bad
+        `smtp_port` wants that named, not a silent "no mailer configured"
+        on the next magic link.
         """
-        host = _first_configured("MIRA_SMTP_HOST", "smtp_host")
+        host = _vault_config("smtp_host")
         if not host:
             return None
 
-        raw_port = _first_configured("MIRA_SMTP_PORT", "smtp_port")
+        raw_port = _vault_config("smtp_port")
         try:
             port = int(raw_port) if raw_port else 587
         except ValueError as error:
-            raise ValueError(f"MIRA_SMTP_PORT is not an integer: {raw_port!r}") from error
+            raise ValueError(f"Vault smtp_port is not an integer: {raw_port!r}") from error
         if not 1 <= port <= 65535:
-            raise ValueError(f"MIRA_SMTP_PORT out of range: {port}")
+            raise ValueError(f"Vault smtp_port out of range: {port}")
 
-        from_address = _first_configured("MIRA_SMTP_FROM", "smtp_from")
+        from_address = _vault_config("smtp_from")
         if not from_address:
             raise ValueError(
-                "MIRA_SMTP_FROM (or Vault smtp_from) is required once an "
-                "SMTP host is configured"
+                "Vault mira/services smtp_from is required once smtp_host "
+                "is set — write it to secret/mira/services (deploy scripts "
+                "persist the MIRA_SMTP_* inputs there at provision time)"
             )
 
-        username = _first_configured("MIRA_SMTP_USER", "smtp_user")
-        password = _first_configured("MIRA_SMTP_PASSWORD", "smtp_password")
-        starttls = _parse_starttls(_first_configured("MIRA_SMTP_STARTTLS", "smtp_starttls"))
+        username = _vault_config("smtp_user")
+        password = _vault_config("smtp_password")
+        starttls = _parse_starttls(_vault_config("smtp_starttls"))
 
         return cls(
             host=host,
@@ -230,10 +233,10 @@ class SmtpMailSender:
 def get_mail_sender() -> Optional[SmtpMailSender]:
     """Return the configured sender, or None when no relay is configured.
 
-    Cheap enough to call per send: the environment lookup is a dict probe and
-    the Vault read behind `_first_configured` caches successful results.
+    Cheap enough to call per send: the Vault read behind `_vault_config`
+    caches successful results.
     """
-    settings = SmtpSettings.from_environment()
+    settings = SmtpSettings.from_vault()
     if settings is None:
         return None
     return SmtpMailSender(settings)

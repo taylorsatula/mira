@@ -55,7 +55,14 @@ rm -rf "$TMP"
 
 echo "== 7. systemd units (User= remapped; valkey.conf; idempotent) =="
 for u in "$SRC"/systemd/*.service; do
-  sudo -n sed -i -e "s/^User=ubuntu\$/User=$VM_USER/" -e "s/^Group=ubuntu\$/Group=$VM_USER/" "$u"
+  # Remap whatever capture user the units carry to $VM_USER (the deploy
+  # writes User=$MIRA_USER at capture time, not always 'ubuntu'). Only the
+  # app-owned units: distro-managed ones (valkey.service runs as User=valkey)
+  # must keep their own User=/Group=.
+  case "$u" in
+    */mira.service|*/vault.service)
+      sudo -n sed -i -e "s/^User=.*\$/User=$VM_USER/" -e "s/^Group=.*\$/Group=$VM_USER/" "$u" ;;
+  esac
   sudo -n cp "$u" /etc/systemd/system/
 done
 [ -f "$SRC/systemd/valkey.conf" ] && sudo -n cp "$SRC/systemd/valkey.conf" /etc/valkey/valkey.conf

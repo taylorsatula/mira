@@ -28,6 +28,7 @@ import logging
 import re
 from collections.abc import Iterator
 from collections.abc import Mapping as MappingABC
+from dataclasses import dataclass
 from typing import Any, NoReturn, TYPE_CHECKING
 
 import httpx
@@ -247,8 +248,13 @@ class OpenAIChatBase(Dialect):
                 error_text = response.read().decode("utf-8", errors="replace")
                 self._raise_provider_http_error(
                     status=response.status_code,
-                    error_body=_json_or_none(error_text),
-                    fallback_text=error_text,
+                    envelope=parse_error_body(
+                        response.status_code,
+                        error_text,
+                        endpoint=self.endpoint_url,
+                        mode="streaming",
+                        dialect_name=self.dialect_name,
+                    ),
                     mode="streaming",
                 )
 
@@ -279,11 +285,30 @@ class OpenAIChatBase(Dialect):
                         "SSE JSON chunk must be an object",
                     )
 
-                if isinstance(chunk.get("error"), dict):
-                    raise ProviderProtocolError(
-                        self.endpoint_url,
-                        "streaming",
-                        f"In-band stream error: {chunk['error']}",
+                if "error" in chunk:
+                    # An error chunk is terminal for the stream, after partial
+                    # events may have been yielded — same mid-stream failure
+                    # semantics as the truncation raise below. Route through the
+                    # HTTP-path status mapping; the stream's own status (200)
+                    # lands in the terminal ProviderProtocolError branch.
+                    error_value = chunk["error"]
+                    if not isinstance(error_value, dict):
+                        raise ProviderProtocolError(
+                            self.endpoint_url,
+                            "streaming",
+                            f"In-band stream error value must be an object, got {type(error_value).__name__}: {line[:200]!r}",
+                        )
+                    self._raise_provider_http_error(
+                        status=response.status_code,
+                        envelope=_envelope_from_error_object(
+                            response.status_code,
+                            error_value,
+                            line[:200],
+                            endpoint=self.endpoint_url,
+                            mode="streaming",
+                            dialect_name=self.dialect_name,
+                        ),
+                        mode="streaming",
                     )
 
                 if llm_tap.is_active():
@@ -905,6 +930,13 @@ class OpenAIChatBase(Dialect):
             return ""
         if accumulated_reasoning and candidate.startswith(accumulated_reasoning):
             return candidate[len(accumulated_reasoning):]
+        # Dedup is aimed at provider/transport-level duplicate deltas
+        # (reconnection/replay artifacts), not model behavior. A model
+        # emitting the same reasoning fragment repeatedly was assessed by
+        # the human as an impossible situation, so any
+        # "legitimate repetition" concern is out of scope by decision. If
+        # genuine model-level repetition ever shows up in evidence, revisit
+        # this decision rather than widening the predicate.
         if accumulated_reasoning.endswith(candidate):
             return ""
         return candidate
@@ -1187,18 +1219,17 @@ class OpenAIChatBase(Dialect):
 
     def _handle_http_error(self, error: httpx.HTTPStatusError, *, mode: str) -> NoReturn:
         response = error.response
-        error_body = None
         fallback_text = str(error)
         if response is not None:
-            fallback_text = response.text
-            try:
-                error_body = response.json()
-            except ValueError:
-                pass
             self._raise_provider_http_error(
                 status=response.status_code,
-                error_body=error_body,
-                fallback_text=fallback_text,
+                envelope=parse_error_body(
+                    response.status_code,
+                    response.text,
+                    endpoint=self.endpoint_url,
+                    mode=mode,
+                    dialect_name=self.dialect_name,
+                ),
                 mode=mode,
             )
         raise ProviderProtocolError(
@@ -1211,17 +1242,15 @@ class OpenAIChatBase(Dialect):
         self,
         *,
         status: int,
-        error_body: dict[str, Any] | None,
-        fallback_text: str,
+        envelope: ProviderErrorEnvelope,
         mode: str,
     ) -> NoReturn:
-        if error_body and status >= 400:
-            logger.error("%s API %s error %d — raw body: %s", self.dialect_name, mode, status, repr(error_body))
-        error_message = _extract_provider_message(error_body, fallback_text)
+        if status >= 400:
+            logger.error("%s API %s error %d — envelope: %r", self.dialect_name, mode, status, envelope)
+        error_message = envelope.message
         # 413 (Groq request-too-large) carries overflow payloads too; tool_use_failed stays 400-only.
-        if status in (400, 413) and error_body:
-            error_info = error_body.get("error", {})
-            error_code = str(error_info.get("code", ""))
+        if status in (400, 413):
+            error_code = envelope.code or ""
             if "context_length" in error_code or "reduce the length" in error_message.lower():
                 raise ProviderContextOverflowError(self.endpoint_url, mode, error_message)
             if status == 400 and error_code == "tool_use_failed":
@@ -1240,28 +1269,99 @@ class OpenAIChatBase(Dialect):
         )
 
 
-def _json_or_none(value: str) -> dict[str, Any] | None:
+@dataclass(frozen=True)
+class ProviderErrorEnvelope:
+    """Strictly validated provider error body.
+
+    The single typed value every error-normalization path consumes: ``message``
+    is fully formatted at parse time (including OpenRouter provider/description
+    tags); ``code`` feeds overflow / tool-use classification.
+    """
+
+    message: str
+    code: str | None = None
+
+
+def parse_error_body(
+    status: int,
+    raw_text: str,
+    *,
+    endpoint: str,
+    mode: str,
+    dialect_name: str,
+) -> ProviderErrorEnvelope:
+    """Single boundary where untyped provider error bytes become a typed value.
+
+    Exactly two branches: the documented JSON envelope
+    (``{"error": {"message": <str>, ...}}``) or non-JSON text (proxy HTML /
+    empty body — a known enumerated shape, not tolerated). Every other shape is
+    a contract violation and raises ProviderProtocolError with a raw excerpt.
+    """
     try:
-        parsed = json.loads(value)
+        decoded = json.loads(raw_text)
     except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+        return ProviderErrorEnvelope(message=raw_text)
+    if not isinstance(decoded, dict):
+        raise ProviderProtocolError(
+            endpoint,
+            mode,
+            f"{dialect_name} error {status} body is JSON but not an object: {raw_text[:200]!r}",
+        )
+    error_info = decoded.get("error")
+    if not isinstance(error_info, dict):
+        raise ProviderProtocolError(
+            endpoint,
+            mode,
+            f"{dialect_name} error {status} body must carry an object-valued 'error' field: {raw_text[:200]!r}",
+        )
+    return _envelope_from_error_object(status, error_info, raw_text[:200], endpoint=endpoint, mode=mode, dialect_name=dialect_name)
 
 
-def _extract_provider_message(error_body: dict[str, Any] | None, fallback_text: str) -> str:
-    if not error_body:
-        return fallback_text
-    error_info = error_body.get("error", {})
+def _envelope_from_error_object(
+    status: int,
+    error_info: dict[str, Any],
+    raw_excerpt: str,
+    *,
+    endpoint: str,
+    mode: str,
+    dialect_name: str,
+) -> ProviderErrorEnvelope:
+    """Validate an already-decoded ``error`` object into an envelope.
+
+    Shared by ``parse_error_body`` (HTTP error bodies) and the SSE in-band
+    error-chunk path; the OpenRouter provider/description tag formatting is
+    applied here, once, at parse time.
+    """
     message = error_info.get("message")
-    if not message:
-        return fallback_text
-    # Include additional context fields (e.g. OpenRouter provider/description) that
-    # carry the real error reason beyond the top-level message string.
-    extra = {}
-    for key in ("provider", "description", "code"):
-        if key in error_info and key != "message":
-            extra[key] = error_info[key]
-    if extra:
-        tags = ", ".join(f"{k}={v!s}" for k, v in extra.items())
-        return f"{message} [{tags}]"
-    return message
+    if not isinstance(message, str) or not message:
+        raise ProviderProtocolError(
+            endpoint,
+            mode,
+            f"{dialect_name} error {status} envelope must carry a non-empty string 'error.message': {raw_excerpt!r}",
+        )
+    code: str | None = None
+    raw_code = error_info.get("code")
+    if raw_code is not None:
+        if isinstance(raw_code, bool) or not isinstance(raw_code, (str, int)):
+            raise ProviderProtocolError(
+                endpoint,
+                mode,
+                f"{dialect_name} error {status} 'error.code' must be a string: {raw_excerpt!r}",
+            )
+        code = str(raw_code)
+    # Include additional context fields (e.g. OpenRouter provider/description)
+    # that carry the real error reason beyond the top-level message string.
+    extra: list[str] = []
+    for key in ("provider", "description"):
+        value = error_info.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise ProviderProtocolError(
+                endpoint,
+                mode,
+                f"{dialect_name} error {status} 'error.{key}' must be a string: {raw_excerpt!r}",
+            )
+        extra.append(f"{key}={value}")
+    formatted = f"{message} [{', '.join(extra)}]" if extra else message
+    return ProviderErrorEnvelope(message=formatted, code=code)

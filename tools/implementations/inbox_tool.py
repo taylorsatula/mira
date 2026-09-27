@@ -183,7 +183,10 @@ class InboxTool(Tool):
     def run(self, **params) -> Dict[str, Any]:
         operation = params.pop("operation", None)
         if not operation:
-            return {"error": "`operation` is required. Valid: list, read, archive."}
+            return {
+                "success": False,
+                "message": "`operation` is required. Valid: list, read, archive.",
+            }
         try:
             if operation == "list":
                 return self._op_list()
@@ -198,12 +201,15 @@ class InboxTool(Tool):
                     filename=params.get("filename"),
                     note=params.get("note"),
                 )
-            return {"error": f"Unknown operation {operation!r}. Valid: list, read, archive."}
+            return {
+                "success": False,
+                "message": f"Unknown operation {operation!r}. Valid: list, read, archive.",
+            }
         except ValueError as e:
-            return {"error": str(e)}
+            return {"success": False, "message": str(e)}
         except Exception as e:
             self.logger.exception("inbox_tool %s failed", operation)
-            return {"error": f"{operation} failed: {e}"}
+            return {"success": False, "message": f"{operation} failed: {e}"}
 
     def _op_list(self) -> Dict[str, Any]:
         inbox = self._inbox_root()

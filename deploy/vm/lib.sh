@@ -169,7 +169,11 @@ bootstrap_ip() {
   local pub; pub=$(pubkey) || return 1
   local script
   script=$(mktemp)
-  { echo "mkdir -p ~/.ssh && chmod 700 ~/.ssh"
+  { # The scp'd copy carries the VM password — the script traps its own
+    # exit and removes /tmp/.mira-bootstrap.sh on the VM on both exit paths
+    # (a no-op when piped over stdin in the sshpass path).
+    echo "trap 'rm -f /tmp/.mira-bootstrap.sh' EXIT HUP INT TERM"
+    echo "mkdir -p ~/.ssh && chmod 700 ~/.ssh"
     echo "grep -qF '$pub' ~/.ssh/authorized_keys 2>/dev/null || echo '$pub' >> ~/.ssh/authorized_keys"
     echo "chmod 600 ~/.ssh/authorized_keys"
     # single-stdin discipline: the password PIPE must be sudo's only stdin — a
@@ -201,6 +205,7 @@ EXP
   rm -f "$script"
   vmssh "$VMIP" 'id' >/dev/null 2>&1 \
     || { echo "FATAL: password bootstrap installed no usable key ssh" >&2; return 1; }
+  vmssh "$VMIP" 'rm -f /tmp/.mira-bootstrap.sh' >/dev/null 2>&1 || true
   vmssh "$VMIP" 'sudo -n true 2>/dev/null' \
     || { echo "FATAL: key ssh works but passwordless sudo does not — check /tmp/.mira-bootstrap.sh leftovers in the VM" >&2; return 1; }
   echo "bootstrap ok: key + passwordless sudo"

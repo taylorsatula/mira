@@ -281,8 +281,27 @@ class WebTool(Tool):
             if extracted:
                 return self._build_fetch_result(input, pw_html, extracted, pw_info)
 
-        # All tiers failed — report the most relevant error
-        error_info = pw_info or response_info or {}
+        # All tiers failed — report the most-specific authoritative error.
+        # Tier-1 (plain HTTP) errors (e.g. 404, DNS, TLS) are definitive: the
+        # page-level failure reason. Playwright merely retried the same URL and
+        # also failed, so its error is secondary context, never the lead reason.
+        tier1_error = response_info.get("error") if response_info else None
+        pw_error = pw_info.get("error") if pw_info else None
+        if tier1_error and pw_error:
+            return {
+                "success": False,
+                "url": input.url,
+                "error": tier1_error,
+                "message": (
+                    f"{response_info['message']} "
+                    f"(Playwright fallback also failed: {pw_info['message']})"
+                ),
+            }
+        error_info = (
+            (pw_info if pw_error else None)
+            or (response_info if tier1_error else None)
+            or {}
+        )
         if "error" in error_info:
             return {"success": False, "url": input.url, **error_info}
         return {"success": False, "url": input.url, "error": "extraction_failed",
@@ -568,17 +587,26 @@ class WebTool(Tool):
     # --- Helpers ---
 
     def _init_kagi(self) -> None:
-        """Initialize Kagi client from vault."""
+        """Initialize Kagi client from Vault. DuckDuckGo is the search
+        fallback whenever no usable key is configured."""
         try:
             from clients.vault_client import get_api_key
             api_key = get_api_key("kagi_api_key")
-            if api_key:
-                self._kagi = KagiClient(api_key)
-                self.logger.info("Kagi client initialized")
-            else:
-                self.logger.info("Kagi API key not found, will use DuckDuckGo for search")
         except Exception as e:
-            self.logger.warning(f"Failed to initialize Kagi: {e}, will use DuckDuckGo for search")
+            self.logger.warning(
+                "Kagi API key unavailable (%s); using DuckDuckGo for search. "
+                "To run without Kagi, set the Vault field kagi_api_key under "
+                "mira/api_keys to an empty value — an empty key suppresses "
+                "this warning and searches fall back to DuckDuckGo.", e
+            )
+            return
+        if api_key:
+            self._kagi = KagiClient(api_key)
+            self.logger.info("Kagi client initialized")
+        else:
+            # Empty value is the deliberate no-Kagi opt-out: stay on
+            # DuckDuckGo silently.
+            self.logger.debug("Kagi disabled (empty kagi_api_key); using DuckDuckGo for search")
 
     def _get_timeout(self, timeout: Optional[int]) -> int:
         """Get validated timeout value."""

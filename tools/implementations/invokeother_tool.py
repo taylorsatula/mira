@@ -142,7 +142,7 @@ class InvokeOtherTool(Tool):
         for tool_name in pinned:
             result = self._enable_tool(tool_name)
             if result is None:
-                self.tool_repo._pinned_tools.add(tool_name)
+                self.tool_repo.pin_tool(tool_name)
                 loaded.append(tool_name)
                 logger.info(f"Pinned tool for session: {tool_name}")
             else:

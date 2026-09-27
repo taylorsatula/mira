@@ -34,7 +34,8 @@ registry.register("sidebar_tool", SidebarToolConfig)
 
 
 # -------------------- SCHEMAS --------------------
-# Scratchpad + activity DDL live in agents.base.ensure_activity_schema()
+# Scratchpad + activity DDL live in utils/userdata_manager.py; tables are
+# created via agents.base.ensure_activity_schema()
 
 AUDIT_TABLE_DDL = """\
 CREATE TABLE IF NOT EXISTS sidebar_audit (

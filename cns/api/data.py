@@ -13,13 +13,12 @@ from enum import Enum
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Depends
-from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 
 from utils.user_context import get_current_user_id
 from auth.api import get_current_user
 from auth.types import SessionData, APITokenContext
-from .base import BaseHandler, ValidationError, NotFoundError
+from .base import PropagatingHandler, ValidationError, NotFoundError
 from utils.timezone_utils import utc_now, format_utc_iso, parse_utc_time_string
 
 logger = logging.getLogger(__name__)
@@ -69,7 +68,7 @@ class DataType(str, Enum):
     PERSONA = "persona"
 
 
-class DataEndpoint(BaseHandler):
+class DataEndpoint(PropagatingHandler):
     """Main data endpoint handler with type-based routing."""
     
     def process_request(self, **params) -> dict[str, Any]:
@@ -297,7 +296,7 @@ class DataEndpoint(BaseHandler):
                 "content": "\n\n".join(content_parts),
                 "enabled": doc.get("enabled", False),
                 "archived": doc.get("archived", False),
-                "description": doc.get("description"),
+                "description": doc.get("encrypted__description"),
                 "created_at": doc.get("created_at"),
                 "updated_at": doc.get("updated_at"),
                 "shared": resolved.is_shared
@@ -311,18 +310,19 @@ class DataEndpoint(BaseHandler):
                         break
             return result
 
-        # List domaindocs — own docs + shared docs
+        # List domaindocs — own docs + shared docs. db.select decrypts rows
+        # (fetchall would return raw encrypted__* columns, leaking ciphertext).
         show_archived = params.get('archived', False)
         if show_archived:
-            all_docs = db.fetchall("SELECT * FROM domaindocs WHERE archived = TRUE ORDER BY label")
+            all_docs = db.select("domaindocs", "archived = TRUE", order_by="label")
         else:
-            all_docs = db.fetchall("SELECT * FROM domaindocs WHERE archived = FALSE ORDER BY label")
+            all_docs = db.select("domaindocs", "archived = FALSE", order_by="label")
 
         domain_list = [
             {
                 "label": doc.get("label"),
                 "name": doc.get("name", doc.get("label")),
-                "description": doc.get("description", ""),
+                "description": doc.get("encrypted__description", ""),
                 "enabled": doc.get("enabled", False),
                 "archived": doc.get("archived", False),
                 "created_at": doc.get("created_at"),
@@ -500,7 +500,7 @@ def get_data_handler() -> DataEndpoint:
 
 
 @router.get("/data")
-async def data_endpoint(
+def data_endpoint(
     type: DataType = Query(..., description="Data type to retrieve"),
     limit: int | None = Query(None, ge=1, le=500, description="Pagination limit"),
     offset: int | None = Query(None, ge=0, description="Pagination offset (memories only)"),
@@ -516,76 +516,46 @@ async def data_endpoint(
     section: str | None = Query(None, description="Specific trinket section to retrieve (for type=working_memory)"),
     current_user: SessionData | APITokenContext = Depends(get_current_user)
 ):
-    """Unified data access endpoint."""
-    try:
-        handler = get_data_handler()
+    """Unified data access endpoint.
 
-        # Build request parameters
-        request_params: dict[str, object] = {}
-        if limit is not None:
-            request_params['limit'] = limit
-        if offset is not None:
-            request_params['offset'] = offset
-        if before is not None:
-            request_params['before'] = before
-        if start_date is not None:
-            request_params['start_date'] = start_date
-        if end_date is not None:
-            request_params['end_date'] = end_date
-        if subtype is not None:
-            request_params['subtype'] = subtype
-        if fields is not None:
-            request_params['fields'] = fields
-        if search is not None:
-            request_params['search'] = search
-        if message_type is not None:
-            request_params['message_type'] = message_type
-        if label is not None:
-            request_params['label'] = label
-        if archived is not None:
-            request_params['archived'] = archived
-        if section is not None:
-            request_params['section'] = section
+    Deliberately sync (not async def) so Starlette runs it in a threadpool
+    instead of blocking the event loop during blocking DB/Valkey reads.
+    Handler errors propagate to main.py's global exception handlers, which
+    assign the HTTP status and build the standard error body.
+    """
+    handler = get_data_handler()
 
-        response = handler.handle_request(
-            data_type=type,
-            request_params=request_params,
-            user_id=current_user.user_id
-        )
-        
-        return response.to_dict()
-        
-    except ValidationError as e:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "success": False,
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": e.message
-                }
-            }
-        )
-    except NotFoundError as e:
-        return JSONResponse(
-            status_code=404,
-            content={
-                "success": False,
-                "error": {
-                    "code": "NOT_FOUND",
-                    "message": e.message
-                }
-            }
-        )
-    except Exception as e:
-        logger.error(f"Data endpoint error: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={
-                "success": False,
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "Data retrieval failed"
-                }
-            }
-        )
+    # Build request parameters
+    request_params: dict[str, object] = {}
+    if limit is not None:
+        request_params['limit'] = limit
+    if offset is not None:
+        request_params['offset'] = offset
+    if before is not None:
+        request_params['before'] = before
+    if start_date is not None:
+        request_params['start_date'] = start_date
+    if end_date is not None:
+        request_params['end_date'] = end_date
+    if subtype is not None:
+        request_params['subtype'] = subtype
+    if fields is not None:
+        request_params['fields'] = fields
+    if search is not None:
+        request_params['search'] = search
+    if message_type is not None:
+        request_params['message_type'] = message_type
+    if label is not None:
+        request_params['label'] = label
+    if archived is not None:
+        request_params['archived'] = archived
+    if section is not None:
+        request_params['section'] = section
+
+    response = handler.handle_request(
+        data_type=type,
+        request_params=request_params,
+        user_id=current_user.user_id
+    )
+
+    return response.to_dict()

@@ -16,6 +16,7 @@ Usage:
 
 import logging
 import asyncio
+from datetime import timedelta
 from typing import Any, Callable, Dict, Optional, List, AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -148,6 +149,7 @@ class MCPConnection:
         self._write = None
         self._transport_context = None
         self._session_context = None  # Tracks if we entered ClientSession context
+        self._in_use = False  # Claimed by an active create_session() context
 
     async def connect(self) -> ClientSession:
         """Establish connection to MCP server with authentication."""
@@ -176,7 +178,12 @@ class MCPConnection:
 
                 self._transport_context = sse_client(self.config.url, headers=headers)
                 self._read, self._write = await self._enter_transport_context()
-                self.session = ClientSession(self._read, self._write)
+                # Bound every request/response read so a hung server cannot
+                # block callers indefinitely
+                self.session = ClientSession(
+                    self._read, self._write,
+                    read_timeout_seconds=timedelta(seconds=DEFAULT_TIMEOUT)
+                )
                 # CRITICAL: ClientSession must be entered as async context manager
                 # to start _receive_loop which dispatches responses to waiting requests
                 self._session_context = self.session
@@ -193,7 +200,12 @@ class MCPConnection:
                 )
                 self._transport_context = stdio_client(server_params)
                 self._read, self._write = await self._enter_transport_context()
-                self.session = ClientSession(self._read, self._write)
+                # Bound every request/response read so a hung server cannot
+                # block callers indefinitely
+                self.session = ClientSession(
+                    self._read, self._write,
+                    read_timeout_seconds=timedelta(seconds=DEFAULT_TIMEOUT)
+                )
                 # CRITICAL: ClientSession must be entered as async context manager
                 # to start _receive_loop which dispatches responses to waiting requests
                 self._session_context = self.session
@@ -446,10 +458,13 @@ async def create_session(
     if user_id not in _connection_pool:
         _connection_pool[user_id] = {}
 
-    if server_name in _connection_pool[user_id]:
-        connection = _connection_pool[user_id][server_name]
+    pooled = _connection_pool[user_id].get(server_name)
+    if pooled is not None and not pooled._in_use:
+        connection = pooled
     else:
-        # Create new connection
+        # The pooled connection (if any) is claimed by another concurrent
+        # context - give this call its own connection so one context exiting
+        # cannot disconnect another's session
         config = MCPServerConfig(
             name=server_name,
             url=server_url,
@@ -461,6 +476,8 @@ async def create_session(
         connection = RetryableMCPConnection(config, user_id, max_retries)
         _connection_pool[user_id][server_name] = connection
 
+    connection._in_use = True
+
     try:
         yield connection
     finally:
@@ -470,11 +487,18 @@ async def create_session(
         # when running in a temporary thread with its own event loop)
         try:
             await connection.disconnect()
-            # Remove from pool since it's now disconnected
-            if user_id in _connection_pool and server_name in _connection_pool[user_id]:
+            # Remove from pool since it's now disconnected - but only if this
+            # connection is still the pooled one (a concurrent context may have
+            # replaced it with its own connection)
+            if (
+                user_id in _connection_pool
+                and _connection_pool[user_id].get(server_name) is connection
+            ):
                 del _connection_pool[user_id][server_name]
         except Exception as e:
             logger.warning(f"Error disconnecting {server_name}: {e}")
+        finally:
+            connection._in_use = False
 
 
 async def call_tool(

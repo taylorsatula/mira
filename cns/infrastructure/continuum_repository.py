@@ -21,6 +21,22 @@ from utils.user_context import get_current_segment_id, set_current_segment_id
 
 logger = logging.getLogger(__name__)
 
+# How long a 'collapsing' claim stays exclusive before it is considered
+# crashed/abandoned and may be re-claimed or re-swept (crash recovery: a
+# process death between claim and save must not strand the segment).
+# Shared by SegmentCollapseHandler's claim UPDATE and the admin timeout sweep
+# below so the two arms can never disagree on the bound.
+COLLAPSE_CLAIM_STALE_MINUTES = 10
+
+# Content-caused extraction failures before a collapsed segment is abandoned
+# (excluded) by the extraction sweep. Only failures caused by the segment's
+# own data consume this budget — infrastructure/LLM outages do not
+# (ExtractionOrchestrator.extract_unprocessed_segments classifies failures and
+# counts only content-caused ones). When the budget is exhausted the sweep
+# writes an 'extraction_abandoned' marker on the boundary message so the
+# exclusion is visible to operators instead of silent.
+EXTRACTION_MAX_CONTENT_FAILURES = 3
+
 
 class HistoryResult(TypedDict):
     """Chronological keyset page returned by get_history()."""
@@ -35,6 +51,7 @@ class FailedSegment(TypedDict):
     message_id: str
     segment_id: str
     extraction_attempts: int
+    extraction_content_failures: int
 
 
 class ActiveSegmentRow(TypedDict):
@@ -226,8 +243,14 @@ class ContinuumRepository:
                 # Format as PostgreSQL vector: '[0.1, 0.2, ...]'
                 segment_embedding_value = '[' + ','.join(str(x) for x in embedding_list) + ']'
 
+            # Stamp the content-type identity tag at write time so reloads
+            # key on the tag, never on shape (a plain-text message that happens
+            # to be valid JSON must reload as plain text). with_metadata()
+            # returns a copy, so the in-memory message is untouched.
+            content_type = "json" if not isinstance(message.content, str) else "text"
+
             # Get base message tuple
-            base_tuple = message.to_db_tuple(continuum_id, user_id)
+            base_tuple = message.with_metadata(content_type=content_type).to_db_tuple(continuum_id, user_id)
 
             # Upsert message with segment embedding
             # ON CONFLICT handles updates to existing messages (e.g., collapsed segment sentinels)
@@ -363,7 +386,9 @@ class ContinuumRepository:
             # (idx_messages_active_segment_unique). If a concurrent call already
             # created an active sentinel for this continuum, DO NOTHING — the
             # race loser silently no-ops instead of creating a duplicate.
-            base_tuple = sentinel.to_db_tuple(continuum_id, user_id)
+            # Content-type tag stamped like every other write path so the
+            # sentinel reloads by identity, not shape.
+            base_tuple = sentinel.with_metadata(content_type="text").to_db_tuple(continuum_id, user_id)
             db.execute_query(
                 """
                 INSERT INTO messages (id, continuum_id, user_id, role, content, metadata, created_at, tool_call_id, is_error)
@@ -380,7 +405,16 @@ class ContinuumRepository:
     
     def save_messages_batch(self, messages: list[Message], continuum_id: str | UUID, user_id: str) -> None:
         """
-        Save multiple messages to database as a batch operation.
+        Save multiple messages to database as one atomic batch.
+
+        All message inserts run in a single database transaction
+        (PostgresClient.execute_transaction): either the entire batch
+        persists or none of it does — a mid-batch failure rolls back
+        cleanly instead of leaving a partially persisted turn. The
+        segment sentinel (via _ensure_active_segment) and activity-day
+        tracking commit separately by design; UnitOfWork.commit
+        invalidates the Valkey cache when this method raises so a stale
+        cached copy cannot outlive the failure.
 
         Args:
             messages: List of messages to save
@@ -420,7 +454,10 @@ class ContinuumRepository:
                 self._ensure_active_segment(continuum_id, user_id, earliest_timestamp, db)
                 logger.debug(f"Checked segment boundary for batch save with {len(real_messages)} real messages")
 
-            # Insert each message using the same pattern as save_message
+            # Insert every message as ONE database transaction: per-statement
+            # autocommit here would leave a partially persisted turn on a
+            # mid-batch failure while the cache keeps serving the old whole.
+            insert_operations: list[tuple[str, tuple[object, ...]]] = []
             has_user_message = False
             for message in messages:
                 # Extract segment embedding if this is a segment boundary with embedding
@@ -430,19 +467,23 @@ class ContinuumRepository:
                     # Format as PostgreSQL vector: '[0.1, 0.2, ...]'
                     segment_embedding_value = '[' + ','.join(str(x) for x in embedding_list) + ']'
 
-                # Get base message tuple
-                base_tuple = message.to_db_tuple(continuum_id, user_id)
+                # Stamp the content-type identity tag (see save_message) and
+                # get the base message tuple
+                content_type = "json" if not isinstance(message.content, str) else "text"
+                base_tuple = message.with_metadata(content_type=content_type).to_db_tuple(continuum_id, user_id)
 
-                db.execute_query(
+                insert_operations.append((
                     """
                     INSERT INTO messages (id, continuum_id, user_id, role, content, metadata, created_at, tool_call_id, is_error, segment_embedding)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector)
                     """,
                     base_tuple + (segment_embedding_value,)
-                )
+                ))
                 # Heartbeat stimuli are machine-sourced, not user activity.
                 if message.role == "user" and message.metadata.get("heartbeat") != "true":
                     has_user_message = True
+
+            db.execute_transaction(insert_operations)
 
             # Track user activity day if batch contained user message
             if has_user_message:
@@ -472,13 +513,6 @@ class ContinuumRepository:
                 logger.warning(f"Skipping message row with invalid ID: {message_id}")
                 continue
 
-            content = row.get("content")
-            if isinstance(content, str) and content.startswith("["):
-                try:
-                    content = json.loads(content)
-                except json.JSONDecodeError:
-                    logger.debug("Failed to parse message content JSON; keeping raw string")
-
             metadata = row.get("metadata", {})
             if isinstance(metadata, str):
                 try:
@@ -487,6 +521,19 @@ class ContinuumRepository:
                     logger.debug("Failed to parse message metadata JSON; defaulting to empty dict")
                     metadata = {}
             metadata = metadata or {}
+
+            # Reconstitute content by its stored identity tag, never by shape.
+            # A plain-text user message that happens to be valid JSON must
+            # reload as plain text; rows written before the tag existed carry
+            # no tag and are treated as plain text.
+            content = row.get("content")
+            if metadata.get("content_type") == "json" and isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        f"Message {canonical_id} tagged as JSON content failed to parse; keeping raw string"
+                    )
 
             # Read tool_call_id/is_error from dedicated columns
             tool_call_id = row.get("tool_call_id")
@@ -877,6 +924,69 @@ class ContinuumRepository:
         rows = db.execute_returning(query, (wake_at, str(continuum_id)))
         return bool(rows)
 
+    def set_heartbeat_retry_at(self, continuum_id: str | UUID, user_id: str, retry_at: str) -> bool:
+        """Stamp the heartbeat retry backoff and bump the consecutive-failure
+        counter on the active segment sentinel.
+
+        Called after a FAILED heartbeat turn. The backoff deliberately lives on
+        its own metadata key, not heartbeat_wake_at: the dispatcher honors it
+        for retry pacing, but the segment timeout service defers collapse only
+        on heartbeat_wake_at — a real sleep commitment MIRA asked for — so a
+        persistently failing heartbeat cannot defer the sweep forever. The
+        counter bounds the pre-turn liveness stamp in heartbeat_service, which
+        is the sweep's other deferral leg.
+
+        Args:
+            continuum_id: Continuum ID
+            user_id: User ID
+            retry_at: UTC ISO timestamp (format_utc_iso) of the next retry
+
+        Returns:
+            True if an active segment sentinel was stamped, False if none exists
+        """
+        db = self.get_user_db_client(user_id)
+
+        query = """
+            UPDATE messages
+            SET metadata = jsonb_set(
+                    jsonb_set(metadata, '{heartbeat_retry_at}', to_jsonb(%s::text)),
+                    '{heartbeat_failures}',
+                    to_jsonb(COALESCE((metadata->>'heartbeat_failures')::int, 0) + 1)
+                )
+            WHERE continuum_id = %s
+                AND metadata->>'is_segment_boundary' = 'true'
+                AND metadata->>'status' = 'active'
+            RETURNING id
+        """
+        rows = db.execute_returning(query, (retry_at, str(continuum_id)))
+        return bool(rows)
+
+    def reset_heartbeat_failures(self, continuum_id: str | UUID, user_id: str) -> bool:
+        """Zero the consecutive-failure counter on the active segment sentinel.
+
+        Called after a successful heartbeat turn: re-arms the pre-turn
+        liveness stamp (hang protection) that a failure streak had suspended.
+
+        Args:
+            continuum_id: Continuum ID
+            user_id: User ID
+
+        Returns:
+            True if an active segment sentinel was stamped, False if none exists
+        """
+        db = self.get_user_db_client(user_id)
+
+        query = """
+            UPDATE messages
+            SET metadata = jsonb_set(metadata, '{heartbeat_failures}', to_jsonb(0))
+            WHERE continuum_id = %s
+                AND metadata->>'is_segment_boundary' = 'true'
+                AND metadata->>'status' = 'active'
+            RETURNING id
+        """
+        rows = db.execute_returning(query, (str(continuum_id),))
+        return bool(rows)
+
     def stamp_segment_liveness(self, continuum_id: str | UUID, user_id: str) -> bool:
         """
         Stamp last_turn_at on the active segment sentinel at heartbeat wake-turn dispatch.
@@ -1063,18 +1173,31 @@ class ContinuumRepository:
         rows = db.execute_query(query, (limit,))
         return self._parse_message_rows(rows)
 
-    def find_failed_extraction_segments(self, user_id: str, max_attempts: int = 3) -> list[FailedSegment]:
+    def find_failed_extraction_segments(
+        self,
+        user_id: str,
+        max_attempts: int = EXTRACTION_MAX_CONTENT_FAILURES,
+    ) -> list[FailedSegment]:
         """
         Find collapsed segments where memory extraction failed or hasn't been attempted.
 
-        Excludes segments that have exceeded max_attempts to prevent infinite retry loops.
+        Excludes segments whose CONTENT-caused failure count has reached
+        max_attempts, to prevent infinite retry loops. Infrastructure/LLM
+        outages are not counted toward that budget (see
+        ExtractionOrchestrator.extract_unprocessed_segments), so a segment is
+        abandoned only when its own data has repeatedly failed extraction —
+        three provider blips must not permanently silence a segment. Budget-
+        excluded segments carry metadata 'extraction_abandoned' = true,
+        written by the sweep, so the state is operator-visible.
 
         Args:
             user_id: User ID
-            max_attempts: Skip segments with this many or more extraction attempts
+            max_attempts: Skip segments with this many or more content-caused
+                extraction failures
 
         Returns:
-            List of dicts with segment_id, message_id, and extraction_attempts
+            List of dicts with segment_id, message_id, extraction_attempts, and
+            extraction_content_failures
         """
         db = self.get_user_db_client(user_id)
 
@@ -1085,7 +1208,8 @@ class ContinuumRepository:
                 AND metadata->>'status' = 'collapsed'
                 AND (metadata->>'memories_extracted' = 'false'
                      OR metadata->>'memories_extracted' IS NULL)
-                AND COALESCE((metadata->>'extraction_attempts')::int, 0) < %(max_attempts)s
+                AND COALESCE((metadata->>'extraction_content_failures')::int, 0) < %(max_attempts)s
+                AND COALESCE(metadata->>'extraction_abandoned', 'false') <> 'true'
             ORDER BY created_at DESC
         """
 
@@ -1101,7 +1225,8 @@ class ContinuumRepository:
             segments.append({
                 'message_id': str(row['id']),
                 'segment_id': metadata.get('segment_id', str(row['id'])),
-                'extraction_attempts': metadata.get('extraction_attempts', 0)
+                'extraction_attempts': metadata.get('extraction_attempts', 0),
+                'extraction_content_failures': metadata.get('extraction_content_failures', 0),
             })
 
         return segments
@@ -1109,6 +1234,10 @@ class ContinuumRepository:
     def find_all_active_segments_admin(self) -> list[ActiveSegmentRow]:
         """
         Find all active segments across all users (admin query for timeout service).
+
+        Also returns segments whose 'collapsing' claim has gone stale
+        (older than COLLAPSE_CLAIM_STALE_MINUTES), so a crashed claim can be
+        re-claimed instead of stranding the segment outside the sweep.
 
         Joined against `users` with `is_active = TRUE`: the sweep runs on
         the BYPASSRLS admin pool, so without the predicate it would keep
@@ -1134,10 +1263,17 @@ class ContinuumRepository:
                 FROM messages
                 JOIN users ON users.id = messages.user_id
                 WHERE messages.metadata->>'is_segment_boundary' = 'true'
-                    AND messages.metadata->>'status' = 'active'
+                    AND (
+                        messages.metadata->>'status' = 'active'
+                        OR (
+                            messages.metadata->>'status' = 'collapsing'
+                            AND (messages.metadata->>'collapse_claimed_at')::timestamptz
+                                < now() - make_interval(mins => %(stale_minutes)s)
+                        )
+                    )
                     AND users.is_active = TRUE
                 ORDER BY messages.created_at ASC
-            """)
+            """, {'stale_minutes': COLLAPSE_CLAIM_STALE_MINUTES})
 
             # Normalize UUID objects to strings at boundary (database driver returns UUID objects)
             for row in rows:
@@ -1251,11 +1387,15 @@ class ContinuumRepository:
         """
         db = self.get_user_db_client(user_id)
 
-        # Get messages before the most recent collapsed segment's end time
+        # Get messages before the most recent collapsed segment's end time.
+        # The stored boundary carries an explicit UTC offset; casting it to
+        # timestamptz honors that offset. A plain ::timestamp cast strips it,
+        # and Postgres then re-interprets the naive value in the session
+        # timezone — shifting the cutoff by hours on non-UTC clusters.
         # Request 4x turn_count to ensure we have enough messages to find complete pairs
         query = """
             WITH boundary_time AS (
-                SELECT (metadata->>'segment_end_time')::timestamp as cutoff_time
+                SELECT (metadata->>'segment_end_time')::timestamptz as cutoff_time
                 FROM messages
                 WHERE continuum_id = %s
                     AND metadata->>'is_segment_boundary' = 'true'

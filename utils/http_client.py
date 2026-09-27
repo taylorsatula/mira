@@ -21,6 +21,8 @@ Usage:
 import logging
 import random
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Iterable, Optional
 from contextlib import contextmanager
 
@@ -44,6 +46,26 @@ RETRYABLE_STATUS_CODES = {429, 502, 503, 504, 529}
 BACKOFF_STATUS_CODES = {429, 529}  # Need longer delays
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_TIMEOUT = 30
+
+
+def _retry_after_seconds(response: Response) -> Optional[float]:
+    """Parse a Retry-After header into seconds, if present and valid.
+
+    Supports both the delta-seconds form and the HTTP-date form.
+    """
+    value = response.headers.get("Retry-After")
+    if value is None:
+        return None
+    value = value.strip()
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    try:
+        retry_at = parsedate_to_datetime(value)
+        return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+    except (TypeError, ValueError):
+        return None
 
 
 class RetryMixin:
@@ -70,12 +92,37 @@ class RetryMixin:
         return status_code in RETRYABLE_STATUS_CODES and attempt < self.max_retries
     
     def _execute_with_retry(self, request_func: Callable[..., Response], *args: Any, **kwargs: Any) -> Response:
-        """Execute a request function with retry logic."""
+        """Execute a request function with retry logic.
+
+        httpx returns responses instead of raising for 4xx/5xx, so retryable
+        status codes are detected on the returned response. After exhausting
+        retries the final response is returned to the caller (httpx semantics).
+        """
         last_exception = None
         
         for attempt in range(self.max_retries + 1):
             try:
-                return request_func(*args, **kwargs)
+                response = request_func(*args, **kwargs)
+                status_code = response.status_code
+                
+                if self._should_retry(status_code, attempt):
+                    delay = self._calculate_delay(attempt, status_code)
+                    if status_code == 429:
+                        retry_after = _retry_after_seconds(response)
+                        if retry_after is not None:
+                            delay = min(retry_after, 30.0)
+                    
+                    if status_code == 529:
+                        logger.warning(f"Server overloaded (529), attempt {attempt + 1}/{self.max_retries + 1}, retrying in {delay:.1f}s...")
+                    elif status_code == 429:
+                        logger.warning(f"Rate limited (429), attempt {attempt + 1}/{self.max_retries + 1}, retrying in {delay:.1f}s...")
+                    else:
+                        logger.warning(f"Server error ({status_code}), attempt {attempt + 1}/{self.max_retries + 1}, retrying in {delay:.1f}s...")
+                    
+                    time.sleep(delay)
+                    continue
+                
+                return response
                 
             except HTTPStatusError as e:
                 last_exception = e
@@ -141,24 +188,29 @@ class Client(RetryMixin, httpx.Client):
         return self._execute_with_retry(super().request, *args, **kwargs)
     
     def get(self, *args, **kwargs):
-        """GET request with retry logic."""
-        return self._execute_with_retry(super().get, *args, **kwargs)
+        """GET request with retry logic.
+
+        Delegates to self.request, the single retry-wrapped entry point.
+        httpx verb methods call self.request internally, so wrapping
+        super().get here would nest two retry loops.
+        """
+        return self.request("GET", *args, **kwargs)
     
     def post(self, *args, **kwargs):
         """POST request with retry logic."""
-        return self._execute_with_retry(super().post, *args, **kwargs)
+        return self.request("POST", *args, **kwargs)
     
     def put(self, *args, **kwargs):
         """PUT request with retry logic."""
-        return self._execute_with_retry(super().put, *args, **kwargs)
+        return self.request("PUT", *args, **kwargs)
     
     def patch(self, *args, **kwargs):
         """PATCH request with retry logic."""
-        return self._execute_with_retry(super().patch, *args, **kwargs)
+        return self.request("PATCH", *args, **kwargs)
     
     def delete(self, *args, **kwargs):
         """DELETE request with retry logic."""
-        return self._execute_with_retry(super().delete, *args, **kwargs)
+        return self.request("DELETE", *args, **kwargs)
     
     def stream(self, *args, **kwargs):
         """Return the httpx stream context manager without retry.

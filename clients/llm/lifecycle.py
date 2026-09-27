@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import uuid
@@ -137,9 +138,18 @@ class LLMLifecycle:
         result: list[Any] = []
         errors: list[BaseException] = []
 
+        # The watcher thread starts with an empty contextvars context, but the
+        # dialect's stream code driven from it reads ambient state (the
+        # file-artifact sink resolves the current user from context) - so a
+        # stalled-path pull would otherwise drop artifacts the response
+        # summary still advertises. Run the invocation inside a copy of the
+        # caller's context so the watcher path behaves identically to the
+        # direct path.
+        context = contextvars.copy_context()
+
         def invoke() -> None:
             try:
-                result.append(operation())
+                result.append(context.run(operation))
             except BaseException as error:
                 errors.append(error)
 

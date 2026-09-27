@@ -77,42 +77,84 @@ class LoraTrinket(EventAwareTrinket):
         """
         Parse user model XML into observations and check-in topics.
 
+        Attributes are keyed by name (section=, confidence=, reason=) rather
+        than by position, so attribute-order drift in the synthesizer's output
+        cannot silently drop observations. Any parse failure logs a warning
+        naming the consequence — the user model (or that entry) is omitted
+        from the prompt for this compose — instead of returning empty silently.
+
         Returns:
             Tuple of (observations list, checkin topics list)
         """
         observations = []
         checkin_topics = []
 
-        # Parse observations
-        obs_pattern = r'<mira:observation\s+section="([^"]+)"\s+confidence="([^"]+)">(.*?)</mira:observation>'
+        # Match each observation's attribute region and body separately so the
+        # attributes can be read by name in any order.
+        obs_pattern = r'<mira:observation\b([^>]*)>(.*?)</mira:observation\s*>'
 
         for match in re.finditer(obs_pattern, xml_output, re.DOTALL):
-            section_id = match.group(1).strip()
-            confidence = match.group(2).strip()
-            body = match.group(3)
+            attrs = match.group(1)
+            section_match = re.search(r'\bsection="([^"]*)"', attrs)
+            confidence_match = re.search(r'\bconfidence="([^"]*)"', attrs)
+            if section_match is None or confidence_match is None:
+                logger.warning(
+                    "LoRA trinket: unparseable <mira:observation> (attributes: %r) — "
+                    "entry omitted from user model in prompt this compose",
+                    attrs.strip()
+                )
+                continue
+
+            body = match.group(2)
 
             # Strip changelog from display text
             obs_text = re.sub(r'<changelog>.*?</changelog>', '', body, flags=re.DOTALL).strip()
 
             observations.append({
-                'section_id': section_id,
-                'confidence': confidence,
+                'section_id': section_match.group(1).strip(),
+                'confidence': confidence_match.group(1).strip(),
                 'text': obs_text
             })
 
-        # Parse check-in topics
-        topic_pattern = r'<mira:topic\s+section="([^"]+)"\s+reason="([^"]+)"\s*(?:/>|>\s*</mira:topic>)'
+        # Parse check-in topics, likewise keyed on named attributes.
+        topic_pattern = r'<mira:topic\b([^>]*?)\s*(?:/>|>(?:.*?)</mira:topic\s*>)'
 
         for match in re.finditer(topic_pattern, xml_output, re.DOTALL):
+            attrs = match.group(1)
+            section_match = re.search(r'\bsection="([^"]*)"', attrs)
+            reason_match = re.search(r'\breason="([^"]*)"', attrs)
+            if section_match is None or reason_match is None:
+                logger.warning(
+                    "LoRA trinket: unparseable <mira:topic> (attributes: %r) — "
+                    "check-in topic omitted from prompt this compose",
+                    attrs.strip()
+                )
+                continue
             checkin_topics.append({
-                'section_id': match.group(1).strip(),
-                'reason': match.group(2).strip()
+                'section_id': section_match.group(1).strip(),
+                'reason': reason_match.group(1).strip()
             })
+
+        # Loud failure, not silence: zero parsed observations from a non-empty
+        # document means the whole user model vanishes from the composed
+        # prompt — say so instead of returning empty without a trace.
+        if not observations and xml_output.strip():
+            logger.warning(
+                "LoRA trinket: user model omitted from prompt this compose — "
+                "no <mira:observation> entries parsed from synthesis output "
+                "(%d tag(s) present)",
+                len(re.findall(r'<mira:observation\b', xml_output))
+            )
 
         return observations, checkin_topics
 
     def _format_user_model(self, observations: list[_Observation]) -> str:
         """Format observations as user model XML for system prompt injection."""
+        # Observation text is intentionally NOT escaped: it is internal second-order
+        # content — synthesized by the user-model pipeline from conversation, not
+        # verbatim user or external text — so it sits downstream of the ingestion
+        # boundary where untrusted content is already wrapped. Escaping here would
+        # double-defend internal content and muddy the boundary rule.
         prefs = get_user_preferences()
         first_name = (prefs.first_name or '').strip() or "this user"
 

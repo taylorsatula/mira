@@ -541,10 +541,29 @@ def _check_vault() -> dict[str, Any]:
             raise RuntimeError(f"Vault mira/database {label} is not a PostgreSQL URL")
         if not parsed.hostname or not parsed.username:
             raise RuntimeError(f"Vault mira/database {label} is missing host or username")
+        # Lockstep with the runtime connection builder: validate the URL
+        # through PostgresClient._parse_database_url itself, so the gate and
+        # the pools share one credential-encoding rule (percent-encoded URL
+        # userinfo, decoded by libpq) — a URL the builder rejects (e.g. query
+        # parameters, malformed credentials) fails boot here, not the first
+        # pool creation.
+        from clients.postgres_client import PostgresClient
+        import psycopg
+        try:
+            PostgresClient._parse_database_url(database_url)
+        except (ValueError, psycopg.Error) as exc:
+            raise RuntimeError(f"Vault mira/database {label}: {exc}") from exc
 
+    # Allow-list only the schemes the Valkey client actually implements —
+    # it has no TLS support, so rediss/valkeys must fail boot here rather
+    # than be accepted by the gate and dropped by the client.
     parsed_valkey = urlparse(service_values["valkey_url"])
-    if parsed_valkey.scheme not in {"redis", "rediss", "valkey", "valkeys"}:
-        raise RuntimeError("Vault mira/services valkey_url is not a Valkey/Redis URL")
+    if parsed_valkey.scheme not in {"redis", "valkey"}:
+        raise RuntimeError(
+            "Vault mira/services valkey_url scheme is not supported (the client "
+            "implements plaintext valkey:// and redis:// only; rediss/valkeys TLS "
+            f"is not implemented): {parsed_valkey.scheme!r}"
+        )
 
     parsed_app_url = urlparse(service_values["app_url"])
     if parsed_app_url.scheme not in {"http", "https"} or not parsed_app_url.hostname:

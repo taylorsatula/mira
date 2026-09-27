@@ -14,7 +14,7 @@ import re
 import threading
 from contextlib import contextmanager
 from typing import Dict, List, Any, Optional, Set, Tuple, TypedDict, Union
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 from config import config
 
@@ -119,20 +119,37 @@ class PostgresClient:
 
     @staticmethod
     def _parse_database_url(url: str) -> str:
-        """Parse a database URL into a properly escaped psycopg3 conninfo string.
+        """Parse a database URL into a psycopg3 conninfo string.
 
-        psycopg3 is stricter than psycopg2 about special characters (spaces,
-        parens, etc.) in connection URIs. Decomposing into keyword args and
-        rebuilding via make_conninfo() lets psycopg3 handle its own escaping.
+        The URL is handed to psycopg verbatim: libpq's own URI parser is the
+        single decoder of percent-encoded userinfo (urlparse does NOT
+        percent-decode, so decomposing here and re-escaping via
+        make_conninfo() would send the literal %XX sequence as the password).
+        Writers (deploy/postgresql.sh, deploy/docker/scripts/init-mira.sh)
+        percent-encode reserved characters when embedding the password in the
+        URL; this reader must decode through the same rule, which libpq does.
+
+        Query parameters in the URL are NOT forwarded — libpq would apply
+        them where this client's pool configuration does not expect them.
+        Rather than silently dropping them, reject: if a deployment ever
+        needs Postgres across the internet, that is where TLS (sslmode)
+        should be implemented — this rejection is the flag that surfaces
+        that need.
         """
         parsed = urlparse(url)
-        return make_conninfo(
-            host=parsed.hostname or 'localhost',
-            port=parsed.port or 5432,
-            dbname=parsed.path.lstrip('/'),
-            user=parsed.username,
-            password=parsed.password,
-        )
+        if parsed.query:
+            dropped = ", ".join(f"{key}={value}" for key, value in parse_qsl(parsed.query, keep_blank_values=True))
+            raise ValueError(
+                f"Database URL has query parameters that this parser discards (they are not "
+                f"forwarded to Postgres): {dropped}. Remove them from the URL, or extend "
+                f"_parse_database_url to forward them explicitly."
+            )
+        # Hostless URLs keep the previous TCP-localhost default instead of
+        # libpq's unix-socket fallback; everything else (credentials above
+        # all) stays encoded exactly as written and is decoded by libpq.
+        if not parsed.hostname:
+            return make_conninfo(url, host='localhost')
+        return make_conninfo(url)
 
     def _needs_vector(self) -> bool:
         """mira_service stores embeddings/vectors (memories, entities, messages)."""

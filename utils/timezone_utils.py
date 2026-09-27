@@ -578,6 +578,8 @@ def parse_time_string(
     - Full ISO format: "2023-04-01T14:30:00"
     - Date only: "2023-04-01"
     - Time only: "14:30:00" or "14:30" (uses reference_date for the date part)
+    - Time only with am/pm marker: "7:48pm", "7:48 PM", "7pm"
+      (resolved like the 24-hour form: already-passed today -> tomorrow)
 
     Args:
         time_str: The time string to parse
@@ -610,6 +612,42 @@ def parse_time_string(
     
     # Try different formats
     
+    # Time-only format with an am/pm marker, e.g. "7:48pm", "7:48 pm",
+    # "7PM". Resolve the calendar date exactly like the 24-hour form
+    # below (already-passed today -> tomorrow) using the reference date
+    # in the user's timezone, never the server clock.
+    ampm_match = re.match(
+        r"^(\d{1,2})(?::(\d{1,2}))?(?::(\d{1,2}))?\s*([APap])\.?\s*[Mm]?\.?$",
+        time_str.strip(),
+    )
+    if ampm_match:
+        try:
+            hour = int(ampm_match.group(1))
+            minute = int(ampm_match.group(2) or 0)
+            second = int(ampm_match.group(3) or 0)
+            if not 1 <= hour <= 12:
+                raise ValueError(f"Invalid hour for am/pm time: '{time_str}'")
+            if hour == 12:
+                hour = 0
+            if ampm_match.group(4).lower() == "p":
+                hour += 12
+
+            # Create datetime using reference date's year, month, day
+            dt = reference_date.replace(
+                hour=hour,
+                minute=minute,
+                second=second,
+                microsecond=0
+            )
+
+            # If time has already passed today, use tomorrow
+            if dt < reference_date:
+                dt = dt + timedelta(days=1)
+
+            return dt
+        except ValueError:
+            pass
+
     # Time-only format (HH:MM:SS or HH:MM)
     if ":" in time_str and "T" not in time_str:
         # Split into hours, minutes, seconds

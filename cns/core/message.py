@@ -110,7 +110,18 @@ def preprocess_content_blocks(content: str | list[ContentBlock]) -> Preprocessed
             text = block.get("text", "")
             if text:
                 text_parts.append(text)
-        # tool_result is not a content block type; it's role="tool" messages
+        elif block_type in ("thinking", "redacted_thinking"):
+            # Provider-serialized thinking payloads never enter the digest
+            # text — the documented skip, enforced instead of implied.
+            continue
+        elif block_type == "tool_result":
+            # tool_result is not a normal content block type (results arrive
+            # as role="tool" messages), but a stray block — e.g. replayed
+            # from provider-serialized content — is truncated at the documented
+            # bound rather than silently growing the digest.
+            text = block.get("text", "")
+            if isinstance(text, str) and text:
+                text_parts.append(text[:500])
 
     return PreprocessedContent(text_parts=text_parts, image_count=image_count)
 
@@ -119,7 +130,7 @@ class MessageMetadata(TypedDict, total=False):
     """All known metadata keys on Message.metadata."""
     # Segment boundary fields
     is_segment_boundary: bool
-    status: str  # "active" | "collapsed"
+    status: str  # "active" | "collapsing" (mid-claim; transient) | "collapsed"
     segment_id: str
     segment_start_time: str
     segment_end_time: str

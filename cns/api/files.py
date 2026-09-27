@@ -22,6 +22,20 @@ router = APIRouter()
 
 FILE_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
 
+# MIME types safe to render inline on MIRA's authenticated origin. Anything
+# outside this set (e.g. a provider-supplied text/html artifact) is forced to
+# a download as application/octet-stream so it cannot execute as stored XSS.
+INLINE_IMAGE_MIME_TYPES = frozenset({
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+})
+
+# Characters permitted in the Content-Disposition filename parameter; strips
+# quotes/newlines from the provider-supplied filename to prevent header injection.
+FILENAME_SAFE_PATTERN = re.compile(r'[^\w.()\- ]')
+
 
 @router.get("/files/{file_id}")
 async def download_file(
@@ -95,14 +109,22 @@ async def view_image(
     file_path.relative_to(base_dir)  # Path traversal guard
 
     meta: dict[str, str] = json.loads(meta_files[0].read_text())
-    mime_type = meta.get("mime_type", "image/png")
-    filename = meta.get("filename", "image.png")
+    mime_type = (meta.get("mime_type") or "").strip().lower()
+    # Never trust the stored MIME for inline rendering: only whitelisted image
+    # types keep inline disposition; everything else is a forced download.
+    safe_filename = FILENAME_SAFE_PATTERN.sub("_", meta.get("filename", "image"))
+    if mime_type in INLINE_IMAGE_MIME_TYPES:
+        disposition = f'inline; filename="{safe_filename}"'
+    else:
+        mime_type = "application/octet-stream"
+        disposition = f'attachment; filename="{safe_filename}"'
 
     return FileResponse(
         path=file_path,
         media_type=mime_type,
         headers={
-            "Content-Disposition": f'inline; filename="{filename}"',
+            "Content-Disposition": disposition,
+            "X-Content-Type-Options": "nosniff",
             "Cache-Control": "public, max-age=3600",
         }
     )

@@ -27,6 +27,12 @@ from clients.llm.tool_messages import (
 from clients.llm.types import ToolCall, ToolResult
 from clients.llm_provider import LLMProvider, get_llm_provider
 from utils.timezone_utils import utc_now, format_utc_iso
+from utils.userdata_manager import (
+    ACTIVITY_INDEX_DDL,
+    ACTIVITY_TABLE_DDL,
+    SCRATCHPAD_INDEX_DDL,
+    SCRATCHPAD_TABLE_DDL,
+)
 
 from config import config
 
@@ -56,49 +62,12 @@ def load_agent_prompt(filename: str) -> str:
     return load_prompt(f"agents/{filename}")
 
 
-# -----------------------------------------------------------------------
-# Shared DDL -- used by SidebarAgent (failure records) and sidebar_tool
-# (complete_task records). Both call CREATE TABLE IF NOT EXISTS.
-# -----------------------------------------------------------------------
-
-ACTIVITY_TABLE_DDL = """\
-CREATE TABLE IF NOT EXISTS sidebar_activity (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    interface_name TEXT NOT NULL,
-    thread_id TEXT NOT NULL,
-    agent_id TEXT NOT NULL,
-    summary TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'handled',
-    escalation_reason TEXT,
-    run_count INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(interface_name, thread_id)
-)"""
-
-ACTIVITY_INDEX_DDL = """\
-CREATE INDEX IF NOT EXISTS idx_activity_interface
-ON sidebar_activity(interface_name)"""
-
-# Scratchpad schema -- used by sidebar_tool for working notes between agent
-# iterations, and cleaned up by SidebarDispatcher._maybe_cleanup().
-SCRATCHPAD_TABLE_DDL = """\
-CREATE TABLE IF NOT EXISTS scratchpad (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    thread_id TEXT NOT NULL,
-    note TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-)"""
-
-SCRATCHPAD_INDEX_DDL = """\
-CREATE INDEX IF NOT EXISTS idx_scratchpad_thread
-ON scratchpad(thread_id)"""
-
-
 def ensure_activity_schema(db) -> None:
     """Create sidebar_activity + scratchpad tables.
 
     Safe to call repeatedly -- CREATE IF NOT EXISTS handles existing tables.
+    The DDL is owned by utils/userdata_manager.py with the other per-user
+    SQLite schemas.
     """
     db.execute(ACTIVITY_TABLE_DDL)
     db.execute(ACTIVITY_INDEX_DDL)

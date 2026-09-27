@@ -168,12 +168,19 @@ async def lifespan(app: FastAPI):
     # the session revocation helpers delete both together — flushing CSRF
     # while preserving sessions (O-10) would 403 the first
     # cookie-authenticated write after every restart.
-    logger.info("Flushing Valkey caches (preserving sessions, CSRF tokens and rate limits)...")
+    # The `pending_memories*` prefixes preserve the durable queue of
+    # user-confirmed manual memories (memory_tool.create_memory) plus its
+    # `pending_memories_done:` / `pending_memories_attempts:` idempotency
+    # markers — these exist nowhere else, so a restart must not destroy them.
+    logger.info("Flushing Valkey caches (preserving sessions, CSRF tokens, rate limits and pending memories)...")
     from clients.valkey_client import get_valkey_client
     try:
         valkey_client = get_valkey_client()
         flushed_count = valkey_client.flush_except_whitelist(
-            preserve_prefixes=["session:", "csrf:", "rate_limit:", "heartbeat:"]
+            preserve_prefixes=[
+                "session:", "csrf:", "rate_limit:", "heartbeat:",
+                "pending_memories:", "pending_memories_done:", "pending_memories_attempts:",
+            ]
         )
     except Exception as e:
         logger.critical(f"Failed to flush Valkey caches on startup: {e}")

@@ -72,6 +72,45 @@ class EmailToolConfig(BaseModel):
 # Register with registry
 registry.register("email_tool", EmailToolConfig)
 
+
+def _quote_mailbox(name: str) -> str:
+    """
+    Quote a mailbox name as an RFC 3501 quoted-string.
+
+    imaplib joins command arguments with spaces and quotes nothing, so a
+    mailbox name containing spaces or other specials must be quoted by the
+    caller or the server parses it as multiple atoms.
+    """
+    escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _reject_crlf(value, name: str) -> None:
+    """
+    Reject CR/LF in strings that reach IMAP command construction.
+
+    An embedded CR or LF terminates the IMAP command line and the remainder
+    executes as a new tagged command in the user's authenticated session.
+    Quoted-string escaping does not close this; both defenses are required.
+    """
+    if isinstance(value, str) and ("\r" in value or "\n" in value):
+        raise ValueError(
+            f"Invalid {name}: carriage returns and line feeds are not allowed"
+        )
+
+
+def _unfold_header(value: str) -> str:
+    """
+    Unfold an RFC 5322 header value into a single line.
+
+    Folded headers retain embedded CR/LF continuation whitespace; assigning
+    such a value to msg[...] raises ValueError under the default email policy.
+    """
+    if not value:
+        return value
+    unfolded = re.sub(r"[\r\n][ \t]*", " ", value)
+    return unfolded.replace("\r", "").replace("\n", "").strip()
+
 # Operations that modify mailbox state — these require a reasoning parameter
 _MUTATING_OPERATIONS = frozenset({
     'send_email', 'reply_to_email', 'create_draft',
@@ -472,6 +511,16 @@ class EmailTool(Tool):
         self.drafts_folder = config.get("drafts_folder", "Drafts")
         self.trash_folder = config.get("trash_folder", "Trash")
 
+        # Folder names reach IMAP command construction (SELECT/APPEND); a CR or
+        # LF would terminate the command line (command injection).
+        for folder_field, folder_value in (
+            ("inbox_folder", self.inbox_folder),
+            ("sent_folder", self.sent_folder),
+            ("drafts_folder", self.drafts_folder),
+            ("trash_folder", self.trash_folder),
+        ):
+            _reject_crlf(folder_value, folder_field)
+
         self._config_loaded = True
     
     @property
@@ -580,7 +629,7 @@ class EmailTool(Tool):
             return True
         
         try:
-            status, response = self.connection.select(folder_name)
+            status, response = self.connection.select(_quote_mailbox(folder_name))
             if status != 'OK':
                 self.logger.warning(f"Failed to select folder '{folder_name}': {response}")
                 return False
@@ -593,7 +642,7 @@ class EmailTool(Tool):
             # Connection might have been lost, try to reconnect and retry once
             if self._connect():
                 try:
-                    status, response = self.connection.select(folder_name)
+                    status, response = self.connection.select(_quote_mailbox(folder_name))
                     if status == 'OK':
                         self.selected_folder = folder_name
                         self.logger.info(f"Successfully selected mailbox '{folder_name}' after reconnection")
@@ -900,7 +949,12 @@ class EmailTool(Tool):
         try:
             # Execute UID-based search (UIDs are stable, unlike sequence numbers)
             typ, data = self.connection.uid("SEARCH", None, criteria)
-            if typ != "OK" or not data or not data[0]:
+            # A NO response is a rejected search, not a successful empty one —
+            # report it as a failure rather than masking it as zero results.
+            if typ != "OK":
+                raise ValueError(f"IMAP search was rejected by the server (status {typ}) for criteria '{criteria}'")
+            if not data or not data[0]:
+                # OK with no data: a legitimate empty result
                 return []
 
             # Parse UIDs
@@ -934,8 +988,10 @@ class EmailTool(Tool):
         for uid in uids:
             try:
                 if load_content:
-                    # Fetch full message AND flags in single request using UID
-                    typ, data = self.connection.uid("FETCH", str(uid), "(RFC822 FLAGS)")
+                    # Fetch full message AND flags in single request using UID.
+                    # BODY.PEEK[] does not implicitly set \Seen (RFC 3501 §6.4.5);
+                    # marking read is an explicit, separate decision.
+                    typ, data = self.connection.uid("FETCH", str(uid), "(BODY.PEEK[] FLAGS)")
                     if typ != "OK" or not data or not data[0]:
                         continue
 
@@ -1029,7 +1085,12 @@ class EmailTool(Tool):
         try:
             # Set or unset the flag using UID
             command = "+FLAGS" if value else "-FLAGS"
-            self.connection.uid("STORE", str(uid), command, flag)
+            typ, _ = self.connection.uid("STORE", str(uid), command, flag)
+            # imaplib only raises on BAD; a NO response means the server
+            # rejected the flag change and must be reported as failure.
+            if typ != "OK":
+                self.logger.error(f"Server rejected flag change {flag} for UID {uid} (status {typ})")
+                return False
             return True
         except Exception as e:
             self.logger.error(f"Error setting flag {flag} for UID {uid}: {e}")
@@ -1121,6 +1182,21 @@ class EmailTool(Tool):
                 self.logger.error("Failed to connect to email server for email_tool")
                 raise ValueError("Failed to connect to email server")
 
+            # LLM-supplied strings that reach IMAP command construction: a CR
+            # or LF would terminate the command line and the remainder would
+            # execute as a new tagged command in the user's session. Reject,
+            # do not silently strip.
+            for arg_name, arg_value in (
+                ("folder", folder),
+                ("destination_folder", destination_folder),
+                ("email_id", email_id),
+                ("sender", sender),
+                ("subject", subject),
+                ("start_date", start_date),
+                ("end_date", end_date),
+            ):
+                _reject_crlf(arg_value, arg_name)
+
             # Translate "INBOX" to configured inbox folder (handles INBOX.* namespace servers)
             if folder == "INBOX" and hasattr(self, 'inbox_folder') and self.inbox_folder:
                 folder = self.inbox_folder
@@ -1153,16 +1229,23 @@ class EmailTool(Tool):
                     search_parts.append("UNSEEN")
                 
                 if sender:
-                    search_parts.append(f'FROM "{sender}"')
+                    # Escape IMAP quoted-string specials in LLM-supplied strings;
+                    # an embedded " or \ would terminate the quoted string early and
+                    # the remainder would be reparsed as further search criteria.
+                    escaped_sender = sender.replace("\\", "\\\\").replace('"', '\\"')
+                    search_parts.append(f'FROM "{escaped_sender}"')
                 
                 if subject:
-                    search_parts.append(f'SUBJECT "{subject}"')
+                    escaped_subject = subject.replace("\\", "\\\\").replace('"', '\\"')
+                    search_parts.append(f'SUBJECT "{escaped_subject}"')
                 
                 if start_date:
-                    search_parts.append(f'SINCE "{start_date}"')
+                    escaped_start = str(start_date).replace("\\", "\\\\").replace('"', '\\"')
+                    search_parts.append(f'SINCE "{escaped_start}"')
                 
                 if end_date:
-                    search_parts.append(f'BEFORE "{end_date}"')
+                    escaped_end = str(end_date).replace("\\", "\\\\").replace('"', '\\"')
+                    search_parts.append(f'BEFORE "{escaped_end}"')
                 
                 # Default to ALL if no criteria specified
                 search_criteria = " ".join(search_parts) if search_parts else "ALL"
@@ -1225,8 +1308,10 @@ class EmailTool(Tool):
                     raise ValueError(f"Failed to select folder '{email_folder}'")
 
                 try:
-                    # Fetch the full message using UID
-                    typ, data = self.connection.uid("FETCH", str(uid), "(RFC822)")
+                    # Fetch the full message using UID. BODY.PEEK[] does not
+                    # implicitly set \Seen; the explicit mark-read branch below
+                    # is the only thing that marks this message read.
+                    typ, data = self.connection.uid("FETCH", str(uid), "(BODY.PEEK[])")
                     if typ != "OK" or not data or not data[0]:
                         self.logger.error(f"Failed to fetch email content for ID {email_id} in email_tool")
                         raise ValueError(f"Failed to fetch email content for ID {email_id}")
@@ -1330,10 +1415,14 @@ class EmailTool(Tool):
 
                 try:
                     # Mark the message as deleted using UID
-                    self.connection.uid("STORE", str(uid), "+FLAGS", "\\Deleted")
+                    typ, _ = self.connection.uid("STORE", str(uid), "+FLAGS", "\\Deleted")
+                    if typ != "OK":
+                        raise ValueError(f"Server rejected delete flag for UID {uid} (status {typ})")
 
                     # Expunge the message
-                    self.connection.expunge()
+                    typ, _ = self.connection.expunge()
+                    if typ != "OK":
+                        raise ValueError(f"Server rejected expunge (status {typ})")
 
                     self._remove_later_reply_id(email_id)
 
@@ -1372,17 +1461,32 @@ class EmailTool(Tool):
 
                     if move_supported:
                         # Use the UID MOVE command
-                        self.connection.uid("MOVE", str(uid), destination_folder)
+                        typ, _ = self.connection.uid("MOVE", str(uid), _quote_mailbox(destination_folder))
+                        if typ != "OK":
+                            raise ValueError(
+                                f"Server rejected move to '{destination_folder}' (status {typ})"
+                            )
                     else:
                         # Fall back to UID copy and delete
                         # Copy to destination
-                        self.connection.uid("COPY", str(uid), destination_folder)
+                        typ, _ = self.connection.uid("COPY", str(uid), _quote_mailbox(destination_folder))
+                        if typ != "OK":
+                            # Copy failed: do NOT delete the source message —
+                            # STORE + expunge here would destroy it uncopied.
+                            raise ValueError(
+                                f"Server rejected copy to '{destination_folder}' (status {typ}); "
+                                "source message left intact"
+                            )
 
                         # Mark as deleted
-                        self.connection.uid("STORE", str(uid), "+FLAGS", "\\Deleted")
+                        typ, _ = self.connection.uid("STORE", str(uid), "+FLAGS", "\\Deleted")
+                        if typ != "OK":
+                            raise ValueError(f"Server rejected delete flag for UID {uid} (status {typ})")
 
                         # Expunge
-                        self.connection.expunge()
+                        typ, _ = self.connection.expunge()
+                        if typ != "OK":
+                            raise ValueError(f"Server rejected expunge (status {typ})")
 
                     # email_id is no longer valid after move.
                     self._remove_later_reply_id(email_id)
@@ -1466,7 +1570,9 @@ class EmailTool(Tool):
                     
                     # Save to Sent folder
                     try:
-                        self.connection.append(self.sent_folder, None, None, msg.as_bytes())
+                        typ, _ = self.connection.append(_quote_mailbox(self.sent_folder), None, None, msg.as_bytes())
+                        if typ != "OK":
+                            self.logger.warning(f"Failed to save to sent folder (status {typ})")
                     except Exception as e:
                         self.logger.warning(f"Failed to save to sent folder: {e}")
                     
@@ -1503,8 +1609,10 @@ class EmailTool(Tool):
                     raise ValueError(f"Failed to select folder '{email_folder}'")
 
                 try:
-                    # Fetch the original message using UID
-                    typ, data = self.connection.uid("FETCH", str(uid), "(RFC822)")
+                    # Fetch the original message using UID. BODY.PEEK[] does not
+                    # implicitly set \Seen (RFC 3501 §6.4.5); the reply-prep read
+                    # must not alter mailbox state. Mirrors get_email_content.
+                    typ, data = self.connection.uid("FETCH", str(uid), "(BODY.PEEK[])")
                     if typ != "OK" or not data or not data[0]:
                         self.logger.error("Failed to fetch original email for reply in email_tool")
                         raise ValueError("Failed to fetch original email for reply")
@@ -1516,8 +1624,10 @@ class EmailTool(Tool):
                     # Create reply message
                     msg = EmailMessage()
                     
-                    # Set subject with Re: prefix if needed
-                    original_subject = self._decode_header(original_msg.get("Subject", ""))
+                    # Set subject with Re: prefix if needed. Unfold first: folded
+                    # headers retain embedded CR/LF and assigning them to msg[...]
+                    # raises ValueError under the default email policy.
+                    original_subject = _unfold_header(self._decode_header(original_msg.get("Subject", "")))
                     if original_subject.lower().startswith("re:"):
                         msg["Subject"] = original_subject
                     else:
@@ -1529,10 +1639,10 @@ class EmailTool(Tool):
                     # Set To
                     if to:
                         parsed_to = self._parse_email_addresses(to)
-                        msg["To"] = parsed_to if parsed_to else original_msg.get("From", "")
+                        msg["To"] = parsed_to if parsed_to else _unfold_header(original_msg.get("From", ""))
                     else:
                         reply_to = original_msg.get("Reply-To")
-                        msg["To"] = reply_to if reply_to else original_msg.get("From", "")
+                        msg["To"] = _unfold_header(reply_to) if reply_to else _unfold_header(original_msg.get("From", ""))
                     
                     # Add CC/BCC if specified
                     if cc:
@@ -1549,12 +1659,12 @@ class EmailTool(Tool):
                     msg["Date"] = email.utils.formatdate(localtime=True)
                     
                     # Set In-Reply-To and References headers for threading
-                    message_id_header = original_msg.get("Message-ID")
+                    message_id_header = _unfold_header(original_msg.get("Message-ID"))
                     if message_id_header:
                         msg["In-Reply-To"] = message_id_header
                         
                         # Set References
-                        references = original_msg.get("References", "")
+                        references = _unfold_header(original_msg.get("References", ""))
                         if references:
                             msg["References"] = f"{references} {message_id_header}"
                         else:
@@ -1575,7 +1685,9 @@ class EmailTool(Tool):
                     
                     # Save to Sent folder
                     try:
-                        self.connection.append(self.sent_folder, None, None, msg.as_bytes())
+                        typ, _ = self.connection.append(_quote_mailbox(self.sent_folder), None, None, msg.as_bytes())
+                        if typ != "OK":
+                            self.logger.warning(f"Failed to save to sent folder (status {typ})")
                     except Exception as e:
                         self.logger.warning(f"Failed to save to sent folder: {e}")
                     
@@ -1637,8 +1749,21 @@ class EmailTool(Tool):
                     # Set the content
                     msg.set_content(body)
                     
-                    # Append to drafts folder with \Draft flag
-                    self.connection.append(self.drafts_folder, "\\Draft", None, msg.as_bytes())
+                    # Append to drafts folder with \Draft flag. imaplib.append
+                    # silently defaults to INBOX when the mailbox is falsy —
+                    # fail loudly instead of writing drafts into the inbox.
+                    if not self.drafts_folder:
+                        raise ValueError(
+                            "Drafts folder is not configured; cannot create draft "
+                            "(configure drafts_folder in Settings > Tools)"
+                        )
+                    typ, _ = self.connection.append(
+                        _quote_mailbox(self.drafts_folder), "\\Draft", None, msg.as_bytes()
+                    )
+                    if typ != "OK":
+                        raise ValueError(
+                            f"Server rejected draft append (status {typ}) to drafts folder '{self.drafts_folder}'"
+                        )
                     
                     self._log_audit("create_draft", f"draft to={to}, subject={subject}", reasoning, "success")
                     return {
@@ -1660,16 +1785,23 @@ class EmailTool(Tool):
                     search_parts.append("UNSEEN")
                 
                 if sender:
-                    search_parts.append(f'FROM "{sender}"')
+                    # Escape IMAP quoted-string specials in LLM-supplied strings;
+                    # an embedded " or \ would terminate the quoted string early and
+                    # the remainder would be reparsed as further search criteria.
+                    escaped_sender = sender.replace("\\", "\\\\").replace('"', '\\"')
+                    search_parts.append(f'FROM "{escaped_sender}"')
                 
                 if subject:
-                    search_parts.append(f'SUBJECT "{subject}"')
+                    escaped_subject = subject.replace("\\", "\\\\").replace('"', '\\"')
+                    search_parts.append(f'SUBJECT "{escaped_subject}"')
                 
                 if start_date:
-                    search_parts.append(f'SINCE "{start_date}"')
+                    escaped_start = str(start_date).replace("\\", "\\\\").replace('"', '\\"')
+                    search_parts.append(f'SINCE "{escaped_start}"')
                 
                 if end_date:
-                    search_parts.append(f'BEFORE "{end_date}"')
+                    escaped_end = str(end_date).replace("\\", "\\\\").replace('"', '\\"')
+                    search_parts.append(f'BEFORE "{escaped_end}"')
                 
                 # Must have at least one search criterion
                 if not search_parts:

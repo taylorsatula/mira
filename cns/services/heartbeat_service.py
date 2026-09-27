@@ -17,8 +17,14 @@ Design constraints honored here:
 - The wake schedule lives on the segment sentinel as heartbeat_wake_at
   metadata, stamped after every confirm: keepsleeping with a requested delay
   sleeps that long with no intervening ticks, keepsleeping without one (and
-  every failed turn) falls back to the configured default interval. The
-  dispatcher skips users whose wake time is in the future, and the segment
+  every breakout) falls back to the configured default interval. A FAILED turn
+  stamps heartbeat_retry_at instead — a backoff, not a sleep commitment: the
+  dispatcher honors both keys for pacing, but the timeout sweep defers only on
+  heartbeat_wake_at, so a persistently failing heartbeat cannot starve the
+  sweep. The pre-turn liveness stamp is likewise suspended after a streak of
+  consecutive failures (heartbeat_failures counter, reset on success), because
+  it resets the sweep's inactivity clock the same way.
+  The dispatcher skips users whose wake time is in the future, and the segment
   timeout service defers collapse until wake_at plus a grace window, so a
   long sleep never collapses the session out from under MIRA.
 - The stimulus user message is persisted with metadata heartbeat="true" and
@@ -31,7 +37,6 @@ Design constraints honored here:
   silently; per-user failures are logged and skipped because the next tick
   retries, but infrastructure failures in the enumeration query propagate.
 """
-import asyncio
 import contextvars
 import html
 import json
@@ -91,8 +96,9 @@ def _get_lock() -> UserRequestLock:
     """Per-user request lock shared with the chat paths (same Valkey key namespace).
 
     TTL is a crash backstop only: it must exceed the longest heartbeat turn so
-    a crashed worker cannot wedge the user, while a live turn holds and
-    releases the lock by token.
+    a crashed worker cannot wedge the user, while a live turn holds it, keeps
+    it renewed across its lifetime (start_renewal, cadence TTL/3), and
+    releases it by token.
     """
     global _lock
     if _lock is None:
@@ -117,6 +123,15 @@ _last_activity_seen: dict[str, str] = {}
 _active_cancel_events: dict[str, threading.Event] = {}
 
 _PAUSED_KEY = "heartbeat:paused:{user_id}"
+
+# A consecutive-failure streak suspends the pre-turn liveness stamp at this
+# cap. The stamp exists to protect one hung turn from being tombstoned
+# mid-flight; without the cap, a persistently failing heartbeat re-stamps
+# last_turn_at on every retry and starves the segment timeout sweep forever
+# (the sweep's last_turn_at guard resets its inactivity clock). Three strikes
+# balance the two: the first attempts of a streak keep hang protection, a
+# persistent failure lets the sweep fire at the normal threshold.
+_LIVENESS_STAMP_FAILURE_CAP = 3
 
 
 def _is_paused(user_id: str) -> bool:
@@ -201,6 +216,25 @@ def _stamp_wake_at(pool, continuum, user_id: str, delay_seconds: int) -> str | N
     return wake_at
 
 
+def _stamp_retry_at(pool, continuum, user_id: str, delay_seconds: int) -> None:
+    """Stamp the retry backoff (now + delay) and bump the failure counter.
+
+    Distinct from _stamp_wake_at by design: a failed turn is not a sleep
+    commitment, so the backoff lands on heartbeat_retry_at, which the segment
+    timeout service ignores. See set_heartbeat_retry_at for the full contract.
+    Raises on infrastructure failure; callers decide whether that aborts the
+    tick."""
+    from utils.timezone_utils import format_utc_iso
+
+    retry_at = format_utc_iso(utc_now() + timedelta(seconds=delay_seconds))
+    stamped = pool.repository.set_heartbeat_retry_at(continuum.id, user_id, retry_at)
+    if not stamped:
+        logger.warning(
+            "No active segment sentinel for user %s; retry backoff %s not stamped",
+            user_id, retry_at,
+        )
+
+
 def _run_heartbeat_turn(user_id: str, tick_id: str) -> dict[str, Any]:
     """Execute one heartbeat turn synchronously. Runs inside a copied context
     that already has the user id set. Raises on infrastructure failure."""
@@ -229,6 +263,7 @@ def _run_heartbeat_turn(user_id: str, tick_id: str) -> dict[str, Any]:
         )
     set_current_segment_id(segment_id)
     segment_turn_number = int(segment_metadata.get("segment_turn_count", 0) or 0)
+    consecutive_failures = int(segment_metadata.get("heartbeat_failures", 0) or 0)
 
     cancel_event = threading.Event()
     from utils.user_context import set_cancel_event
@@ -237,17 +272,22 @@ def _run_heartbeat_turn(user_id: str, tick_id: str) -> dict[str, Any]:
     try:
         return _execute_heartbeat_turn(
             pool, continuum, user_id, tick_id, segment_turn_number,
+            stamp_liveness=consecutive_failures < _LIVENESS_STAMP_FAILURE_CAP,
         )
     except Exception:
         # A failed turn must not retry at dispatcher cadence (60s): stamp the
-        # default interval so the next attempt waits a normal wake cycle.
-        # Best-effort: if this stamp also fails the exception below still
-        # propagates and the next dispatcher pass retries.
+        # retry backoff so the next attempt waits a normal wake cycle. The
+        # backoff lands on heartbeat_retry_at, NOT heartbeat_wake_at — the
+        # timeout sweep defers collapse on wake_at only, so a persistent
+        # failure loop cannot starve it (which is also why the liveness
+        # stamp above is suspended during a failure streak). Best-effort:
+        # if this stamp also fails the exception below still propagates and
+        # the next dispatcher pass retries.
         try:
-            _stamp_wake_at(pool, continuum, user_id, app_config.heartbeat.interval_seconds)
+            _stamp_retry_at(pool, continuum, user_id, app_config.heartbeat.interval_seconds)
         except Exception as stamp_error:
             logger.warning(
-                "Wake stamp after failed heartbeat turn failed for user %s: %s",
+                "Retry-backoff stamp after failed heartbeat turn failed for user %s: %s",
                 user_id, stamp_error,
             )
         raise
@@ -261,6 +301,7 @@ def _execute_heartbeat_turn(
     user_id: str,
     tick_id: str,
     segment_turn_number: int,
+    stamp_liveness: bool,
 ) -> dict[str, Any]:
     """Stimulus, turn, commit, decision readback, decision stamp. The segment
     and cancel-event wiring live in the caller."""
@@ -272,8 +313,12 @@ def _execute_heartbeat_turn(
     stimulus = _build_stimulus(tick_id, digest)
 
     # Liveness stamp: the timeout service's last_turn_at guard then covers this
-    # wake turn for one threshold window even if the turn hangs.
-    pool.repository.stamp_segment_liveness(continuum.id, user_id)
+    # wake turn for one threshold window even if the turn hangs. Suspended
+    # during a consecutive-failure streak (the caller computed stamp_liveness):
+    # a streak that kept stamping would reset the sweep's inactivity clock on
+    # every retry and starve collapse forever.
+    if stamp_liveness:
+        pool.repository.stamp_segment_liveness(continuum.id, user_id)
 
     uow = pool.begin_work(continuum)
     continuum, response_text, _metadata = get_orchestrator().process_message(
@@ -319,6 +364,10 @@ def _execute_heartbeat_turn(
         sleep_source = "default"
     wake_at = _stamp_wake_at(pool, continuum, user_id, delay_seconds)
 
+    # The turn succeeded: re-arm the liveness stamp (hang protection) that a
+    # failure streak may have suspended.
+    pool.repository.reset_heartbeat_failures(continuum.id, user_id)
+
     # Post-tag the stimulus row with the decision. Downstream consumers filter
     # keepsleeping turns out of history/live-context/extraction/summaries and
     # keep breakout turns, so the decision must be readable from message
@@ -357,8 +406,15 @@ def _execute_heartbeat_turn(
     }
 
 
-async def heartbeat_tick() -> None:
+def heartbeat_tick() -> None:
     """Scheduler entry point: one wake cycle across all users with active segments.
+
+    Synchronous by design: APScheduler threadpools plain-function jobs, so
+    the admin enumeration query and every per-user turn run off the event
+    loop instead of stalling it once a minute. The one async obligation —
+    pushing a breakout message to live websocket clients — crosses to the
+    loop through the sanctioned bridge (push_proactive_message_sync) in the
+    websocket module that owns the loop.
 
     Device binding: the pass aggregates the earliest next wake obligation
     across all users (min heartbeat_wake_at, freshly stamped stamps included)
@@ -386,41 +442,67 @@ async def heartbeat_tick() -> None:
     wake_by_user: dict[str, str] = {}
     stay_awake = False
 
-    loop = asyncio.get_running_loop()
     for segment in segments:
         user_id = str(segment["user_id"])
         try:
             # MIRA asked to sleep until heartbeat_wake_at (stamped by the last
-            # confirm): no ticks until then. Absent or malformed stamp means
-            # due now.
-            wake_at_str = segment["metadata"].get("heartbeat_wake_at")
-            if wake_at_str:
-                try:
-                    wake_dt = parse_utc_time_string(wake_at_str)
-                except (ValueError, TypeError):
-                    wake_dt = None
-                if wake_dt is not None and utc_now() < wake_dt:
-                    wake_by_user[user_id] = wake_at_str
-                    if earliest_wake_dt is None or wake_dt < earliest_wake_dt:
-                        earliest_wake_dt, earliest_wake_str = wake_dt, wake_at_str
+            # confirm), or a failed turn backed off until heartbeat_retry_at:
+            # no ticks until the earliest of them. A future stamp on EITHER
+            # key is a scheduling fact for the dispatcher only — the timeout
+            # sweep reads heartbeat_wake_at alone (a real sleep commitment,
+            # never the retry backoff). Absent or malformed stamps mean due
+            # now.
+            earliest_future = None
+            for stamp_str in (
+                segment["metadata"].get("heartbeat_wake_at"),
+                segment["metadata"].get("heartbeat_retry_at"),
+            ):
+                if not stamp_str:
                     continue
+                try:
+                    stamp_dt = parse_utc_time_string(stamp_str)
+                except (ValueError, TypeError):
+                    continue
+                if utc_now() < stamp_dt and (
+                    earliest_future is None or stamp_dt < earliest_future[0]
+                ):
+                    earliest_future = (stamp_dt, stamp_str)
+            if earliest_future is not None:
+                # Site-specific rationale (assessed by the human): this
+                # branch aggregates the sleep schedule without the user-lock
+                # check below, and that was assessed as not a real-world
+                # issue — a future-wake stamp computed while a turn is running
+                # does not arise in normal operation, so no lock machinery is
+                # warranted here. Revisit only if the wake cadence changes to
+                # overlap live turns routinely.
+                wake_by_user[user_id] = earliest_future[1]
+                if (
+                    earliest_wake_dt is None
+                    or earliest_future[0] < earliest_wake_dt
+                ):
+                    earliest_wake_dt, earliest_wake_str = earliest_future
+                continue
 
-            if await loop.run_in_executor(None, _is_paused, user_id):
+            if _is_paused(user_id):
                 logger.debug("Heartbeat paused externally for user %s", user_id)
                 continue
 
-            lock_token = await loop.run_in_executor(None, _get_lock().acquire, user_id)
+            lock_token = _get_lock().acquire(user_id)
             if lock_token is None:
                 # User mid-turn: the box is actively serving, device stays awake.
                 stay_awake = True
                 logger.debug("Heartbeat skipped for user %s: request lock held", user_id)
                 continue
 
+            # Background renewal: one renewal every TTL/3 — safely inside the
+            # TTL — so a heartbeat turn cannot outlive its own lock (which
+            # would let a chat turn interleave on the same segment and leave
+            # this turn's release as a token-mismatch no-op).
+            renewal_stop = _get_lock().start_renewal(user_id, lock_token)
+
             try:
                 mode = app_config.heartbeat.wake_mode
-                if mode == "pregated" and not await loop.run_in_executor(
-                    None, _pregate_check, user_id
-                ):
+                if mode == "pregated" and not _pregate_check(user_id):
                     # Due now but nothing new: the next pass re-checks at ticker
                     # cadence, so the obligation is ticker-bounded — stay awake.
                     stay_awake = True
@@ -434,7 +516,7 @@ async def heartbeat_tick() -> None:
                     set_current_user_id(user_id)
                     return _run_heartbeat_turn(user_id, tick_id)
 
-                result = await loop.run_in_executor(None, ctx.run, turn_with_context)
+                result = ctx.run(turn_with_context)
                 if result.get("skipped"):
                     continue
                 logger.info(
@@ -446,9 +528,9 @@ async def heartbeat_tick() -> None:
                     # device must be awake to serve that.
                     stay_awake = True
                     if result.get("response_text"):
-                        from cns.api.websocket_chat import push_proactive_message
+                        from cns.api.websocket_chat import push_proactive_message_sync
 
-                        await push_proactive_message(
+                        push_proactive_message_sync(
                             user_id=user_id,
                             message_id=result.get("final_message_id"),
                             turn_id=result.get("turn_id"),
@@ -468,7 +550,8 @@ async def heartbeat_tick() -> None:
                     # retries at ticker cadence — stay awake.
                     stay_awake = True
             finally:
-                await loop.run_in_executor(None, _get_lock().release, user_id, lock_token)
+                renewal_stop.set()
+                _get_lock().release(user_id, lock_token)
         except GenerationCancelled:
             # Cancelled externally: someone is actively steering the user —
             # the device stays awake.
@@ -494,9 +577,7 @@ async def heartbeat_tick() -> None:
             "kind": "heartbeat_sleep",
             "user_wake_times": wake_by_user,
         }
-        await loop.run_in_executor(
-            None, notify_heartbeat_sleep, earliest_wake_str, metadata
-        )
+        notify_heartbeat_sleep(earliest_wake_str, metadata)
 
 
 def _pregate_check(user_id: str) -> bool:

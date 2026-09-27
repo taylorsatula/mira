@@ -48,6 +48,23 @@ class ValkeyClient:
             logger.toast("Valkey running without authentication")
 
         parsed = urlparse(self.valkey_url)
+        # TLS schemes must not be accepted-and-dropped — this client
+        # implements no TLS (no ssl key reaches any connection constructor),
+        # so honoring the scheme silently would connect in plaintext. Reject
+        # loudly at config load instead (same fail-fast shape as the
+        # query-parameter rejection in postgres_client._parse_database_url).
+        if parsed.scheme in ('rediss', 'valkeys'):
+            raise ValueError(
+                f"Valkey URL scheme {parsed.scheme!r} requests TLS, which this client does not "
+                f"implement — accepting it would silently connect in plaintext. Use a "
+                f"valkey:// or redis:// URL (TLS support would need a certificate-verification "
+                f"Vault surface, which does not exist): {self.valkey_url}"
+            )
+        if parsed.scheme not in ('redis', 'valkey'):
+            raise ValueError(
+                f"Valkey URL scheme {parsed.scheme!r} is not supported (expected valkey:// or "
+                f"redis://): {self.valkey_url}"
+            )
         self.host = parsed.hostname or 'localhost'
         self.port = parsed.port or 6379
         logger.debug(f"Valkey config loaded from Vault: {self.host}:{self.port}")
@@ -167,15 +184,32 @@ class ValkeyClient:
 
     def increment_with_expiry(self, key: str, expiry_seconds: int) -> int:
         """Atomic increment with expiration - ideal for rate limiting."""
-        # First increment the counter
-        count = self._client.incr(key)
-
-        # Only set expiry if this is the first increment (count == 1)
-        # This prevents resetting the TTL window on every request
-        if count == 1:
-            self._client.expire(key, expiry_seconds)
-
+        # Single EVAL so the counter can never exist without its TTL:
+        # a crash between a bare INCR and a separate EXPIRE must not be
+        # able to immortalize a rate-limit counter. EXPIRE NX sets the
+        # TTL only when the key has none, preserving the window on
+        # subsequent increments (and healing any TTL-less key).
+        script = """
+        local count = redis.call('INCR', KEYS[1])
+        redis.call('EXPIRE', KEYS[1], ARGV[1], 'NX')
         return count
+        """
+        return int(self._client.eval(script, 1, key, expiry_seconds))
+
+    def delete_and_increment(self, delete_key: str, increment_key: str) -> tuple[int, int]:
+        """Atomic delete-then-increment, returning (deleted_count, new_counter).
+
+        Single EVAL so no writer can observe or land between the DEL and the
+        counter bump: a reader holding the pre-increment counter can never
+        re-create the deleted key with stale content after this call returns.
+        """
+        script = """
+        local deleted = redis.call('DEL', KEYS[1])
+        local count = redis.call('INCR', KEYS[2])
+        return {deleted, count}
+        """
+        result = self._client.eval(script, 2, delete_key, increment_key)
+        return int(result[0]), int(result[1])
 
     def json_set(self, key: str, path: str, value: Dict[str, Any], ex: Optional[int] = None) -> bool:
         """Set JSON data, optionally with expiration.

@@ -367,13 +367,16 @@ class LTMemoryDB:
         resolved_user_id = self._resolve_user_id(user_id)
 
         with self.session_manager.get_session(resolved_user_id) as session:
-            session.execute_update("""
-                UPDATE memories
-                SET is_archived = TRUE,
-                    archived_at = NOW(),
-                    updated_at = NOW()
-                WHERE id = %(memory_id)s
-            """, {'memory_id': memory_id})
+            with session.transaction():
+                session.execute_update("""
+                    UPDATE memories
+                    SET is_archived = TRUE,
+                        archived_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = %(memory_id)s
+                """, {'memory_id': memory_id})
+
+                self._recount_entity_link_counts([memory_id], session)
 
         # Clean up dead links while we're here
         self.remove_dead_links([memory_id], user_id=resolved_user_id)
@@ -671,6 +674,42 @@ class LTMemoryDB:
 
         return result if result else 0
 
+    def _recount_entity_link_counts(
+        self,
+        memory_ids: List[UUID],
+        session: LTMemorySession
+    ) -> None:
+        """
+        Recount link_count for every entity linked by the given memories.
+
+        Recount, not decrement: link_count is a live tally of non-archived
+        linked memories (mirrors merge_entities), so archived memories stop
+        inflating entity hub scores and merge-prompt link counts. Called after
+        memories are archived, inside the archiving transaction.
+
+        Args:
+            memory_ids: Memory UUIDs whose linked entities need a recount
+            session: Database session
+        """
+        session.execute_update("""
+            UPDATE entities
+            SET link_count = (
+                    SELECT COUNT(*)
+                    FROM memories m
+                    WHERE m.entity_links @> jsonb_build_array(
+                              jsonb_build_object('uuid', entities.id::text)
+                          )
+                      AND m.is_archived = FALSE
+                ),
+                updated_at = NOW()
+            WHERE id IN (
+                SELECT (el->>'uuid')::uuid
+                FROM memories m2,
+                     jsonb_array_elements(COALESCE(m2.entity_links, '[]'::jsonb)) AS el
+                WHERE m2.id = ANY(%(memory_ids)s::uuid[])
+            )
+        """, {'memory_ids': list(memory_ids)})
+
     def update_access_stats(
         self,
         memory_id: UUID,
@@ -716,13 +755,19 @@ class LTMemoryDB:
                 # Step 2: Recalculate importance score using shared formula
                 self._recalculate_importance_scores([memory_id], session)
 
-                # Step 3: Fetch and return updated memory
-                result = self.get_memory(memory_id, user_id=resolved_user_id)
+                # Step 3: Fetch and return updated memory from THIS
+                # transaction — get_memory would read through a second pooled
+                # connection and miss the uncommitted UPDATE above
+                result = session.execute_single("""
+                    SELECT * FROM memories
+                    WHERE id = %(memory_id)s
+                    LIMIT 1
+                """, {'memory_id': memory_id})
                 if not result:
                     raise RuntimeError(
                         f"Memory {memory_id} disappeared between UPDATE and SELECT"
                     )
-                return result
+                return Memory(**result)
 
     def apply_pin_boost(
         self,
@@ -852,12 +897,22 @@ class LTMemoryDB:
                 list(stale_ids),
             ))
             archived_count = len(archived)
+            archived_ids = [row['id'] for row in archived]
 
-            logger.info(
-                f"Bulk recalculated {updated_count} memories, archived {archived_count}"
-            )
+            if archived_ids:
+                # Mirror archive_memory: link_count tracks non-archived links only
+                self._recount_entity_link_counts(archived_ids, session)
 
-            return updated_count
+        # Mirror archive_memory: purge archived UUIDs from live memories' link
+        # arrays (remove_dead_links opens its own session, so stay outside ours)
+        if archived_ids:
+            self.remove_dead_links(archived_ids, user_id=resolved_user_id)
+
+        logger.info(
+            f"Bulk recalculated {updated_count} memories, archived {archived_count}"
+        )
+
+        return updated_count
 
     def recalculate_temporal_scores(
         self,
@@ -923,13 +978,23 @@ class LTMemoryDB:
                 list(temporal_ids),
             ))
             archived_count = len(archived)
+            archived_ids = [row['id'] for row in archived]
 
-            logger.info(
-                f"Temporal recalculation: updated {updated_count} memories, "
-                f"archived {archived_count}"
-            )
+            if archived_ids:
+                # Mirror archive_memory: link_count tracks non-archived links only
+                self._recount_entity_link_counts(archived_ids, session)
 
-            return updated_count
+        # Mirror archive_memory: purge archived UUIDs from live memories' link
+        # arrays (remove_dead_links opens its own session, so stay outside ours)
+        if archived_ids:
+            self.remove_dead_links(archived_ids, user_id=resolved_user_id)
+
+        logger.info(
+            f"Temporal recalculation: updated {updated_count} memories, "
+            f"archived {archived_count}"
+        )
+
+        return updated_count
 
     # ==================== LINK OPERATIONS ====================
 
@@ -1125,9 +1190,19 @@ class LTMemoryDB:
         with self.session_manager.get_session(resolved_user_id) as session:
             query = """
             SELECT a.id AS id_a, a.name AS name_a, a.entity_type AS type_a,
-                   a.link_count AS links_a,
+                   (SELECT COUNT(*)
+                    FROM memories m
+                    WHERE m.entity_links @> jsonb_build_array(
+                              jsonb_build_object('uuid', a.id::text)
+                          )
+                      AND m.is_archived = FALSE) AS links_a,
                    b.id AS id_b, b.name AS name_b, b.entity_type AS type_b,
-                   b.link_count AS links_b,
+                   (SELECT COUNT(*)
+                    FROM memories m
+                    WHERE m.entity_links @> jsonb_build_array(
+                              jsonb_build_object('uuid', b.id::text)
+                          )
+                      AND m.is_archived = FALSE) AS links_b,
                    similarity(a.name, b.name) AS sim
             FROM entities a
             JOIN entities b ON a.id < b.id
@@ -1417,7 +1492,7 @@ class LTMemoryDB:
                         SELECT COUNT(*)
                         FROM memories
                         WHERE entity_links @> jsonb_build_array(
-                                  jsonb_build_object('uuid', %(target_id_str)s)
+                                  jsonb_build_object('uuid', %(target_id_str)s::text)
                               )
                           AND is_archived = FALSE
                     ),

@@ -17,7 +17,7 @@ from .mode import auth_mode
 from .types import UserProfile, SessionData, APITokenContext
 from .webauthn_service import WebAuthnService
 from utils.user_context import set_current_user_id, set_current_user_data
-from utils.timezone_utils import format_utc_iso, utc_now
+from utils.timezone_utils import format_utc_iso, utc_now, validate_timezone
 from utils.profile_validation import validate_profile_name
 from cns.api.base import (
     SuccessResponse,
@@ -57,6 +57,11 @@ class SignupRequest(BaseModel):
     @classmethod
     def validate_name(cls, value: str, info) -> str:
         return validate_profile_name(value, info.field_name)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_tz(cls, value: str) -> str:
+        return validate_timezone(value)
 
 
 class MagicLinkRequest(BaseModel):

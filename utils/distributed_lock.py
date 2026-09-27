@@ -6,6 +6,7 @@ replacing in-memory locks that only work within a single process.
 """
 
 import logging
+import threading
 import uuid
 from typing import Optional
 from contextlib import contextmanager
@@ -33,7 +34,21 @@ class DistributedLock:
         """
         self.lock_prefix = lock_prefix
         self.default_ttl = default_ttl
-        self.valkey = get_valkey()
+        self._valkey = None
+
+    @property
+    def valkey(self):
+        """Valkey client, resolved on first use — never at import time.
+
+        Construction of a DistributedLock must not touch infrastructure:
+        locks are constructed at module import (e.g. UserRequestLock in
+        cns/api/chat.py), and import must succeed without Valkey/Vault
+        credentials. Unavailability still propagates — at the first
+        acquire/release/renew, never as a silent no-lock.
+        """
+        if self._valkey is None:
+            self._valkey = get_valkey()
+        return self._valkey
     
     def acquire(self, resource_id: str, ttl: int | None = None) -> str | None:
         """
@@ -149,7 +164,55 @@ class DistributedLock:
             logger.warning("Lock renewal for %s failed: ownership lost", resource_id)
 
         return renewed
-    
+
+    def start_renewal(self, resource_id: str, token: str) -> threading.Event:
+        """
+        Start a background daemon thread that keeps renewing a held lock
+        until the returned stop Event is set (the guarded action ended) or
+        ownership is lost.
+
+        The cadence is TTL/3 — safely inside the TTL: one missed or slow
+        renewal still leaves two full intervals of cover, so a live turn
+        cannot outlive its own lock. Each renewal resets the full TTL via
+        compare-and-expire against the token, so a lock that expired and was
+        re-acquired by another owner is never extended by this thread.
+
+        The caller MUST set the returned Event when the guarded action ends;
+        the thread then exits within one cadence interval.
+
+        Args:
+            resource_id: Unique identifier for the locked resource
+            token: Token returned by the acquire() call that won the lock
+
+        Returns:
+            threading.Event the owner sets to stop the renewal
+        """
+        interval = max(self.default_ttl // 3, 1)
+        stop = threading.Event()
+
+        def _renew_loop() -> None:
+            while not stop.wait(interval):
+                try:
+                    if not self.renew(resource_id, token):
+                        # Ownership lost (expired and re-acquired elsewhere):
+                        # nothing left to renew.
+                        break
+                except Exception:
+                    # Transient infrastructure failure: the key is not
+                    # deleted by Valkey being down, so retry at the next
+                    # cadence tick while cover remains.
+                    logger.warning(
+                        "Background lock renewal for %s failed; retrying next interval",
+                        resource_id, exc_info=True,
+                    )
+
+        threading.Thread(
+            target=_renew_loop,
+            name=f"lock-renewal:{self.lock_prefix}{resource_id}",
+            daemon=True,
+        ).start()
+        return stop
+
     def is_locked(self, resource_id: str) -> bool:
         """
         Check if a resource is currently locked.
@@ -276,6 +339,15 @@ class UserRequestLock:
             True if renewed, False if ownership was lost
         """
         return self.lock.renew(user_id, token, ttl=self.default_ttl)
+
+    def start_renewal(self, user_id: str, token: str) -> threading.Event:
+        """
+        Start background renewal of the held lock (see
+        DistributedLock.start_renewal). The caller sets the returned Event
+        when the turn ends; the renewal thread stops within one cadence
+        interval (TTL/3).
+        """
+        return self.lock.start_renewal(user_id, token)
     
     def is_locked(self, user_id: str) -> bool:
         """

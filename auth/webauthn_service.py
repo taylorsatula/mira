@@ -180,10 +180,6 @@ class WebAuthnService:
                 expected_rp_id=self.rp_id
             )
 
-            # Get current user data
-            user = self.db.get_user_by_id(user_id)
-            current_creds = user.webauthn_credentials or {}
-
             # Prepare credential data for storage, keyed by the base64url
             # credential ID the browser returns in every ceremony.
             credential_id = bytes_to_base64url(verification.credential_id)
@@ -198,11 +194,17 @@ class WebAuthnService:
                 "name": f"Biometric Device {credential_id[:8]}"
             }
 
-            # Add new credential
-            current_creds[credential_data["credential_id"]] = credential_data
-
-            # Update user credentials
-            self.db.update_webauthn_credentials(user_id, current_creds)
+            # Add the credential with a single guarded UPDATE: zero rows means
+            # the user vanished or this credential ID is already registered —
+            # either way the registration did not land and must not report
+            # success.
+            if not self.db.add_webauthn_credential(
+                user_id, credential_data["credential_id"], credential_data
+            ):
+                raise AuthError(
+                    "credential_registration_failed",
+                    "Credential registration did not complete; no change was stored"
+                )
 
             return {
                 "verified": True,
@@ -453,17 +455,12 @@ class WebAuthnService:
             if not user:
                 raise AuthError("user_not_found", "User not found")
 
-            current_creds = user.webauthn_credentials or {}
-
-            # Check if credential exists
-            if credential_id not in current_creds:
+            # Remove the credential with a single guarded UPDATE: zero rows
+            # means the user vanished or this credential ID is no longer
+            # registered — either way the removal did not land and must not
+            # report success.
+            if not self.db.remove_webauthn_credential(user_id, credential_id):
                 raise AuthError("credential_not_found", "Credential not found")
-
-            # Remove credential
-            del current_creds[credential_id]
-
-            # Update user credentials
-            self.db.update_webauthn_credentials(user_id, current_creds)
 
             return True
 

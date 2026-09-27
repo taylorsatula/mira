@@ -15,7 +15,10 @@ Handles SessionTimeoutEvent by:
 """
 from __future__ import annotations
 
+import json
 import logging
+import threading
+from contextvars import copy_context
 from typing import List, Optional, TYPE_CHECKING
 from uuid import UUID
 
@@ -28,15 +31,20 @@ if TYPE_CHECKING:
     from cns.infrastructure.continuum_pool import ContinuumPool
     from tools.repo import ToolRepository
 
-from cns.core.events import SegmentTimeoutEvent, SegmentCollapsedEvent, ManifestUpdatedEvent
+from cns.core.events import (
+    SegmentTimeoutEvent, SegmentCollapsedEvent, ManifestUpdatedEvent, TurnCompletedEvent,
+)
 from cns.core.message import Message
 from cns.services.segment_helpers import collapse_segment_sentinel
 from cns.services.summary_generator import SummaryGenerator, SummaryResult, SummaryType
-from cns.infrastructure.continuum_repository import ContinuumRepository
+from cns.infrastructure.continuum_repository import (
+    ContinuumRepository,
+    COLLAPSE_CLAIM_STALE_MINUTES,
+)
 from clients.hybrid_embeddings_provider import EmbeddingsProvider
 from clients.valkey_client import get_valkey_client
 from cns.integration.event_bus import EventBus
-from utils.timezone_utils import utc_now, parse_time_string, ensure_utc, validate_timezone
+from utils.timezone_utils import utc_now, format_utc_iso, parse_time_string, ensure_utc, validate_timezone
 from utils.user_context import (
     set_current_user_id, get_current_user_id, clear_user_context, get_user_preferences,
 )
@@ -46,7 +54,35 @@ logger = logging.getLogger(__name__)
 # Maximum collapse attempts before tombstoning a segment.
 # Prevents infinite retry loops when a persistent failure (billing, DB schema,
 # missing config) causes every attempt to fail after the expensive LLM call.
+# The counter deliberately counts infrastructure failures too — the
+# transient-vs-persistent distinction is intentionally not made (accepted
+# decision 2026-09-20).
 MAX_COLLAPSE_ATTEMPTS = 3
+
+# Pending manual collapse. A manual collapse requested while the user's
+# turn is in flight must not run mid-turn — turn messages commit only at turn
+# end, and the collapse recheck's last_turn_at is stamped at message arrival,
+# so the interleaving turn is invisible to it and would be orphaned from the
+# digest. The actions API entry defers instead: it writes this single flag and
+# returns; the completing turn's TurnCompletedEvent consumes it (see
+# SegmentCollapseHandler._handle_turn_completed). No timers, no polling loops
+# — the turn's own completion event is the trigger. The TTL only bounds a
+# flag whose turn died without completing (crash, halt): a stale flag is
+# harmless — the claim/not-found refusal in collapse_segment makes the late
+# run a no-op, and the scheduled timeout path collapses the segment anyway.
+PENDING_MANUAL_COLLAPSE_KEY = "pending_manual_collapse:{user_id}"
+PENDING_MANUAL_COLLAPSE_TTL_SECONDS = 24 * 3600
+
+# Pending manual-memory drain. The Valkey queue written by
+# memory_tool.create_memory is the sole durable record of a user-confirmed
+# memory, so an item counts as consumed only once a per-pending_id done
+# marker is durably set — never via a blanket queue delete before the work
+# (store_memories is NOT idempotent; the marker is what prevents a re-drain
+# from double-storing, mirroring the keyed-idempotence shape of the
+# extract_unprocessed_segments retry sweep).
+PENDING_DONE_MARKER_TTL_SECONDS = 14 * 86400  # outlives the queue's refreshed TTL below
+PENDING_QUEUE_RETRY_TTL_SECONDS = 7 * 86400   # keeps failing items retryable past the producer's 24h TTL
+PENDING_ITEM_MAX_ATTEMPTS = 3                # dead-letter bound: a permanently-failing item must not wedge the queue
 
 
 def _resolve_pending_memory_timezone(segment_id: str) -> str:
@@ -183,6 +219,11 @@ class SegmentCollapseHandler:
         self.event_bus.subscribe('SegmentTimeoutEvent', self.handle_timeout)
         logger.info("SegmentCollapseHandler subscribed to SegmentTimeoutEvent")
 
+        # Consume a queued manual collapse at the turn's completion —
+        # see _handle_turn_completed.
+        self.event_bus.subscribe('TurnCompletedEvent', self._handle_turn_completed)
+        logger.info("SegmentCollapseHandler subscribed to TurnCompletedEvent")
+
     def _init_feedback_loop(self) -> bool:
         """
         Lazy initialization of feedback loop components.
@@ -240,11 +281,143 @@ class SegmentCollapseHandler:
             self.collapse_segment(event)
         except Exception as e:
             logger.error(
-                f"COLLAPSE FAILURE: Segment {event.segment_id} collapse failed. "
-                f"Segment will remain active and retry on next timeout check. "
-                f"Operators should investigate if this persists. Error: {e}",
+                f"COLLAPSE FAILURE: Segment {event.segment_id} collapse did not complete. "
+                f"If the failure happened before the sentinel was saved, the segment "
+                f"remains active and will retry on the next timeout check. A sentinel "
+                f"already saved 'collapsed' is never re-matched; its downstream failures "
+                f"(pending-memory drain, extraction, feedback/portrait passes) are logged "
+                f"separately as a CRITICAL 'downstream processing failed' and flagged "
+                f"'downstream_failed' on the sentinel for retry by the extraction sweep "
+                f"and the next pending-memory drain. Operators should investigate if "
+                f"this persists. Error: {e}",
                 exc_info=True
             )
+
+    def queue_manual_collapse(self, user_id: str, continuum_id: str, segment_id: str) -> None:
+        """
+        Queue a manual collapse behind the user's in-flight turn.
+
+        Called by the actions API entry when the per-user turn lock is held:
+        collapsing mid-turn orphans that turn from the digest (turn messages
+        commit only at turn end, and the collapse recheck's last_turn_at is
+        stamped at message arrival, so it cannot see the interleaving turn).
+        The single flag written here is consumed by _handle_turn_completed at
+        the next TurnCompletedEvent — no timers, no polling: the completing
+        turn itself triggers the deferred collapse.
+
+        Args:
+            user_id: User whose segment to collapse
+            continuum_id: Continuum UUID (string, captured at request time)
+            segment_id: Segment UUID (string, captured at request time)
+        """
+        get_valkey_client().set(
+            PENDING_MANUAL_COLLAPSE_KEY.format(user_id=user_id),
+            json.dumps({
+                "user_id": user_id,
+                "continuum_id": continuum_id,
+                "segment_id": segment_id,
+            }),
+            ex=PENDING_MANUAL_COLLAPSE_TTL_SECONDS,
+        )
+        logger.info(
+            "Manual collapse for segment %s queued behind the in-flight turn; "
+            "it will run when the turn completes",
+            segment_id,
+        )
+
+    def _handle_turn_completed(self, event: TurnCompletedEvent) -> None:
+        """
+        TurnCompletedEvent subscriber: run a queued manual collapse, if any.
+
+        Fires from the turn's post-commit callback, so the completing turn's
+        messages are durably in the segment — collapsing here includes them,
+        which is the whole point of the queue. The collapse itself runs on its
+        own thread (canonical copy-context pattern, cns/services/tool_loop.py):
+        this subscriber is synchronous inside the reply's commit, and the
+        collapse's LLM summary must not stall the reply the user is waiting
+        for. A user can hold only one turn at a time (the same lock the entry
+        probes), so flag consumes cannot pile up; even a racing double
+        consume is a refused no-op under the claim mutual exclusion.
+        """
+        try:
+            valkey = get_valkey_client()
+            key = PENDING_MANUAL_COLLAPSE_KEY.format(user_id=event.user_id)
+            raw = valkey.get(key)
+            if raw is None:
+                return
+            valkey.delete(key)
+            payload = json.loads(raw)
+        except Exception:
+            logger.error(
+                "Could not read the queued manual collapse for user %s; the "
+                "scheduled timeout path still collapses the segment",
+                event.user_id, exc_info=True,
+            )
+            return
+
+        context = copy_context()
+        threading.Thread(
+            target=context.run,
+            args=(self._run_queued_manual_collapse, payload),
+            name=f"queued-collapse:{payload.get('segment_id')}",
+            daemon=True,
+        ).start()
+
+    def _run_queued_manual_collapse(self, payload: dict) -> None:
+        """Run one queued manual collapse; a failure logs and leaves the segment active."""
+        event = SegmentTimeoutEvent.create(
+            continuum_id=payload["continuum_id"],
+            user_id=payload["user_id"],
+            segment_id=payload["segment_id"],
+            inactive_duration_minutes=0,  # Manual trigger (mirrors the actions API entry)
+            local_hour=utc_now().hour,
+        )
+        try:
+            self.collapse_segment(event)
+        except Exception:
+            logger.error(
+                "Queued manual collapse for segment %s did not complete; the "
+                "segment stays active and the scheduled timeout path retries",
+                payload.get("segment_id"), exc_info=True,
+            )
+
+    def _claim_collapse(self, sentinel: Message, attempts: int) -> bool:
+        """Atomically claim the collapse for this handler via mutual exclusion.
+
+        The UPDATE only lands while the sentinel is still 'active'/'paused' —
+        or while a previous 'collapsing' claim has gone stale (older than
+        COLLAPSE_CLAIM_STALE_MINUTES), which is the crash-recovery path: a
+        process death between claim and save must not strand the segment.
+        On success the row flips to 'collapsing' with collapse_claimed_at
+        stamped; every concurrent claimant (scheduled timeout vs manual
+        collapse, or a racing tombstone) gets no rows and must abort.
+        """
+        db = self.continuum_repo.get_user_db_client(get_current_user_id())
+        claimed = db.execute_returning("""
+            UPDATE messages
+            SET metadata = metadata || jsonb_build_object(
+                'status', 'collapsing',
+                'collapse_attempts', %s,
+                'collapse_claimed_at', %s::text
+            )
+            WHERE id = %s
+                AND metadata->>'is_segment_boundary' = 'true'
+                AND (
+                    metadata->>'status' IN ('active', 'paused')
+                    OR (
+                        metadata->>'status' = 'collapsing'
+                        AND (metadata->>'collapse_claimed_at')::timestamptz
+                            < now() - make_interval(mins => %s)
+                    )
+                )
+            RETURNING id
+        """, (
+            attempts + 1,
+            format_utc_iso(utc_now()),
+            str(sentinel.id),
+            COLLAPSE_CLAIM_STALE_MINUTES,
+        ))
+        return bool(claimed)
 
     def collapse_segment(
         self,
@@ -299,6 +472,19 @@ class SegmentCollapseHandler:
                 "Check previous COLLAPSE FAILURE logs for root cause.",
                 event.segment_id, MAX_COLLAPSE_ATTEMPTS
             )
+            # The tombstone save goes through the same mutual-exclusion claim as
+            # the normal path: without it, this branch could overwrite a sentinel
+            # a concurrent winner already collapsed (duplicate events, lost
+            # summary). No claim means the segment is already collapsed or
+            # actively being collapsed — return the current sentinel untouched.
+            if not self._claim_collapse(sentinel, attempts):
+                logger.warning(
+                    "Tombstone for segment %s refused: collapse already claimed elsewhere",
+                    event.segment_id
+                )
+                return sentinel
+            sentinel.metadata['collapse_attempts'] = attempts + 1
+
             # Force-collapse with tombstone so segment exits timeout queue
             tombstone = collapse_segment_sentinel(
                 sentinel,
@@ -315,37 +501,86 @@ class SegmentCollapseHandler:
             user_id = get_current_user_id()
             self.continuum_repo.save_message(tombstone, event.continuum_id, user_id)
             self.continuum_pool.invalidate()
+
+            # A tombstone is a real collapsed segment as far as every
+            # subscriber is concerned — publish the same SegmentCollapsedEvent
+            # the normal path publishes. Without it, poller threads keep
+            # polling the dead segment and stateful trinkets carry stale
+            # snapshots into the next segment.
+            self.event_bus.publish(SegmentCollapsedEvent.create(
+                continuum_id=event.continuum_id,
+                segment_id=event.segment_id,
+                summary=tombstone.content,
+                tools_used=tombstone.metadata.get('tools_used', []),
+            ))
+
+            # A tombstoned segment never reaches the downstream stage, but its
+            # pending manual memories are still the user's confirmed data and
+            # must not be stranded on the queue to be deleted by TTL.
+            # The drain is idempotent per item, so a best-effort call here is
+            # safe; on failure the items stay queued for the next drain rather
+            # than being destroyed.
+            try:
+                self._process_pending_manual_memories(user_id, event.segment_id)
+            except Exception:
+                logger.error(
+                    "Pending manual memory drain failed for tombstoned segment %s; "
+                    "items remain queued for retry on the next drain",
+                    event.segment_id, exc_info=True,
+                )
+
+            # The manifest publish runs on the tombstone path too, mirroring
+            # the normal path — without it the manifest TTL cache keeps showing
+            # the segment active until the cache expires.
+            self.event_bus.publish(ManifestUpdatedEvent.create(
+                continuum_id=event.continuum_id,
+                segment_count=self._count_user_segments()
+            ))
             return tombstone
 
         # Load messages in segment (between this sentinel and next, or end of continuum).
-        # Runs before the attempt counter: a still-processing turn must not burn
-        # attempts on every timeout scan when the cheap read already answers.
+        # Runs before the claim: a still-processing turn gets the cheap "not yet"
+        # answer without taking the mutual-exclusion claim.
         messages = self._load_segment_messages(
             event.continuum_id,
             sentinel
         )
 
         if not messages:
+            # An empty active segment is unfixable by retry, not a transient:
+            # the sentinel is persisted at commit time together with its first
+            # messages, so a sentinel with zero messages means a non-atomic
+            # save lost them (e.g. sentinel committed, batch rolled back).
+            # Flow this shape through the same attempt budget the circuit
+            # breaker reads (the counter stamp _claim_collapse performs) so
+            # after MAX_COLLAPSE_ATTEMPTS sweeps the breaker tombstones the
+            # orphan instead of the sweep retrying it forever. Status stays
+            # active/paused (no claim): if a message does land the segment
+            # heals and collapses normally on a later pass, and a concurrent
+            # claimant's own stamp is not double-counted.
+            db = self.continuum_repo.get_user_db_client(get_current_user_id())
+            db.execute_returning("""
+                UPDATE messages
+                SET metadata = jsonb_set(metadata, '{collapse_attempts}', to_jsonb(%s))
+                WHERE id = %s
+                    AND metadata->>'is_segment_boundary' = 'true'
+                    AND metadata->>'status' IN ('active', 'paused')
+                RETURNING id
+            """, (attempts + 1, str(sentinel.id)))
             raise RuntimeError(
-                f"Segment {event.segment_id} has no committed messages yet. "
-                f"This usually means the conversation is still being processed "
-                f"(messages are committed after the full turn completes). "
-                f"The segment will collapse automatically once the conversation finishes."
+                f"Segment {event.segment_id} has no committed messages. A "
+                f"sentinel persisted without its messages (non-atomic save) can "
+                f"never be summarized on retry; collapse attempt {attempts + 1} of "
+                f"{MAX_COLLAPSE_ATTEMPTS} was counted and the circuit breaker will "
+                f"tombstone the segment if it stays empty."
             )
 
-        # Claim the collapse via compare-and-set: the UPDATE only lands while the
-        # sentinel is still active/paused, so a concurrent manual collapse (which
-        # flips status to 'collapsed' first) makes this return no rows.
-        db = self.continuum_repo.get_user_db_client(get_current_user_id())
-        claimed = db.execute_returning("""
-            UPDATE messages
-            SET metadata = jsonb_set(metadata, '{collapse_attempts}', to_jsonb(%s))
-            WHERE id = %s
-                AND metadata->>'is_segment_boundary' = 'true'
-                AND metadata->>'status' IN ('active', 'paused')
-            RETURNING id
-        """, (attempts + 1, str(sentinel.id)))
-        if not claimed:
+        # Claim the collapse via mutual exclusion (see _claim_collapse): the
+        # UPDATE flips status to 'collapsing' and only lands while the sentinel
+        # is active/paused or its previous claim has gone stale; a concurrent
+        # claimant — manual collapse, scheduled timeout, or a racing tombstone —
+        # gets no rows and must abort.
+        if not self._claim_collapse(sentinel, attempts):
             raise RuntimeError("Segment no longer active; collapse already claimed")
 
         # Generate summary and embedding (raises on failure)
@@ -404,7 +639,7 @@ class SegmentCollapseHandler:
         )
         if (
             current is None
-            or current.metadata.get('status') not in ('active', 'paused')
+            or current.metadata.get('status') not in ('active', 'paused', 'collapsing')
             or current.metadata.get('last_turn_at') != sentinel.metadata.get('last_turn_at')
         ):
             raise RuntimeError(
@@ -430,32 +665,78 @@ class SegmentCollapseHandler:
             tools_used=tools_used
         ))
 
-        # Trigger downstream processing
-        self._trigger_downstream_processing(
-            event.continuum_id,
-            event.segment_id,
-            collapsed_sentinel,
-            messages,
-            result.synopsis,
-        )
+        # Downstream processing is deliberately separated from the collapse
+        # itself: the sentinel is already saved 'collapsed', so a
+        # downstream failure must not unwind as though the collapse had
+        # failed. The pre-repair path skipped the pending-memory drain, the
+        # feedback loop, portrait synthesis and the manifest publish, and
+        # nothing ever re-matched a collapsed segment — so the queue was left
+        # to be deleted by TTL. Here the failure is recorded on the sentinel
+        # and the collapse still completes. The pending-memory drain is
+        # idempotent per item (see _process_pending_manual_memories), so the
+        # next collapse's rescue sweep re-drains stranded items without
+        # double-storing; extraction retries stay with the 6-hour
+        # extract_unprocessed_segments sweep — no second extraction run is
+        # submitted here.
+        try:
+            self._trigger_downstream_processing(
+                event.continuum_id,
+                event.segment_id,
+                collapsed_sentinel,
+                messages,
+                result.synopsis,
+            )
 
-        # DIY Reinforcement Loop: Extract feedback and run synthesis if due
-        self._process_feedback_loop(
-            messages=messages,
-            segment_id=UUID(event.segment_id),
-            continuum_id=UUID(event.continuum_id),
-        )
+            # DIY Reinforcement Loop: Extract feedback and run synthesis if due
+            self._process_feedback_loop(
+                messages=messages,
+                segment_id=UUID(event.segment_id),
+                continuum_id=UUID(event.continuum_id),
+            )
 
-        # Portrait synthesis if use-day threshold reached
-        self._process_portrait_synthesis()
+            # Portrait synthesis if use-day threshold reached
+            self._process_portrait_synthesis()
+        except Exception:
+            logger.critical(
+                "Segment %s collapsed successfully, but downstream processing "
+                "failed; the collapse stands. Pending manual memories are left "
+                "queued (they retry on the next drain without double-storing), "
+                "and the sentinel is flagged 'downstream_failed' for operators. "
+                "Extraction itself is retried by the extract_unprocessed_segments "
+                "sweep.",
+                event.segment_id, exc_info=True,
+            )
+            collapsed_sentinel.metadata['downstream_failed'] = True
+            collapsed_sentinel.metadata['downstream_failed_at'] = format_utc_iso(utc_now())
+            try:
+                self.continuum_repo.save_message(
+                    collapsed_sentinel,
+                    event.continuum_id,
+                    user_id
+                )
+                self.continuum_pool.invalidate()
+            except Exception:
+                logger.critical(
+                    "Could not record the downstream_failed flag on sentinel %s; "
+                    "the collapse itself is durable — check the CRITICAL above "
+                    "for what was skipped",
+                    event.segment_id, exc_info=True,
+                )
+        finally:
+            # The manifest publish runs on both paths — the pre-repair unwind
+            # skipped it and left the manifest TTL cache stale.
+            self.event_bus.publish(ManifestUpdatedEvent.create(
+                continuum_id=event.continuum_id,
+                segment_count=self._count_user_segments()
+            ))
 
-        # Publish manifest updated event (for cache invalidation)
-        self.event_bus.publish(ManifestUpdatedEvent.create(
-            continuum_id=event.continuum_id,
-            segment_count=self._count_user_segments()
-        ))
-
-        logger.info(f"Successfully collapsed segment {event.segment_id}")
+        if collapsed_sentinel.metadata.get('downstream_failed'):
+            logger.info(
+                "Collapsed segment %s with downstream failures flagged on the sentinel",
+                event.segment_id
+            )
+        else:
+            logger.info(f"Successfully collapsed segment {event.segment_id}")
         return collapsed_sentinel
 
     def _find_segment_sentinel(
@@ -650,6 +931,21 @@ class SegmentCollapseHandler:
             logger.warning(f"Skipping memory extraction for tombstoned segment {segment_id}")
             return
 
+        # Process pending manual memories (from memory_tool.create_memory)
+        # FIRST and best-effort: the queue is the sole durable record of
+        # user-confirmed memories, so an extraction submission
+        # failure below must not strand it. The drain is idempotent per item,
+        # so retrying it on the next collapse's rescue sweep is safe; a blow-up
+        # here leaves the items queued rather than destroying them.
+        try:
+            self._process_pending_manual_memories(user_id, segment_id)
+        except Exception:
+            logger.exception(
+                "Pending manual memory drain failed for segment %s; items remain "
+                "queued for retry on the next drain",
+                segment_id,
+            )
+
         # Memory extraction (direct through the fixed background route)
         if messages:
             # submit_segment_extraction is self-contained: loads messages, extracts, marks boundary
@@ -678,18 +974,46 @@ class SegmentCollapseHandler:
         """
         Process pending manual memories queued by memory_tool.create_memory().
 
-        Fetches pending memories from Valkey and processes them synchronously:
-        - Generates embeddings
-        - Extracts entities and links to knowledge graph
-        - Creates supersedes links
-        - Stores to database
+        Drains the Valkey queues idempotently, one item at a time:
+        - reading a queue is non-destructive; an item counts as consumed only
+          after a per-pending_id done marker is durably set, because
+          store_memories is NOT idempotent — a re-run would duplicate the
+          memory, so the marker (not a queue delete) is the consumption record;
+        - the done marker is CLAIMED atomically (SET NX) before the store
+          two overlapping drains — this segment's drain and the rescue
+          sweep over older segments' queues — can both pass a check-then-set
+          gate and double-store; a failed claim means another drain owns the
+          item and this drain skips it;
+        - an item whose embedding/store fails stays in its queue for the next
+          drain instead of being destroyed with the batch. Only content-caused
+          failures (the item's own data rejected by validation or by the
+          database row insert) consume the attempts budget — infrastructure/
+          LLM outages do not: retry counters never gate data on
+          infrastructure failure, and the queue holds data the user was told
+          was saved;
+        - a permanently-failing item is dead-lettered after
+          PENDING_ITEM_MAX_ATTEMPTS content-caused failures so it cannot wedge
+          the queue forever; its dead-letter marker carries a full copy of the
+          item, so the loss stays repairable by hand.
 
-        This runs at segment collapse to defer heavy operations from tool invocation.
+        In addition to the collapsed segment's own queue and the presegment
+        queue, this sweeps older `pending_memories:{user_id}:*` keys stranded
+        by a previous collapse whose downstream stage failed after the
+        sentinel was already saved 'collapsed' — those segments are
+        never re-matched by a collapse claim, so without this sweep their
+        queues would only ever be deleted by TTL. The done markers make every
+        re-drain safe: a visited item is never stored twice. This mirrors the
+        keyed-idempotence shape of the extract_unprocessed_segments retry
+        sweep and does NOT submit any second extraction run — extraction
+        retries remain that sweep's job.
 
         Args:
             user_id: User UUID
             segment_id: Segment UUID being collapsed
         """
+        import json
+        import psycopg.errors
+        from pydantic import ValidationError
         from lt_memory.models import PendingManualMemory, ExtractedMemory, MemoryLink
         from lt_memory.db_access import LTMemoryDB
         from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
@@ -697,31 +1021,75 @@ class SegmentCollapseHandler:
 
         valkey = get_valkey_client()
 
-        # Check both segment-specific queue and presegment queue
+        # The collapsed segment's queue, the presegment queue, then any older
+        # stranded queue keys for this user (rescue sweep — see docstring).
+        # Done/attempt markers use the `pending_memories_done:` and
+        # `pending_memories_attempts:` prefixes so the scan pattern below only
+        # ever matches queue keys.
         queue_keys = [
             f"pending_memories:{user_id}:{segment_id}",
-            f"pending_memories:{user_id}:presegment"
+            f"pending_memories:{user_id}:presegment",
         ]
+        try:
+            for key in valkey.scan_iter(match=f"pending_memories:{user_id}:*"):
+                if key not in queue_keys:
+                    queue_keys.append(key)
+        except Exception:
+            logger.warning(
+                "Pending-memory rescue scan failed for user %s; draining only the "
+                "current segment's queues this pass",
+                user_id, exc_info=True,
+            )
 
-        all_pending = []
+        # Phase 1 — classify without destroying anything. Items with a done
+        # marker (or unparseable payloads, which can never succeed on any
+        # retry) are consumed; the rest are stored below.
+        consumed_raw: dict[str, set[str]] = {key: set() for key in queue_keys}
+        work: list[tuple[str, str, PendingManualMemory]] = []  # (queue_key, raw_json, item)
         for queue_key in queue_keys:
-            pending_json_list = valkey.lrange(queue_key, 0, -1)
+            try:
+                pending_json_list = valkey.lrange(queue_key, 0, -1)
+            except Exception:
+                logger.error(
+                    "Could not read pending memory queue %s; leaving it untouched "
+                    "for the next drain",
+                    queue_key, exc_info=True,
+                )
+                continue
             for json_str in pending_json_list:
                 try:
                     pending = PendingManualMemory.from_json(json_str)
-                    all_pending.append(pending)
                 except Exception:
-                    logger.warning("Failed to parse pending memory", exc_info=True)
+                    # Drop only this entry, never the whole queue: the surviving
+                    # items still need their embedding/store pass.
+                    consumed_raw[queue_key].add(json_str)
+                    logger.warning(
+                        "Dropping unparseable pending memory from %s: %.200s",
+                        queue_key, json_str, exc_info=True,
+                    )
+                    continue
+                done_value = valkey.get(f"pending_memories_done:{user_id}:{pending.pending_id}")
+                if done_value == "claimed":
+                    # Another drain holds the SET NX claim on this item
+                    # Neither re-store it nor count it consumed —
+                    # the claim holder may still release it on failure.
+                    continue
+                if done_value is not None:
+                    # Already durably stored (or dead-lettered, with the
+                    # item's content preserved in the marker) by an earlier
+                    # drain; consume without re-storing.
+                    consumed_raw[queue_key].add(json_str)
+                    continue
+                work.append((queue_key, json_str, pending))
 
-            # Delete queue after fetching
-            if pending_json_list:
-                valkey.delete(queue_key)
-
-        if not all_pending:
+        if not work and not any(consumed_raw.values()):
             logger.debug(f"No pending manual memories for segment {segment_id}")
             return
 
-        logger.info(f"Processing {len(all_pending)} pending manual memories for segment {segment_id}")
+        logger.info(
+            "Draining pending manual memories for segment %s: %d to store, %d already consumed",
+            segment_id, len(work), sum(len(v) for v in consumed_raw.values()),
+        )
 
         embeddings_provider = get_hybrid_embeddings_provider()
         session_manager = get_shared_session_manager()
@@ -735,8 +1103,36 @@ class SegmentCollapseHandler:
         # them after the loop (preserving their user-specified attributes).
         stored_manual = []  # list[tuple[str, str]] of (full_uuid_str, text)
 
-        for mem in all_pending:
+        # Phase 2 — store each pending item. One item's failure never touches
+        # the others: the failing item stays in its queue with a bounded retry
+        # counter that only content-caused failures consume, the surviving
+        # items continue to their own durable store.
+        for queue_key, json_str, mem in work:
+            done_key = f"pending_memories_done:{user_id}:{mem.pending_id}"
+            attempts_key = f"pending_memories_attempts:{user_id}:{mem.pending_id}"
+            # Tracks whether this drain holds the SET NX claim, so the
+            # failure paths below only ever release a marker they own.
+            claimed = False
             try:
+                # Claim the done marker ATOMICALLY BEFORE the store: SET NX
+                # (set-if-not-exists, with TTL) — the same acquire shape the
+                # compaction lock uses. The pre-repair gate was check-then-set
+                # (exists(done) -> store_memories -> setex(done)), so two
+                # overlapping drains could both pass the exists() check and
+                # both store, and store_memories is NOT idempotent. With the
+                # guard living in the mutation itself, only one drain can
+                # flip the marker; claim failure means another drain owns
+                # this item: skip.
+                if not valkey.set(
+                    done_key, "claimed", nx=True, ex=PENDING_DONE_MARKER_TTL_SECONDS
+                ):
+                    logger.debug(
+                        "Pending manual memory %s is claimed by another drain; skipping",
+                        mem.pending_id,
+                    )
+                    continue
+                claimed = True
+
                 # Document embedding (deep encoder)
                 embedding = embeddings_provider.encode_deep([mem.text])[0].tolist()
 
@@ -782,15 +1178,131 @@ class SegmentCollapseHandler:
                         db.create_links([link])
                         logger.debug(f"Created supersedes link: {memory_id} -> {target.id}")
 
+                # Durable consumption record. This drain already holds the
+                # claim (SET NX above), so overwriting the transient
+                # "claimed" value with the terminal one is safe; the claim,
+                # once granted, is what stops a concurrent drain from
+                # double-storing the same item. The residual crash window
+                # (DB commit succeeds, process dies around claim/overwrite)
+                # is the same trade the extraction sweep accepts for its
+                # boundary marker.
+                valkey.setex(done_key, PENDING_DONE_MARKER_TTL_SECONDS, "1")
+                valkey.delete(attempts_key)
+
                 logger.info(
                     f"Processed manual memory {memory_id} "
                     f"(pending_id: {mem.pending_id})"
                 )
                 stored_manual.append((str(memory_id), mem.text))
 
+            except (ValidationError, psycopg.errors.DataError) as exc:
+                # Content-caused failure: the item's own data was
+                # rejected — its fields failed the durable-representation
+                # validation (ExtractedMemory), or Postgres rejected the row
+                # itself (DataError). Deterministic on every retry, so this
+                # — and only this — consumes the item's attempts budget;
+                # infrastructure/LLM outages never do.
+                attempts = valkey.increment_with_expiry(
+                    attempts_key, PENDING_DONE_MARKER_TTL_SECONDS
+                )
+                if attempts >= PENDING_ITEM_MAX_ATTEMPTS:
+                    # Dead-letter: mark done with a TERMINAL value (anything
+                    # other than "claimed") that carries a full copy of the
+                    # item's content, so the memory the user was told was
+                    # saved stays diagnosable and repairable by hand like a
+                    # dropped temporal anchor, and the queue can drain. This
+                    # drain holds the claim, so overwriting it is safe.
+                    valkey.setex(
+                        done_key,
+                        PENDING_DONE_MARKER_TTL_SECONDS,
+                        json.dumps({
+                            "status": "deadletter",
+                            "reason": f"{type(exc).__name__}: {exc}",
+                            "attempts": PENDING_ITEM_MAX_ATTEMPTS,
+                            "item": mem.model_dump(),
+                        }),
+                    )
+                    valkey.delete(attempts_key)
+                    logger.critical(
+                        "Pending manual memory %s failed %d content-caused attempts; "
+                        "dead-lettering it (content preserved in %s) so the queue "
+                        "can drain. Memory text follows so the loss is repairable "
+                        "by hand: %r",
+                        mem.pending_id, PENDING_ITEM_MAX_ATTEMPTS, done_key, mem.text,
+                    )
+                else:
+                    # Not yet dead-lettered: release the claim so a later
+                    # drain retries the item. The item is NOT consumed.
+                    try:
+                        valkey.delete(done_key)
+                    except Exception:
+                        logger.warning(
+                            "Could not release claim on %s; item %s stays skipped "
+                            "until the claim TTL expires",
+                            done_key, mem.pending_id, exc_info=True,
+                        )
+                    logger.error(
+                        "Failed to process pending memory %s (content-caused, "
+                        "attempt %d/%d); left in queue for the next drain",
+                        mem.pending_id, attempts, PENDING_ITEM_MAX_ATTEMPTS,
+                    )
             except Exception:
-                # Log but don't fail segment collapse on individual memory failures
-                logger.exception("Failed to process pending memory %s", mem.pending_id)
+                # Infrastructure failure: the embedding encoder, the
+                # database, Valkey — anything not attributable to this item's
+                # content. It must NOT consume the attempts budget: an infra/
+                # LLM outage burning all PENDING_ITEM_MAX_ATTEMPTS on one item
+                # would dead-letter a memory the user was told was saved.
+                # Pinned doctrine: retry counters never gate data on
+                # infrastructure failure. The item stays queued; only the
+                # claim is released so a later drain (once infrastructure
+                # recovers) can retry it.
+                if claimed:
+                    try:
+                        valkey.delete(done_key)
+                    except Exception:
+                        logger.warning(
+                            "Could not release claim on %s; item %s stays skipped "
+                            "until the claim TTL expires",
+                            done_key, mem.pending_id, exc_info=True,
+                        )
+                logger.exception(
+                    "Failed to process pending memory %s (infrastructure failure; "
+                    "not counted against its %d-attempt budget); left in queue "
+                    "for the next drain",
+                    mem.pending_id, PENDING_ITEM_MAX_ATTEMPTS,
+                )
+
+        # Phase 3 — settle each queue. A queue is deleted only when every item
+        # in it is durably consumed; otherwise its TTL is extended past the
+        # producer's 24h so the failing items survive until a later drain.
+        for queue_key in queue_keys:
+            try:
+                remaining = valkey.lrange(queue_key, 0, -1)
+            except Exception:
+                logger.error(
+                    "Could not re-read pending memory queue %s for settlement; "
+                    "leaving it untouched",
+                    queue_key, exc_info=True,
+                )
+                continue
+            if not remaining:
+                continue
+            for json_str in remaining:
+                if json_str in consumed_raw[queue_key]:
+                    continue
+                try:
+                    pending = PendingManualMemory.from_json(json_str)
+                except Exception:
+                    continue
+                done_value = valkey.get(f"pending_memories_done:{user_id}:{pending.pending_id}")
+                if done_value is None or done_value == "claimed":
+                    # At least one item not durably consumed — still queued, or
+                    # another drain's claim on it is still in flight: keep the
+                    # queue alive for retry.
+                    valkey.expire(queue_key, PENDING_QUEUE_RETRY_TTL_SECONDS)
+                    break
+            else:
+                valkey.delete(queue_key)
 
         # Tend the manually-created memories via the integration curator too.
         # They were stored immediately with user-specified attributes (score,
@@ -817,7 +1329,9 @@ class SegmentCollapseHandler:
             {"memory_id": str(mid), "text": getattr(mem, "text", "")}
             for mid, mem in zip(memory_ids, memories)
         ]
-        self._spawn_integration_curator(user_id, segment_id, new_memories, candidate_hints)
+        self._spawn_integration_curator(
+            user_id, segment_id, new_memories, candidate_hints, source="extraction"
+        )
 
     def _tend_manual_memories(
         self,
@@ -841,7 +1355,9 @@ class SegmentCollapseHandler:
             except Exception:
                 logger.warning("find_candidate_hints failed for manual memory %s", memory_id_str, exc_info=True)
         new_memories = [{"memory_id": mid, "text": text} for mid, text in stored_manual]
-        self._spawn_integration_curator(user_id, segment_id, new_memories, candidate_hints)
+        self._spawn_integration_curator(
+            user_id, segment_id, new_memories, candidate_hints, source="drain"
+        )
 
     def _spawn_integration_curator(
         self,
@@ -849,6 +1365,8 @@ class SegmentCollapseHandler:
         segment_id: Optional[str],
         new_memories: list[dict],
         candidate_hints: dict[str, list[dict]],
+        *,
+        source: str,
     ) -> None:
         """Spawn MemoryCuratorAgent integration mode (forage-style background thread).
 
@@ -856,6 +1374,11 @@ class SegmentCollapseHandler:
         pre-computed candidate hints (deterministic discovery + extraction
         bonds). Runs in a daemon thread with copied user context so the
         collapse chain doesn't block on curation.
+
+        ``source`` tags which path spawned ("extraction" or "drain") so the
+        two runs get distinct WorkItem identities and can coexist under the
+        identity contract (item_id + UNIQUE(interface_name, thread_id)) —
+        a dual-path collapse no longer races one shared UPSERT row.
         """
         if not new_memories:
             return
@@ -870,7 +1393,7 @@ class SegmentCollapseHandler:
 
         seg_id = str(segment_id) if segment_id else "unknown"
         work_item = WorkItem(
-            item_id=f"integrate_{seg_id}_{user_id}",
+            item_id=f"integrate_{seg_id}_{user_id}:{source}",
             interface_name="memory_curator_integration",
             context={
                 "mode": "integration",

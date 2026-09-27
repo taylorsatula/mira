@@ -21,7 +21,7 @@ from config import config
 from utils.user_context import get_current_user_id, set_current_user_id, invalidate_user_preferences_cache
 from auth.api import get_current_user
 from auth.types import SessionData, APITokenContext
-from .base import BaseHandler, ValidationError, NotFoundError
+from .base import BaseHandler, PropagatingHandler, ValidationError, NotFoundError
 from utils.timezone_utils import utc_now, format_utc_iso
 from clients.valkey_client import get_valkey_client
 from working_memory.trinkets.base import TRINKET_KEY_PREFIX
@@ -644,8 +644,10 @@ class UserDomainHandler(BaseDomainHandler):
 
         elif action == "update_profile":
             from utils.database_session_manager import get_shared_session_manager
-            from clients.valkey_client import get_valkey_client
             from utils.profile_validation import validate_profile_name
+            # get_valkey_client stays module-level (imported at :35) — a local
+            # re-import here shadows it for the whole execute_action scope and
+            # UnboundLocalErrors the effort-override branches below.
 
             # At least one field must be provided
             if not any(k in data for k in ["first_name", "last_name", "timezone", "temperature_unit"]):
@@ -2145,6 +2147,25 @@ class ContinuumDomainHandler(BaseDomainHandler):
         }
     }
 
+    def _latest_boundary_is_collapsing(self, continuum_repo, continuum_id) -> bool:
+        """Whether the newest segment boundary sentinel is mid-collapse-claim.
+
+        'collapsing' is a transient mutual-exclusion state set by the collapse
+        handler's claim; it is invisible to find_active_segment, so callers
+        that found no active sentinel use this to distinguish "collapse in
+        progress" from "no segment exists".
+        """
+        db = continuum_repo.get_user_db_client(self.user_id)
+        rows = db.execute_query("""
+            SELECT metadata->>'status' AS status
+            FROM messages
+            WHERE continuum_id = %s
+                AND metadata->>'is_segment_boundary' = 'true'
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (str(continuum_id),))
+        return bool(rows) and rows[0].get('status') == 'collapsing'
+
     def execute_action(self, action: str, data: dict[str, Any]) -> dict[str, Any]:
         """Execute segment lifecycle actions."""
         if action == "collapse_segment":
@@ -2161,9 +2182,36 @@ class ContinuumDomainHandler(BaseDomainHandler):
             sentinel = continuum_repo.find_active_segment(continuum.id, self.user_id)
 
             if not sentinel:
+                # A segment mid-claim ('collapsing') is invisible to
+                # find_active_segment; distinguish it from a genuinely absent
+                # segment so the user gets a truthful error, not "not found".
+                if self._latest_boundary_is_collapsing(continuum_repo, continuum.id):
+                    raise ValidationError(
+                        "A segment collapse is already in progress; try again in a moment."
+                    )
                 raise NotFoundError("segment", "active")
 
             segment_id = sentinel.metadata.get("segment_id")
+
+            # A live turn holds the per-user request lock (module-level in
+            # chat.py, renewed in the background for the turn's lifetime — the WS
+            # transport probes the same Valkey key). Collapsing under it orphans
+            # the in-flight turn from the digest: turn messages commit only at
+            # turn end, and the collapse recheck's last_turn_at is stamped at
+            # message arrival, so the interleaving turn is invisible to it.
+            # Defer instead — queue behind the lock and let the turn's completion
+            # path run the collapse (SegmentCollapseHandler._handle_turn_completed).
+            from cns.api.chat import _user_request_lock
+            if _user_request_lock.is_locked(self.user_id):
+                get_segment_collapse_handler().queue_manual_collapse(
+                    self.user_id, str(continuum.id), segment_id
+                )
+                return {
+                    "collapsed": False,
+                    "segment_id": segment_id,
+                    "message": "Your conversation is still being processed — "
+                               "the segment will collapse as soon as the current response finishes."
+                }
 
             # Create event and invoke the collapse handler
             event = SegmentTimeoutEvent.create(
@@ -2206,6 +2254,12 @@ class ContinuumDomainHandler(BaseDomainHandler):
             # find_active_segment returns active OR paused — check current state
             sentinel = continuum_repo.find_active_segment(continuum.id, self.user_id)
             if not sentinel:
+                # Same truthful-error rule as collapse_segment: a mid-claim
+                # segment cannot be paused, but it exists.
+                if self._latest_boundary_is_collapsing(continuum_repo, continuum.id):
+                    raise ValidationError(
+                        "A segment collapse is already in progress; try again in a moment."
+                    )
                 raise NotFoundError("segment", "active")
 
             if sentinel.metadata.get("status") == "paused":
@@ -2790,7 +2844,7 @@ class PortraitDomainHandler(BaseDomainHandler):
             raise ValidationError(f"Unknown action: {action}")
 
 
-class ActionsEndpoint(BaseHandler):
+class ActionsEndpoint(PropagatingHandler):
     """Main actions endpoint handler with domain-based routing."""
 
     def __init__(self):
@@ -2858,61 +2912,22 @@ def get_actions_handler() -> ActionsEndpoint:
 
 
 @router.post("/actions")
-async def actions_endpoint(
+def actions_endpoint(
     request_data: ActionRequest,
     current_user: SessionData | APITokenContext = Depends(get_current_user)
 ):
-    """Execute state-changing operations through domain-routed actions."""
-    try:
-        handler = get_actions_handler()
-        response = handler.handle_request(request_data=request_data, current_user=current_user)
-        return response.to_dict()
-        
-    except ValidationError as e:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "success": False,
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": e.message
-                }
-            }
-        )
-    except NotFoundError as e:
-        return JSONResponse(
-            status_code=404,
-            content={
-                "success": False,
-                "error": {
-                    "code": "NOT_FOUND",
-                    "message": e.message
-                }
-            }
-        )
-    except NotImplementedError as e:
-        return JSONResponse(
-            status_code=501,
-            content={
-                "success": False,
-                "error": {
-                    "code": "NOT_IMPLEMENTED",
-                    "message": str(e)
-                }
-            }
-        )
-    except Exception:
-        logger.exception("Actions endpoint error")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "success": False,
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "Action execution failed"
-                }
-            }
-        )
+    """Execute state-changing operations through domain-routed actions.
+
+    Deliberately sync (not async def) so Starlette runs it in a threadpool
+    instead of blocking the event loop during blocking tool/DB work.
+
+    Handler errors propagate to main.py's global exception handlers, which
+    assign the HTTP status (APIError codes -> 400/401/403/404/429/500/503;
+    anything else -> 500) and build the standard error body.
+    """
+    handler = get_actions_handler()
+    response = handler.handle_request(request_data=request_data, current_user=current_user)
+    return response.to_dict()
 
 
 # =============================================================================
@@ -2936,7 +2951,7 @@ def _get_tool_instance(tool_name: str):
 
 
 @router.get("/tools/{tool_name}/query")
-async def query_tool(
+def query_tool(
     tool_name: str,
     operation: str = Query(..., description="Tool operation to execute"),
     date_type: str | None = Query(None, description="Date filter type (for reminder_tool)"),
@@ -2950,6 +2965,9 @@ async def query_tool(
     the LLM or trinket system. Useful for polling current state.
 
     Only whitelisted tools can be queried.
+
+    Deliberately sync (not async def) so Starlette runs it in a threadpool
+    instead of blocking the event loop during the blocking tool DB queries.
     """
     # Set user context
     set_current_user_id(current_user.user_id)

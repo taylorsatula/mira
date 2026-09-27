@@ -137,8 +137,11 @@ class FeedbackTracker:
                 WHERE user_id = %s
             """, (activity_days, now, synthesis_output, needs_checkin, user_id))
 
-            logger.info("User %s: synthesis complete, snapshot activity_days=%d, needs_checkin=%s",
-                       user_id, activity_days, needs_checkin)
+        # Logged only after the session exits: the commit in __exit__ re-raises
+        # on failure, so "synthesis complete" is never reported for a snapshot
+        # that did not persist.
+        logger.info("User %s: synthesis complete, snapshot activity_days=%d, needs_checkin=%s",
+                   user_id, activity_days, needs_checkin)
 
     def get_tracking_status(self, user_id: str) -> TrackingStatus:
         """
@@ -286,12 +289,15 @@ class FeedbackTracker:
 
         logger.info("User %s: check-in acknowledged, needs_checkin=FALSE", user_id)
 
-    def get_and_clear_checkin_response(self, user_id: str) -> str | None:
+    def get_checkin_response(self, user_id: str) -> str | None:
         """
-        Atomically read and clear stored check-in feedback.
+        Read stored check-in feedback without consuming it.
 
-        Called during synthesis to incorporate user feedback, then null the
-        column so it's not consumed again in a subsequent cycle.
+        Companion to get_and_clear_checkin_response(): lets the synthesis path
+        peek at pending feedback while all fallible work (LLM calls, critic
+        loop, parsing) runs. The destructive consume happens only after
+        synthesis has fully succeeded, so any failure before that point
+        leaves the user's check-in response intact for the next cycle.
 
         Args:
             user_id: User ID
@@ -303,6 +309,36 @@ class FeedbackTracker:
 
         with session_manager.get_session(user_id) as session:
             result = session.execute_single("""
+                SELECT checkin_response
+                FROM feedback_synthesis_tracking
+                WHERE user_id = %s
+            """, (user_id,))
+
+            if result:
+                return result.get('checkin_response')
+            return None
+
+    def get_and_clear_checkin_response(self, user_id: str) -> str | None:
+        """
+        Atomically read and clear stored check-in feedback.
+
+        Called at the END of a successful synthesis run to consume the
+        feedback that was incorporated, nulling the column so it's not
+        consumed again in a subsequent cycle. Callers that may fail before
+        completion (e.g. the synthesis LLM path) must peek via
+        get_checkin_response() first and only call this after success.
+
+        Args:
+            user_id: User ID
+
+        Returns:
+            Stored feedback text, or None if no feedback pending
+        """
+        session_manager = get_shared_session_manager()
+
+        feedback = None
+        with session_manager.get_session(user_id) as session:
+            result = session.execute_single("""
                 UPDATE feedback_synthesis_tracking
                 SET checkin_response = NULL
                 WHERE user_id = %s AND checkin_response IS NOT NULL
@@ -311,10 +347,13 @@ class FeedbackTracker:
 
             if result:
                 feedback = result.get('checkin_response')
-                if feedback:
-                    logger.info("User %s: consumed check-in feedback for synthesis", user_id)
-                    return feedback
-            return None
+
+        # Logged only after the session exits: the commit in __exit__ re-raises
+        # on failure, so "consumed" is never claimed for feedback that did not
+        # persist (it stays in the column for the next synthesis cycle).
+        if feedback:
+            logger.info("User %s: consumed check-in feedback for synthesis", user_id)
+        return feedback or None
 
     def initialize_user(self, user_id: str) -> None:
         """

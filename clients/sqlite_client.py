@@ -13,27 +13,27 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Global cache for SQLiteClient instances per user
+# Global cache for SQLiteClient instances per database path
 _client_cache: Dict[str, 'SQLiteClient'] = {}
 
 class SQLiteClient:
     """
-    Raw SQL client with explicit per-request connections (no pooling) and automatic user isolation.
+    Raw SQL client with explicit per-request connections (no pooling).
 
     IMPORTANT: SQLite does not support Row Level Security (RLS) like PostgreSQL.
-    Each user has their own separate SQLite database file, but we still need manual
-    user_id filtering in queries to maintain consistency with the PostgreSQL patterns
+    Each user has their own separate SQLite database file, and queries must
+    filter by user_id manually to maintain consistency with the PostgreSQL patterns
     and to prevent accidental cross-user data access if database paths are misconfigured.
 
     This manual filtering is NOT redundant - it's the ONLY mechanism for user isolation
     in SQLite, unlike PostgreSQL where it would be redundant with RLS policies.
+    The client itself does no scoping; it is raw SQL over the given db_path.
     """
 
-    def __init__(self, db_path: str, user_id: str):
+    def __init__(self, db_path: str):
         self.db_path = db_path
-        self.user_id = user_id
         self._ensure_db_directory()
-        logger.debug(f"SQLite client initialized: {db_path} for user {user_id}")
+        logger.debug(f"SQLite client initialized: {db_path}")
 
     def _ensure_db_directory(self):
         db_dir = Path(self.db_path).parent
@@ -99,23 +99,20 @@ class SQLiteClient:
         logger.debug(f"Table created: {table_name}")
 
 
-def get_sqlite_client(db_path: str, user_id: str) -> SQLiteClient:
+def get_sqlite_client(db_path: str) -> SQLiteClient:
     """
-    Get a singleton SQLiteClient instance for the given user.
+    Get a singleton SQLiteClient instance for the given database path.
 
     Args:
         db_path: Path to the SQLite database file
-        user_id: User ID for isolation
 
     Returns:
-        SQLiteClient instance (singleton per user)
+        SQLiteClient instance (singleton per database path)
     """
-    cache_key = f"{user_id}:{db_path}"
-
-    if cache_key not in _client_cache:
-        _client_cache[cache_key] = SQLiteClient(db_path, user_id)
-        logger.debug(f"Created new SQLiteClient singleton for user {user_id}")
+    if db_path not in _client_cache:
+        _client_cache[db_path] = SQLiteClient(db_path)
+        logger.debug("Created new SQLiteClient singleton")
     else:
-        logger.debug(f"Reusing existing SQLiteClient singleton for user {user_id}")
+        logger.debug("Reusing existing SQLiteClient singleton")
 
-    return _client_cache[cache_key]
+    return _client_cache[db_path]

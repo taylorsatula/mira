@@ -26,6 +26,89 @@ if TYPE_CHECKING:
 # Module-level cache for UserDataManager instances
 _manager_cache: Dict[str, "UserDataManager"] = {}
 
+# Canonical CREATE statements for the domaindoc tables.
+# id columns use AUTOINCREMENT so a deleted doc's rowid is never reused
+# (plain INTEGER PRIMARY KEY reuses max(rowid)+1, which can graft deleted
+# content into a newly created document).
+_DOMAINDOC_DDL = {
+    "domaindocs": """
+    CREATE TABLE IF NOT EXISTS domaindocs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        label TEXT UNIQUE NOT NULL,
+        encrypted__description TEXT,
+        enabled BOOLEAN DEFAULT TRUE,
+        archived BOOLEAN DEFAULT FALSE,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    "domaindoc_sections": """
+    CREATE TABLE IF NOT EXISTS domaindoc_sections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        domaindoc_id INTEGER NOT NULL REFERENCES domaindocs(id) ON DELETE CASCADE,
+        parent_section_id INTEGER DEFAULT NULL REFERENCES domaindoc_sections(id) ON DELETE CASCADE,
+        header TEXT NOT NULL,
+        encrypted__content TEXT NOT NULL,
+        encrypted__summary TEXT DEFAULT NULL,
+        sort_order INTEGER NOT NULL,
+        collapsed BOOLEAN DEFAULT FALSE,
+        expanded_by_default BOOLEAN DEFAULT FALSE,
+        pinned BOOLEAN DEFAULT FALSE,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(domaindoc_id, parent_section_id, header)
+    )
+    """,
+    "domaindoc_versions": """
+    CREATE TABLE IF NOT EXISTS domaindoc_versions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        domaindoc_id INTEGER NOT NULL REFERENCES domaindocs(id) ON DELETE CASCADE,
+        section_id INTEGER REFERENCES domaindoc_sections(id) ON DELETE SET NULL,
+        version_num INTEGER NOT NULL,
+        operation TEXT NOT NULL,
+        encrypted__diff_data TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(domaindoc_id, version_num)
+    )
+    """,
+}
+
+# Sidebar-agent tables. SidebarAgent failure records and sidebar_tool
+# complete_task records both write sidebar_activity; sidebar_tool keeps working
+# notes in scratchpad, cleaned up by SidebarDispatcher._maybe_cleanup().
+# Created via agents.base.ensure_activity_schema() (CREATE ... IF NOT EXISTS);
+# sidebar_activity is also created at every user-DB open.
+ACTIVITY_TABLE_DDL = """\
+CREATE TABLE IF NOT EXISTS sidebar_activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface_name TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'handled',
+    escalation_reason TEXT,
+    run_count INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(interface_name, thread_id)
+)"""
+
+ACTIVITY_INDEX_DDL = """\
+CREATE INDEX IF NOT EXISTS idx_activity_interface
+ON sidebar_activity(interface_name)"""
+
+SCRATCHPAD_TABLE_DDL = """\
+CREATE TABLE IF NOT EXISTS scratchpad (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id TEXT NOT NULL,
+    note TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+)"""
+
+SCRATCHPAD_INDEX_DDL = """\
+CREATE INDEX IF NOT EXISTS idx_scratchpad_thread
+ON scratchpad(thread_id)"""
+
 
 class UserDataManager:
     """
@@ -62,6 +145,9 @@ class UserDataManager:
             # Enable WAL mode for concurrent read/write support
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA busy_timeout=5000")  # Wait up to 5s for locks
+            # Enforce foreign keys (per-connection in SQLite). Without this, every
+            # ON DELETE CASCADE in the schema is inert and deletes orphan child rows.
+            self._conn.execute("PRAGMA foreign_keys=ON")
         return self._conn
 
     def close(self) -> None:
@@ -127,7 +213,23 @@ class UserDataManager:
         # Initialize trigger rules schema (sidebar agent trigger filters)
         self._init_trigger_rules_schema()
 
+        # Initialize the sidebar-activity schema so heartbeat pregating and
+        # dispatcher dedup work from first boot, before any agent has run.
+        self._init_sidebar_activity_schema()
+
         logger.info("Tool schemas initialized successfully")
+
+    def _init_sidebar_activity_schema(self):
+        """Create the sidebar_activity table at every user-DB open.
+
+        The table then exists from first boot (heartbeat pregating and
+        dispatcher dedup read it) instead of appearing only when the first
+        agent runs. DDL: module-level ACTIVITY_TABLE_DDL / ACTIVITY_INDEX_DDL.
+        """
+        cursor = self.connection.cursor()
+        cursor.execute(ACTIVITY_TABLE_DDL)
+        cursor.execute(ACTIVITY_INDEX_DDL)
+        self.connection.commit()
     
     def _init_pager_schema(self):
         """Initialize PagerTool database schema."""
@@ -271,50 +373,9 @@ class UserDataManager:
 
         # Domain metadata (replaces manifest.json)
         # Note: 'label' is the single identifier - used for both lookups and display
-        domaindocs_sql = """
-        CREATE TABLE IF NOT EXISTS domaindocs (
-            id INTEGER PRIMARY KEY,
-            label TEXT UNIQUE NOT NULL,
-            encrypted__description TEXT,
-            enabled BOOLEAN DEFAULT TRUE,
-            archived BOOLEAN DEFAULT FALSE,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        """
-
         # Section-level storage (supports one level of nesting via parent_section_id)
-        sections_sql = """
-        CREATE TABLE IF NOT EXISTS domaindoc_sections (
-            id INTEGER PRIMARY KEY,
-            domaindoc_id INTEGER NOT NULL REFERENCES domaindocs(id) ON DELETE CASCADE,
-            parent_section_id INTEGER DEFAULT NULL REFERENCES domaindoc_sections(id) ON DELETE CASCADE,
-            header TEXT NOT NULL,
-            encrypted__content TEXT NOT NULL,
-            encrypted__summary TEXT DEFAULT NULL,
-            sort_order INTEGER NOT NULL,
-            collapsed BOOLEAN DEFAULT FALSE,
-            expanded_by_default BOOLEAN DEFAULT FALSE,
-            pinned BOOLEAN DEFAULT FALSE,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(domaindoc_id, parent_section_id, header)
-        )
-        """
-
         # Version history (operation diffs)
-        versions_sql = """
-        CREATE TABLE IF NOT EXISTS domaindoc_versions (
-            id INTEGER PRIMARY KEY,
-            domaindoc_id INTEGER NOT NULL REFERENCES domaindocs(id) ON DELETE CASCADE,
-            section_id INTEGER REFERENCES domaindoc_sections(id) ON DELETE SET NULL,
-            version_num INTEGER NOT NULL,
-            operation TEXT NOT NULL,
-            encrypted__diff_data TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            UNIQUE(domaindoc_id, version_num)
-        )
-        """
+        # DDL lives in _DOMAINDOC_DDL (module level) - shared with the rebuild migration.
 
         # Create indexes
         indexes_sql = [
@@ -328,9 +389,8 @@ class UserDataManager:
         ]
 
         # Execute schema creation
-        cursor.execute(domaindocs_sql)
-        cursor.execute(sections_sql)
-        cursor.execute(versions_sql)
+        for ddl in _DOMAINDOC_DDL.values():
+            cursor.execute(ddl)
 
         # Run migrations for existing databases (must precede index creation
         # since indexes may reference columns added by migrations)

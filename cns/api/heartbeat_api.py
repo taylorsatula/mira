@@ -16,7 +16,7 @@ from auth.api import get_current_user
 from auth.types import SessionData, APITokenContext
 from utils.user_context import set_current_user_id
 
-from .base import BaseHandler, ValidationError
+from .base import PropagatingHandler, ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ router = APIRouter()
 _VALID_OPS = ("cancel", "resume", "status")
 
 
-class HeartbeatControlHandler(BaseHandler):
+class HeartbeatControlHandler(PropagatingHandler):
     """One handler, three ops; op maps onto a heartbeat_service function."""
 
     def process_request(self, *, user_id: str, op: str) -> dict[str, Any]:

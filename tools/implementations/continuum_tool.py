@@ -1000,6 +1000,12 @@ class ContinuumSearchTool(Tool):
         if not query or not query.strip():
             raise ValueError("Query is required for search_within_segment operation")
 
+        if not segment_id or len(segment_id) < 8:
+            raise ValueError(
+                f"segment_id must be at least 8 characters (got {len(segment_id or '')}); "
+                "provide more characters or the full segment ID"
+            )
+
         # Find the full segment sentinel
         db = self._continuum_repo.get_user_db_client(self.user_id)
 
@@ -1155,6 +1161,11 @@ class ContinuumSearchTool(Tool):
         Returns:
             Message data or None if not found
         """
+        if not short_id or len(short_id) < 8:
+            raise ValueError(
+                f"Message ID prefix must be at least 8 characters (got {len(short_id or '')}); "
+                "provide more characters or the full message ID"
+            )
         try:
             db = self._continuum_repo.get_user_db_client(self.user_id)
 
@@ -1256,7 +1267,10 @@ class ContinuumSearchTool(Tool):
 
             return context
 
-        except Exception as e:
-            # WARNING not ERROR: empty context is non-fatal - user still gets main message
-            self.logger.warning(f"Failed to fetch context messages: {e}")
-            return []
+        except Exception:
+            # Required infrastructure: a DB/Valkey outage must propagate so the
+            # caller sees the failure -- an expand_message result that silently
+            # degrades to no context is worse than the error. Genuinely-empty
+            # query results never reach this handler.
+            self.logger.exception("Failed to fetch context messages")
+            raise

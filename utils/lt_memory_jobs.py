@@ -63,6 +63,8 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> None:
                 db = lt_memory_factory.db
                 updated = db.recalculate_temporal_scores(user_id=user_id)
                 total_updated += updated
+            except Exception as e:
+                logger.error(f"Error recalculating temporal scores for user {user_id}: {e}", exc_info=True)
             finally:
                 clear_user_context()
 
@@ -92,6 +94,8 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> None:
                 db = lt_memory_factory.db
                 updated = db.bulk_recalculate_scores(user_id=user_id)
                 total_updated += updated
+            except Exception as e:
+                logger.error(f"Error recalculating bulk scores for user {user_id}: {e}", exc_info=True)
             finally:
                 clear_user_context()
 
@@ -121,6 +125,8 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> None:
             try:
                 stats = run_entity_merge_for_user(user_id)
                 total_merged += stats.get("merged", 0)
+            except Exception as e:
+                logger.error(f"Error merging entities for user {user_id}: {e}", exc_info=True)
             finally:
                 clear_user_context()
 

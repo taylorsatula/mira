@@ -241,15 +241,14 @@ class ValkeyMessageCache:
         """
         user_id = get_current_user_id()
         messages_key = self._get_key(user_id)
+        epoch_key = self._get_epoch_key(user_id)
 
-        messages_result = self.valkey.delete(messages_key)
+        # One atomic operation: no in-flight writer holding the pre-collapse
+        # epoch can land its stale cache write between the delete and the
+        # epoch bump.
+        deleted_count, _ = self.valkey.delete_and_increment(messages_key, epoch_key)
 
-        # Bump the collapse epoch so in-flight UnitOfWork commits carrying the
-        # pre-collapse epoch skip their cache write instead of re-caching the
-        # pre-collapse message set.
-        self.valkey.increment(self._get_epoch_key(user_id))
-
-        if messages_result:
+        if deleted_count:
             logger.debug(f"Invalidated cached continuum for user {user_id}")
 
-        return bool(messages_result)
+        return deleted_count > 0

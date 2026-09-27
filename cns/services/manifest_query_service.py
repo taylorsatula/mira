@@ -10,6 +10,8 @@ import logging
 from typing import TypedDict
 
 from clients.valkey_client import get_valkey_client
+from valkey.exceptions import ConnectionError as ValkeyConnectionError
+from valkey.exceptions import TimeoutError as ValkeyTimeoutError
 from cns.core.events import ManifestUpdatedEvent
 from cns.integration.event_bus import EventBus
 from cns.infrastructure.continuum_repository import ContinuumRepository, get_continuum_repository
@@ -136,7 +138,7 @@ class ManifestQueryService:
                 logger.debug(f"Manifest cache hit for user {user_id}")
                 cached_str = cached.decode('utf-8') if isinstance(cached, bytes) else cached
                 return json.loads(cached_str)
-        except (ConnectionError, TimeoutError, OSError) as e:
+        except (ValkeyConnectionError, ValkeyTimeoutError) as e:
             logger.warning(f"Valkey unavailable for manifest cache read: {e}")
 
         # Query segments from database
@@ -148,7 +150,7 @@ class ManifestQueryService:
                 import json
                 self.valkey.setex(cache_key, self.cache_ttl, json.dumps(segments))
                 logger.debug(f"Cached manifest segments for user {user_id} (TTL={self.cache_ttl}s)")
-            except (ConnectionError, TimeoutError, OSError) as e:
+            except (ValkeyConnectionError, ValkeyTimeoutError) as e:
                 logger.warning(f"Valkey unavailable for manifest cache write: {e}")
 
         return segments
@@ -185,7 +187,13 @@ class ManifestQueryService:
             segments.append({
                 'id': str(msg.id),
                 'display_title': display_title,
-                'status': metadata.get('status', 'unknown'),
+                # 'collapsing' is a transient mid-claim state lasting seconds; the
+                # segment is still open while the claim runs, so the UI sees 'active'.
+                'status': (
+                    'active'
+                    if metadata.get('status') == 'collapsing'
+                    else metadata.get('status', 'unknown')
+                ),
                 'start_time': metadata.get('segment_start_time'),
                 'end_time': metadata.get('segment_end_time'),
                 'created_at': msg.created_at.isoformat() if msg.created_at else None

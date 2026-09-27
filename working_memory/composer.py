@@ -30,6 +30,10 @@ SECTION_LAYOUT: Dict[str, List[str]] = {
         # feature and must not share a slot.
         'behavioral_directives',
         'persona_directives',
+        # Reserved future surface: the consuming code path for this slot is
+        # available and correct but unexercised today — no trinket currently
+        # provides `tool_availability`. The silent miss in this direction is
+        # known and deliberate, not a wiring bug.
         'tool_availability',
         'location_context',
         'conversation_manifest',

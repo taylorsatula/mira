@@ -22,6 +22,7 @@ from cns.api.base import (
     generate_request_id,
 )
 from tools.registry import registry
+from tools.repo import ESSENTIAL_TOOLS
 from utils.timezone_utils import format_utc_iso, utc_now
 from utils.user_credentials import UserCredentialService
 from utils.tool_config_store import (
@@ -37,6 +38,11 @@ from utils.tool_config_store import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# All handlers below are deliberately sync (not async def) so Starlette runs
+# them in its threadpool; each performs blocking Postgres/Valkey round-trips
+# (and, for validate, potentially blocking network connection tests) that
+# would otherwise freeze the shared event loop. Same discipline as chat_endpoint.
 
 
 # Helper functions
@@ -62,7 +68,7 @@ def _delete_user_tool_config(tool_name: str) -> bool:
 
 # Endpoints
 @router.get("/actions/tools")
-async def list_configurable_tools(
+def list_configurable_tools(
     response: Response,
     current_user: SessionData | APITokenContext = Depends(get_current_user)
 ) -> dict[str, Any]:
@@ -107,7 +113,7 @@ async def list_configurable_tools(
 
 
 @router.get("/actions/tools/{tool_name}")
-async def get_tool_config(
+def get_tool_config(
     tool_name: str,
     response: Response,
     current_user: SessionData | APITokenContext = Depends(get_current_user)
@@ -167,7 +173,7 @@ async def get_tool_config(
 
 
 @router.get("/actions/tools/{tool_name}/schema")
-async def get_tool_schema(
+def get_tool_schema(
     tool_name: str,
     response: Response,
     current_user: SessionData | APITokenContext = Depends(get_current_user)
@@ -218,7 +224,7 @@ class ToolConfigUpdateRequest(BaseModel):
 
 
 @router.put("/actions/tools/{tool_name}")
-async def update_tool_config(
+def update_tool_config(
     tool_name: str,
     request_body: ToolConfigUpdateRequest,
     response: Response,
@@ -260,6 +266,19 @@ async def update_tool_config(
                 details={"validation_errors": errors}
             )
 
+        # Essential tools are force-enabled at startup, so an enabled=false
+        # setting would store but never take effect. Reject it up front
+        # instead of saving a setting that silently does nothing.
+        if tool_name in ESSENTIAL_TOOLS and getattr(validated_config, "enabled", True) is False:
+            raise ValidationError(
+                f"{tool_name} is an essential tool and cannot be disabled",
+                details={
+                    "tool_name": tool_name,
+                    "field": "enabled",
+                    "reason": "essential_tool",
+                },
+            )
+
         # Save the validated config
         config_dict = validated_config.model_dump()
         persist_secret_updates(tool_name, prepared.secret_updates)
@@ -295,7 +314,7 @@ async def update_tool_config(
 
 
 @router.post("/actions/tools/{tool_name}/validate")
-async def validate_tool_config(
+def validate_tool_config(
     tool_name: str,
     request_body: ToolConfigUpdateRequest,
     response: Response,
@@ -421,7 +440,7 @@ def _call_tool_validation(tool_name: str, config: dict[str, Any]) -> dict[str, A
 
 
 @router.delete("/actions/tools/{tool_name}")
-async def reset_tool_config(
+def reset_tool_config(
     tool_name: str,
     response: Response,
     current_user: SessionData | APITokenContext = Depends(get_current_user)

@@ -28,30 +28,25 @@ class AsyncActivityTrinket(EventAwareTrinket):
         Summary text originates from untrusted input; escape < > before
         rendering into the system prompt XML.
         """
-        try:
-            from utils.userdata_manager import get_user_data_manager
-            from utils.user_context import get_current_user_id
+        from utils.userdata_manager import get_user_data_manager
+        from utils.user_context import get_current_user_id
 
-            db = get_user_data_manager(get_current_user_id())
+        db = get_user_data_manager(get_current_user_id())
 
-            from agents.base import ensure_activity_schema
-            ensure_activity_schema(db)
+        from agents.base import ensure_activity_schema
+        ensure_activity_schema(db)
 
-            rows = db.select(
-                "sidebar_activity",
-                where="status NOT IN ('dismissed', 'resolved')",
-                order_by="updated_at DESC",
-            )
+        rows = db.select(
+            "sidebar_activity",
+            where="status NOT IN ('dismissed', 'resolved')",
+            order_by="updated_at DESC",
+        )
 
-            if not rows:
-                return ""
-
-            lines = self._render_items(rows)
-            return "<async_activity>\n" + "\n".join(lines) + "\n</async_activity>"
-
-        except Exception as e:
-            logger.error(f"AsyncActivityTrinket: failed to render: {e}", exc_info=True)
+        if not rows:
             return ""
+
+        lines = self._render_items(rows)
+        return "<async_activity>\n" + "\n".join(lines) + "\n</async_activity>"
 
     def _render_items(self, rows: list[dict]) -> list[str]:
         """Group items by interface and render one line per thread."""

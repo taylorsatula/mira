@@ -277,28 +277,31 @@ class ValidationUtils:
                 {"date": date_str}
             )
             
+        # Parse date in ISO format using our timezone utilities
         try:
-            # Parse date in ISO format using our timezone utilities
             date_obj = parse_utc_time_string(date_str)
-
-            # Ensure we're working with UTC time for consistency
-            now_utc = utc_now()
-            
-            # Ensure date is not too far in the future
-            max_days = 16  # OpenMeteo typically supports up to 16 days
-            if date_obj.date() > now_utc.date() + timedelta(days=max_days):
-                raise ValueError(
-                    f"Date cannot be more than {max_days} days in the future",
-                        {"date": date_str, "max_days": max_days}
-                )
-                
-            # Return the validated date string
-            return date_str
         except ValueError:
             raise ValueError(
                 f"Invalid date format: '{date_str}'. Use ISO format (YYYY-MM-DD)",
-                {"date": date_str}
+                {"date": date_str, "error_type": "format"}
             )
+
+        # Ensure we're working with UTC time for consistency
+        now_utc = utc_now()
+
+        # Ensure date is not too far in the future
+        max_days = 16  # OpenMeteo typically supports up to 16 days
+        max_date = now_utc.date() + timedelta(days=max_days)
+        if date_obj.date() > max_date:
+            raise ValueError(
+                f"Date '{date_str}' is out of range: dates cannot be more than "
+                f"{max_days} days in the future (latest allowed date: {max_date.isoformat()}). "
+                f"Use a date between {now_utc.date().isoformat()} and {max_date.isoformat()}.",
+                {"date": date_str, "max_days": max_days, "error_type": "range"}
+            )
+
+        # Return the validated date string
+        return date_str
     
     @staticmethod
     def validate_parameters(parameters: Optional[Union[str, List[str]]]) -> Optional[List[str]]:
@@ -343,6 +346,22 @@ class ValidationUtils:
                     f"Parameter at index {i} must be a string, got {type(param).__name__}",
                         {"parameter": param}
                 )
+        
+        # Reject parameters that are not supported instead of silently
+        # substituting defaults later
+        valid_parameters = sorted(
+            set(WeatherTool._available_hourly_params)
+            | set(WeatherTool._available_daily_params)
+        )
+        invalid_params = [p for p in parameters if p not in valid_parameters]
+        if invalid_params:
+            raise ValueError(
+                f"Invalid parameters: {', '.join(invalid_params)}. "
+                f"Parameters must be one of the {len(valid_parameters)} supported "
+                f"weather parameters (e.g. temperature_2m, precipitation, "
+                f"wind_speed_10m)",
+                {"parameters": invalid_params, "valid_parameters": valid_parameters}
+            )
         
         # Return list of validated parameters
         return parameters
@@ -784,19 +803,29 @@ class WeatherTool(Tool):
             else:  # daily
                 daily_params = self._available_daily_params
         else:
-            # Requested parameters
+            # Requested parameters — reject invalid ones for this forecast
+            # type instead of silently substituting defaults
+            available_params = (
+                self._available_hourly_params if forecast_type == "hourly"
+                else self._available_daily_params
+            )
+            invalid_params = [p for p in parameters if p not in available_params]
+            if invalid_params:
+                raise ValueError(
+                    f"Invalid parameters for {forecast_type} forecast: "
+                    f"{', '.join(invalid_params)}. Must be one of the "
+                    f"{len(available_params)} supported {forecast_type} parameters "
+                    f"(e.g. {', '.join(available_params[:5])})",
+                    {
+                        "parameters": invalid_params,
+                        "forecast_type": forecast_type,
+                        "valid_parameters": available_params,
+                    }
+                )
             if forecast_type == "hourly":
-                hourly_params = [p for p in parameters if p in self._available_hourly_params]
+                hourly_params = list(parameters)
             else:  # daily
-                daily_params = [p for p in parameters if p in self._available_daily_params]
-        
-        # Ensure we have parameters to request
-        if forecast_type == "hourly" and not hourly_params:
-            self.logger.warning("No valid hourly parameters specified, using defaults")
-            hourly_params = ["temperature_2m", "precipitation_probability", "wind_speed_10m"]
-        elif forecast_type == "daily" and not daily_params:
-            self.logger.warning("No valid daily parameters specified, using defaults")
-            daily_params = ["temperature_2m_max", "temperature_2m_min", "precipitation_sum"]
+                daily_params = list(parameters)
         
         # Build API request URL
         url = config.weather_tool.api_endpoint

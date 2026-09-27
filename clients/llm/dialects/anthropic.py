@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import random
 import time
@@ -10,6 +11,7 @@ from collections.abc import Iterator
 from typing import Any, TYPE_CHECKING
 
 import anthropic
+from anthropic._exceptions import OverloadedError
 
 from clients.llm.artifacts import FileArtifactSink
 from clients.llm.events import (
@@ -69,8 +71,8 @@ def _apply_cache_control(anthro_block: dict[str, Any], neutral_block: dict[str, 
 
 
 def is_overloaded_error(error: Exception) -> bool:
-    error_text = str(error).lower()
-    return "overloaded" in error_text or "overloaded_error" in error_text
+    """Classify overload by the SDK's typed exception, not string sniffing."""
+    return isinstance(error, OverloadedError)
 
 
 class AnthropicDialect(Dialect):
@@ -235,9 +237,32 @@ class AnthropicDialect(Dialect):
         result = self._normalize_message(final_message, request)
         self._log_response(result, request.model)
 
-        yield from self._server_tool_completed_events(final_message.content)
-        yield from self._file_artifact_events(final_message.content)
+        # Download artifacts before emitting the code-execution summary so the
+        # summary can advertise what actually landed, not what the provider
+        # listed. Consumer-visible event order is unchanged.
+        landed_files: set[str] = set()
+        artifact_events = list(
+            self._file_artifact_events(final_message.content, landed_files=landed_files)
+        )
+        yield from self._server_tool_completed_events(
+            final_message.content, landed_files=landed_files
+        )
+        yield from artifact_events
         yield CompleteEvent(response=result)
+
+    def abort_active_stream(self) -> None:
+        """Close the in-flight streaming response from another thread.
+
+        Mirrors openai_chat_base.abort_active_stream: the worker sits blocked
+        inside a socket read; closing the underlying httpx response is the
+        only unblock that works (generator.close() raises ValueError while
+        the frame is executing, not suspended at a yield). MessageStream
+        closes the raw stream's httpx response, releasing the connection
+        the stalled worker is pinned to.
+        """
+        stream = self._active_stream
+        if stream is not None:
+            stream.close()
 
     def current_partial_usage(self) -> Usage | None:
         stream = self._active_stream
@@ -524,8 +549,16 @@ class AnthropicDialect(Dialect):
         if isinstance(content, str):
             content = [{"type": "text", "text": content}]
 
+        # Key-form tool_calls: an assistant message stored by the OpenAI
+        # family carries tool calls as a top-level "tool_calls" list instead
+        # of content blocks. A mid-session dialect switch replays stored
+        # messages through whichever dialect serves the next turn, so the
+        # key form is normalized to tool_use blocks here — never dropped.
+        key_form_calls = message.get("tool_calls") or []
         if not isinstance(content, list):
-            return content
+            if not key_form_calls:
+                return content
+            content = []
 
         # Reconstruct thinking blocks from ReasoningBlocks + thinking_signatures metadata
         thinking_signatures = message.get("thinking_signatures", [])
@@ -533,6 +566,7 @@ class AnthropicDialect(Dialect):
 
         result: list[dict[str, Any]] = []
         thinking_blocks: list[dict[str, Any]] = []
+        emitted_tool_use_ids: set[str] = set()
         for block in content:
             if not isinstance(block, dict):
                 continue
@@ -554,9 +588,20 @@ class AnthropicDialect(Dialect):
                     elif sig.get("type") == "redacted_thinking":
                         thinking_blocks.append({"type": "redacted_thinking", "data": sig["data"]})
                 if not matched:
-                    continue
+                    # Co-occurrence invariant: every reasoning block must pair
+                    # with exactly one thinking signature, positionally. An
+                    # unmatched block means the stored metadata drifted from
+                    # the content (silent block loss, or a mispaired signature
+                    # the provider rejects next turn) — refuse at the boundary.
+                    raise ProviderProtocolError(
+                        "anthropic",
+                        "message-conversion",
+                        "Reasoning block has no matching thinking signature; "
+                        "reasoning blocks and thinking_signatures must pair one-to-one",
+                    )
                 thinking_blocks.append(anthro_block)
             elif block_type == "tool_call":
+                emitted_tool_use_ids.add(block.get("id", ""))
                 result.append({
                     "type": "tool_use",
                     "id": block.get("id", ""),
@@ -572,12 +617,70 @@ class AnthropicDialect(Dialect):
             elif block_type == "document":
                 result.append(self._serialize_inner_block(block))
 
+        # Normalize key-form tool_calls to the canonical tool_use shape.
+        # Mirrors the OpenAI family's _convert_assistant_message acceptance:
+        # arguments may be a JSON string or a mapping; malformed JSON is a
+        # loud protocol error, never a silent drop of the call.
+        for tool_call in key_form_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            call_id = tool_call.get("id", "")
+            if call_id in emitted_tool_use_ids:
+                # Already emitted from a content block; both forms in one
+                # message must not produce duplicate tool_use ids.
+                continue
+            emitted_tool_use_ids.add(call_id)
+            function = tool_call.get("function") or {}
+            name = function.get("name", "")
+            arguments = function.get("arguments") if "arguments" in function else None
+            if arguments is None or arguments == "":
+                tool_input: dict[str, Any] = {}
+            elif isinstance(arguments, dict):
+                tool_input = dict(arguments)
+            elif isinstance(arguments, str):
+                try:
+                    parsed = json.loads(arguments)
+                except json.JSONDecodeError as error:
+                    raise ProviderProtocolError(
+                        "anthropic",
+                        "message-conversion",
+                        f"Tool call {call_id!r} for {name!r} contains malformed JSON arguments",
+                    ) from error
+                if not isinstance(parsed, dict):
+                    raise ProviderProtocolError(
+                        "anthropic",
+                        "message-conversion",
+                        f"Tool call {call_id!r} for {name!r} arguments must be a JSON object",
+                    )
+                tool_input = parsed
+            else:
+                raise ProviderProtocolError(
+                    "anthropic",
+                    "message-conversion",
+                    f"Tool call {call_id!r} for {name!r} arguments must be a JSON string or mapping",
+                )
+            result.append({
+                "type": "tool_use",
+                "id": call_id,
+                "name": name,
+                "input": tool_input,
+            })
+
         if thinking_active:
             while sig_index < len(thinking_signatures):
                 sig = thinking_signatures[sig_index]
                 sig_index += 1
                 if sig.get("type") == "redacted_thinking":
                     thinking_blocks.append({"type": "redacted_thinking", "data": sig["data"]})
+                else:
+                    # A leftover thinking signature has no reasoning block
+                    # to pair with — same co-occurrence invariant as above.
+                    raise ProviderProtocolError(
+                        "anthropic",
+                        "message-conversion",
+                        "thinking signature has no matching reasoning block; "
+                        "reasoning blocks and thinking_signatures must pair one-to-one",
+                    )
 
         return (thinking_blocks + result) if thinking_active else result
 
@@ -740,7 +843,12 @@ class AnthropicDialect(Dialect):
             container_id=container_id,
         )
 
-    def _server_tool_completed_events(self, content_blocks: list) -> Iterator[ToolCompletedEvent]:
+    def _server_tool_completed_events(
+        self,
+        content_blocks: list,
+        *,
+        landed_files: set[str],
+    ) -> Iterator[ToolCompletedEvent]:
         from anthropic.types.beta import BetaCodeExecutionResultBlock
 
         server_tool_map = {}
@@ -755,18 +863,35 @@ class AnthropicDialect(Dialect):
             tool_name = server_tool_map.get(tool_id, "code_execution")
             if isinstance(block.content, BetaCodeExecutionResultBlock):
                 inner = block.content
-                file_count = sum(1 for output in inner.content if getattr(output, "file_id", None))
+                file_ids = [
+                    file_id
+                    for file_id in (getattr(output, "file_id", None) for output in inner.content)
+                    if file_id
+                ]
+                landed = [file_id for file_id in file_ids if file_id in landed_files]
+                missing = [file_id for file_id in file_ids if file_id not in landed_files]
+                # The summary is a user-facing claim about files: it advertises
+                # what actually landed (successful downloads), and names any
+                # file that failed to land. Reasons stay in the warning log.
                 result_summary = (
                     f"[code_execution: rc={inner.return_code}, "
                     f"stdout={len(inner.stdout or '')}B, stderr={len(inner.stderr or '')}B, "
-                    f"files={file_count}]"
+                    f"files={len(landed)}"
                 )
+                if missing:
+                    result_summary += f" (unavailable: {', '.join(missing)})"
+                result_summary += "]"
             else:
                 error_code = getattr(block.content, "error_code", "unknown")
                 result_summary = f"[code_execution error: {error_code}]"
             yield ToolCompletedEvent(tool_name=tool_name, tool_id=tool_id, result=result_summary)
 
-    def _file_artifact_events(self, content_blocks: list) -> Iterator[FileArtifactEvent]:
+    def _file_artifact_events(
+        self,
+        content_blocks: list,
+        *,
+        landed_files: set[str],
+    ) -> Iterator[FileArtifactEvent]:
         from anthropic.types.beta import BetaCodeExecutionResultBlock
 
         for block in content_blocks:
@@ -793,6 +918,7 @@ class AnthropicDialect(Dialect):
                         size_bytes=metadata.size_bytes,
                         content=response.read(),
                     )
+                    landed_files.add(file_id)
                     yield FileArtifactEvent(
                         file_id=file_id,
                         filename=metadata.filename,

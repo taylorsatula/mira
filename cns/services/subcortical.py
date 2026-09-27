@@ -24,6 +24,7 @@ from typing import List, Literal, Set, TypedDict, TYPE_CHECKING
 import json_repair
 
 from cns.core.continuum import Continuum
+from cns.core.message import preprocess_content_blocks
 
 if TYPE_CHECKING:
     from clients.llm_provider import LLMProvider
@@ -671,15 +672,23 @@ class SubcorticalLayer:
         )
 
     def _extract_text_content(self, content: str | list[dict[str, object]]) -> str:
-        """Extract text from potentially multimodal content."""
+        """Extract natural text from potentially structured content.
+
+        Delegates to cns.core.message.preprocess_content_blocks (the repo's
+        canonical structured-content preprocessor, mirrored from
+        summary_generator/persona_service): text and reasoning blocks render
+        as text, tool_call blocks as a labeled marker, media blocks are
+        stripped. Never returns str() of a raw structure.
+        """
         if isinstance(content, str):
             return content
 
         if isinstance(content, list):
-            text_parts = [
-                item['text'] for item in content
-                if isinstance(item, dict) and item.get('type') == 'text'
-            ]
-            return ' '.join(text_parts) if text_parts else '[non-text content]'
+            preprocessed = preprocess_content_blocks(content)
+            if preprocessed.text_parts:
+                return ' '.join(preprocessed.text_parts)
+            if preprocessed.image_count:
+                return '[image content]'
+            return '[non-text content]'
 
-        return str(content)
+        return '[non-text content]'

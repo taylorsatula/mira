@@ -18,6 +18,7 @@ no-reasoning signal, and is never omitted from the payload.
 from __future__ import annotations
 
 import ipaddress
+import logging
 from typing import Any
 from urllib.parse import urlparse
 
@@ -30,6 +31,8 @@ from clients.llm.types import (
     Request,
     ThinkingConfig,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIDialect(OpenAIChatBase):
@@ -78,11 +81,43 @@ class OpenAIDialect(OpenAIChatBase):
         """Override base to extract reasoning_content from OpenAI-compatible
         providers (llama.cpp, local servers) that surface reasoning in the
         `reasoning_content` field."""
-        return message.get("reasoning_content") or ""
+        value = message.get("reasoning_content")
+        if not value:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (int, float)):
+            logger.warning(
+                "%s reasoning_content was %s (expected str) — coerced to string",
+                self.dialect_name, type(value).__name__,
+            )
+            return str(value)
+        logger.error(
+            "%s reasoning_content had unexpected shape %s — skipping fragment, "
+            "stream continues",
+            self.dialect_name, type(value).__name__,
+        )
+        return ""
 
     def _extract_reasoning_delta(self, delta) -> str:
         """Override base to extract reasoning_content from streaming deltas."""
-        return delta.get("reasoning_content") or ""
+        value = delta.get("reasoning_content")
+        if not value:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (int, float)):
+            logger.warning(
+                "%s reasoning_content was %s (expected str) — coerced to string",
+                self.dialect_name, type(value).__name__,
+            )
+            return str(value)
+        logger.error(
+            "%s reasoning_content had unexpected shape %s — skipping fragment, "
+            "stream continues",
+            self.dialect_name, type(value).__name__,
+        )
+        return ""
 
     def _serialize_thinking(self, payload: dict[str, Any], thinking: ThinkingConfig) -> None:
         effort = thinking.effort

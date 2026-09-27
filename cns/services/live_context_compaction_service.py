@@ -194,20 +194,48 @@ def filter_messages_for_live_context(
     continuum_id: str,
 ) -> list[Message]:
     """
-    Return a request-local message list with compacted ordinary messages omitted.
+    Return a request-local message list with compacted ordinary messages and
+    keepsleeping heartbeat turns omitted.
 
-    Messages are omitted only when an artifact for this continuum covers their
-    timestamp. Segment boundaries, system notifications, and compaction synopsis
-    scaffolding are always preserved.
+    Messages are omitted when an artifact for this continuum covers their
+    timestamp. Keepsleeping heartbeat turns are omitted on every path (the
+    same exclusion load_segment_messages and the history API apply; breakout
+    turns are real conversation and stay visible). Segment boundaries, system
+    notifications, and compaction synopsis scaffolding are always preserved.
     """
+    keepsleeping_turn_ids = {
+        message.metadata.get("turn_id")
+        for message in messages
+        if message.metadata.get("heartbeat") == "true"
+        and (message.metadata.get("heartbeat_decision") or "keepsleeping") != "breakout"
+        and message.metadata.get("turn_id") is not None
+    }
+    surviving = [
+        message
+        for message in messages
+        if not _is_keepsleeping_heartbeat(message, keepsleeping_turn_ids)
+    ]
+
     if artifact is None or artifact.continuum_id != continuum_id:
-        return list(messages)
+        return surviving
 
     return [
         message
-        for message in messages
+        for message in surviving
         if not _is_covered_ordinary_message(message, artifact)
     ]
+
+
+def _is_keepsleeping_heartbeat(
+    message: Message,
+    keepsleeping_turn_ids: set,
+) -> bool:
+    """Mirror the load_segment_messages SQL predicate in Python."""
+    if message.metadata.get("heartbeat") == "true":
+        if (message.metadata.get("heartbeat_decision") or "keepsleeping") != "breakout":
+            return True
+    turn_id = message.metadata.get("turn_id")
+    return turn_id is not None and turn_id in keepsleeping_turn_ids
 
 
 def _is_covered_ordinary_message(
@@ -428,6 +456,10 @@ class LiveContextCompactionService:
             covered_start=new_range_start,
             covered_end=utc_now(),
         )
+        # Keepsleeping heartbeat turns are scheduler noise, not user turns:
+        # without this exclusion they inflate the raw-user-turn count and drive
+        # premature compaction (breakout turns count, as everywhere else).
+        candidates = filter_messages_for_live_context(candidates, None, str(continuum_id))
         user_messages = [message for message in candidates if message.role == "user"]
         if len(user_messages) <= config.api.compaction_raw_user_turns_to_preserve:
             return None
@@ -447,6 +479,7 @@ class LiveContextCompactionService:
             covered_start=new_range_start,
             covered_end=covered_end,
         )
+        messages = filter_messages_for_live_context(messages, None, str(continuum_id))
         if not messages:
             return None
 

@@ -4,11 +4,19 @@ Sidebar Agents Tool -- Main conversation tool for managing sidebar activity.
 Reads the same sidebar_activity and scratchpad SQLite tables that
 sidebar_tool writes. Both use self.db (same UserDataManager per user).
 """
-import html
 import logging
+import re
+from datetime import datetime
 from typing import Dict, Any, TYPE_CHECKING
 
-from pydantic import BaseModel, Field
+from pydantic import (
+    BaseModel,
+    Field,
+    StrictInt,
+    StrictStr,
+    ValidationError,
+    field_validator,
+)
 
 from agents.base import ensure_activity_schema
 from tools.repo import Tool
@@ -25,6 +33,84 @@ def _sqlite_now() -> str:
     return utc_now().strftime("%Y-%m-%d %H:%M:%S")
 
 logger = logging.getLogger(__name__)
+
+
+# -------------------- SCRATCHPAD PARSER --------------------
+# Scratchpad notes are model-authored free text (written via
+# sidebar_tool.write_note) with no documented structure, so they are
+# never returned to the main conversation as raw text. Each DB row is
+# parsed into a ScratchpadNoteRecord -- a strict, typed, known shape --
+# and any row that does not conform raises loudly with diagnostics
+# instead of leaking free-form content into the tool envelope.
+
+# Format used by the table's writers (SQLite datetime('now')).
+_SCRATCHPAD_TS_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+# Control characters with no legitimate place in prose notes. Tab,
+# newline, and carriage return are allowed; all other C0/C1 controls fail.
+_NOTE_CONTROL_CHARS = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]')
+
+
+class ScratchpadNoteRecord(BaseModel):
+    """Known-shape record for one scratchpad note row.
+
+    Strict types throughout: pydantic's default coercion is disabled so
+    a malformed row fails validation instead of being silently repaired.
+    """
+
+    model_config = {"strict": True}
+
+    note_id: StrictInt
+    created_at: StrictStr
+    note: StrictStr
+
+    @field_validator("created_at")
+    @classmethod
+    def _created_at_is_sqlite_datetime(cls, v: str) -> str:
+        try:
+            datetime.strptime(v, _SCRATCHPAD_TS_FORMAT)
+        except ValueError:
+            raise ValueError(
+                f"created_at {v!r} is not in the SQLite datetime format "
+                f"'{_SCRATCHPAD_TS_FORMAT}'"
+            )
+        return v
+
+    @field_validator("note")
+    @classmethod
+    def _note_is_prose(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("note is empty or whitespace-only")
+        if _NOTE_CONTROL_CHARS.search(v):
+            raise ValueError("note contains control characters")
+        return v
+
+
+def _parse_scratchpad_note(
+    row: Dict[str, Any], thread_id: str
+) -> ScratchpadNoteRecord:
+    """Parse one scratchpad DB row into a known shape or fail loudly."""
+    try:
+        if row.get('thread_id') != thread_id:
+            raise ValueError(
+                f"row thread_id {row.get('thread_id')!r} does not match "
+                f"requested thread {thread_id!r}"
+            )
+        return ScratchpadNoteRecord(
+            note_id=row['id'],
+            created_at=row['created_at'],
+            note=row['note'],
+        )
+    except KeyError as exc:
+        raise ValueError(
+            f"scratchpad row for thread {thread_id!r} is missing field "
+            f"{exc}; row keys: {sorted(row.keys())}"
+        ) from exc
+    except ValidationError as exc:
+        raise ValueError(
+            f"scratchpad note id {row.get('id', '<unknown>')} for thread "
+            f"{thread_id!r} is not parseable into the known shape: {exc}"
+        ) from exc
 
 
 # -------------------- CONFIGURATION --------------------
@@ -160,7 +246,10 @@ class SidebarAgentsTool(Tool):
         )
         activity = activity_rows[0] if activity_rows else None
 
-        # Scratchpad content originates from untrusted input; escape before return
+        # Scratchpad content is model-authored free text with no
+        # documented format: parse each row into a validated known shape
+        # (raising loudly on anything unparseable) rather than returning
+        # raw text with escaping applied.
         note_rows = self.db.select(
             "scratchpad",
             where="thread_id = :tid",
@@ -168,10 +257,7 @@ class SidebarAgentsTool(Tool):
             order_by="created_at ASC",
         )
         notes = [
-            {
-                "note": html.escape(r['note']),
-                "created_at": r['created_at'],
-            }
+            _parse_scratchpad_note(r, thread_id).model_dump()
             for r in note_rows
         ]
 

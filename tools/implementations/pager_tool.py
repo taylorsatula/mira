@@ -28,6 +28,7 @@ from utils.timezone_utils import (
     get_default_timezone,
     format_datetime, utc_now
 )
+from utils.userdata_manager import get_user_data_manager
 from clients.llm_provider import get_llm_provider
 
 from typing import TYPE_CHECKING
@@ -742,7 +743,7 @@ class PagerTool(Tool):
             self.logger.error(f"Failed to register username '{username}': {e}")
             raise ValueError(f"Failed to register username: {e}")
 
-    def _resolve_recipient_to_pager_id(self, recipient_address: str) -> str:
+    def _resolve_recipient_to_pager_id(self, recipient_address: str) -> tuple:
         """
         Resolve recipient address to pager device ID (internal use only).
 
@@ -750,7 +751,7 @@ class PagerTool(Tool):
             recipient_address: Username (e.g., "taylor")
 
         Returns:
-            Pager device ID
+            Tuple of (pager device ID, recipient's per-user data manager)
 
         Raises:
             ValueError: If recipient cannot be resolved
@@ -774,8 +775,11 @@ class PagerTool(Tool):
 
         user_id = str(username_result['user_id'])
 
-        # Look up the user's pager device
-        pager = self.db.select(
+        # Look up the recipient's pager device in the RECIPIENT's per-user
+        # store. self.db is scoped to the sending user and holds only their
+        # own devices, so it can never contain the recipient's binding.
+        recipient_db = get_user_data_manager(uuid.UUID(user_id))
+        pager = recipient_db.select(
             'pager_devices',
             'user_id = :user_id AND active = :active',
             {'user_id': user_id, 'active': 1}
@@ -784,7 +788,7 @@ class PagerTool(Tool):
         if not pager or len(pager) == 0:
             raise ValueError(f"No active pager found for username '{recipient_address}'")
 
-        return pager[0]['id']
+        return pager[0]['id'], recipient_db
 
     def _send_federated_message(
         self,
@@ -931,7 +935,8 @@ class PagerTool(Tool):
             )
 
         # For local delivery, resolve username to pager device ID
-        recipient_pager_id = self._resolve_recipient_to_pager_id(recipient)
+        # (resolved against the recipient's per-user store, not ours)
+        recipient_pager_id, recipient_db = self._resolve_recipient_to_pager_id(recipient)
 
         # Validate required parameters
         if not all([sender_id, recipient_pager_id, content]):
@@ -959,7 +964,7 @@ class PagerTool(Tool):
             self.logger.error("Invalid device secret")
             raise ValueError("Invalid device secret")
 
-        recipient_device = self.db.select(
+        recipient_device = recipient_db.select(
             'pager_devices',
             'id = :recipient_id',
             {'recipient_id': recipient_pager_id}
@@ -1099,8 +1104,12 @@ class PagerTool(Tool):
         if unread_only:
             query += " AND m.read = 0"
             
-        # Always filter out expired messages
-        query += " AND m.expires_at > datetime('now')"
+        # Always filter out expired messages. expires_at is stored as a
+        # UTC ISO-8601 'T' timestamp, so compare it against the same format
+        # (mirrors cleanup_expired) — never SQLite's space-separated
+        # datetime('now'), which mismatches at day granularity.
+        query += " AND m.expires_at > :current_time"
+        params['current_time'] = utc_now().isoformat()
             
         # Sort by sent time descending (newest first)
         query += " ORDER BY m.sent_at DESC"
@@ -1186,7 +1195,8 @@ class PagerTool(Tool):
         params = {'user_id': self.user_id, 'pager_id': pager_id}
         
         if not include_expired:
-            query += " AND m.expires_at > datetime('now')"
+            query += " AND m.expires_at > :current_time"
+            params['current_time'] = utc_now().isoformat()
             
         # Sort by sent time descending (newest first)
         query += " ORDER BY m.sent_at DESC"

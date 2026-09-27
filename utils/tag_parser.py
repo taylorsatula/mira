@@ -131,10 +131,14 @@ class TagParser:
         r'<mira:precis>(.*?)</mira:precis>',
         re.DOTALL | re.IGNORECASE
     )
-    # Pattern for errant timestamps MIRA might add at message start
-    # Matches: [5:48pm], (5:48pm), 5:48pm, [5:48 PM], etc.
+    # Pattern for errant timestamps MIRA might add at message start.
+    # The tool loop injects ephemeral stamps in exactly one shape
+    # (cns/core/message_formatter.py: "[%-I:%M%p] ".lower(), e.g. "[5:48pm] ")
+    # and MIRA mimics that bracketed shape when opening a response.
+    # Brackets are therefore REQUIRED: a natural leading time reference
+    # ("7:48pm — the results are in") survives untouched.
     ERRANT_TIMESTAMP_PATTERN = re.compile(
-        r'^[\[\(]?\d{1,2}:\d{2}\s*(?:am|pm)[\]\)]?\s*[:,-]?\s*',
+        r'^\[\d{1,2}:\d{2}\s*(?:am|pm)\]\s*[:,-]?\s*',
         re.IGNORECASE
     )
     # Pattern for internal monologue block (cognitive anchoring mechanism)

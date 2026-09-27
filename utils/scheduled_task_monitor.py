@@ -93,6 +93,11 @@ class ScheduledTaskMonitor:
                 cls._job_history[job_id]['total_runs'] += 1
                 cls._job_history[job_id]['last_run_time'] = start_time.isoformat()
 
+            # Set to True only by the monitor's own timeout path, so a
+            # TimeoutError raised by the job body itself is accounted as a
+            # failure instead of being re-raised as "already logged"
+            timeout_counted = False
+
             try:
                 if timeout_seconds:
                     # Execute with timeout using ThreadPoolExecutor
@@ -120,6 +125,15 @@ class ScheduledTaskMonitor:
                         return result
 
                     except FuturesTimeoutError:
+                        # Python 3.11+ aliases concurrent.futures.TimeoutError to
+                        # the built-in TimeoutError, so a TimeoutError raised by
+                        # the job body surfaces here too. If the future is done,
+                        # the job itself raised it - re-raise so it flows to the
+                        # failure accounting below instead of being counted as a
+                        # monitor timeout.
+                        if future.done() and not future.cancelled():
+                            raise
+
                         duration = (utc_now() - start_time).total_seconds()
 
                         logger.error(
@@ -130,6 +144,7 @@ class ScheduledTaskMonitor:
                         # Update timeout stats
                         with cls._history_lock:
                             cls._job_history[job_id]['timeout_runs'] += 1
+                        timeout_counted = True
 
                         # Attempt to cancel - this won't stop a running thread,
                         # but will prevent queued work from starting
@@ -172,8 +187,24 @@ class ScheduledTaskMonitor:
 
                     return result
 
-            except TimeoutError:
-                raise  # Already logged
+            except TimeoutError as e:
+                if timeout_counted:
+                    raise  # Monitor timeout - already logged and counted
+
+                # A TimeoutError raised by the job body itself is a job failure,
+                # not a monitor timeout - log and count it like any other error
+                duration = (utc_now() - start_time).total_seconds()
+                logger.error(
+                    f"Scheduled job '{job_id}' failed after {duration:.2f}s: {e}",
+                    exc_info=True
+                )
+
+                # Update failure stats
+                with cls._history_lock:
+                    cls._job_history[job_id]['failed_runs'] += 1
+                    cls._job_history[job_id]['last_duration_seconds'] = duration
+
+                raise
 
             except Exception as e:
                 duration = (utc_now() - start_time).total_seconds()

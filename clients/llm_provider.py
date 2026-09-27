@@ -238,6 +238,11 @@ class LLMProvider:
         container_id: str | None,
     ) -> Request:
         extracted_system, prepared_messages = self._prepare_messages(messages)
+        if extracted_system is not None and system_prompt is not None:
+            raise ValueError(
+                "Two system prompt sources were provided: a system message inside `messages` "
+                "and the `system_prompt` argument. Pass exactly one system prompt source."
+            )
         request_system = system_prompt if system_prompt is not None else extracted_system
 
         # Merge the resolver's per-route effort default into the caller's

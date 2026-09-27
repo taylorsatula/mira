@@ -334,7 +334,21 @@ class ToolRepository:
         self.enabled_tools: Set[str] = set()
         self.gated_tools: Set[str] = set()  # Tools that self-determine availability
         self.working_memory = working_memory
-        self._pinned_tools: Set[str] = set()  # Tools pinned for rest of session via load_for_rest_of_session
+        # Tools pinned via load_for_rest_of_session, keyed by the user id
+        # resolved from the contextvar at read/write time — the same per-user
+        # keying pattern used for stateful trinket state. Never a bare set
+        # shared across users: the repository is a process-global singleton.
+        self._pinned_tools: Dict[str, Set[str]] = {}
+
+        # Removal boundary: clear the current user's pins on segment collapse,
+        # mirroring working_memory/core.py:_flush_stateful_trinkets (the user
+        # is resolved from the contextvar at event time). Registered here
+        # rather than in cns/integration/factory.py, reaching the event bus
+        # through working_memory — the same bus the factory wires the
+        # repository's TurnCompletedEvent cleanup subscription to.
+        event_bus = getattr(working_memory, "event_bus", None)
+        if event_bus is not None:
+            event_bus.subscribe('SegmentCollapsedEvent', self._clear_pinned_tools_on_segment_collapse)
     
     def register_tool_class(self, tool_class: Type[Tool], tool_name: str) -> None:
         """Register a tool class for lazy instantiation."""
@@ -393,9 +407,31 @@ class ToolRepository:
         else:
             self.logger.debug(f"Tool '{name}' was already disabled")
 
+    def pin_tool(self, name: str) -> None:
+        """Pin a tool for the rest of the current user's session.
+
+        Writer for invokeother_tool's load_for_rest_of_session: the pin is
+        recorded under the current user so it is only honored for them.
+        """
+        user_id = get_current_user_id()
+        self._pinned_tools.setdefault(user_id, set()).add(name)
+        self.logger.debug(f"Pinned tool '{name}' for user {user_id}")
+
+    def _clear_pinned_tools_on_segment_collapse(self, event) -> None:
+        """Clear the current user's pinned tools on SegmentCollapsedEvent.
+
+        Mirrors working_memory/core.py:_flush_stateful_trinkets: resolve the
+        user from the contextvar at event time and clear only that user's
+        state, so one user's collapse never touches another user's pins.
+        """
+        user_id = get_current_user_id()
+        if self._pinned_tools.pop(user_id, None):
+            self.logger.info(f"Cleared pinned tools on segment collapse for user {user_id}")
+
     def cleanup_ephemeral_tools(self, essential_tools: Set[str]) -> None:
         """Disable all non-essential, non-pinned tools. Called on TurnCompletedEvent."""
-        ephemeral = self.enabled_tools - essential_tools - self._pinned_tools
+        pinned = self._pinned_tools.get(get_current_user_id(), set())
+        ephemeral = self.enabled_tools - essential_tools - pinned
         if not ephemeral:
             return
 

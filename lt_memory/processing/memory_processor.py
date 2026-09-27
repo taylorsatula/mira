@@ -32,6 +32,19 @@ DEDUP_SIMILARITY_THRESHOLD = 0.92  # Cosine similarity for duplicate detection
 DEFAULT_IMPORTANCE_SCORE = 0.5     # Default importance for newly extracted memories
 
 
+class LLMResponseFormatError(ValueError):
+    """The extraction LLM's response is empty or otherwise unusable.
+
+    This is an infra/LLM-class failure, NOT a content failure, and it must NOT
+    be treated as a successful zero-memory extraction: returning an empty
+    list for a degenerate response would let the caller mark the segment
+    extracted and silently end its memory extraction forever. Raising keeps
+    the segment unextracted so the sweep retries it, and callers classify
+    this type to keep it off the segment's content-failure retry budget
+    (see ExtractionOrchestrator.extract_unprocessed_segments).
+    """
+
+
 class DuplicateCheckResult(NamedTuple):
     """Result of duplicate memory check."""
     is_duplicate: bool
@@ -151,6 +164,8 @@ class MemoryProcessor:
             ExtractionResult containing validated memories
 
         Raises:
+            LLMResponseFormatError: If the response is empty/degenerate (a
+                ValueError subclass) — the segment must NOT be marked extracted
             ValueError: If response parsing fails catastrophically
         """
         # Step 1: Parse JSON response
@@ -234,7 +249,9 @@ class MemoryProcessor:
         - List of memory dicts (standard)
         - Single memory dict → wrapped in list
         - {"memories": [...]} wrapper → extracted
-        - Empty/whitespace responses → empty list
+        - Empty/whitespace responses → LLMResponseFormatError (a degenerate
+          response is a FAILURE, not a zero-memory success; a genuine zero is
+          a well-formed [] or {"memories": []})
 
         Args:
             response_text: LLM response text (JSON format)
@@ -243,17 +260,26 @@ class MemoryProcessor:
             List of memory dictionaries
 
         Raises:
-            ValueError: If response is not valid JSON and repair fails
+            LLMResponseFormatError: If the response is empty/degenerate or not
+                repairable into the memory list schema
         """
         response_text = response_text.strip()
 
-        # Handle empty responses (LLM returned nothing)
+        # Empty/degenerate responses are a FAILURE, not a zero-memory success:
+        # returning [] here would let the caller mark the segment extracted and
+        # silently end its memory extraction forever. A genuine zero-memory
+        # result is a well-formed [] / {"memories": []} response. Raise so the
+        # segment stays unextracted and is retried by the sweep — as an
+        # infra/LLM-class failure, it does not consume the content budget.
         if not response_text:
             logger.warning(
                 "LLM returned empty response - should return valid JSON like [] or {\"memories\": []}. "
                 "May indicate API issue or prompt problem."
             )
-            return []
+            raise LLMResponseFormatError(
+                "LLM extraction response was empty; a well-formed zero-memory "
+                "response (e.g. []) is required to mark a segment extracted"
+            )
 
         # Try parsing as-is first (handles compliant responses)
         try:
@@ -262,7 +288,7 @@ class MemoryProcessor:
             # Handle different response formats
             if isinstance(parsed, list):
                 if not self._validate_memory_list_structure(parsed):
-                    raise ValueError("Parsed list contains invalid memory structures")
+                    raise LLMResponseFormatError("Parsed list contains invalid memory structures")
                 return parsed
             elif isinstance(parsed, dict):
                 # Single memory object or {"memories": [...]} wrapper
@@ -270,7 +296,7 @@ class MemoryProcessor:
                     memories = parsed["memories"]
                     if isinstance(memories, list):
                         if not self._validate_memory_list_structure(memories):
-                            raise ValueError("Parsed 'memories' field contains invalid structures")
+                            raise LLMResponseFormatError("Parsed 'memories' field contains invalid structures")
                         return memories
                     else:
                         return [memories] if memories else []
@@ -278,15 +304,18 @@ class MemoryProcessor:
                     # Single memory object
                     return [parsed]
             else:
-                raise ValueError(
+                raise LLMResponseFormatError(
                     f"Invalid extraction response format: expected list or dict, got {type(parsed).__name__}"
                 )
 
         except json.JSONDecodeError as e:
-            # Check if it's actually an empty response that looks like whitespace/special chars
+            # Whitespace-only output is the same degenerate-response failure as
+            # an empty one: it must not be recorded as a zero-memory success.
             if not response_text or response_text.isspace():
-                logger.debug("Response contains only whitespace - no memories extracted")
-                return []
+                logger.debug("Response contains only whitespace - degenerate response")
+                raise LLMResponseFormatError(
+                    "LLM extraction response contained only whitespace"
+                )
 
             # Log the actual error with the first part of the response for debugging
             logger.warning(f"JSON parsing failed: {e}")
@@ -302,7 +331,7 @@ class MemoryProcessor:
                         f"json_repair could not repair response (returned unchanged). "
                         f"Response is not valid JSON. First 200 chars: {response_text[:200]!r}"
                     )
-                    raise ValueError(
+                    raise LLMResponseFormatError(
                         "LLM response is not valid JSON and json_repair could not fix it. "
                         "Indicates LLM output format issue."
                     )
@@ -314,7 +343,7 @@ class MemoryProcessor:
                 if isinstance(parsed, list):
                     if not self._validate_memory_list_structure(parsed):
                         logger.debug(f"Repaired JSON has invalid structure: {parsed}")
-                        raise ValueError("Repaired JSON does not match memory list schema")
+                        raise LLMResponseFormatError("Repaired JSON does not match memory list schema")
                     return parsed
                 elif isinstance(parsed, dict):
                     if "memories" in parsed:
@@ -322,14 +351,14 @@ class MemoryProcessor:
                         if isinstance(memories, list):
                             if not self._validate_memory_list_structure(memories):
                                 logger.debug(f"Repaired JSON 'memories' field invalid: {memories}")
-                                raise ValueError("Repaired JSON memories field does not match schema")
+                                raise LLMResponseFormatError("Repaired JSON memories field does not match schema")
                             return memories
                         else:
                             return [memories] if memories else []
                     else:
                         return [parsed]
                 else:
-                    raise ValueError(
+                    raise LLMResponseFormatError(
                         f"Invalid extraction response format after repair: expected list or dict, got {type(parsed).__name__}"
                     )
 
@@ -339,13 +368,13 @@ class MemoryProcessor:
                     f"Repaired response still not valid JSON: {e}. "
                     f"Repaired text (first 200 chars): {repaired[:200]!r}"
                 )
-                raise ValueError(
+                raise LLMResponseFormatError(
                     f"LLM response invalid even after json_repair attempt: {e}"
                 ) from e
             except Exception as repair_error:
                 # Unexpected error during repair - propagate it
                 logger.error(f"Unexpected error during JSON repair: {repair_error}")
-                raise ValueError(
+                raise LLMResponseFormatError(
                     f"JSON repair failed with unexpected error: {repair_error}"
                 ) from repair_error
 
@@ -421,6 +450,9 @@ class MemoryProcessor:
         Validate and sanitize extracted memory structure.
 
         Rejects invalid memories, applies intelligent fallbacks for recoverable issues.
+        Malformed related_memory_ids entries are dropped (with a WARNING), not
+        rejected — the segment is already collapsed, so a rejected memory is
+        lost permanently, and one bad optional link must not destroy it.
         Modifies memory_dict in-place with fixes.
 
         Args:
@@ -449,19 +481,30 @@ class MemoryProcessor:
             logger.warning(f"Rejecting memory: text too short ({len(text)} chars): {text}")
             return False
 
-        # REJECT: Validate related_memory_ids as list of ExtractionRef dicts
+        # FIX (drop-malformed): related_memory_ids are optional links; the
+        # segment is already collapsed, so rejecting the memory here loses it
+        # permanently. Drop the malformed entry with a WARNING and keep the
+        # rest of the memory — same tolerate-and-filter shape as the
+        # entities block below.
         if "related_memory_ids" in memory_dict:
             refs = memory_dict["related_memory_ids"]
             if not isinstance(refs, list):
-                logger.error(f"Rejecting memory: related_memory_ids is {type(refs)}, not list")
-                return False
-            for ref in refs:
-                if not isinstance(ref, dict) or "id" not in ref or "bond" not in ref:
-                    logger.error(
-                        f"Rejecting memory: malformed related_memory_ids entry {ref!r}. "
-                        f"Expected {{'id': str, 'bond': str}}"
-                    )
-                    return False
+                logger.warning(
+                    f"Dropping malformed related_memory_ids ({type(refs).__name__}, not a list); "
+                    f"keeping the memory itself"
+                )
+                memory_dict["related_memory_ids"] = []
+            else:
+                valid_refs = []
+                for ref in refs:
+                    if isinstance(ref, dict) and "id" in ref and "bond" in ref:
+                        valid_refs.append(ref)
+                    else:
+                        logger.warning(
+                            f"Dropping malformed related_memory_ids entry {ref!r}. "
+                            f"Expected {{'id': str, 'bond': str}}; keeping the rest of the memory"
+                        )
+                memory_dict["related_memory_ids"] = valid_refs
 
         # FIX: Validate numeric fields with fallbacks
         if "importance_score" in memory_dict:

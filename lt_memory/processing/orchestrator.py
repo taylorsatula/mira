@@ -12,20 +12,40 @@ All complexity lives in submit_segment_extraction. Callers are trivial.
 """
 import json
 import logging
-from typing import Dict, Any, TYPE_CHECKING
+from typing import Dict, Any
 from uuid import UUID
 
 from cns.core.message import Message
+from cns.infrastructure.continuum_repository import (
+    ContinuumRepository,
+    EXTRACTION_MAX_CONTENT_FAILURES,
+)
 from lt_memory.models import ProcessingChunk, MemoryContextSnapshot
 from lt_memory.processing.extraction_engine import ExtractionEngine
 from lt_memory.processing.execution_strategy import DirectExecutionStrategy
+from lt_memory.processing.memory_processor import LLMResponseFormatError
 from lt_memory.db_access import LTMemoryDB
 from utils.user_context import set_current_user_id, get_current_user_id, clear_user_context
 
-if TYPE_CHECKING:
-    from cns.infrastructure.continuum_repository import ContinuumRepository
-
 logger = logging.getLogger(__name__)
+
+
+def _is_content_caused_extraction_failure(error: Exception) -> bool:
+    """
+    Classify an extraction failure as content-caused (consumes the budget).
+
+    Only failures that are deterministic given the segment's own data count
+    against the abandonment budget: a missing boundary row (RuntimeError) or
+    a segment with no extractable payload (ValueError). Everything else is
+    infra/LLM class and must NOT consume the budget — provider/network/DB
+    outages raise arbitrary library exception types, and degenerate model
+    output raises LLMResponseFormatError (checked first: it subclasses
+    ValueError). Pinned doctrine: retry counters never gate data on
+    infrastructure failure.
+    """
+    if isinstance(error, LLMResponseFormatError):
+        return False
+    return isinstance(error, (RuntimeError, ValueError))
 
 
 class ExtractionOrchestrator:
@@ -183,7 +203,10 @@ class ExtractionOrchestrator:
         # Step 4: Execute directly through model_config=batch.
         extraction_id = self.execution_strategy.execute_extraction(user_id, [chunk])
 
-        # Step 5: Mark boundary as extracted
+        # Step 5: Mark boundary as extracted. Reached only when the LLM
+        # returned a well-formed response (including a well-formed explicit
+        # zero, []); an empty/degenerate response raises LLMResponseFormatError
+        # in memory_processor and leaves the segment unextracted for retry.
         db_client.execute_query("""
             UPDATE messages
             SET metadata = jsonb_set(metadata, '{memories_extracted}', 'true')
@@ -203,6 +226,14 @@ class ExtractionOrchestrator:
         Finds all collapsed segments with memories_extracted != true and
         submits each via submit_segment_extraction. Per-segment error isolation
         ensures one bad segment doesn't block the rest.
+
+        Failure accounting: only CONTENT-caused failures (deterministic given
+        the segment's own data) consume the abandonment budget — a segment is
+        marked 'extraction_abandoned' and excluded from future sweeps once its
+        extraction_content_failures count reaches
+        EXTRACTION_MAX_CONTENT_FAILURES. Infra/LLM outages (provider blips,
+        degenerate responses) are not counted, so they can never permanently
+        silence a segment.
 
         Args:
             user_id: Optional specific user. If None, processes all users.
@@ -233,8 +264,10 @@ class ExtractionOrchestrator:
                 set_current_user_id(uid)
 
                 for segment in failed_segments:
-                    # Increment attempt counter before expensive work (persists via jsonb_set)
+                    # Total attempt counter (observability only — it does NOT
+                    # gate the retry budget). Persists via jsonb_set.
                     attempts = segment.get('extraction_attempts', 0)
+                    content_failures = segment.get('extraction_content_failures', 0)
                     db_client = self.continuum_repo.get_user_db_client(uid)
                     db_client.execute_returning("""
                         UPDATE messages
@@ -254,6 +287,44 @@ class ExtractionOrchestrator:
                             exc_info=True
                         )
                         results["errors"].append(str(e))
+
+                        # Retry budget: only content-caused failures may abandon
+                        # a segment. Infra/LLM-class failures leave the budget
+                        # untouched so the segment is retried on the next sweep.
+                        if not _is_content_caused_extraction_failure(e):
+                            logger.info(
+                                f"Infra/LLM-class extraction failure for segment "
+                                f"{segment.get('segment_id', '?')}; not counted toward "
+                                f"the abandonment budget"
+                            )
+                            continue
+
+                        new_content_failures = content_failures + 1
+                        db_client.execute_returning("""
+                            UPDATE messages
+                            SET metadata = jsonb_set(metadata, '{extraction_content_failures}', to_jsonb(%s))
+                            WHERE id = %s
+                                AND metadata->>'is_segment_boundary' = 'true'
+                            RETURNING id
+                        """, (new_content_failures, segment['message_id']))
+
+                        if new_content_failures >= EXTRACTION_MAX_CONTENT_FAILURES:
+                            # Abandonment marker: budget-excluded segments stay
+                            # visible to operators instead of silently vanishing
+                            # from the sweep.
+                            db_client.execute_returning("""
+                                UPDATE messages
+                                SET metadata = jsonb_set(metadata, '{extraction_abandoned}', 'true')
+                                WHERE id = %s
+                                    AND metadata->>'is_segment_boundary' = 'true'
+                                RETURNING id
+                            """, (segment['message_id'],))
+                            logger.warning(
+                                f"Segment {segment.get('segment_id', '?')} for user {uid} "
+                                f"abandoned after {new_content_failures} content-caused "
+                                f"extraction failures (extraction_abandoned=true; excluded "
+                                f"from future extraction sweeps)"
+                            )
 
                 results["users_processed"] += 1
 

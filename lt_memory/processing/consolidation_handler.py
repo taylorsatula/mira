@@ -247,7 +247,23 @@ class ConsolidationHandler:
                 else:
                     rewritten_outbound.append(link)
             if rewritten_outbound != affected.outbound_links:
-                updates['outbound_links'] = rewritten_outbound
+                # Links to multiple consolidated sources collapse onto the
+                # single new target; write the (memory, link) pair once.
+                # Keep the most recent link, mirroring the Step 4 dedupe.
+                deduped_outbound = []
+                for link in rewritten_outbound:
+                    if link['uuid'] == new_memory_id_str:
+                        existing = next(
+                            (l for l in deduped_outbound if l['uuid'] == new_memory_id_str),
+                            None
+                        )
+                        if existing is None:
+                            deduped_outbound.append(link)
+                        elif link.get('created_at', '') > existing.get('created_at', ''):
+                            deduped_outbound[deduped_outbound.index(existing)] = link
+                    else:
+                        deduped_outbound.append(link)
+                updates['outbound_links'] = deduped_outbound
 
             rewritten_inbound = []
             for link in affected.inbound_links:
@@ -258,7 +274,22 @@ class ConsolidationHandler:
                 else:
                     rewritten_inbound.append(link)
             if rewritten_inbound != affected.inbound_links:
-                updates['inbound_links'] = rewritten_inbound
+                # Same dedupe as the outbound side: two old memories both
+                # linking here collapse to one inbound entry for the target.
+                deduped_inbound = []
+                for link in rewritten_inbound:
+                    if link['uuid'] == new_memory_id_str:
+                        existing = next(
+                            (l for l in deduped_inbound if l['uuid'] == new_memory_id_str),
+                            None
+                        )
+                        if existing is None:
+                            deduped_inbound.append(link)
+                        elif link.get('created_at', '') > existing.get('created_at', ''):
+                            deduped_inbound[deduped_inbound.index(existing)] = link
+                    else:
+                        deduped_inbound.append(link)
+                updates['inbound_links'] = deduped_inbound
 
             if updates:
                 self.db.update_memory(affected_id, updates, user_id=user_id)

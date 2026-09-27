@@ -174,6 +174,36 @@ class BaseHandler:
         raise NotImplementedError("Subclasses must implement process_request")
 
 
+class PropagatingHandler(BaseHandler):
+    """BaseHandler whose errors propagate to main.py's global exception handlers.
+
+    BaseHandler.handle_request converts every APIError/Exception into an
+    ErrorResponse, which a route serializes as HTTP 200. Routes that must
+    report the real HTTP status subclass this instead: same logging, but the
+    error is re-raised so the APIError handler / Exception handler in main.py
+    assign the status. Same body contract: create_error_response is still the
+    body builder on the other side.
+    """
+
+    def handle_request(self, **params) -> APIResponse:
+        """Handle the request, letting APIError/Exception propagate."""
+        try:
+            validated_params = self.validate_params(**params)
+            result = self.process_request(**validated_params)
+
+            if isinstance(result, (SuccessResponse, ErrorResponse)):
+                return result
+            else:
+                return create_success_response(result)
+
+        except APIError as e:
+            self.logger.warning(f"API error in {self.__class__.__name__}: {e.message}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Unexpected error in {self.__class__.__name__}: {e}", exc_info=True)
+            raise
+
+
 def add_request_meta(response: APIResponse, **meta_data) -> APIResponse:
     """Add metadata to existing response."""
     new_meta = {**response.meta, **meta_data}

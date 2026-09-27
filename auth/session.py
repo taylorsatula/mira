@@ -133,6 +133,14 @@ class SessionManager:
                 return None
 
         if extend_activity:
+            # NOTE: The GET above followed by this
+            # unconditional SETEX is a non-atomic read-then-extend; a validate
+            # landing in a revoke window could in principle resurrect a revoked
+            # session. This race is unreachable at the current deployment shape:
+            # one worker per user (api_server workers=1), so revoke and extend are
+            # never concurrent for the same session. The unconditional extend is
+            # deliberate. Revisit an atomic extend (Lua/WATCH) only if a
+            # multi-worker deployment is introduced.
             # Update last activity and extend TTL
             session_data["last_activity"] = utc_now().isoformat()
             valkey.json_set_with_expiry(

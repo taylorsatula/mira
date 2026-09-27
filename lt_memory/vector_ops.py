@@ -148,13 +148,13 @@ class VectorOps:
         Returns:
             List of Memory models sorted by similarity
         """
-        # Apply config defaults if values not provided
-        if self.vector_search_config:
-            limit = limit if limit is not None else DEFAULT_VECTOR_SEARCH_LIMIT
-            similarity_threshold = similarity_threshold if similarity_threshold is not None else DEFAULT_VECTOR_SIMILARITY_THRESHOLD
-        else:
-            limit = limit if limit is not None else 10
-            similarity_threshold = similarity_threshold if similarity_threshold is not None else 0.7
+        # Apply defaults if values not provided
+        limit = limit if limit is not None else DEFAULT_VECTOR_SEARCH_LIMIT
+        similarity_threshold = (
+            similarity_threshold
+            if similarity_threshold is not None
+            else DEFAULT_VECTOR_SIMILARITY_THRESHOLD
+        )
         min_importance = min_importance if min_importance is not None else 0.1
 
         # Use realtime (query) encoding for search queries

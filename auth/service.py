@@ -154,7 +154,20 @@ class AuthService:
                 current_focus=current_focus,
             )
         except Exception:
-            cleanup_complete = self.provisioner.delete(user_id)
+            try:
+                cleanup_complete = self.provisioner.delete(user_id)
+            except Exception:
+                # A failed commit propagates out of local_teardown:
+                # the account row was NOT deleted. Log the pending
+                # cleanup with the full traceback, then re-raise — never
+                # swallowed, and no destructive teardown step ran.
+                logger.error(
+                    "Account cleanup for %s failed after a provisioning "
+                    "error; account is pending garbage collection",
+                    user_id,
+                    exc_info=True,
+                )
+                raise
             if not cleanup_complete:
                 logger.error(
                     "Account provisioning failed and cleanup is pending for %s",

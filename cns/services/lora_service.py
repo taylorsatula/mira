@@ -307,8 +307,20 @@ def _validate_with_critic(candidate_xml: str) -> dict:
 
     status_match = re.search(r'<mira:critic_review\s+status="(\w+)"', raw_output)
     if not status_match:
-        logger.warning("Could not parse critic output, treating as pass")
-        return {"passed": True, "feedback": ""}
+        # Fail closed: an unparseable critic verdict is a validation failure,
+        # never a pass (mirrors UserModelSynthesizer._validate_with_critic) —
+        # the loop retries with the feedback below and, if exhaustion hits,
+        # the last candidate is presented for explicit human review only.
+        logger.warning("Could not parse critic output, failing validation")
+        return {
+            "passed": False,
+            "feedback": (
+                "The quality critic returned an unparseable response (no "
+                "verdict could be extracted). Regenerate the user model, "
+                "ensuring observations are section-anchored, evidence-grounded, "
+                "free of personality labels, and internally consistent."
+            )
+        }
 
     status = status_match.group(1)
     if status == "pass":

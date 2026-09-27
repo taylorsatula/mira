@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import concurrent.futures
 import contextvars
 import logging
 import threading
@@ -48,6 +49,11 @@ from cns.services.async_work_barrier import get_async_work_barrier
 from cns.services.orchestrator import get_orchestrator
 from config.config_manager import config as app_config
 from utils.distributed_lock import UserRequestLock
+# Same structural turn bound as the HTTP path (cns/api/chat.py): both
+# transports run the identical orchestrator tool loop, so the turn-lock TTL
+# must exceed the worst legal turn plus margin. Shared, not re-derived, so the
+# two paths cannot drift.
+from .chat import _HTTP_TURN_LOCK_TTL_SECONDS as _TURN_LOCK_TTL_SECONDS
 from utils.document_processing import (
     MAX_DOCUMENT_SIZE_MB,
     SUPPORTED_DOCUMENT_FORMATS,
@@ -70,7 +76,26 @@ router = APIRouter()
 
 SUPPORTED_IMAGE_FORMATS = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
 MAX_IMAGE_SIZE_MB = 5
+# Deliberately more permissive than the HTTP gate (MAX_TEXT_MESSAGE_LENGTH =
+# 20_000 in cns/api/chat.py): a WS turn streams content continuously, while the
+# HTTP endpoint must hold the connection open for the full synchronous request —
+# the tighter HTTP bound protects request duration, not model input. Do not
+# "fix" the inconsistency by aligning the gates.
 MAX_CONTENT_LENGTH = 100_000
+
+# Bounded wait for one streamed frame to cross the thread->asyncio bridge in
+# ``stream_to_connection``. ``ChatConnection.send`` only validates a frame and
+# ``put_nowait``()s it into an in-process queue — it never touches the network
+# — so a healthy send needs a single event-loop turn, effectively instantly.
+# The bound is therefore sized against the turn's structural envelope, not the
+# send's: one turn is capped at 50 local tool calls (orchestrator
+# MAX_LOCAL_TOOL_CALLS_PER_TURN) at ~180s provider timeout apiece, and this
+# per-chunk wait is a small fraction of that envelope while remaining orders of
+# magnitude above any healthy loop's scheduling latency. A wait that exceeds it
+# means the loop is wedged; the expiry path in ``stream_to_connection`` then
+# aborts the turn via the halt signal instead of pinning the worker thread
+# indefinitely (bounded waits at every boundary).
+STREAM_SEND_TIMEOUT_SECONDS = 30.0
 
 
 # --- Inbound frames -------------------------------------------------------
@@ -507,6 +532,65 @@ async def push_proactive_message(
     return delivered
 
 
+# The event loop that owns every ChatConnection's outbound queue. Captured on
+# the loop itself when a connection is accepted; the heartbeat service's sync
+# tick crosses to it through push_proactive_message_sync.
+_main_event_loop: asyncio.AbstractEventLoop | None = None
+
+
+def push_proactive_message_sync(
+    user_id: str,
+    content: str,
+    message_id: str | None,
+    turn_id: str | None,
+    created_at: str | None,
+) -> int:
+    """Sync, thread-safe bridge for push_proactive_message.
+
+    The heartbeat tick runs synchronous on an APScheduler threadpool worker,
+    but the push is a coroutine that must touch the loop-owned connection
+    queues. This crosses that boundary the same way stream_to_connection
+    does: schedule on the captured main loop and wait with the same bounded
+    STREAM_SEND_TIMEOUT_SECONDS. On expiry the frame is dropped — the message
+    remains visible via history on next load per push_proactive_message's own
+    contract — instead of pinning the tick thread. With no loop captured yet
+    (no client ever connected) there is nothing to deliver to: return 0.
+    """
+    loop = _main_event_loop
+    if loop is None or loop.is_closed() or not loop.is_running():
+        # No live loop to cross to: no client ever connected, or the owning
+        # server's loop is gone (closed, or stopped mid-teardown before
+        # close). Either way nothing can be delivered — 0, and the message
+        # remains visible via history — instead of pinning the caller's
+        # thread on a loop that will never turn.
+        return 0
+    future = asyncio.run_coroutine_threadsafe(
+        push_proactive_message(
+            user_id=user_id,
+            content=content,
+            message_id=message_id,
+            turn_id=turn_id,
+            created_at=created_at,
+        ),
+        loop,
+    )
+    try:
+        return future.result(timeout=STREAM_SEND_TIMEOUT_SECONDS)
+    except concurrent.futures.TimeoutError:
+        # The loop did not run the push within the bound — it is wedged. Pull
+        # the loop-side future so a late send cannot deliver a stale frame,
+        # then return 0: the message is still visible via history. Never hang
+        # the caller's thread on a loop that is not turning.
+        future.cancel()
+        logger.warning(
+            "Proactive push bridge for user %s timed out after %.1fs; "
+            "frame dropped (message remains visible via history)",
+            user_id,
+            STREAM_SEND_TIMEOUT_SECONDS,
+        )
+        return 0
+
+
 class WebSocketChatHandler:
     """Authenticate and dispatch one connection's validated frames."""
 
@@ -516,7 +600,10 @@ class WebSocketChatHandler:
         self.continuum_repo = get_continuum_repository()
         self.auth_service = get_auth_service()
         self.session_manager = SessionManager()
-        self.user_request_lock = UserRequestLock(ttl=60)
+        # TTL derived from the structural max turn length (see chat.py);
+        # background renewal per turn keeps it refreshed, so it is a crash
+        # backstop, not a turn-length estimate.
+        self.user_request_lock = UserRequestLock(ttl=_TURN_LOCK_TTL_SECONDS)
 
     async def authenticate(self, websocket: WebSocket, token: str | None) -> str:
         """Resolve an identity for this socket and install the user context.
@@ -681,6 +768,14 @@ class WebSocketChatHandler:
                 "message_id": message.message_id,
             })
             return
+
+        # Background renewal: one renewal every TTL/3 — safely inside the
+        # TTL — so a turn of any legal length (including a silent provider
+        # or tool stall with no streamed frame) cannot outlive its own lock
+        # and admit a concurrent second turn on the same segment. Mirrors
+        # cns/api/chat.py and the heartbeat dispatcher.
+        renewal_stop = self.user_request_lock.start_renewal(user_id, lock_token)
+
         try:
             content = sanitize_message_content(message.content.strip())
             if not content:
@@ -727,8 +822,43 @@ class WebSocketChatHandler:
                 # about what the client asked for.
                 if frame["type"] == "thinking" and not message.include_thinking:
                     return
-                future = asyncio.run_coroutine_threadsafe(connection.send(frame), loop)
-                future.result()
+
+                async def send_frame() -> None:
+                    # Loop-side half of the abort path. A wedged loop may not
+                    # run this coroutine until after the turn has been aborted
+                    # below — concurrent.futures cancellation cannot stop a
+                    # queued await-free send on this interpreter — so check the
+                    # halt signal on wake and drop the frame instead of
+                    # delivering a stale delta after turn_stopped.
+                    if cancel_event.is_set():
+                        return
+                    await connection.send(frame)
+
+                future = asyncio.run_coroutine_threadsafe(send_frame(), loop)
+                try:
+                    # Bounded bridge wait: an unbounded result() would pin this
+                    # worker thread forever if the loop wedges, and a user halt
+                    # (read on the loop) could never reach the turn.
+                    future.result(timeout=STREAM_SEND_TIMEOUT_SECONDS)
+                except concurrent.futures.TimeoutError:
+                    # The loop did not run the send within the bound — it is
+                    # wedged. Pull the loop-side future so the send cannot
+                    # linger, then abort the turn through the same cancellation
+                    # path a user halt takes: check_cancelled() at the next
+                    # stream/tool boundary raises GenerationCancelled and the
+                    # turn ends as turn_stopped(halt).
+                    future.cancel()
+                    set_cancel_reason("halt")
+                    cancel_event.set()
+                    return
+                except concurrent.futures.CancelledError:
+                    # Cancellation reached the loop-side future while this
+                    # thread was blocked (connection/loop teardown). Route it
+                    # into the turn's halt signal instead of letting a bare
+                    # cancellation leak out of a worker thread.
+                    set_cancel_reason("halt")
+                    cancel_event.set()
+                    return
                 self.user_request_lock.renew(user_id, lock_token)
 
             result = await run_in_threadpool(
@@ -795,6 +925,7 @@ class WebSocketChatHandler:
                     "message": get_friendly_error_message(error),
                 })
         finally:
+            renewal_stop.set()
             await run_in_threadpool(self.user_request_lock.release, user_id, lock_token)
 
     def _prepare_image(self, message: MessageFrame) -> CompressedImage | None:
@@ -969,6 +1100,8 @@ async def websocket_chat_endpoint(websocket: WebSocket) -> None:
     * client ``{type:"halt", turn_id}`` -> the active turn ends in ``turn_stopped``
     * client ``{type:"ping"}`` -> ``{type:"pong"}``
     """
+    global _main_event_loop
+    _main_event_loop = asyncio.get_running_loop()
     await websocket.accept()
     connection_id = str(uuid4())
     connection = ChatConnection(websocket)

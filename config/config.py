@@ -364,8 +364,9 @@ class HeartbeatConfig(BaseModel):
         default=900, ge=60,
         description=(
             "TTL for the per-user request lock a heartbeat turn holds. Must "
-            "exceed the longest expected heartbeat turn; the lock is not "
-            "renewed mid-turn"
+            "exceed the longest expected heartbeat turn; renewed in the "
+            "background for the turn's lifetime, so expiry only matters if "
+            "renewal itself fails"
         )
     )
     device_power_binding: DevicePowerBindingConfig = Field(
