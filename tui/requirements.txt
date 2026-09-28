@@ -1,0 +1,8 @@
+# websockets==15.0.1      — asyncio WebSocket client for the turn protocol (ws://.../v0/ws/chat); used by the retained WS stack (client.py), lands in the streaming brick
+# httpx==0.28.1           — REST chat (POST /v0/api/chat), history fetch, and --login bootstrap
+# pydantic==2.11.9        — strict WS frame mirror (extra="forbid") in protocol.py so server/client drift fails loudly
+# rich==14.2.0            — display filters' module (render.py); the minimal REPL itself uses plain ANSI
+websockets==15.0.1
+httpx==0.28.1
+pydantic==2.11.9
+rich==14.2.0
