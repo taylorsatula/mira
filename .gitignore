@@ -61,3 +61,6 @@ training_data/
 .pi/subagent-schedules/
 .pi/subagents.json
 /.pi/plans
+/.pi/reports
+/.pi/workflows
+.kata.local.toml
