@@ -4,9 +4,9 @@ Security headers middleware for the FastAPI application.
 Adds defense-in-depth HTTP response headers to every response.
 
 The Content-Security-Policy header is gated behind `MIRA_CSP` and is off by default.
-`script-src 'self'` — the narrowing that makes this middleware worth having — is not
-satisfiable by the retained web UI yet, so hard-enabling it would serve a blank page.
-The other five headers carry no such cost and are always sent.
+`script-src 'self'` — the narrowing that makes this middleware worth having — has no
+in-tree client that satisfies it since the `web/` UI was removed, so it stays off by
+default. The other five headers carry no such cost and are always sent.
 
     MIRA_CSP unset or "off"   five core headers, plus HSTS on HTTPS
     MIRA_CSP=strict           the same, plus STRICT_CONTENT_SECURITY_POLICY
@@ -19,23 +19,15 @@ defense-in-depth posture, and a typo must not select a different one.
 
 The strict policy admits no third-party origin. `frame-src` is omitted rather than set
 to `'none'`, so same-origin frames fall back to `default-src 'self'`. `style-src
-'unsafe-inline'` stays, because `web/chat/index.html:104` carries a `<style>` block and
-the retained pages carry 122 inline `style="…"` attributes.
+'unsafe-inline'` stays for now: it was required by the removed `web/` UI's inline
+`<style>` block and inline `style="…"` attributes, and no replacement client has landed.
 
 What must change before strict can become the default
 -----------------------------------------------------
-1. Inline script and inline handlers have to move into served assets. Eight `<script>`
-   blocks (two per page in `web/{chat,settings,domaindocs,memories}/index.html`: a theme
-   bootstrap in `<head>`, a page script at the end of `<body>`) and 32 `onclick=`
-   attributes (`web/chat/index.html`, `web/domaindocs/index.html`) are what
-   `script-src 'self'` actually rejects.
-   The vendored markdown and DOM-sanitizer libraries are not part of this problem —
-   `web/chat/index.html` loads marked/purify from the static `/assets` mount,
-   so they are already external.
+1. The replacement browser client must keep scripts and handlers out of inline markup
+   (`script-src 'self'` rejects both) and serve its scripts and styles from assets.
 2. A card-processor origin must never come back. mira-OSS has no payments subsystem, so
    nothing may widen `script-src`, `connect-src` or `frame-src` for one.
-3. `worker-src` is already present, so `web/sw.js` is admitted explicitly rather than by
-   inheriting `script-src`. No service-worker change is outstanding.
 """
 
 import os

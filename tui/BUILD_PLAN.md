@@ -23,7 +23,7 @@ owns the living contracts.
 |---|---|
 | Framework | **Textual** (6.6.0 installed) — async-first, differential renderer, ModalScreen overlays, docked input. Avoids hand-rolled ANSI state machines. |
 | Wire | `websockets` 15.x (asyncio client) for WS; `httpx` for REST history fetch. Pin both in `tui/requirements.txt` with rationale comments. Server `requirements.txt` untouched. |
-| Placement | **`tui/` top-level dir**, run via `python -m tui`. Pure client — imports **nothing** from the server tree. Peer of `web/` (another client surface). |
+| Placement | **`tui/` top-level dir**, run via `python -m tui`. Pure client — imports **nothing** from the server tree. The only in-tree client surface. |
 | Endpoint/key store | Local JSON at `~/.config/mira-tui/config.json`, chmod 0600, multiple named endpoints, active pointer. |
 | History default | Everything from the active session + the most recent session summary; configurable in /settings. |
 | Follow-ups during a turn | **Outbox queue**: input stays live; queued messages visible in a dock widget; undo-until-sent via key command (pull back into editor); auto-send one at a time as each terminal frame arrives. Server enforces one active turn per *user* (`UserRequestLock`, `TURN_BUSY`), so queuing is the only correct client behavior. |

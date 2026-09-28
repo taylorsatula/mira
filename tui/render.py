@@ -5,8 +5,8 @@ No I/O beyond the StringIO capture console; no prompt_toolkit imports.
 Everything returns ``rich.RenderableType`` (or plain strings for the
 preview region); the app owns emission.
 
-Display filters mirror the web client's JS (``web/assets/javascript/
-messaging.js``) so both clients display the same text.
+Display filters are ported from the web client's JS (``messaging.js``, since
+removed), which they mirrored so the two clients displayed the same text.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 # ---------------------------------------------------------------------------
-# Display filters (mirror of web/assets/javascript/messaging.js)
+# Display filters (ported from the removed web client's messaging.js)
 # ---------------------------------------------------------------------------
 
 # JS: complete think blocks, any casing, dot-matches-newline, non-greedy.

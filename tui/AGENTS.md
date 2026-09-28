@@ -6,7 +6,7 @@ alternating cyan/green You/MIRA text blocks, a dark-grey delimiter row
 between turns, a plain `input()` line. No prompt_toolkit, no Rich panels, no
 streaming, no reconnect machinery. The turn wire is sync REST
 (`POST /v0/api/chat`, owned by `cns/api/chat.py`). Imports NOTHING from the
-server tree; a pure client, peer to `web/`.
+server tree; a pure client, the only in-tree client surface.
 
 The WebSocket stack (`client.py` + `protocol.py`) is **retained, currently
 unused by the REPL** — it is the verified foundation for the later streaming
@@ -31,7 +31,7 @@ brick lands.
   (accepted MVP limit).
 - Message text — both directions — passes through
   `render.py:filter_system_tags` before display; display filters stay owned
-  by `render.py` (mirror of `web/assets/javascript/messaging.js`).
+  by `render.py` (ported from the removed web client's filters).
 - Tag-literal hazard: literal think/mira tag strings written through agent
   tool payloads get HTML-entity-mangled on disk.
   `render.py:_THINK_BLOCK_RE` builds its pattern by concatenation — any new
@@ -55,7 +55,7 @@ brick lands.
 - `protocol.py` — RETAINED, unused by the REPL: strict pydantic v2 mirror of all WS frames + `parse_inbound_frame` / `dump_outbound_frame` + REST history models. The WS drift anchor cited above.
 - `endpoints.py` — `EndpointConfig`, `EndpointStore` (0600 JSON at `~/.config/mira-tui/config.json`), `HISTORY_FETCH_MODES`. Gotcha: the constructor does NOT auto-read — callers must `store.load()` explicitly.
 - `login.py` — headless token bootstrap: `mint_api_token()` chains `GET /v0/auth/local/session` (single-mode: zero-credential; 404 → magic-link flow with email + pasted link token) → `POST /v0/auth/csrf` → `POST /v0/auth/api-tokens` (`x-csrf-token` header), mirroring `auth/api.py`. Minted token goes straight into the 0600 store and is never printed (only the can't-write-store last resort prints it). Token names retry with `-2`/`-3` suffixes on the server's `duplicate_token_name`. Live multi-mode flow is code-verified only.
-- `render.py` — display filters (`filter_system_tags` / `filter_streaming_text` / `summarize_tool_result` / `format_content_blocks` / `user_content_text`, mirroring `web/assets/javascript/messaging.js`) — used by the REPL via `filter_system_tags` — plus the retired Rich block renderers, `ActiveTurn` preview state, and `history_blocks` mapping, retained for the history/streaming bricks. No prompt_toolkit imports.
+- `render.py` — display filters (`filter_system_tags` / `filter_streaming_text` / `summarize_tool_result` / `format_content_blocks` / `user_content_text`, ported from the removed web client's filters) — used by the REPL via `filter_system_tags` — plus the retired Rich block renderers, `ActiveTurn` preview state, and `history_blocks` mapping, retained for the history/streaming bricks. No prompt_toolkit imports.
 - `requirements.txt` — the client's own pin set (websockets, httpx, pydantic, rich); prompt_toolkit was removed with the old UI. The server's `requirements.txt` gains nothing from this package.
 - `BUILD_PLAN.md` — design record of the 2026-09-18 Textual build and the post-build pivot to terminal-native rendering; historical, not a living contract.
 

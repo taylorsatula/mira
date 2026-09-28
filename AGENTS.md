@@ -49,8 +49,6 @@ directory whose map is missing is a defect.
 | `tools/implementations/` | All concrete LLM-callable tools |
 | `tui/` | Minimal terminal chat client: sync-REST REPL brick, retained (unused) WS stack, display-filter mirror of the web client, endpoint store, headless token bootstrap, config-file settings |
 | `utils/` | Cross-cutting infrastructure: identity, scheduling, storage, security, observability |
-| `web/` | Browser UI pages, serving contract, load manifests |
-| `web/assets/javascript/` | Client JS modules, client side of the WebSocket turn protocol |
 | `working_memory/` | Event-driven system-prompt composition via trinkets |
 | `working_memory/trinkets/` | Trinket implementations: one `variable_name` slot each |
 
@@ -88,7 +86,7 @@ unnecessary edit costs a line; a missed one misleads every session.
   POST gate before bind. The per-directory contracts are owned by
   `cns/api/AGENTS.md`, `auth/AGENTS.md`, `cns/integration/AGENTS.md`,
   `agents/AGENTS.md`, `config/AGENTS.md`, `lt_memory/AGENTS.md`,
-  `utils/AGENTS.md`, `web/AGENTS.md`.
+  `utils/AGENTS.md`.
 - `requirements.txt` — dependency pins; the optional block's visibility to
   `Dockerfile.base` is owned by `deploy/AGENTS.md`.
 - `VERSION` — release identity string, read by `cns/api/update.py:get_latest_version`
