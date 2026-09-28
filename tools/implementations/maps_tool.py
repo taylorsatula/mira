@@ -92,6 +92,8 @@ class MapsTool(Tool):
 
     name = "maps_tool"
 
+    simple_description = "Geocode addresses and place names to coordinates, reverse geocode coordinates to addresses, and look up place details and nearby points of interest via OpenStreetMap."
+
     tool_schema = {
         "name": "maps_tool",
         "description": "Provides comprehensive location intelligence and geographical services through OpenStreetMap integration. Use this tool for geocoding, place details, distance calculations, and location-based searches.",
