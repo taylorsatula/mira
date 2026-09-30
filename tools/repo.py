@@ -14,7 +14,7 @@ from typing import Dict, List, Any, Set, Type, Union, get_args, get_origin
 from pathlib import Path
 
 from pydantic import BaseModel, create_model
-from utils.user_context import get_current_user_id
+from utils.user_context import get_current_user_id, has_user_context
 from utils.userdata_manager import get_user_data_manager
 from clients.llm.types import ToolDefinition
 
@@ -100,6 +100,11 @@ ESSENTIAL_TOOLS = [
     # record its keepsleeping/breakout decision.
     "heartbeat_tool"
 ]
+
+# Reserved per-user key for enablement performed before any user context exists
+# (startup: enable_tools_from_config). These tools are everyone's baseline and
+# are presented alongside each user's own per-user enabled set.
+_BOOT_ENABLED_KEY = "__boot__"
 
 class Tool(ABC):
     """
@@ -323,7 +328,9 @@ class ToolRepository:
 
     Attributes:
         tool_classes (Dict[str, Type[Tool]]): Dictionary mapping tool names to tool classes.
-        enabled_tools (Set[str]): Set of names of currently enabled tools.
+        _enabled_tools (Dict[str, Set[str]]): Per-user sets of enabled tool names, keyed by
+            user id (startup enablement under _BOOT_ENABLED_KEY); read as a name set via the
+            `enabled_tools` property.
         gated_tools (Set[str]): Set of gated tools that self-determine availability via is_available().
         working_memory (Optional[WorkingMemory]): WorkingMemory instance for tool DI.
     """
@@ -331,7 +338,13 @@ class ToolRepository:
     def __init__(self, working_memory=None):
         self.logger = logging.getLogger("tool_repository")
         self.tool_classes: Dict[str, Type[Tool]] = {}  # Store tool classes for lazy instantiation
-        self.enabled_tools: Set[str] = set()
+        # Tools enabled for a user's session, keyed by the user id resolved
+        # from the contextvar at read/write time — the same per-user keying
+        # pattern used for _pinned_tools below and for stateful trinket state.
+        # Never a bare set shared across users: the repository is a
+        # process-global singleton. Enablement performed before any user
+        # context exists (startup) lands under _BOOT_ENABLED_KEY instead.
+        self._enabled_tools: Dict[str, Set[str]] = {}
         self.gated_tools: Set[str] = set()  # Tools that self-determine availability
         self.working_memory = working_memory
         # Tools pinned via load_for_rest_of_session, keyed by the user id
@@ -349,7 +362,24 @@ class ToolRepository:
         event_bus = getattr(working_memory, "event_bus", None)
         if event_bus is not None:
             event_bus.subscribe('SegmentCollapsedEvent', self._clear_pinned_tools_on_segment_collapse)
-    
+
+    @property
+    def enabled_tools(self) -> Set[str]:
+        """Read-only union of every user's enabled tools (set of tool names).
+
+        The authoritative store is the per-user `_enabled_tools` dict; writers
+        go through enable_tool/disable_tool, which key by the current user.
+        This union view preserves the tool-name read surface used by the
+        startup gate (utils/power_on_self_test.py:_check_tools), which runs
+        before any user context exists and asks "which tools are enabled in
+        this repository". Per-user visibility is served by
+        get_all_tool_definitions/is_tool_enabled, never by this union.
+        """
+        combined: Set[str] = set()
+        for tools_for_user in self._enabled_tools.values():
+            combined |= tools_for_user
+        return combined
+
     def register_tool_class(self, tool_class: Type[Tool], tool_name: str) -> None:
         """Register a tool class for lazy instantiation."""
         if tool_name in self.tool_classes:
@@ -387,13 +417,15 @@ class ToolRepository:
         if name in self.gated_tools:
             raise ValueError(f"Cannot enable gated tool '{name}' - availability controlled by is_available()")
 
+        user_id = get_current_user_id() if has_user_context() else _BOOT_ENABLED_KEY
+
         # Auto-enable dependencies recursively
         dependencies = self.resolve_dependencies(name)
         for dep_name in dependencies:
-            if dep_name not in self.enabled_tools:
+            if dep_name not in self._enabled_tools.get(user_id, set()):
                 self.enable_tool(dep_name)
-        
-        self.enabled_tools.add(name)
+
+        self._enabled_tools.setdefault(user_id, set()).add(name)
         self.logger.info(f"Enabled tool: {name}")
     
     def disable_tool(self, name: str) -> None:
@@ -401,8 +433,9 @@ class ToolRepository:
             self.logger.error(f"Cannot disable tool '{name}': Tool not found")
             raise KeyError(f"Cannot disable tool '{name}': Tool not found")
         
-        if name in self.enabled_tools:
-            self.enabled_tools.remove(name)
+        user_id = get_current_user_id() if has_user_context() else _BOOT_ENABLED_KEY
+        if name in self._enabled_tools.get(user_id, set()):
+            self._enabled_tools.setdefault(user_id, set()).remove(name)
             self.logger.info(f"Disabled tool: {name}")
         else:
             self.logger.debug(f"Tool '{name}' was already disabled")
@@ -427,16 +460,23 @@ class ToolRepository:
         user_id = get_current_user_id()
         if self._pinned_tools.pop(user_id, None):
             self.logger.info(f"Cleared pinned tools on segment collapse for user {user_id}")
+        # Same per-user scope for the enabled set: the collapse tears down the
+        # user's session-scoped enablement along with their pins.
+        self._enabled_tools.pop(user_id, None)
 
     def cleanup_ephemeral_tools(self, essential_tools: Set[str]) -> None:
         """Disable all non-essential, non-pinned tools. Called on TurnCompletedEvent."""
-        pinned = self._pinned_tools.get(get_current_user_id(), set())
-        ephemeral = self.enabled_tools - essential_tools - pinned
+        user_id = get_current_user_id()
+        user_enabled = self._enabled_tools.setdefault(user_id, set())
+        pinned = self._pinned_tools.get(user_id, set())
+        ephemeral = user_enabled - essential_tools - pinned
         if not ephemeral:
             return
 
         self.logger.info(f"Cleaning up {len(ephemeral)} ephemeral tools")
-        self.enabled_tools -= ephemeral
+        # Subtract only from the completing user's own set — never from
+        # another user's enabled tools.
+        user_enabled -= ephemeral
 
     def get_tool(self, name: str) -> Tool:
         """Get tool instance, creating it lazily with current user context."""
@@ -502,8 +542,10 @@ class ToolRepository:
             self.logger.error(f"Cannot invoke tool '{name}': Tool not found")
             raise KeyError(f"Cannot invoke tool '{name}': Tool not found")
 
-        # Check if tool is invocable: either explicitly enabled OR a gated tool that's available
-        if name not in self.enabled_tools:
+        # Check if tool is invocable: enabled for the current user OR a gated
+        # tool that's available
+        user_id = get_current_user_id() if has_user_context() else _BOOT_ENABLED_KEY
+        if name not in self._enabled_tools.get(user_id, set()):
             if name in self.gated_tools:
                 # Gated tool - check is_available() at invocation time
                 tool = self.get_tool(name)
@@ -512,6 +554,16 @@ class ToolRepository:
                     raise RuntimeError(f"Cannot invoke gated tool '{name}': Tool is not available")
                 # Gated tool is available - allow invocation to proceed
             else:
+                # A tool absent from the enabled set is usually one that
+                # ephemeral cleanup removed at the last turn boundary —
+                # auto-enabling it back is the load-bearing cross-turn reload
+                # path. But a tool the user/config deliberately disabled
+                # (config.<name>.enabled falsy) is never auto-enabled: that
+                # is the disable contract invokeother_tool enforces on load.
+                tool_config = getattr(get_config(), name, None)
+                if tool_config and not getattr(tool_config, 'enabled', True):
+                    self.logger.error(f"Cannot invoke tool '{name}': Tool is disabled in config")
+                    raise RuntimeError(f"Cannot invoke tool '{name}': Tool is disabled in config")
                 # Auto-enable the tool on first invocation
                 self.logger.info(f"Auto-enabling tool '{name}' on first invocation")
                 self.enable_tool(name)
@@ -582,7 +634,10 @@ class ToolRepository:
         return list(self.enabled_tools)
     
     def is_tool_enabled(self, name: str) -> bool:
-        return name in self.enabled_tools
+        user_id = get_current_user_id() if has_user_context() else _BOOT_ENABLED_KEY
+        visible = (self._enabled_tools.get(user_id, set())
+                   | self._enabled_tools.get(_BOOT_ENABLED_KEY, set()))
+        return name in visible
     
     def get_tool_metadata(self, name: str) -> Dict[str, Any]:
         if name not in self.tool_classes:
@@ -617,14 +672,22 @@ class ToolRepository:
         """
         Get tool schemas for LLM context - only enabled and available tools.
 
-        invokeother_tool pattern: Essential tools are always enabled. Other tools
-        loaded on-demand via invokeother_tool. Ephemeral tools cleaned up on turn end;
-        pinned tools persist for the session.
+        invokeother_tool pattern: Boot-enabled (essential) tools are everyone's
+        baseline. Other tools are loaded on-demand per user via
+        invokeother_tool and presented only to the user who enabled them —
+        one user's ephemeral/pinned load never leaks into another user's
+        schema. Ephemeral tools cleaned up on turn end; pinned tools persist
+        for the session.
         """
         definitions: List[ToolDefinition] = []
 
+        # Boot-enabled tools (essentials) plus the CURRENT user's enabled set
+        user_id = get_current_user_id() if has_user_context() else _BOOT_ENABLED_KEY
+        enabled = (self._enabled_tools.get(_BOOT_ENABLED_KEY, set())
+                   | self._enabled_tools.get(user_id, set()))
+
         # Standard enabled tools (explicit enable/disable)
-        for name in sorted(self.enabled_tools):
+        for name in sorted(enabled):
             definitions.append(self.get_tool_definition(name))
 
         # Gated tools - check is_available() at runtime
@@ -737,10 +800,11 @@ class ToolRepository:
     
     def enable_all_tools(self) -> None:
         self.logger.info("Enabling all registered tools")
-        
+
+        user_id = get_current_user_id() if has_user_context() else _BOOT_ENABLED_KEY
         for name in self.tool_classes:
             try:
-                if name not in self.enabled_tools:
+                if name not in self._enabled_tools.get(user_id, set()):
                     self.enable_tool(name)
             except Exception:
                 self.logger.exception("Error enabling tool %s during enable_all — it will be unavailable this session", name)
