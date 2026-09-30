@@ -10,7 +10,7 @@ Generate a first-person memory trace of the following conversation segment.
 {tools_used}
 
 Remember:
-- **Voice**: Collaborative/Intersubjective ("Taylor identified X, so we pivoted to Y").
+- **Voice**: Collaborative/Intersubjective ("Sam identified X, so we pivoted to Y").
 - **Time**: ABSOLUTE ONLY ("On Jan 8"). Relative time ("yesterday") is forbidden.
 - **Titles**: Describe *what happened/resolved*, not just the topic.
 - **Density**: Complexity reflects degree of abstraction (Linear vs. Branching vs. Systemic), not just message count.

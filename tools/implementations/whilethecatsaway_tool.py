@@ -77,7 +77,7 @@ class WhileTheCatsAwayTool(Tool):
                         "Why you're curious about this. What conversation or "
                         "thought sparked the interest? The agent uses this to "
                         "judge what angles are worth pursuing. "
-                        "Example: 'Taylor mentioned their neighbor uses Great "
+                        "Example: 'Sam mentioned their neighbor uses Great "
                         "Pyrenees for predator deterrence and I realized I "
                         "know very little about working LGD breeds beyond "
                         "the basics.'"

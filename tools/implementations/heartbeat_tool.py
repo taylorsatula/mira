@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from tools.repo import Tool
 from tools.registry import registry
 from utils.timezone_utils import format_utc_iso, utc_now
+from utils.user_context import get_user_preferences
 
 logger = logging.getLogger(__name__)
 
@@ -212,10 +213,12 @@ class HeartbeatTool(Tool):
                     "your final message must be exactly the single word: keepsleeping"
                 )
         else:
+            prefs = get_user_preferences()
+            display_name = (prefs.first_name or "").strip() or "friend"
             guidance = (
-                "Decision recorded. Continue this turn normally: act on what needs "
-                "attention, then end with the message Taylor should see. Write it "
-                "to stand alone; Taylor may not have been watching."
+                f"Decision recorded. Continue this turn normally: act on what needs "
+                f"attention, then end with the message {display_name} should see. Write it "
+                f"to stand alone; {display_name} may not have been watching."
             )
         return {
             "success": True,
