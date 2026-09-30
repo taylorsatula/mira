@@ -198,7 +198,12 @@ def _on_anthropic_response(response):
 
     Fires once per HTTP response. Extracts the request ID from response
     headers and the message content from the original request body.
+    Content logging only happens when system.anthropic_sdk_content_logging
+    is enabled (off by default).
     """
+    if not _anthropic_sdk_content_logging_enabled():
+        return
+
     request_id = response.headers.get("request-id", "")
     if not request_id:
         return
@@ -218,6 +223,16 @@ def _on_anthropic_response(response):
     )
 
 
+def _anthropic_sdk_content_logging_enabled() -> bool:
+    """Read the system.anthropic_sdk_content_logging flag (default OFF).
+
+    Import is deferred so this module stays import-order independent of the
+    config manager.
+    """
+    from config.config_manager import config
+    return config.system.anthropic_sdk_content_logging
+
+
 def setup_anthropic_sdk_logging(log_dir: str = "logs"):
     """Set up file-based logging for Anthropic SDK request/response correlation.
 
@@ -225,8 +240,17 @@ def setup_anthropic_sdk_logging(log_dir: str = "logs"):
     of message content that was sent. The actual correlation happens via httpx
     response event hooks attached by instrument_anthropic_client().
 
+    Gated by system.anthropic_sdk_content_logging (default OFF — privacy-safe:
+    message content and full SDK request bodies are never persisted unless
+    explicitly enabled). When disabled, no file handler is attached, the
+    anthropic/httpx loggers keep their default levels, and the log file is
+    not created.
+
     Log file: {log_dir}/anthropic_sdk.log (50MB rotation, 3 backups)
     """
+    if not _anthropic_sdk_content_logging_enabled():
+        return
+
     os.makedirs(log_dir, exist_ok=True)
 
     file_handler = RotatingFileHandler(

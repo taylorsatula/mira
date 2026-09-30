@@ -93,6 +93,10 @@ class SystemConfig(BaseModel):
 
     # Operational
     log_level: str = Field(default="WARNING", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
+    anthropic_sdk_content_logging: bool = Field(
+        default=False,
+        description="Enable Anthropic SDK message-content logging to logs/anthropic_sdk.log (persists user/assistant conversation text and SDK request bodies; privacy-sensitive, off by default)"
+    )
     timezone: str = Field(
         default_factory=get_default_timezone,
         description="Default timezone (IANA name); defaults to the host system timezone, overridable via MIRA_TIMEZONE"

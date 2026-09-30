@@ -552,10 +552,14 @@ def register_perf_routes(app: 'FastAPI') -> None:
     if not logger.isEnabledFor(logging.INFO):
         return
 
+    from fastapi import Depends
     from fastapi.responses import JSONResponse
 
+    from auth.api import get_current_user
+    from auth.types import SessionData, APITokenContext
+
     @app.get("/dev/perf/summary", tags=["dev"])
-    def perf_summary():
+    def perf_summary(current_user: SessionData | APITokenContext = Depends(get_current_user)):
         """Rolling performance summary — recent request stats, N+1 detections, pool info."""
         summary = _get_rolling_summary()
         return JSONResponse(content=summary)
