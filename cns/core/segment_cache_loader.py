@@ -90,8 +90,12 @@ class SegmentCacheLoader:
         # Step 2: Load continuity messages (last 2 turns before active sentinel)
         continuity_messages = self._load_continuity_messages(continuum_id, turn_count=2)
 
-        # Step 3: Create collapse marker to indicate older searchable content
-        collapse_marker = create_collapse_marker()
+        # Step 3: Create collapse marker to indicate older searchable content,
+        # but only when there IS older content (collapsed summaries or
+        # continuity turns). An empty history must not claim searchable past
+        # conversations that do not exist.
+        history_present = bool(segment_summaries or continuity_messages)
+        collapse_marker = create_collapse_marker() if history_present else None
 
         # Step 4: Load active segment messages (current unconsolidated conversation)
         active_segment_messages = self._load_active_segment_messages(continuum_id)
@@ -103,11 +107,12 @@ class SegmentCacheLoader:
         primer_turns = self._primer_turns if segment_summaries else []
 
         # Step 6: Assemble in order - collapse marker first, then summaries, primer, continuity, boundary, and active messages
-        messages = [collapse_marker] + segment_summaries + primer_turns + continuity_messages + [boundary] + active_segment_messages
+        marker_messages = [collapse_marker] if collapse_marker is not None else []
+        messages = marker_messages + segment_summaries + primer_turns + continuity_messages + [boundary] + active_segment_messages
 
         logger.info(
             f"Loaded session cache for continuum {continuum_id}: "
-            f"collapse marker + {len(segment_summaries)} summaries + "
+            f"{'collapse marker' if marker_messages else 'no collapse marker (no history)'} + {len(segment_summaries)} summaries + "
             f"{len(primer_turns)} primer + {len(continuity_messages)} continuity + "
             f"boundary + {len(active_segment_messages)} active"
         )

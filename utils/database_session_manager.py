@@ -465,8 +465,13 @@ class AdminSession:
         # Register pgvector extension
         register_vector(self._conn)
 
-        # Don't set app.current_user_id at all - let it remain undefined
-        # RLS policies check for NULL context to allow admin cross-user queries
+        # Don't set app.current_user_id: this pool authenticates as the
+        # mira_admin role, which was provisioned with BYPASSRLS
+        # (deploy/postgresql.sh), so RLS policies never apply to these
+        # connections and cross-user admin queries are allowed at the
+        # PostgreSQL level. RLS policies are scoped TO mira_dbuser and
+        # fail closed on missing/NULL context (no rows), so leaving the
+        # setting unset is safe here only because of the role attribute.
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Exit session context - return connection."""

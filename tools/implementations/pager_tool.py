@@ -13,6 +13,7 @@ Datetime handling follows the UTC-everywhere approach:
 """
 
 import logging
+import base64
 import json
 import uuid
 import hashlib
@@ -163,12 +164,11 @@ class PagerTool(Tool):
     
     3. get_received_messages: Get messages received by a specific pager.
        - Required: pager_id (the pager device ID)
-       - Optional: unread_only (boolean), include_expired (boolean)
+       - Optional: unread_only (boolean)
        - Returns list of received messages
     
     4. get_sent_messages: Get messages sent from a specific pager.
        - Required: pager_id (the pager device ID)
-       - Optional: include_expired (boolean)
        - Returns list of sent messages
        
     5. mark_message_read: Mark a message as read.
@@ -176,7 +176,6 @@ class PagerTool(Tool):
        - Returns the updated message
        
     6. get_devices: List all registered pager devices.
-       - Optional: active_only (boolean, default true)
        - Returns list of pager devices
        
     7. deactivate_device: Deactivate a pager device.
@@ -197,16 +196,19 @@ class PagerTool(Tool):
     11. send_location: Send a location pin message from one pager to another.
         - Required: sender_id, recipient
         - Optional: priority (0=normal, 1=high, 2=urgent), note, device_secret
-        - Automatically includes current location as a pin
+        - Simulated: no real location source exists, so the pin carries an explicit
+          "simulated - no real location available" marker — never coordinates or a
+          street address
         - Returns the sent location message
        
     The tool uses AI to automatically distill long messages to fit pager constraints while
     preserving the essential information. Location information can be attached to messages
     for context, and priority levels help indicate message urgency.
     
-    Location pins are a special feature that allow sending your current coordinates as a 
-    message, perfect for emergencies or meetups. The location is formatted with both a 
-    human-readable address and technical coordinates.
+    Location pins are a simulated feature: no real location source exists, so a
+    location pin never contains coordinates or a street address. It always carries
+    an explicit "simulated - no real location available" marker and must never be
+    presented as a measured location.
     """
     
     description = simple_description + implementation_details
@@ -274,9 +276,9 @@ class PagerTool(Tool):
             "output": {
                 "message": {
                     "id": "msg_87654321",
-                    "content": "Location Pin: 1-1 Kitahama, Chuo-ku, Osaka (Near Osaka City Hall)\\nNote: Stuck in traffic\\n[34.6937, 135.5023]",
+                    "content": "📍 Location Pin: simulated - no real location available\\nNote: Stuck in traffic",
                     "priority": 2,
-                    "location": "{\"lat\": 34.6937, \"lng\": 135.5023, \"accuracy_meters\": 15}"
+                    "location": "simulated - no real location available"
                 }
             }
         }
@@ -429,14 +431,50 @@ class PagerTool(Tool):
             "device_fingerprint": device_row["device_fingerprint"]
         }
 
+    @staticmethod
+    def _is_fernet_ciphertext(value: Any) -> bool:
+        """Return True if value carries the Fernet token envelope (0x80 version
+        byte, timestamp, and minimum token length). Values that pass this check
+        are genuine ciphertext from db.execute(); values that fail are plaintext
+        already decrypted by db.select()."""
+        if not isinstance(value, str) or not value.startswith("gAAAAA"):
+            return False
+        try:
+            raw = base64.urlsafe_b64decode(value.encode("ascii"))
+        except Exception:
+            return False
+        # Fernet token: 0x80 || ts(8) || IV(16) || ciphertext(>=16) || HMAC(32)
+        return len(raw) >= 73 and raw[0] == 0x80
+
     def _decrypt_row_safely(self, row: Dict[str, Any]) -> Dict[str, Any]:
-        """Decrypt encrypted__ fields without failing on rows already decrypted by select()."""
+        """Decrypt encrypted__ fields.
+
+        Rows fetched via db.execute() carry genuine ciphertext: a decrypt
+        failure there is a real error and surfaces (it is never silently
+        substituted as message content). Rows already decrypted by db.select()
+        carry plaintext, which fails Fernet decryption by construction; that
+        case is tolerated. The two are distinguished by the Fernet token
+        envelope, not by swallowing exceptions.
+        """
         decrypted = {}
         for key, value in row.items():
             if key.startswith("encrypted__") and value is not None:
-                try:
-                    decrypted[key] = self.db._decrypt_value(value)
-                except Exception:
+                if self._is_fernet_ciphertext(value):
+                    try:
+                        decrypted[key] = self.db._decrypt_value(value)
+                    except Exception as e:
+                        self.logger.error(
+                            "Failed to decrypt field %r on row %r: %s — "
+                            "refusing to emit ciphertext as content",
+                            key, row.get("id"), e,
+                        )
+                        raise ValueError(
+                            f"Failed to decrypt field {key!r} on message "
+                            f"{row.get('id')!r}: stored data is unreadable "
+                            "(wrong encryption key or corrupted row)"
+                        ) from e
+                else:
+                    # Already plaintext (row came from db.select()) — keep as-is.
                     decrypted[key] = value
             else:
                 decrypted[key] = value
@@ -496,12 +534,11 @@ class PagerTool(Tool):
 
         3. get_received_messages: Get messages for a pager
            - Required: pager_id
-           - Optional: unread_only, include_expired
+           - Optional: unread_only
            - Returns: Dict with list of messages
 
         4. get_sent_messages: Get messages sent by a pager
            - Required: pager_id
-           - Optional: include_expired
            - Returns: Dict with list of messages
 
         5. mark_message_read: Mark a message as read
@@ -509,7 +546,6 @@ class PagerTool(Tool):
            - Returns: Dict with updated message
 
         6. get_devices: List pager devices
-           - Optional: active_only
            - Returns: Dict with list of devices
 
         7. deactivate_device: Deactivate a pager
@@ -1138,6 +1174,13 @@ class PagerTool(Tool):
             msg_dict['original_content'] = wrap_untrusted(msg_dict.get('original_content'), "federated_message_content")
             msg_dict['sender_name'] = wrap_untrusted(msg_dict.get('sender_name'), "federated_sender")
             msg_dict['location'] = wrap_untrusted(msg_dict.get('location'), "federated_location")
+
+            # Federated rows carry the external from_address as sender_id; the
+            # sender_name join can never match a federated address, so the wrap
+            # above is a no-op for these rows. Wrap the address itself here.
+            # Local device IDs (dev_XXXXXXXX, self-owned rows) stay unwrapped.
+            if msg_dict.get('sender_fingerprint') == 'FEDERATED':
+                msg_dict['sender_id'] = wrap_untrusted(msg_dict['sender_id'], "federated_sender")
             
             # Note: Conflicted messages will never reach here as they're rejected during send
             message_list.append(msg_dict)
@@ -1605,54 +1648,6 @@ Provide ONLY the distilled message, no explanations or meta-text."""
             "untrusted_device_id": untrusted_device_id
         }
     
-    def _get_device_location(self) -> Dict[str, Any]:
-        """
-        Get the current device location.
-        
-        Returns:
-            Dict with location information including coordinates and address
-        """
-        # In a real implementation, this would use device GPS or IP geolocation
-        # For this simulation, we'll generate realistic location data
-        import random
-        
-        # Simulate some common locations
-        locations = [
-            {
-                "lat": 34.6937,
-                "lng": 135.5023,
-                "address": "1-1 Kitahama, Chuo-ku, Osaka",
-                "description": "Near Osaka City Hall"
-            },
-            {
-                "lat": 35.6762,
-                "lng": 139.6503,
-                "address": "2-8-1 Nishi-Shinjuku, Tokyo",
-                "description": "Tokyo Metropolitan Building"
-            },
-            {
-                "lat": 40.7128,
-                "lng": -74.0060,
-                "address": "City Hall Park, New York, NY",
-                "description": "Near City Hall"
-            },
-            {
-                "lat": 37.7749,
-                "lng": -122.4194,
-                "address": "1 Dr Carlton B Goodlett Pl, San Francisco, CA",
-                "description": "San Francisco City Hall"
-            }
-        ]
-        
-        # Pick a random location for simulation
-        location = random.choice(locations)
-        
-        # Add timestamp
-        location["timestamp"] = utc_now().isoformat()
-        location["accuracy_meters"] = random.randint(5, 50)
-        
-        return location
-    
     def _send_location(
         self,
         sender_id: str,
@@ -1676,20 +1671,14 @@ Provide ONLY the distilled message, no explanations or meta-text."""
         """
         self.logger.info(f"Sending location pin from {sender_id} to {recipient}")
 
-        # Get current location
-        location_data = self._get_device_location()
-
-        # Format location as JSON string for storage
-        location_json = json.dumps({
-            "lat": location_data["lat"],
-            "lng": location_data["lng"],
-            "accuracy_meters": location_data["accuracy_meters"]
-        })
+        # No real location source exists in this tree (no GPS or IP
+        # geolocation), so a location pin must not fabricate coordinates or a
+        # street address. Emit an explicit simulation marker so the model can
+        # never present invented data as a measured location.
+        location_marker = "simulated - no real location available"
 
         # Create location message content
-        content = f"📍 Location Pin: {location_data['address']}"
-        if location_data.get('description'):
-            content += f" ({location_data['description']})"
+        content = f"📍 Location Pin: {location_marker}"
 
         # Add optional note if provided
         if note:
@@ -1698,16 +1687,13 @@ Provide ONLY the distilled message, no explanations or meta-text."""
                 raise ValueError(f"Location pin note too long: {len(note)} characters (max 50)")
             content += f"\nNote: {note}"
 
-        # Add coordinates for technical reference
-        content += f"\n[{location_data['lat']:.4f}, {location_data['lng']:.4f}]"
-
-        # Use the existing send_message method with location data
+        # Use the existing send_message method with the simulation marker
         return self._send_message(
             sender_id=sender_id,
             recipient=recipient,
             content=content,
             priority=priority,
-            location=location_json,
+            location=location_marker,
             expiry_hours=6,  # Location pins expire faster (6 hours)
             device_secret=device_secret
         )

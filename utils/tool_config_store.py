@@ -148,6 +148,10 @@ def prepare_tool_config_for_validation(
         if incoming_value == SECRET_REDACTION_SENTINEL:
             if existing_value is not None:
                 prepared[field_name] = existing_value
+            else:
+                # Sentinel echoed for a field with no stored value: treat as unset
+                # (same as omission) instead of passing the literal sentinel through.
+                prepared[field_name] = ""
             secret_updates[field_name] = None
         elif incoming_value == "":
             prepared[field_name] = ""

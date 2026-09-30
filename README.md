@@ -68,7 +68,6 @@ MIRA ships with
 - Punchclock
 - Reminder
 - Sidebar agents
-- Square
 - Weather
 - Web Search
 - While The Cat's Away
@@ -135,11 +134,7 @@ The script handles:
 8. Service verification (PostgreSQL, Valkey, Vault running and accessible)
 9. A litany of other configuration steps
 
-Existing installations can use the migration path:
-
-```bash
-./deploy/deploy.sh --migrate
-```
+There is no in-place upgrade path: 2.0 installs the greenfield schema into an empty database. To salvage data from an older install, take a `pg_dump` first and restore it manually.
 
 ## Install MIRA via Docker
 Build the base image first (heavy, rarely changes), then the thin app layer:
@@ -153,13 +148,13 @@ Run interactively (setup wizard) or headless with environment variables:
 
 ```bash
 # Interactive setup
-docker run -it -v mira-data:/opt/vault -v mira-userdata:/opt/mira/app/data -p 1993:1993 mira:latest
+docker run -it -v mira-data:/opt/vault -v mira-userdata:/opt/mira/app/data -v mira-pgdata:/var/lib/postgresql/17/main -v mira-valkey:/var/lib/valkey -p 1993:1993 mira:latest
 
 # Headless (non-interactive)
-docker run -e MIRA_ANTHROPIC_KEY=sk-ant-xxx -e MIRA_PROVIDER_KEY=gsk_xxx -v mira-data:/opt/vault -v mira-userdata:/opt/mira/app/data -p 1993:1993 mira:latest
+docker run -e MIRA_ANTHROPIC_KEY=sk-ant-xxx -e MIRA_PROVIDER_KEY=gsk_xxx -v mira-data:/opt/vault -v mira-userdata:/opt/mira/app/data -v mira-pgdata:/var/lib/postgresql/17/main -v mira-valkey:/var/lib/valkey -p 1993:1993 mira:latest
 ```
 
-Vault data persists in the `mira-data` volume. User data (uploaded and generated files, per-user tool data) persists in the `mira-userdata` volume — without it, recreating the container loses those files (conversations live in the PostgreSQL volume). PostgreSQL and Valkey data persist in container volumes.
+Vault data persists in the `mira-data` volume. User data (uploaded and generated files, per-user tool data) persists in the `mira-userdata` volume, conversations in the `mira-pgdata` volume, and Valkey state in the `mira-valkey` volume. Always re-create the container with the same named volumes — without them, recreating the container attaches fresh empty volumes and loses those files and every conversation.
 
 ## Trying MIRA without installing anything
 I run a hosted copy of MIRA on [miraos.org](https://miraos.org/). It has a macOS app that can be downloaded [here](https://miraos.org/assets/MIRA-for-Mac.dmg).

@@ -92,6 +92,8 @@ def _envelope(response: httpx.Response, step: str) -> dict:
 def _request(client: httpx.Client, method: str, url: str, step: str, **kwargs: object) -> httpx.Response:
     try:
         return client.request(method, url, **kwargs)
+    except httpx.InvalidURL as error:
+        raise LoginError(f"{step}: malformed base URL ({url!r}): {error}") from error
     except httpx.HTTPError as error:
         raise LoginError(f"{step}: {error}") from error
 
@@ -187,7 +189,10 @@ def mint_api_token(base_url: str, token_name: str = _TOKEN_NAME) -> str:
             client, "POST", base_url + _CSRF_PATH, "csrf",
             headers=headers, cookies=cookies,
         )
-        csrf_token = _envelope(response, "csrf")["csrf_token"]
+        data = _envelope(response, "csrf")
+        csrf_token = data.get("csrf_token")
+        if not csrf_token:
+            raise LoginError(f"csrf: 2xx without data.csrf_token: {data}")
 
         for attempt in range(1, 5):
             name = token_name if attempt == 1 else f"{token_name}-{attempt}"

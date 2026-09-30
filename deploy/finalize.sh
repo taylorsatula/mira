@@ -119,10 +119,12 @@ elif [ "${CONFIG_INSTALL_SYSTEMD}" = "no" ]; then
     print_info "Skipping systemd service installation (user opted out)"
 fi
 
-# macOS: write a launcher that exports Vault env vars before starting MIRA.
-# On Linux these vars are baked into the systemd unit; macOS has no equivalent,
-# and the server itself reads Vault at startup (POST gate, preload_secrets).
-if [ "$OS" = "macos" ]; then
+# Write a launcher that exports Vault env vars before starting MIRA.
+# On Linux with systemd these vars are baked into the unit; macOS has no
+# equivalent, and a Linux user who declined (or failed) systemd gets no unit
+# at all — so both need the launcher. The server itself reads Vault at
+# startup (POST gate, preload_secrets) and fails fast without these env vars.
+if [ "$OS" = "macos" ] || { [ "$OS" = "linux" ] && [ "${CONFIG_INSTALL_SYSTEMD}" != "yes" ]; }; then
     print_header "Step 15b: MIRA Launcher Script"
 
     RUN_SH="/opt/mira/app/run.sh"
@@ -355,8 +357,16 @@ if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ] && [ "$OS" = "linux" ]; then
     echo ""
     print_info "MIRA will auto-start on system boot (systemd enabled)"
 else
-    echo -e "  ${CYAN}→${RESET} Start MIRA: ${BOLD}/opt/mira/app/run.sh${RESET}"
-    echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/chat${RESET}"
+    if [ "$OS" = "linux" ]; then
+        # No systemd unit exists (user opted out or install failed), so the
+        # Step 15b launcher written above is the start path.
+        echo -e "  ${CYAN}→${RESET} Start MIRA: ${BOLD}/opt/mira/app/run.sh${RESET}"
+        echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/chat${RESET}"
+        echo -e "  ${CYAN}→${RESET} After a reboot, unseal Vault first: ${BOLD}/opt/vault/unseal.sh${RESET}"
+    else
+        echo -e "  ${CYAN}→${RESET} Start MIRA: ${BOLD}/opt/mira/app/run.sh${RESET}"
+        echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/chat${RESET}"
+    fi
 fi
 
 # Harden /opt/vault/ permissions — restrict to MIRA_USER only

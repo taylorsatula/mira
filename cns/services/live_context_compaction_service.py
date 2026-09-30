@@ -192,6 +192,7 @@ def filter_messages_for_live_context(
     messages: Sequence[Message],
     artifact: LiveContextCompactionArtifact | None,
     continuum_id: str,
+    active_turn_id: str | None = None,
 ) -> list[Message]:
     """
     Return a request-local message list with compacted ordinary messages and
@@ -202,6 +203,12 @@ def filter_messages_for_live_context(
     same exclusion load_segment_messages and the history API apply; breakout
     turns are real conversation and stay visible). Segment boundaries, system
     notifications, and compaction synopsis scaffolding are always preserved.
+
+    ``active_turn_id`` exempts the in-flight turn (the heartbeat stimulus and
+    its same-turn assistant/tool rows): the decision stamp is written only
+    post-commit, so during compose the current turn is unstamped and would
+    otherwise be excluded as keepsleeping before the model can see it.
+    Historical settled keepsleeping turns stay excluded.
     """
     keepsleeping_turn_ids = {
         message.metadata.get("turn_id")
@@ -213,7 +220,7 @@ def filter_messages_for_live_context(
     surviving = [
         message
         for message in messages
-        if not _is_keepsleeping_heartbeat(message, keepsleeping_turn_ids)
+        if not _is_keepsleeping_heartbeat(message, keepsleeping_turn_ids, active_turn_id)
     ]
 
     if artifact is None or artifact.continuum_id != continuum_id:
@@ -229,8 +236,11 @@ def filter_messages_for_live_context(
 def _is_keepsleeping_heartbeat(
     message: Message,
     keepsleeping_turn_ids: set,
+    active_turn_id: str | None = None,
 ) -> bool:
     """Mirror the load_segment_messages SQL predicate in Python."""
+    if active_turn_id is not None and message.metadata.get("turn_id") == active_turn_id:
+        return False
     if message.metadata.get("heartbeat") == "true":
         if (message.metadata.get("heartbeat_decision") or "keepsleeping") != "breakout":
             return True
@@ -491,12 +501,20 @@ class LiveContextCompactionService:
             prior_artifact=prior_artifact,
         )
 
-    def format_messages_for_api(self, continuum: Continuum) -> list[dict[str, object]]:
+    def format_messages_for_api(
+        self,
+        continuum: Continuum,
+        active_turn_id: str | None = None,
+    ) -> list[dict[str, object]]:
         """Return provider-formatted messages after live compaction filtering."""
-        visible_messages = self.get_visible_messages(continuum)
+        visible_messages = self.get_visible_messages(continuum, active_turn_id)
         return format_messages_for_api(visible_messages)
 
-    def get_visible_messages(self, continuum: Continuum) -> list[Message]:
+    def get_visible_messages(
+        self,
+        continuum: Continuum,
+        active_turn_id: str | None = None,
+    ) -> list[Message]:
         """Return request-visible messages without mutating the continuum."""
         user_id = get_current_user_id()
         try:
@@ -512,6 +530,7 @@ class LiveContextCompactionService:
             continuum.messages,
             artifact,
             str(continuum.id),
+            active_turn_id,
         )
 
     def _build_compactor_messages(

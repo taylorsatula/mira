@@ -41,6 +41,7 @@ For example: if the user model notes "This user becomes defensive when challenge
 The conversation segment uses XML tags:
 - `<user>` — User messages
 - `<assistant>` — Assistant responses
+- `<tool>` — Tool results (output produced by tools the assistant invoked; this is not user speech)
 - `<think>` — Assistant's internal reasoning (thinking traces)
 
 When evaluating behavior, consider thinking traces as part of the assistant's behavioral output. Reasoning quality in thinking traces reflects actual decision-making. Contradictions between thinking and response are significant signals.

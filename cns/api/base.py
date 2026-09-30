@@ -118,10 +118,14 @@ def create_error_response(
             "details": error.details
         }
     else:
+        # Never serialize raw exception text to the client: unexpected errors get
+        # a fixed message, and the request id (in details and meta) correlates the
+        # response with the server-side log entry. Mirrors main.py's
+        # general_exception_handler. Call sites log the real exception themselves.
         error_detail = {
             "code": "INTERNAL_ERROR",
-            "message": str(error),
-            "details": {}
+            "message": "An unexpected error occurred",
+            "details": {"request_id": request_id} if request_id else {}
         }
 
     meta: ResponseMeta = {

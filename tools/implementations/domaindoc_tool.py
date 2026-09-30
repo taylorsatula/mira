@@ -14,7 +14,7 @@ from tools.repo import Tool
 from tools.registry import registry
 from utils.timezone_utils import utc_now, format_utc_iso
 from utils.userdata_manager import UserDataManager, get_user_data_manager
-from utils.domaindoc_shares import resolve_domaindoc, get_accepted_shares, invalidate_domaindoc_cache
+from utils.domaindoc_shares import resolve_domaindoc, get_accepted_shares, invalidate_domaindoc_cache, is_shared_label
 
 
 logger = logging.getLogger(__name__)
@@ -416,8 +416,6 @@ class DomaindocTool(Tool):
 
         if resolved.is_shared:
             self._shared_doc_context = resolved
-            if operation in ("enable", "disable"):
-                raise ValueError(f"Cannot {operation} a shared domaindoc — only the owner can manage document lifecycle")
 
         try:
             if operation == "expand":
@@ -606,6 +604,8 @@ class DomaindocTool(Tool):
 
     def _op_enable(self, db: UserDataManager, label: str) -> Dict[str, Any]:
         """Enable a disabled domaindoc."""
+        if is_shared_label(label):
+            raise ValueError("Cannot enable a shared domaindoc — only the owner can manage document lifecycle")
         doc = self._get_domaindoc(db, label, require_enabled=False)
 
         if doc.get("archived", False):
@@ -634,6 +634,8 @@ class DomaindocTool(Tool):
 
     def _op_disable(self, db: UserDataManager, label: str) -> Dict[str, Any]:
         """Disable an enabled domaindoc."""
+        if is_shared_label(label):
+            raise ValueError("Cannot disable a shared domaindoc — only the owner can manage document lifecycle")
         doc = self._get_domaindoc(db, label, require_enabled=False)
 
         if not doc.get("enabled", True):
@@ -1190,7 +1192,14 @@ class DomaindocTool(Tool):
             all_sections = self._get_all_sections(db, domaindoc_id)
 
         existing_headers = {s["header"] for s in all_sections}
-        provided_headers = {self._normalize_section_name(h) for h in order}
+        normalized_order = [self._normalize_section_name(h) for h in order]
+
+        if len(normalized_order) != len(set(normalized_order)):
+            duplicates = sorted({h for h in normalized_order if normalized_order.count(h) > 1})
+            raise ValueError(
+                f"Reorder failed: duplicate sections {duplicates} — order must list each section exactly once"
+            )
+        provided_headers = set(normalized_order)
 
         missing = existing_headers - provided_headers
         unknown = provided_headers - existing_headers
@@ -1204,17 +1213,16 @@ class DomaindocTool(Tool):
             raise ValueError(f"Reorder failed: {' and '.join(parts)}")
 
         now = format_utc_iso(utc_now())
-        for new_order, header in enumerate(order):
-            normalized = self._normalize_section_name(header)
+        for new_order, normalized in enumerate(normalized_order):
             sec = next(s for s in all_sections if s["header"] == normalized)
             db.execute(
                 "UPDATE domaindoc_sections SET sort_order = :order, updated_at = :now WHERE id = :id",
                 {"order": new_order, "now": now, "id": sec["id"]}
             )
 
-        self._record_version(db, domaindoc_id, "reorder_sections", {"order": order, "parent": parent, **self._actor_suffix()})
+        self._record_version(db, domaindoc_id, "reorder_sections", {"order": normalized_order, "parent": parent, **self._actor_suffix()})
         self._update_domaindoc_timestamp(db, domaindoc_id)
-        return {"success": True, "new_order": order, "parent": parent}
+        return {"success": True, "new_order": normalized_order, "parent": parent}
 
     # =========================================================================
     # Content Editing Operations

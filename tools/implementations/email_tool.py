@@ -1419,8 +1419,13 @@ class EmailTool(Tool):
                     if typ != "OK":
                         raise ValueError(f"Server rejected delete flag for UID {uid} (status {typ})")
 
-                    # Expunge the message
-                    typ, _ = self.connection.expunge()
+                    # Expunge the message: prefer UID EXPUNGE (UIDPLUS) so only
+                    # this UID is removed; a bare EXPUNGE would permanently remove
+                    # every \Deleted message in the folder.
+                    if b'UIDPLUS' in self.connection.capabilities:
+                        typ, _ = self.connection.uid("EXPUNGE", str(uid))
+                    else:
+                        typ, _ = self.connection.expunge()
                     if typ != "OK":
                         raise ValueError(f"Server rejected expunge (status {typ})")
 
@@ -1483,8 +1488,13 @@ class EmailTool(Tool):
                         if typ != "OK":
                             raise ValueError(f"Server rejected delete flag for UID {uid} (status {typ})")
 
-                        # Expunge
-                        typ, _ = self.connection.expunge()
+                        # Expunge: prefer UID EXPUNGE (UIDPLUS) so only this UID
+                        # is removed; a bare EXPUNGE would permanently remove
+                        # every \Deleted message in the folder.
+                        if b'UIDPLUS' in self.connection.capabilities:
+                            typ, _ = self.connection.uid("EXPUNGE", str(uid))
+                        else:
+                            typ, _ = self.connection.expunge()
                         if typ != "OK":
                             raise ValueError(f"Server rejected expunge (status {typ})")
 

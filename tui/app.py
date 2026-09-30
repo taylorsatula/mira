@@ -136,6 +136,20 @@ def _post_chat(config: EndpointConfig, message: str) -> str:
             headers={"Authorization": f"Bearer {config.api_key}"},
             timeout=_CHAT_TIMEOUT,
         )
+    except httpx.TimeoutException as error:
+        # Mirrors the KeyboardInterrupt caveat below: the request died
+        # client-side at the _CHAT_TIMEOUT bound while the server may
+        # still run the turn to completion.
+        raise ChatError(
+            f"request to {url} timed out ({error}) — the request was "
+            "dropped client-side (the server turn may still complete); "
+            "check history before resubmitting"
+        ) from error
+    except httpx.InvalidURL as error:
+        raise ChatError(
+            f"the stored base_url is malformed ({config.base_url!r}): {error}\n"
+            "  Fix base_url in the endpoint store."
+        ) from error
     except httpx.HTTPError as error:
         raise ChatError(f"request to {url} failed: {error}") from error
     if response.status_code != 200:
@@ -173,6 +187,11 @@ def preflight(config: EndpointConfig, store_path: str) -> None:
             headers={"Authorization": f"Bearer {config.api_key}"},
             timeout=_PREFLIGHT_TIMEOUT,
         )
+    except httpx.InvalidURL as error:
+        raise ChatError(
+            f"the stored base_url is malformed ({config.base_url!r}): {error}\n"
+            f"  Fix base_url in:\n  {store_path}"
+        ) from error
     except httpx.HTTPError as error:
         raise ChatError(
             f"cannot reach MIRA at {config.base_url} ({error})\n"

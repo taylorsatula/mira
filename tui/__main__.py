@@ -11,9 +11,10 @@ CLI:
 - ``--config-debug``  print the resolved store path and, per endpoint,
   name / base_url / history_fetch / include_thinking — never the api_key —
   then exit 0.
-- default: load the store and run the chat app (Rich + prompt_toolkit,
-  native scrollback). First run with no usable endpoint prints setup
-  guidance and exits 1.
+- default: load the store and run the chat app (plain ANSI + sync
+  REST REPL — Rich display filters, native scrollback; the retained
+  WebSocket stack is currently unused). First run with no usable
+  endpoint prints setup guidance and exits 1.
 
 Exit codes: 0 on ``/exit`` (or terminal EOF); 1 on fatal startup errors
 (unreadable or corrupt store, no usable endpoint) with the real message —
@@ -50,7 +51,7 @@ def _print_config_debug(store: EndpointStore) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="tui",
-        description="MIRA terminal chat client (Rich + prompt_toolkit over the deployed WS/REST API).",
+        description="MIRA terminal chat client (plain ANSI REPL over the deployed REST API; Rich display filters; the retained WebSocket stack is currently unused).",
     )
     parser.add_argument(
         "--config",

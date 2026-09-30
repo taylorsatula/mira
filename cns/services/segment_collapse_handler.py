@@ -1380,6 +1380,13 @@ class SegmentCollapseHandler:
         identity contract (item_id + UNIQUE(interface_name, thread_id)) —
         a dual-path collapse no longer races one shared UPSERT row.
         """
+        from config import config
+
+        if not config.memory_curator.enabled:
+            logger.info(
+                "memory_curator disabled; skipping integration curator spawn (%s)", source
+            )
+            return
         if not new_memories:
             return
         if self.tool_repo is None:

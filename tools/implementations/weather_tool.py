@@ -289,15 +289,19 @@ class ValidationUtils:
         # Ensure we're working with UTC time for consistency
         now_utc = utc_now()
 
-        # Ensure date is not too far in the future
-        max_days = 16  # OpenMeteo typically supports up to 16 days
+        # OpenMeteo's forecast endpoint only serves a bounded window:
+        # up to 92 days of past data (past_days) and up to 16 forecast
+        # days counting today (i.e. a latest start_date of today + 15).
+        min_days = 92
+        max_days = 15
+        min_date = now_utc.date() - timedelta(days=min_days)
         max_date = now_utc.date() + timedelta(days=max_days)
-        if date_obj.date() > max_date:
+        if date_obj.date() < min_date or date_obj.date() > max_date:
             raise ValueError(
-                f"Date '{date_str}' is out of range: dates cannot be more than "
-                f"{max_days} days in the future (latest allowed date: {max_date.isoformat()}). "
-                f"Use a date between {now_utc.date().isoformat()} and {max_date.isoformat()}.",
-                {"date": date_str, "max_days": max_days, "error_type": "range"}
+                f"Date '{date_str}' is out of range: dates must be between "
+                f"{min_date.isoformat()} and {max_date.isoformat()} "
+                f"(from {min_days} days in the past to {max_days} days in the future).",
+                {"date": date_str, "min_days": min_days, "max_days": max_days, "error_type": "range"}
             )
 
         # Return the validated date string
@@ -775,7 +779,13 @@ class WeatherTool(Tool):
         """
         from config import config
 
-        days_to_request = forecast_days or config.weather_tool.forecast_days
+        # When a specific date is requested, start_date/end_date define the
+        # window: OpenMeteo rejects forecast_days combined with them, so it
+        # must be omitted (the configured default must not ride along).
+        days_to_request = (
+            None if date
+            else (forecast_days or config.weather_tool.forecast_days)
+        )
 
         # Create cache key
         cache_key = f"{latitude}_{longitude}_{forecast_type}_{days_to_request}d"
@@ -833,8 +843,9 @@ class WeatherTool(Tool):
             "latitude": latitude,
             "longitude": longitude,
             "timezone": config.weather_tool.timezone,
-            "forecast_days": days_to_request
         }
+        if not date:
+            params["forecast_days"] = days_to_request
 
         # Add parameters
         if hourly_params:
@@ -860,6 +871,22 @@ class WeatherTool(Tool):
                 cache.set(cache_key, data)
             
             return data
+        except http_client.HTTPStatusError as e:
+            # Surface the upstream reason body (e.g. OpenMeteo's JSON
+            # {"reason": ...}) instead of the raw httpx status string.
+            reason = ""
+            try:
+                body = e.response.json()
+                if isinstance(body, dict) and body.get("reason"):
+                    reason = str(body["reason"])
+                else:
+                    reason = (e.response.text or "")[:500]
+            except ValueError:
+                reason = (e.response.text or "")[:500]
+            raise RuntimeError(
+                f"Weather API request failed with HTTP {e.response.status_code}"
+                + (f": {reason}" if reason else "")
+            )
         except http_client.RequestError as e:
             raise ConnectionError(f"Failed to fetch weather data: {str(e)}")
         except (ValueError, KeyError) as e:

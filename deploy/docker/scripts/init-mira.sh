@@ -59,7 +59,7 @@ check_env_vars() {
         print_info "  MIRA_DB_PASSWORD          - Database password"
         print_info ""
         print_info "Or run with -it flag for interactive setup:"
-        print_info "  docker run -it -p 1993:1993 mira:latest"
+        print_info "  docker run -it -v mira-data:/opt/vault -v mira-userdata:/opt/mira/app/data -v mira-pgdata:/var/lib/postgresql/17/main -v mira-valkey:/var/lib/valkey -p 1993:1993 mira:latest"
         exit 1
     fi
 }
@@ -364,6 +364,17 @@ main() {
         print_success "First-boot setup complete!"
         echo ""
     else
+        # Reconcile the Vault-keyed first-boot gate with the PostgreSQL
+        # provisioning precondition (init_postgresql, which owns initdb, is
+        # first-boot-only). Vault surviving while pgdata is empty means the
+        # postgres volume was lost or never mounted — provisioning a fresh
+        # cluster here would silently discard the previous database, so abort
+        # loudly instead of handing an empty dir to the s6 longrun.
+        if [ ! -f /var/lib/postgresql/17/main/postgresql.conf ]; then
+            print_error "pgdata empty but Vault initialized: /opt/vault/init-keys.txt exists but /var/lib/postgresql/17/main has no cluster."
+            print_info "The PostgreSQL data volume is missing or was recreated empty. Re-create the container with the same named volume (-v mira-pgdata:/var/lib/postgresql/17/main) to restore the database; refusing to start with an empty data directory."
+            exit 1
+        fi
         print_info "Existing configuration found. Starting services..."
     fi
 
@@ -376,6 +387,12 @@ main() {
     # /opt/vault ownership handling in init_vault above.
     mkdir -p /opt/mira/app/data
     chown mira:mira /opt/mira/app/data
+
+    # PostgreSQL data may sit on a named volume that comes up root-owned,
+    # and postgres runs as the postgres user — fix ownership on every start,
+    # not just first boot (mirrors the chown in init_postgresql and the
+    # /opt/vault ownership handling in init_vault above).
+    chown -R postgres:postgres /var/lib/postgresql
 
     # Hand off to s6-overlay
     print_header "Starting Services via s6-overlay"

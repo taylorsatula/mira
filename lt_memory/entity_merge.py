@@ -122,8 +122,10 @@ def _parse_merge_response(
 ) -> List[Tuple[UUID, List[UUID]]]:
     """Parse the LLM JSON response into [(target_uuid, [source_uuid, ...])].
 
-    Validates every short ID exists in the input (rejects hallucinated IDs) and
-    skips any merge entry with an unknown canonical or empty merge list.
+    Validates every short ID exists in the input (rejects hallucinated IDs)
+    and skips any merge entry with an unknown canonical, empty merge list, or a
+    canonical that appears in its own merge list (a degenerate self-merge
+    decision would archive the canonical hub itself via merge_entities).
     """
     data = _extract_json(response_text)
     merges = data.get('merges', [])
@@ -147,6 +149,13 @@ def _parse_merge_response(
                 logger.warning("Entity merge: unknown merge id %r, skipping it", short_id)
                 continue
             source_uuids.append(uuid)
+        if canonical_uuid in source_uuids:
+            logger.warning(
+                "Entity merge: canonical %s appears in its own merge list, "
+                "skipping decision",
+                canonical_short,
+            )
+            continue
         if source_uuids:
             decisions.append((canonical_uuid, source_uuids))
     return decisions
@@ -209,6 +218,19 @@ def run_entity_merge_for_user(user_id: str) -> Dict[str, int]:
 
     merged = 0
     for target_id, source_ids in decisions:
+        # A target archived earlier in this batch (or a stale decision naming
+        # an archived entity) must not absorb more sources: merging into an
+        # archived row orphans the rewritten memory links. Skip the decision.
+        target = db.get_entity(target_id, user_id=user_id)
+        if target is None or target.is_archived:
+            logger.warning(
+                "Entity merge: target %s %s, skipping %d source merge(s) (user %s)",
+                target_id,
+                "not found" if target is None else "already archived",
+                len(source_ids),
+                user_id,
+            )
+            continue
         for source_id in source_ids:
             try:
                 db.merge_entities(source_id, target_id, user_id=user_id)

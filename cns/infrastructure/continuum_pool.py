@@ -6,6 +6,7 @@ replacing the in-memory LRU pool with Valkey-based caching.
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from collections.abc import Callable
@@ -18,6 +19,57 @@ from cns.core.segment_cache_loader import SegmentCacheLoader
 from utils.user_context import get_current_user_id
 
 logger = logging.getLogger(__name__)
+
+
+def _trim_content_blocks(content: list, limit: int) -> int:
+    """
+    Trim oversized list message content in place until it fits the limit.
+
+    The durable form of list content is json.dumps(content) (see
+    Message.to_db_tuple), so that serialization is what the limit is
+    measured against. When it exceeds ``limit``, the largest string field
+    in a block — the offending text or media payload — is truncated and
+    marked. The list/block structure is preserved so the row is stored with
+    content_type "json" and reloads as a content array; the whole list is
+    never flattened to a repr.
+
+    Mirrors the format-aware tool-result truncation upstream in the
+    orchestrator: cut the payload, not the envelope.
+
+    Blocks are trimmed in place so the continuum's in-memory copy and the
+    persisted row stay identical — a cache reload serves exactly what
+    was saved.
+
+    Returns:
+        The serialized length before trimming; 0 when no trim was needed.
+    """
+    original_len = len(json.dumps(content))
+    if original_len <= limit:
+        return 0
+    while True:
+        total = len(json.dumps(content))
+        if total <= limit:
+            break
+        # Largest trimmable string field across all blocks.
+        candidates = [
+            (len(value), block, key)
+            for block in content
+            if isinstance(block, dict)
+            for key, value in block.items()
+            if isinstance(value, str)
+        ]
+        if not candidates:
+            break  # no trimmable payload; keep the structure as-is
+        field_len, block, key = max(candidates, key=lambda c: c[0])
+        marker = (f"\n\n[Block truncated: {field_len:,} chars cut to fit "
+                  f"the {limit:,} char persistence limit]")
+        keep = field_len - (total - limit) - len(marker)
+        if keep < 0:
+            keep = 0
+        if keep + len(marker) >= field_len:
+            break  # field already at the marker floor — cannot shrink further
+        block[key] = block[key][:keep] + marker
+    return original_len
 
 
 class UnitOfWork:
@@ -52,8 +104,12 @@ class UnitOfWork:
         Queue messages for persistence.
 
         Enforces a per-message character limit as a safety net against
-        oversized content bricking the conversation. Tool results have
-        a tighter, format-aware limit upstream in the orchestrator.
+        oversized content bricking the conversation. String content is cut
+        to the limit; list content is trimmed format-aware — the offending
+        block payloads are truncated in place so the persisted row keeps
+        the list/block structure (content_type "json") and the in-memory
+        continuum copy stays identical to the durable one. Tool results
+        have a tighter, format-aware limit upstream in the orchestrator.
 
         Args:
             *messages: One or more Message objects to persist
@@ -65,23 +121,31 @@ class UnitOfWork:
 
         for msg in messages:
             content = msg.content
-            content_len = len(content) if isinstance(content, str) else len(str(content))
-            if content_len > limit:
-                truncated = (content if isinstance(content, str) else str(content))[:limit]
-                truncated += f"\n\n[Message truncated: {content_len:,} chars exceeded {limit:,} char limit]"
-                msg = Message(
-                    id=msg.id,
-                    content=truncated,
-                    role=msg.role,
-                    created_at=msg.created_at,
-                    metadata=msg.metadata,
-                    tool_call_id=msg.tool_call_id,
-                    is_error=msg.is_error
-                )
-                logger.warning(
-                    "Truncated oversized %s message at persistence: %d -> %d chars",
-                    msg.role, content_len, len(truncated)
-                )
+            if isinstance(content, str):
+                if len(content) > limit:
+                    truncated = content[:limit]
+                    truncated += f"\n\n[Message truncated: {len(content):,} chars exceeded {limit:,} char limit]"
+                    msg = Message(
+                        id=msg.id,
+                        content=truncated,
+                        role=msg.role,
+                        created_at=msg.created_at,
+                        metadata=msg.metadata,
+                        tool_call_id=msg.tool_call_id,
+                        is_error=msg.is_error
+                    )
+                    logger.warning(
+                        "Truncated oversized %s message at persistence: %d -> %d chars",
+                        msg.role, len(content), len(truncated)
+                    )
+            else:
+                original_len = _trim_content_blocks(content, limit)
+                if original_len:
+                    logger.warning(
+                        "Trimmed oversized %s message blocks at persistence: "
+                        "%d -> %d serialized chars",
+                        msg.role, original_len, len(json.dumps(content))
+                    )
             self.pending_messages.append(msg)
         
     def mark_metadata_updated(self) -> None:

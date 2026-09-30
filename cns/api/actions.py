@@ -21,7 +21,7 @@ from config import config
 from utils.user_context import get_current_user_id, set_current_user_id, invalidate_user_preferences_cache
 from auth.api import get_current_user
 from auth.types import SessionData, APITokenContext
-from .base import BaseHandler, PropagatingHandler, ValidationError, NotFoundError
+from .base import BaseHandler, PropagatingHandler, ValidationError, NotFoundError, generate_request_id
 from utils.timezone_utils import utc_now, format_utc_iso
 from clients.valkey_client import get_valkey_client
 from working_memory.trinkets.base import TRINKET_KEY_PREFIX
@@ -1266,6 +1266,9 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
     def _action_enable(self, db: UserDataManager, data: dict[str, Any]) -> dict[str, Any]:
         """Enable a domaindoc. Collapses all sections except first."""
         label = data["label"]
+        from utils.domaindoc_shares import is_shared_label
+        if is_shared_label(label):
+            raise ValidationError("Cannot enable a shared domaindoc — only the owner can manage document lifecycle")
         self._validate_label(label)
         doc = self._get_domaindoc(db, label)
 
@@ -1288,6 +1291,9 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
     def _action_disable(self, db: UserDataManager, data: dict[str, Any]) -> dict[str, Any]:
         """Disable a domaindoc."""
         label = data["label"]
+        from utils.domaindoc_shares import is_shared_label
+        if is_shared_label(label):
+            raise ValidationError("Cannot disable a shared domaindoc — only the owner can manage document lifecycle")
         self._validate_label(label)
         doc = self._get_domaindoc(db, label)
         now = format_utc_iso(utc_now())
@@ -1698,6 +1704,9 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
             parent_id = parent["id"]
 
         sections = self._get_all_sections(db, doc["id"], parent_id)
+
+        if len(order) != len(set(order)):
+            raise ValidationError(f"Order must list each section exactly once — found duplicates: {order}")
 
         existing = {s["header"] for s in sections}
         provided = set(order)
@@ -3017,15 +3026,19 @@ def query_tool(
                 }
             }
         )
-    except Exception as e:
-        logger.exception("Tool query error for %s", tool_name)
+    except Exception:
+        request_id = generate_request_id()
+        logger.exception("Tool query error for %s (request_id: %s)", tool_name, request_id)
+        # Fixed message plus request id, mirroring main.py's
+        # general_exception_handler; the real exception stays in the log only.
         return JSONResponse(
             status_code=500,
             content={
                 "success": False,
                 "error": {
                     "code": "INTERNAL_ERROR",
-                    "message": str(e)
+                    "message": "An unexpected error occurred",
+                    "details": {"request_id": request_id}
                 }
             }
         )

@@ -33,6 +33,7 @@ import os
 import posixpath
 import re
 import shlex
+import signal
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Iterable, List, NoReturn, Optional, Tuple
@@ -1063,8 +1064,9 @@ class BashTool(Tool):
                     "type": "integer",
                     "minimum": 1,
                     "description": (
-                        "Required. Kill the command after this many seconds (SIGTERM, then "
-                        "SIGKILL ten seconds later), clamped to the configured maximum. "
+                        "Required. Kill the command after this many seconds "
+                        "(the entire process group is SIGKILLed), clamped to "
+                        "the configured maximum. "
                         "Ignored by run_background, which uses its own start timeout — still "
                         "pass a value; it is not acted on there."
                     ),
@@ -1109,21 +1111,53 @@ class BashTool(Tool):
         shell_command: str,
         *,
         timeout_seconds: Optional[float] = None,
+        kill_group: bool = False,
     ) -> subprocess.CompletedProcess:
         """Run a composed shell command locally via subprocess."""
         effective = timeout_seconds or float(cfg.default_timeout_seconds)
+        if not kill_group:
+            try:
+                return subprocess.run(
+                    ["bash", "-c", shell_command],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=effective,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ValueError(
+                    f"Command exceeded {effective:.0f}s and was killed. "
+                    f"The process may still be running."
+                ) from exc
+            except OSError as exc:
+                raise ValueError(f"Could not launch the local shell: {exc}") from exc
+        # kill_group: the child is started as its own session leader, so its
+        # pid names the whole process group and a timeout SIGKILLs every
+        # descendant — the escalation the GNU `timeout -k` wrapper used to
+        # provide. That binary is absent on stock macOS, so the wrapper must
+        # not appear in any composed command; the parent timeout bounds
+        # duration and this group kill supplies the enforcement.
         try:
-            return subprocess.run(
+            with subprocess.Popen(
                 ["bash", "-c", shell_command],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=effective,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise ValueError(
-                f"Command exceeded {effective:.0f}s and was killed. "
-                f"The process may still be running."
-            ) from exc
+                start_new_session=True,
+            ) as proc:
+                try:
+                    stdout, stderr = proc.communicate(timeout=effective)
+                except subprocess.TimeoutExpired as exc:
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    stdout, stderr = proc.communicate()
+                    raise ValueError(
+                        f"Command exceeded {effective:.0f}s and its process "
+                        f"group was killed."
+                    ) from exc
+                return subprocess.CompletedProcess(
+                    ["bash", "-c", shell_command], proc.returncode, stdout, stderr
+                )
         except OSError as exc:
             raise ValueError(f"Could not launch the local shell: {exc}") from exc
 
@@ -1193,17 +1227,15 @@ class BashTool(Tool):
         workdir = self._resolve(cfg, cwd) if cwd else posixpath.normpath(cfg.root)
         _validate_command(command, cfg.root, workdir)
         timeout = self._clamp_timeout(cfg, timeout_seconds)
-        composed = (
-            f"cd {shlex.quote(workdir)} && "
-            f"timeout -k 10s {timeout}s bash -lc {shlex.quote(command)}"
+        composed = f"cd {shlex.quote(workdir)} && bash -lc {shlex.quote(command)}"
+        result = self._execute_local(
+            cfg, composed, timeout_seconds=float(timeout), kill_group=True
         )
-        result = self._execute_local(cfg, composed, timeout_seconds=timeout + 20)
         stdout, stdout_truncated = self._truncate(result.stdout, cfg.max_output_bytes)
         stderr, stderr_truncated = self._truncate(result.stderr, cfg.max_output_bytes)
         return {
             "success": True,
             "exit_code": result.returncode,
-            "timed_out": result.returncode == 124,
             "cwd": workdir,
             "stdout": stdout,
             "stderr": stderr,

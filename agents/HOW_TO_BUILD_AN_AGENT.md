@@ -719,8 +719,8 @@ Report the change as EXECUTED (what ran) or UNVERIFIED (why not, and which probe
 | Agent | Route | Iterations | Key patterns |
 |-------|------|-----------|--------------|
 | `whilethecatsaway_agent.py` | `batch` | 25 | **Start here.** Minimal: no sentry, no overwatch, no `_iteration_status`. Completion hooks only. |
-| `forage_agent.py` | `batch` | 20 | `inherit_base_prompt=False`, overwatch on `primary`, `_iteration_status()` progress bar, refinement branch in `build_initial_message()`, direct invocation from `forage_tool.py` |
-| `memory_curator_agent.py` | `primary` | 8 | Two modes via `work_item.context['mode']` (Mode Contract TypedDicts, `ValueError` on unknown), `tool_schema_overrides` blocking `create_memory`, `on_completion()` side effect (`last_tended_at` stamp), short-vs-full memory ID asymmetry |
+| `forage_agent.py` | `batch` | 20 | `inherit_base_prompt=False`, overwatch on `fast`, `_iteration_status()` progress bar, refinement branch in `build_initial_message()`, direct invocation from `forage_tool.py` |
+| `memory_curator_agent.py` | `batch` | 8 | Two modes via `work_item.context['mode']` (Mode Contract TypedDicts, `ValueError` on unknown), `tool_schema_overrides` blocking `create_memory`, `on_completion()` side effect (`last_tended_at` stamp), short-vs-full memory ID asymmetry |
 
 | Trigger | Feeds | Cadence |
 |---|---|---|

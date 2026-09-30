@@ -13,7 +13,7 @@ from auth.types import SessionData, APITokenContext
 from clients.valkey_client import get_valkey_client
 from utils import http_client
 from utils.database_session_manager import get_shared_session_manager
-from utils.timezone_utils import utc_now
+from utils.timezone_utils import utc_now, strftime_no_pad
 from utils.user_context import set_current_user_id, get_user_preferences
 
 from .base import PropagatingHandler
@@ -161,7 +161,7 @@ def _fetch_forecast(
             forecast = []
             for i in range(1, min(3, len(times))):
                 hour_dt = datetime.fromisoformat(times[i])
-                hour_label = hour_dt.strftime("%-I %p")
+                hour_label = strftime_no_pad(hour_dt, "%-I %p")
                 condition = WMO_DESCRIPTIONS.get(codes[i], f"Code {codes[i]}")
                 forecast.append({
                     "hour": hour_label,
@@ -181,8 +181,8 @@ def _fetch_forecast(
         if sunrises and sunsets:
             sunrise_dt = datetime.fromisoformat(sunrises[-1])
             sunset_dt = datetime.fromisoformat(sunsets[-1])
-            result["sunrise"] = sunrise_dt.strftime("%-I:%M %p")
-            result["sunset"] = sunset_dt.strftime("%-I:%M %p")
+            result["sunrise"] = strftime_no_pad(sunrise_dt, "%-I:%M %p")
+            result["sunset"] = strftime_no_pad(sunset_dt, "%-I:%M %p")
 
         # UV from today (last entry)
         uv_values = daily.get("uv_index_max", [])
@@ -202,7 +202,7 @@ def _fetch_forecast(
                 day_dt = date.fromisoformat(daily_dates[i])
                 entry: dict = {
                     "date": daily_dates[i],
-                    "day_label": day_dt.strftime("%a %b %-d"),
+                    "day_label": strftime_no_pad(day_dt, "%a %b %-d"),
                 }
                 if i < len(highs) and highs[i] is not None:
                     entry["high"] = f"{round(highs[i])}{unit_symbol}"

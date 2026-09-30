@@ -93,13 +93,17 @@ class ContactsTool(Tool):
                         "type": "string",
                         "description": "ZIP code (optional for add_contact and update_contact)"
                     },
+                    "pager_address": {
+                        "type": "string",
+                        "description": "Contact's pager address, e.g. username or user@domain (optional for add_contact and update_contact)"
+                    },
                     "identifier": {
                         "type": "string",
                         "description": "Contact UUID or name to search for/update/delete (required for get_contact, delete_contact, update_contact)"
                     },
                     "contacts": {
                         "type": "string",
-                        "description": "JSON array of contacts for batch add_contact operations. Each contact should have name, email, phone, street, city, state, zip fields. Use this instead of individual fields for bulk imports."
+                        "description": "JSON array of contacts for batch add_contact operations. Each contact should have name, email, phone, street, city, state, zip, pager_address fields. Use this instead of individual fields for bulk imports."
                     }
                 },
                 "required": ["operation"],

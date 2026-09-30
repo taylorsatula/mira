@@ -166,7 +166,6 @@ class DataEndpoint(PropagatingHandler):
         user_id = get_current_user_id()
         limit = params.get('limit', 50)
         offset = params.get('offset', 0)
-        subtype = params.get('subtype')  # 'active', 'expired'
         search_query = params.get('search')
 
         session_manager = get_shared_session_manager()
@@ -187,7 +186,6 @@ class DataEndpoint(PropagatingHandler):
                 "next_offset": memory_data.get("next_offset"),
                 "limit": limit,
                 "offset": offset,
-                "subtype": subtype,
                 "search_query": memory_data.get("search_query")
             }
         })
@@ -507,7 +505,6 @@ def data_endpoint(
     before: str | None = Query(None, description="Opaque exclusive history cursor"),
     start_date: str | None = Query(None, description="Start date filter (ISO-8601)"),
     end_date: str | None = Query(None, description="End date filter (ISO-8601)"),
-    subtype: str | None = Query(None, description="Type-specific filtering"),
     fields: str | None = Query(None, description="Comma-separated field selection"),
     search: str | None = Query(None, description="Search query for full-text search (memories only)"),
     message_type: str = Query("regular", description="History message filter: 'regular' or 'all'"),
@@ -537,8 +534,6 @@ def data_endpoint(
         request_params['start_date'] = start_date
     if end_date is not None:
         request_params['end_date'] = end_date
-    if subtype is not None:
-        request_params['subtype'] = subtype
     if fields is not None:
         request_params['fields'] = fields
     if search is not None:

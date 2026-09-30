@@ -93,7 +93,7 @@ def _validate_pattern(pattern: str) -> None:
 # ------------------------------------------------------------------
 
 @router.get("/triggers/rules")
-async def list_rules(
+def list_rules(
     response: Response,
     trigger_id: str | None = None,
     current_user: SessionData | APITokenContext = Depends(get_current_user),
@@ -144,7 +144,7 @@ async def list_rules(
 
 
 @router.post("/triggers/rules")
-async def create_rule(
+def create_rule(
     body: CreateRuleRequest,
     response: Response,
     current_user: SessionData | APITokenContext = Depends(get_current_user),
@@ -195,7 +195,7 @@ async def create_rule(
 
 
 @router.put("/triggers/rules/{rule_id}")
-async def update_rule(
+def update_rule(
     rule_id: int,
     body: UpdateRuleRequest,
     response: Response,
@@ -260,7 +260,7 @@ async def update_rule(
 
 
 @router.delete("/triggers/rules/{rule_id}")
-async def delete_rule(
+def delete_rule(
     rule_id: int,
     response: Response,
     current_user: SessionData | APITokenContext = Depends(get_current_user),
@@ -295,7 +295,7 @@ async def delete_rule(
 
 
 @router.get("/triggers/conflicts")
-async def list_conflicts(
+def list_conflicts(
     response: Response,
     current_user: SessionData | APITokenContext = Depends(get_current_user),
 ) -> dict[str, Any]:

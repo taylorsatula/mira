@@ -313,10 +313,11 @@ class ImageGenerationTool(Tool):
         mime_type = "image/png"
         response_text = ""
 
-        if not response.candidates or not response.candidates[0].content.parts:
+        candidate_content = response.candidates[0].content if response.candidates else None
+        if candidate_content is None or not candidate_content.parts:
             raise ValueError("No content generated. The prompt may have been filtered.")
 
-        for part in response.candidates[0].content.parts:
+        for part in candidate_content.parts:
             if part.text is not None:
                 response_text = part.text
             elif part.inline_data is not None:

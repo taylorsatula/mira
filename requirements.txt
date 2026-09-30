@@ -60,6 +60,7 @@ rapidfuzz        # Fuzzy string matching - memory deduplication, entity normaliz
 json-repair      # JSON repair for malformed LLM responses - memory_processor.py, subcortical.py
 jsonschema       # Validate provider-returned tool arguments against ToolDefinition schemas
 psutil           # Process management - playwright_service.py for forced browser shutdown
+packaging        # Version parsing - cns/api/update.py (boot path via main.py)
 
 # == TESTING DEPENDENCIES ==
 pytest           # Test framework - extensive test suite

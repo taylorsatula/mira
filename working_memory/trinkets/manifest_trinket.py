@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional
 
 from cns.services.manifest_query_service import ManifestSegment
 from .base import EventAwareTrinket
-from utils.timezone_utils import utc_now, convert_from_utc, parse_utc_time_string
+from utils.timezone_utils import utc_now, convert_from_utc, parse_utc_time_string, strftime_no_pad
 from utils.user_context import get_current_user_id, get_user_preferences
 
 logger = logging.getLogger(__name__)
@@ -177,7 +177,7 @@ class ManifestTrinket(EventAwareTrinket):
 
             if status == 'active':
                 # Active segment - show start time and "ACTIVE"
-                start_str = start_time_local.strftime("%-I:%M%p").upper()
+                start_str = strftime_no_pad(start_time_local, "%-I:%M%p").upper()
                 return f"[{start_str} - ACTIVE]"
             else:
                 # Collapsed segment - show time range
@@ -185,11 +185,11 @@ class ManifestTrinket(EventAwareTrinket):
                     end_time_utc = parse_utc_time_string(end_time_str)
                     end_time_local = convert_from_utc(end_time_utc, timezone)
 
-                    start_str = start_time_local.strftime("%-I:%M%p").upper()
-                    end_str = end_time_local.strftime("%-I:%M%p").upper()
+                    start_str = strftime_no_pad(start_time_local, "%-I:%M%p").upper()
+                    end_str = strftime_no_pad(end_time_local, "%-I:%M%p").upper()
                     return f"[{start_str} - {end_str}]"
                 else:
-                    start_str = start_time_local.strftime("%-I:%M%p").upper()
+                    start_str = strftime_no_pad(start_time_local, "%-I:%M%p").upper()
                     return f"[{start_str}]"
 
         except Exception as e:

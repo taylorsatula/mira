@@ -14,7 +14,7 @@ from .message import Message
 def format_messages_for_api(messages: Sequence[Message]) -> list[dict[str, object]]:
     """Format messages for the provider-neutral LLM API."""
     from cns.services.segment_helpers import format_segment_for_display, format_precis_for_display
-    from utils.timezone_utils import convert_from_utc
+    from utils.timezone_utils import convert_from_utc, strftime_no_pad
     from utils.user_context import get_user_preferences
 
     user_tz = get_user_preferences().timezone
@@ -100,7 +100,7 @@ def format_messages_for_api(messages: Sequence[Message]) -> list[dict[str, objec
             and not message.metadata.get("has_tool_calls")
         ):
             local_dt = convert_from_utc(message.created_at, user_tz)
-            timestamp = local_dt.strftime("%-I:%M%p").lower()
+            timestamp = strftime_no_pad(local_dt, "%-I:%M%p").lower()
             if isinstance(content, str):
                 content = f"[{timestamp}] {content}"
             elif isinstance(content, list):

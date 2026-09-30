@@ -10,7 +10,18 @@ Usage:
     # Async producer (e.g., TurnCompletedEvent handler):
     barrier = get_async_work_barrier()
     done = barrier.register_work(user_id)
-    threading.Thread(target=lambda: (do_work(), done())).start()
+    # Copy the context on the CALLER's thread, while the user context is
+    # live, so the worker keeps user scoping (see cns/services/tool_loop.py
+    # and the EventBus.publish rule).
+    ctx = contextvars.copy_context()
+
+    def _worker() -> None:
+        try:
+            do_work()
+        finally:
+            done()  # release the barrier on success AND failure
+
+    threading.Thread(target=ctx.run, args=(_worker,)).start()
 
     # Consumer (e.g., API endpoint before next turn):
     barrier = get_async_work_barrier()

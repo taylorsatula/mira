@@ -200,12 +200,20 @@ class AssessmentExtractor:
                         parts.append(f"<think>{html.escape(''.join(thinking_parts), quote=False)}</think>")
                     if text_parts:
                         parts.append(f"<assistant>{html.escape(' '.join(text_parts), quote=False)}</assistant>")
+                elif msg.role == "tool":
+                    if text_parts:
+                        parts.append(f"<tool>{html.escape(' '.join(text_parts), quote=False)}</tool>")
                 else:
                     if text_parts:
                         parts.append(f"<user>{html.escape(' '.join(text_parts), quote=False)}</user>")
 
             elif isinstance(content, str):
-                tag = "assistant" if msg.role == "assistant" else "user"
+                if msg.role == "assistant":
+                    tag = "assistant"
+                elif msg.role == "tool":
+                    tag = "tool"
+                else:
+                    tag = "user"
                 parts.append(f"<{tag}>{html.escape(content, quote=False)}</{tag}>")
 
         return "\n\n".join(parts)

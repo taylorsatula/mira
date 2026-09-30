@@ -1294,8 +1294,11 @@ def parse_error_body(
 
     Exactly two branches: the documented JSON envelope
     (``{"error": {"message": <str>, ...}}``) or non-JSON text (proxy HTML /
-    empty body — a known enumerated shape, not tolerated). Every other shape is
-    a contract violation and raises ProviderProtocolError with a raw excerpt.
+    empty body — a known enumerated shape, not tolerated). A JSON object
+    without an object-valued ``error`` field is degraded to a raw-text
+    envelope (contract violation logged) so the status taxonomy stays
+    reachable. Every other shape is a contract violation and raises
+    ProviderProtocolError with a raw excerpt.
     """
     try:
         decoded = json.loads(raw_text)
@@ -1309,11 +1312,19 @@ def parse_error_body(
         )
     error_info = decoded.get("error")
     if not isinstance(error_info, dict):
-        raise ProviderProtocolError(
-            endpoint,
-            mode,
-            f"{dialect_name} error {status} body must carry an object-valued 'error' field: {raw_text[:200]!r}",
+        # Non-conformant but parseable JSON object (e.g. {"detail": ...},
+        # {"error": "string"}): degrade to a raw-text envelope so the
+        # status taxonomy (auth / retryable / overflow) in
+        # _raise_provider_http_error still runs instead of the raise
+        # happening from inside its argument list.
+        logger.error(
+            "%s error %d body violates error-envelope contract "
+            "(expected object-valued 'error' field): %r",
+            dialect_name,
+            status,
+            raw_text[:200],
         )
+        return ProviderErrorEnvelope(message=raw_text, code=None)
     return _envelope_from_error_object(status, error_info, raw_text[:200], endpoint=endpoint, mode=mode, dialect_name=dialect_name)
 
 

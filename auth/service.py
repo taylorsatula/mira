@@ -299,7 +299,9 @@ class AuthService:
         composed message, never in a log line.
         """
         minutes = max(1, config.MAGIC_LINK_EXPIRY // 60)
-        link = f"{config.APP_URL.rstrip('/')}/verify-magic-link?token={token}"
+        # APP_URL is canonical origin form (no trailing slash) by the time it
+        # reaches here — normalized once at the auth config boundary.
+        link = f"{config.APP_URL}/verify-magic-link?token={token}"
         subject = "Your MIRA sign-in link"
         body = (
             "Use the link below to sign in to MIRA. "

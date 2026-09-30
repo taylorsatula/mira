@@ -292,6 +292,23 @@ class AnthropicDialect(Dialect):
         max_tokens += thinking_adjustment
         if "haiku" in request.model.lower() and max_tokens > 8192:
             max_tokens = 8192
+        # Anthropic rejects enabled thinking with budget_tokens >= max_tokens.
+        # The clamp above can cap the total at exactly the legacy budget
+        # (e.g. high -> 8192 == 8192), so the budget must be reconciled *after*
+        # all clamping. Thinking is never silently disabled for this: the
+        # budget is reduced and a TranslationNote records the caller's loss.
+        budget_tokens = thinking_params.get("thinking", {}).get("budget_tokens")
+        if thinking_params.get("thinking", {}).get("type") == "enabled" and budget_tokens >= max_tokens:
+            self._log_translation(TranslationNote(
+                field="budget_tokens",
+                requested=budget_tokens,
+                applied=max_tokens - 1,
+                reason=(
+                    f"model {request.model!r} caps max_tokens at {max_tokens}; "
+                    f"budget reduced to keep budget_tokens < max_tokens"
+                ),
+            ))
+            thinking_params["thinking"]["budget_tokens"] = max_tokens - 1
 
         params: dict[str, Any] = {
             "model": request.model,

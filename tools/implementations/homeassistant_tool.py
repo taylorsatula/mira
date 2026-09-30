@@ -104,6 +104,10 @@ class HomeassistantTool(Tool):
                 "query": {
                     "type": "string",
                     "description": "Search term for find_entities. Matches against friendly names in the local registry. No HTTP call — instant results."
+                },
+                "return_response": {
+                    "type": "boolean",
+                    "description": "For call_service: ask Home Assistant to return the service's response payload. Only set true for services that support responses (e.g. weather.get_forecasts, calendar.get_events, conversation.process); Home Assistant 2024.8+ rejects the call with 400 for ordinary actuator services. Leave unset otherwise."
                 }
             },
             "required": ["operation"]
@@ -226,6 +230,17 @@ class HomeassistantTool(Tool):
                 )
             if e.response.status_code == 404:
                 return None
+            ha_message = ""
+            try:
+                error_body = e.response.json()
+                if isinstance(error_body, dict):
+                    ha_message = error_body.get("message", "")
+            except Exception:
+                pass
+            if ha_message:
+                raise ValueError(
+                    f"Home Assistant returned {e.response.status_code}: {ha_message}"
+                )
             raise
 
     # -------------------- ENTITY REGISTRY --------------------
@@ -646,6 +661,7 @@ class HomeassistantTool(Tool):
         service: str = "",
         entity_id: str = "",
         service_data: Dict[str, Any] = None,
+        return_response: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
         if not domain or not service:
@@ -659,9 +675,11 @@ class HomeassistantTool(Tool):
         if service_data:
             body.update(service_data)
 
-        result = self._ha_request(
-            "POST", f"/api/services/{domain}/{service}?return_response", body
-        )
+        path = f"/api/services/{domain}/{service}"
+        if return_response:
+            path += "?return_response"
+
+        result = self._ha_request("POST", path, body)
 
         # With ?return_response, HA returns {changed_states, service_response}
         # Without response data, it returns just the changed states array

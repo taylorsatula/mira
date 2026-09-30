@@ -134,14 +134,17 @@ class ScheduledJobsConfig(BaseModel):
     )
     temporal_score_recalc_use_days: int = Field(
         default=1,
+        ge=1,
         description="Use-days between temporal score recalculations"
     )
     bulk_score_recalc_use_days: int = Field(
         default=1,
+        ge=1,
         description="Use-days between bulk score recalculations"
     )
     portrait_synthesis_use_days: int = Field(
         default=10,
+        ge=1,
         description="Use-days between portrait synthesis (runs in segment collapse chain)"
     )
     entity_merge_use_days: int = Field(

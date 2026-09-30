@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import logging
 import re
+from typing import Optional
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -230,7 +231,11 @@ class PersonaService:
         return revision
 
     def decline_preview(self, user_id: str, preview_id: str) -> None:
-        self._pop_preview(user_id, preview_id)
+        """Decline a persona preview: delete from Valkey without persisting.
+
+        No-op if the preview has already expired or been consumed.
+        """
+        self._pop_preview(user_id, preview_id, required=False)
 
     def rollback(self, user_id: str, revision_id: UUID) -> PersonaRevision:
         target = self.repository.get_revision(user_id, revision_id)
@@ -296,7 +301,7 @@ class PersonaService:
             feedback="\n".join(issue.strip() for issue in issues) or "Critic rejected candidate",
         )
 
-    def _pop_preview(self, user_id: str, preview_id: str) -> PersonaPreview:
+    def _pop_preview(self, user_id: str, preview_id: str, required: bool = True) -> Optional[PersonaPreview]:
         if not preview_id.strip():
             raise ValueError("preview_id is required")
         from clients.valkey_client import get_valkey_client
@@ -305,6 +310,8 @@ class PersonaService:
         key = f"{PERSONA_PREVIEW_PREFIX}:{user_id}:{preview_id}"
         raw = valkey.get(key)
         if raw is None:
+            if not required:
+                return None
             raise ValueError("Persona preview not found; it may have expired")
         valkey.delete(key)
         if isinstance(raw, bytes):

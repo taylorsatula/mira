@@ -38,7 +38,7 @@ FILENAME_SAFE_PATTERN = re.compile(r'[^\w.()\- ]')
 
 
 @router.get("/files/{file_id}")
-async def download_file(
+def download_file(
     file_id: str,
     current_user: SessionData | APITokenContext = Depends(get_current_user)
 ) -> FileResponse:
@@ -81,7 +81,7 @@ async def download_file(
 
 
 @router.get("/images/{file_id}")
-async def view_image(
+def view_image(
     file_id: str,
     current_user: SessionData | APITokenContext = Depends(get_current_user)
 ) -> FileResponse:
@@ -125,6 +125,6 @@ async def view_image(
         headers={
             "Content-Disposition": disposition,
             "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "public, max-age=3600",
+            "Cache-Control": "no-store",
         }
     )

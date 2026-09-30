@@ -516,6 +516,7 @@ class ContinuumOrchestrator:
         self,
         continuum: Continuum,
         system_prompt: str,
+        active_turn_id: str | None = None,
     ) -> list[dict[str, object]]:
         from cns.core.events import ComposeSystemPromptEvent
         from working_memory.core import _compose_lock
@@ -585,7 +586,9 @@ class ContinuumOrchestrator:
                 "content": item,
             })
 
-        messages = self.live_context_compaction_service.format_messages_for_api(continuum)
+        messages = self.live_context_compaction_service.format_messages_for_api(
+            continuum, active_turn_id
+        )
         current_user_msg = messages[-1]
         history_messages = messages[:-1]
 
@@ -903,7 +906,12 @@ class ContinuumOrchestrator:
                     try:
                         tool_result = json.loads(event.result) if isinstance(event.result, str) else event.result
                         if tool_result.get("status") == "touched":
-                            acc.touch_resolved_uuids = tool_result.get("resolved_uuids", [])
+                            # Accumulate across touches in the same turn:
+                            # a later touch (even one resolving zero IDs)
+                            # must not erase earlier touches' provenance.
+                            for uuid in tool_result.get("resolved_uuids", []):
+                                if uuid not in acc.touch_resolved_uuids:
+                                    acc.touch_resolved_uuids.append(uuid)
                     except (json.JSONDecodeError, AttributeError):
                         logger.warning("Failed to parse memory_tool touch result")
                 elif event.tool_name == "invokeother_tool":
@@ -1209,7 +1217,7 @@ class ContinuumOrchestrator:
             logger.info(f"Thinking: complexity={mem.subcortical_result.complexity} effort={effort_level}")
 
         def compose_messages() -> list[dict[str, object]]:
-            return self._compose_llm_messages(continuum, system_prompt)
+            return self._compose_llm_messages(continuum, system_prompt, str(active_turn_id))
 
         complete_messages = compose_messages()
         messages_for_llm = complete_messages

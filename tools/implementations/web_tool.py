@@ -264,10 +264,18 @@ class WebTool(Tool):
 
         # Tier 1: HTTP GET + trafilatura
         html, response_info = self._fetch_http(input.url, timeout)
+        tier1_content: Optional[str] = None
         if html is not None:
             extracted = self._extract_content(html)
+            if not extracted:
+                # Tier-1 trafilatura got nothing; the BeautifulSoup fallback may
+                # still read text out of the fetched HTML (mirrors Tier 3).
+                extracted = self._fallback_text_extract(html)
             if self._extraction_sufficient(extracted):
                 return self._build_fetch_result(input, html, extracted, response_info)
+            # Keep the short/empty-gated content: if escalation cannot improve
+            # on it, this is what we return instead of a fetch failure.
+            tier1_content = extracted
 
         # Tier 2: Playwright + trafilatura
         pw_html, pw_info = self._fetch_playwright(input.url, timeout)
@@ -280,6 +288,21 @@ class WebTool(Tool):
             extracted = self._fallback_text_extract(pw_html)
             if extracted:
                 return self._build_fetch_result(input, pw_html, extracted, pw_info)
+
+        # Escalation tier unavailable or yielded nothing, but Tier-1 already
+        # retrieved content: return it rather than report a fetch failure for a
+        # page we actually fetched. Below the 150-char gate the extraction is
+        # only a partial/short result, so label it as such instead of
+        # presenting it as a full fetch.
+        if tier1_content:
+            result = self._build_fetch_result(input, html, tier1_content, response_info)
+            if len(tier1_content) < self._MIN_EXTRACT_LENGTH:
+                result["partial"] = True
+                result["message"] = (
+                    f"Partial result: short extraction ({len(tier1_content)} chars); "
+                    "rendered fetch yielded no additional content"
+                )
+            return result
 
         # All tiers failed — report the most-specific authoritative error.
         # Tier-1 (plain HTTP) errors (e.g. 404, DNS, TLS) are definitive: the

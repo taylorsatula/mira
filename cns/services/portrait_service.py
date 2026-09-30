@@ -285,7 +285,12 @@ def decline_portrait(user_id: str, preview_id: str) -> None:
         user_id: UUID string for the user
         preview_id: Opaque ID returned by refine_portrait()
     """
-    _pop_preview(user_id, preview_id)
+    if _pop_preview(user_id, preview_id, required=False) is None:
+        logger.info(
+            "Portrait preview already expired or consumed for user %s: preview_id=%s",
+            user_id, preview_id
+        )
+        return
 
     logger.info(
         "Portrait preview declined for user %s: preview_id=%s",
@@ -293,12 +298,13 @@ def decline_portrait(user_id: str, preview_id: str) -> None:
     )
 
 
-def _pop_preview(user_id: str, preview_id: str) -> str:
+def _pop_preview(user_id: str, preview_id: str, required: bool = True) -> Optional[str]:
     """
     Fetch and delete a portrait preview from Valkey (single-consume).
 
     Validates that the preview belongs to the requesting user and hasn't expired.
-    Returns the portrait text. Raises ValueError if not found.
+    Returns the portrait text, or None when the key is missing and required is
+    False. Raises ValueError if not found and required is True.
 
     Args:
         user_id: UUID string for the user
@@ -314,6 +320,8 @@ def _pop_preview(user_id: str, preview_id: str) -> str:
 
     proposed = valkey.get(valkey_key)
     if proposed is None:
+        if not required:
+            return None
         raise ValueError(
             "Portrait preview not found — it may have expired (10-minute lifetime). "
             "Please generate a new preview."

@@ -706,3 +706,31 @@ def parse_utc_time_string(time_str: str) -> datetime:
     """
     dt = parse_time_string(time_str, "UTC")
     return ensure_utc(dt)
+
+
+def strftime_no_pad(dt: datetime, fmt: str) -> str:
+    """
+    Portable strftime supporting the no-pad directives %-I and %-d.
+
+    The `%-` (glibc/BSD "no zero-pad") flag raises `ValueError` on the
+    Windows CRT, which only accepts `#`. Render those directives with the
+    portable `%I` / `%d` and strip the leading zero per occurrence instead,
+    so output is byte-identical to glibc `%-` on every platform.
+
+    Args:
+        dt: Datetime (or date) to format
+        fmt: strftime format string, possibly containing %-I / %-d
+
+    Returns:
+        Formatted string
+    """
+    parts = re.split(r"(%-I|%-d)", fmt)
+    out: list[str] = []
+    for part in parts:
+        if part == "%-I":
+            out.append(dt.strftime("%I").lstrip("0"))
+        elif part == "%-d":
+            out.append(dt.strftime("%d").lstrip("0"))
+        elif part:
+            out.append(dt.strftime(part))
+    return "".join(out)

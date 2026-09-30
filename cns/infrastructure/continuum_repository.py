@@ -70,8 +70,11 @@ class IncrementSegmentTurnResult(NamedTuple):
     `segment_id` is always populated. For continuing sessions it is read from
     the existing active sentinel; for new sessions it is freshly allocated in
     memory and the corresponding sentinel is NOT yet persisted — persistence
-    is deferred to `save_messages_batch` so sentinel and first message land
-    together. The id is exposed to tools (and the deferred sentinel) via the
+    is deferred to `save_messages_batch`, where the sentinel INSERT commits
+    separately (autocommit) before the message-batch transaction opens.
+    Sentinel and first message land in separate commits by design, so a
+    message-batch failure leaves a residual orphan-sentinel window. The id
+    is exposed to tools (and the deferred sentinel) via the
     `current_segment_id` contextvar, so no separate channel threads it through
     the persistence call stack.
     """
@@ -287,10 +290,14 @@ class ContinuumRepository:
 
     def _ensure_active_segment(self, continuum_id: UUID, user_id: str, current_message_time: datetime, db: PostgresClient) -> None:
         """
-        Ensure active segment exists, creating one if needed when second message arrives.
+        Ensure active segment exists, creating one when the segment's first
+        real message is saved.
 
-        Segments represent conversations (2+ messages forming user/assistant pairs).
-        Sentinel is created when the second real message is saved.
+        The sentinel is created whenever no active sentinel exists — which
+        includes the segment's first real message — matching the turn-1
+        initialization of create_segment_boundary_sentinel. The INSERT runs
+        on the autocommitted connection, so it lands in a separate commit
+        from the message batch that follows.
 
         Args:
             continuum_id: Continuum UUID
@@ -412,7 +419,11 @@ class ContinuumRepository:
         persists or none of it does — a mid-batch failure rolls back
         cleanly instead of leaving a partially persisted turn. The
         segment sentinel (via _ensure_active_segment) and activity-day
-        tracking commit separately by design; UnitOfWork.commit
+        tracking commit separately by design: the sentinel INSERT runs on
+        the autocommitted connection before the message transaction opens,
+        so a message-batch failure rolls the messages back but leaves the
+        sentinel committed — the orphan-sentinel window is residual, not
+        eliminated. UnitOfWork.commit
         invalidates the Valkey cache when this method raises so a stale
         cached copy cannot outlive the failure.
 
@@ -838,8 +849,10 @@ class ContinuumRepository:
         read its segment_id from the RETURNING clause. For new segments we
         allocate a fresh segment_id in memory and expose it via the
         ``current_segment_id`` contextvar; sentinel persistence is deferred
-        to ``save_messages_batch`` so the sentinel and first message land
-        in the same commit.
+        to ``save_messages_batch``, where the sentinel INSERT commits
+        separately (autocommit) before the message-batch transaction —
+        sentinel and first message land in separate commits by design, so
+        a message-batch failure leaves a residual orphan-sentinel window.
 
         Args:
             continuum_id: Continuum ID
@@ -880,9 +893,10 @@ class ContinuumRepository:
             return IncrementSegmentTurnResult(rows[0]['turn_count'], segment_id)
 
         # No active/paused segment exists — allocate a fresh id in memory.
-        # Sentinel persistence is deferred to save_messages_batch so the
-        # sentinel and first message land in the same commit, eliminating the
-        # orphan-sentinel window.
+        # Sentinel persistence is deferred to save_messages_batch, where the
+        # sentinel INSERT autocommits before the message-batch transaction:
+        # separate commits by design, leaving a residual orphan-sentinel
+        # window if the message batch fails.
         new_segment_id = str(uuid4())
         set_current_segment_id(new_segment_id)
         return IncrementSegmentTurnResult(1, new_segment_id)

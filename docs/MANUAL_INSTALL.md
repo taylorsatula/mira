@@ -87,4 +87,4 @@ Once services, credentials, schema, and Python dependencies are in place:
 venv/bin/python main.py
 ```
 
-Use `deploy/deploy.sh --migrate` for existing automated installations that need a supported upgrade path.
+There is no in-place upgrade path: 2.0 installs the greenfield schema into an empty database. To salvage data from an older install, take a `pg_dump` first and restore it manually.

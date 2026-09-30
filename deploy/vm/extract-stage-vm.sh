@@ -76,9 +76,15 @@ done
 ls /etc/systemd/system/ | grep -E 'mira|vault|valkey' > "$STAGE/systemd/unit-list.txt"
 
 echo "== 6. home-ubuntu (ssh + instance credentials) =="
+members=("$VM_USER/.ssh" "$VM_USER/.vault-token")
+if [ -f "/home/$VM_USER/MIRA_credentials.txt" ]; then
+  members+=("$VM_USER/MIRA_credentials.txt")
+else
+  echo "  NOTE: $VM_USER/MIRA_credentials.txt absent (operator deleted it per finalize.sh) — snapshotting without it" >&2
+fi
 tar -C /home -czf "$STAGE/home-ubuntu.tar.gz" \
   --exclude="$VM_USER/.cache" \
-  $VM_USER/.ssh $VM_USER/MIRA_credentials.txt $VM_USER/.vault-token
+  "${members[@]}"
 
 echo "== 7. system-info (OS + package inventory for reprovision) =="
 { head -2 /etc/os-release; uname -a; } > "$STAGE/system-info/os-kernel.txt"
