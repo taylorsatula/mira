@@ -98,7 +98,12 @@ ESSENTIAL_TOOLS = [
     "bash_tool",
     # Heartbeat wake cycle: the scheduler-initiated turn must always be able to
     # record its keepsleeping/breakout decision.
-    "heartbeat_tool"
+    "heartbeat_tool",
+    # Skills: the skills_catalog prompt section always instructs the model to
+    # call invoke_skill_tool — it must be in every user's baseline, not an
+    # invokeother-loaded optional (the catalog would otherwise name a tool the
+    # model cannot see, and turn-end ephemeral cleanup would evict it).
+    "invoke_skill_tool",
 ]
 
 # Reserved per-user key for enablement performed before any user context exists

@@ -66,6 +66,7 @@ class DataType(str, Enum):
     WORKING_MEMORY = "working_memory"
     LORA = "lora"
     PERSONA = "persona"
+    SKILLS = "skills"
 
 
 class DataEndpoint(PropagatingHandler):
@@ -98,6 +99,8 @@ class DataEndpoint(PropagatingHandler):
             return self._get_lora(**request_params)
         elif data_type == DataType.PERSONA:
             return self._get_persona(**request_params)
+        elif data_type == DataType.SKILLS:
+            return self._get_skills(**request_params)
         else:
             raise ValidationError(f"Invalid data type: {data_type}")
     
@@ -492,6 +495,48 @@ class DataEndpoint(PropagatingHandler):
         }
 
 
+    def _get_skills(self, **params) -> dict[str, Any]:
+        """Get the merged skill catalog, or one skill with its body.
+
+        Without `name`: every skill available to the user — their own plus the
+        boot-cached global catalog — each tagged with its source. With `name`:
+        that skill's full record including body. Global skills are read-only
+        repo content surfaced here for display; only user skills are
+        manageable via the skills action domain.
+        """
+        from utils.skill_files import SkillNotFoundError, catalog_for, load_skill
+
+        user_id = get_current_user_id()
+        name = params.get('name')
+
+        if name:
+            try:
+                record, body = load_skill(user_id, name)
+            except SkillNotFoundError:
+                raise NotFoundError("skill", name)
+            return {
+                "name": record.name,
+                "description": record.description,
+                "body": body,
+                "source": record.source,
+            }
+
+        records = catalog_for(user_id)
+        skills = [
+            {
+                "name": r.name,
+                "description": r.description,
+                "source": r.source,
+            }
+            for r in records
+        ]
+        return {
+            "skills": skills,
+            "user_count": sum(1 for s in skills if s["source"] == "user"),
+            "global_count": sum(1 for s in skills if s["source"] == "global"),
+        }
+
+
 def get_data_handler() -> DataEndpoint:
     """Get data endpoint handler instance."""
     return DataEndpoint()
@@ -511,6 +556,7 @@ def data_endpoint(
     label: str | None = Query(None, description="Domain label to retrieve (for type=domaindocs)"),
     archived: bool | None = Query(None, description="Filter archived domaindocs: true=archived only, false/absent=non-archived (for type=domaindocs)"),
     section: str | None = Query(None, description="Specific trinket section to retrieve (for type=working_memory)"),
+    name: str | None = Query(None, description="Skill name to retrieve with its body (for type=skills)"),
     current_user: SessionData | APITokenContext = Depends(get_current_user)
 ):
     """Unified data access endpoint.
@@ -546,6 +592,8 @@ def data_endpoint(
         request_params['archived'] = archived
     if section is not None:
         request_params['section'] = section
+    if name is not None:
+        request_params['name'] = name
 
     response = handler.handle_request(
         data_type=type,

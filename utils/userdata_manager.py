@@ -633,6 +633,12 @@ class UserDataManager:
         path = self.base_dir / "tools" / tool_name
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def get_skills_dir(self) -> Path:
+        """Per-user skills root; each skill is a subdirectory containing a SKILL.md."""
+        path = self.base_dir / "skills"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
     
     def _ensure_credentials_table(self):
         """Helper method to ensure credentials table exists (used by UserCredentialService)."""

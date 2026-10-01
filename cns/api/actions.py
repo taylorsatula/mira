@@ -45,6 +45,7 @@ class DomainType(str, Enum):
     PERSONA = "persona"
     FEEDBACK = "feedback"
     PORTRAIT = "portrait"
+    SKILLS = "skills"
 
 
 class ActionRequest(BaseModel):
@@ -2853,6 +2854,75 @@ class PortraitDomainHandler(BaseDomainHandler):
             raise ValidationError(f"Unknown action: {action}")
 
 
+class SkillsDomainHandler(BaseDomainHandler):
+    """Handler for per-user skill management (create/delete).
+
+    Skills are files under the user's skills directory (write/delete owned by
+    utils/skill_files.py). Global skills (working_memory/skills/) are
+    read-only repo content — no action here may touch them, which the delete
+    path enforces with a distinct message. Reads live in the data endpoint
+    (type=skills); only mutations live here.
+    """
+
+    ACTIONS = {
+        "create": {
+            "required": ["name", "description", "body"],
+            "optional": [],
+            "types": {"name": str, "description": str, "body": str}
+        },
+        "delete": {
+            "required": ["name"],
+            "optional": [],
+            "types": {"name": str}
+        }
+    }
+
+    def _invalidate_trinket_cache(self) -> None:
+        """Drop the stale skills_catalog field so API reads between composes
+        don't serve pre-write content (the catalog re-renders every compose
+        regardless). Same idiom as DomainKnowledgeDomainHandler."""
+        hash_key = f"{TRINKET_KEY_PREFIX}:{get_current_user_id()}"
+        valkey = get_valkey_client()
+        valkey.hdel_with_retry(hash_key, "skills_catalog")
+
+    def execute_action(self, action: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Execute skill create/delete through the sanctioned file path."""
+        from utils import skill_files
+
+        if action == "create":
+            try:
+                record = skill_files.write_user_skill(
+                    self.user_id, data["name"], data["description"], data["body"]
+                )
+            except ValueError as e:
+                raise ValidationError(str(e))
+            self._invalidate_trinket_cache()
+            return {
+                "created": True,
+                "name": record.name,
+                "message": f"Skill '{record.name}' created"
+            }
+
+        elif action == "delete":
+            try:
+                skill_files.delete_user_skill(self.user_id, data["name"])
+            except skill_files.GlobalSkillReadOnlyError as e:
+                # Exists but is repo content — a client misunderstanding, not a
+                # missing resource, so 400 with the reason, not a bare 404.
+                raise ValidationError(str(e))
+            except skill_files.SkillNotFoundError:
+                raise NotFoundError("skill", data["name"])
+            self._invalidate_trinket_cache()
+            return {
+                "deleted": True,
+                "name": data["name"],
+                "message": f"Skill '{data['name']}' deleted"
+            }
+
+        else:
+            raise ValidationError(f"Unknown action: {action}")
+
+
 class ActionsEndpoint(PropagatingHandler):
     """Main actions endpoint handler with domain-based routing."""
 
@@ -2868,6 +2938,7 @@ class ActionsEndpoint(PropagatingHandler):
             DomainType.LORA: LoraDomainHandler,
             DomainType.FEEDBACK: FeedbackDomainHandler,
             DomainType.PORTRAIT: PortraitDomainHandler,
+            DomainType.SKILLS: SkillsDomainHandler,
         }
         # MIRA_PERSONA_ENABLED=0 omits the domain at construction instead of branching
         # inside the handler, so a disabled install rejects `persona/*` as an unknown

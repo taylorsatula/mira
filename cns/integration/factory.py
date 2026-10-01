@@ -193,6 +193,8 @@ class CNSIntegrationFactory:
             from working_memory.trinkets.asyncactivity_trinket import AsyncActivityTrinket
             from working_memory.trinkets.live_context_compaction_trinket import LiveContextCompactionTrinket
             from working_memory.trinkets.memory_curator_trinket import MemoryCuratorTrinket
+            from working_memory.trinkets.skills_catalog_trinket import SkillsCatalogTrinket
+            from working_memory.trinkets.active_skills_trinket import ActiveSkillsTrinket
 
             # Registration order is deliberate; keep manual — no trinket
             # auto-registration. Trinkets self-register with working memory.
@@ -217,6 +219,13 @@ class CNSIntegrationFactory:
             LocationTrinket(event_bus, self._working_memory)
             AsyncActivityTrinket(event_bus, self._working_memory)
             MemoryCuratorTrinket(event_bus, self._working_memory)
+            SkillsCatalogTrinket(event_bus, self._working_memory)
+            ActiveSkillsTrinket(event_bus, self._working_memory)
+            # Boot collection of the global skills catalog — the one moment
+            # it is read from disk; everything after serves this snapshot
+            # (utils/skill_files.py:load_global_catalog for the contract).
+            from utils.skill_files import load_global_catalog
+            load_global_catalog()
 
             logger.info("Event-driven working memory initialized with trinkets")
         return self._working_memory

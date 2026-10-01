@@ -35,6 +35,12 @@ SECTION_LAYOUT: Dict[str, List[str]] = {
         # provides `tool_availability`. The silent miss in this direction is
         # known and deliberate, not a wiring bug.
         'tool_availability',
+        # Skills: the catalog lists name + description per skill (cached — a
+        # mid-session edit busts the prefix once, accepted); the active bodies
+        # section mutates on every activation, so it stays out of the cached
+        # prefix.
+        'skills_catalog',
+        'active_skills',
         'location_context',
         'conversation_manifest',
     ],
