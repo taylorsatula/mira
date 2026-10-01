@@ -1,1 +1,1 @@
-"""MIRA terminal chat client — a plain-ANSI synchronous REPL over the deployed instance's REST API (Rich powers the display filters in render.py); the retained WebSocket stack is currently unused. A pure client: imports nothing from the server tree."""
+"""MIRA terminal chat client: a streaming WebSocket chat UI over the deployed instance; a pure client that imports nothing from the server tree."""

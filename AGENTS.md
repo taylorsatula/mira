@@ -47,7 +47,7 @@ directory whose map is missing is a defect.
 | `tests/tmp/` | Display exhibit for the disposable-probe pattern: autodeleted-on-sight test policy, one exemplary probe |
 | `tools/` | Tool framework: base class, repository, config registry |
 | `tools/implementations/` | All concrete LLM-callable tools |
-| `tui/` | Minimal terminal chat client: sync-REST REPL brick, retained (unused) WS stack, display-filter mirror of the web client, endpoint store, headless token bootstrap, config-file settings |
+| `tui/` | Streaming WebSocket terminal chat client: twin of the WS frame protocol (client side), single-writer screen and single-consumer `ChatSession` invariants, message-in-one-place rule, display sanitizing, endpoint store, headless token bootstrap |
 | `utils/` | Cross-cutting infrastructure: identity, scheduling, storage, security, observability |
 | `working_memory/` | Event-driven system-prompt composition via trinkets |
 | `working_memory/trinkets/` | Trinket implementations: one `variable_name` slot each |

@@ -1,66 +1,38 @@
-# tui/ — Minimal terminal chat client over the deployed REST/WS API
+# tui/ — Streaming WebSocket terminal chat client for a deployed MIRA instance
 
-Standalone client (`python -m tui`) for a deployed MIRA instance, rebuilt
-brick-by-brick from 2026-09-19. Current brick: a bare **synchronous REPL** —
-alternating cyan/green You/MIRA text blocks, a dark-grey delimiter row
-between turns, a plain `input()` line. No prompt_toolkit, no Rich panels, no
-streaming, no reconnect machinery. The turn wire is sync REST
-(`POST /v0/api/chat`, owned by `cns/api/chat.py`). Imports NOTHING from the
-server tree; a pure client, the only in-tree client surface.
-
-The WebSocket stack (`client.py` + `protocol.py`) is **retained, currently
-unused by the REPL** — it is the verified foundation for the later streaming
-brick. Do not delete it and do not half-wire it into `app.py` until that
-brick lands.
+Standalone client (`python -m tui`) with a bottom-pinned input bar over native terminal scrollback. A pure client: imports nothing from the server tree.
 
 ## Rules
 
-- The active wire is sync REST: `app.py:_post_chat` mirrors the
-  `ChatRequest`/envelope shape of `cns/api/chat.py` (`{success, data|error}`,
-  response text under `data.response`). When that handler changes,
-  `_post_chat` changes in the same commit.
-- `protocol.py` remains the strict (`extra="forbid"`) mirror of the WS frames
-  of `cns/api/websocket_chat.py` and the history envelope of
-  `cns/api/data.py`, and `client.py` remains its event-pump consumer — the
-  pre-rebuild drift rule (mirror + pump + history models change together
-  with the server handler) still binds them for the streaming brick.
-- Screen output is ONLY `app.py`'s ANSI helpers (`_color`, `_delimiter`,
-  `_block`, `_clear_last_line`) — no rich bridge, no hand-rolled codes
-  anywhere else. The clear-line trick assumes single-visual-line rows: a
-  wrapped/pasted multi-line input leaves debris above the cleared row
-  (accepted MVP limit).
-- Message text — both directions — passes through
-  `render.py:filter_system_tags` before display; display filters stay owned
-  by `render.py` (ported from the removed web client's filters).
-- Tag-literal hazard: literal think/mira tag strings written through agent
-  tool payloads get HTML-entity-mangled on disk.
-  `render.py:_THINK_BLOCK_RE` builds its pattern by concatenation — any new
-  code needing those literals must do the same and verify on-disk bytes by
-  execution.
-- Settings have NO UI — the JSON store (`endpoints.py`) plus
-  `--config-debug` is the interface. `/exit` is the only command the REPL
-  knows. Do not add interactive configuration.
-- Segment sentinels in history: detection goes through
-  `client.py:_is_sentinel` (server may send `is_segment_boundary` as JSON
-  bool or string). A collapsed sentinel's `content` IS the session summary.
-- Every await in the retained WS stack is bounded (constants at the top of
-  `client.py`); the REPL's one HTTP call carries `_CHAT_TIMEOUT`. No
-  unbounded waits anywhere.
+- Twin contract: `protocol.py` mirrors the frames of `cns/api/websocket_chat.py` and the history envelope of `cns/api/data.py`; `client.py:_frame_to_event` maps them to events. A server frame change lands here in the same commit; drift shows as `ProtocolError`/`UNPARSEABLE_FRAME` (strict `extra="forbid"`). Two-endpoint protocol: this map owns the client side, `cns/api/AGENTS.md` (`## WebSocket turn protocol (server side)`) owns the server side.
+- One terminal writer: while the app runs, only `screen.py:Screen.emit` writes to the terminal, in a print step that never leaves raw mode. `run_in_terminal`/`print` for chat output switches the tty to cooked mode, re-enables ECHO, and keys typed during the emit print twice. No hand-counted cursor movement — the renderer measures and erases the bar.
+- One consumer: `chat.py:ChatSession.run` is the only reader of the inbox. `MiraClient` and `Screen` only post (`put`/`put_nowait`); a second reader steals items. Handlers run strictly in order; `ChatSession` derives `Live` on read (`_live`), never keeps it in step by hand.
+- A message lives in exactly one place (input box, live region, or scrollback). It reaches scrollback only in `ChatSession._on_turn_started` (the server accepted it). Every undeliverable path (`_restore_unsent`: send failure, attributed `protocol_error`, connect failure or cancel, lost connection, user halt with queued follow-ups) returns it, with queued siblings, to the box via `Screen.restore_input`. `Screen.consume_input` is the compare-and-clear that ignores a duplicate Enter.
+- Display safety: every model or user string passes `text.py:sanitize` (Rich passes ESC through to the terminal), and `transcript.py` builds `Text` from plain strings, never markup. A new scrollback element goes in `transcript.py` and sanitizes there.
+- `turn_complete.response` is displayed only when `ReplyStream.has_text` is false (`ChatSession._on_turn_complete`); otherwise the streamed lines already showed it and it prints twice. `ReplyStream.flush`/`finish` never reveal held-back text (an unclosed tag is metadata — every reply ends inside `<mira:my_emotion>` tokens, so a cut-off reply would otherwise print tag text); a reply held back entirely falls through to `response`.
+- Tag-literal hazard: literal think/mira tag strings written through agent tool payloads get HTML-entity-mangled on disk. `text.py` builds them by concatenation; any new code needing them does the same and verifies on-disk bytes by execution.
+- Bounded waits: constants live at the top of `client.py` (`WS_OPEN_TIMEOUT`, `SEND_TIMEOUT`, `CLOSE_TIMEOUT`, `HTTP_PAGE_TIMEOUT`) and `chat.py` (`EMIT_TIMEOUT`, `PUMP_JOIN_TIMEOUT`, ...). The idle `await self._inbox.get()` in `ChatSession.run` is the one sanctioned unbounded await; every other await carries a bound.
+- Settings have NO UI: the 0600 JSON store (`endpoints.py`) plus `--config-debug` is the interface, and `/exit` is the only command (any other `/text` is a message). Do not add interactive configuration or commands.
 
 ## Files
 
-- `__main__.py` — CLI entry `main()`: `--config PATH` store override, `--config-debug` (prints store layout, NEVER the api_key), `--login [--endpoint NAME | --base-url URL [--save-as NAME]]` (headless token mint via `login.py`, exits before the chat app); exit 0 on `/exit`, 1 on fatal store errors and first-run-no-endpoint.
-- `app.py` — the minimal REPL (`run()`): prompt → clear echoed line → colored block → grey delimiter → dim `thinking…` indicator → sync `POST /v0/api/chat` → clear indicator → MIRA block → delimiter. Errors print red with the real server message; Ctrl+C at the prompt exits 0, Ctrl+C during a request drops it client-side with a notice (the server turn may still complete and land in history). `setup_guidance` prints the config template when no usable endpoint exists.
-- `client.py` — RETAINED, unused by the REPL: `MiraClient` (WS auth + frame pump, REST history pager), the `ClientEvent` dataclass union, `ClientError` (sole exception type). Pure asyncio, bounded waits. Foundation of the streaming brick.
-- `protocol.py` — RETAINED, unused by the REPL: strict pydantic v2 mirror of all WS frames + `parse_inbound_frame` / `dump_outbound_frame` + REST history models. The WS drift anchor cited above.
-- `endpoints.py` — `EndpointConfig`, `EndpointStore` (0600 JSON at `~/.config/mira-tui/config.json`), `HISTORY_FETCH_MODES`. Gotcha: the constructor does NOT auto-read — callers must `store.load()` explicitly.
-- `login.py` — headless token bootstrap: `mint_api_token()` chains `GET /v0/auth/local/session` (single-mode: zero-credential; 404 → magic-link flow with email + pasted link token) → `POST /v0/auth/csrf` → `POST /v0/auth/api-tokens` (`x-csrf-token` header), mirroring `auth/api.py`. Minted token goes straight into the 0600 store and is never printed (only the can't-write-store last resort prints it). Token names retry with `-2`/`-3` suffixes on the server's `duplicate_token_name`. Live multi-mode flow is code-verified only.
-- `render.py` — display filters (`filter_system_tags` / `filter_streaming_text` / `summarize_tool_result` / `format_content_blocks` / `user_content_text`, ported from the removed web client's filters) — used by the REPL via `filter_system_tags` — plus the retired Rich block renderers, `ActiveTurn` preview state, and `history_blocks` mapping, retained for the history/streaming bricks. No prompt_toolkit imports.
-- `requirements.txt` — the client's own pin set (websockets, httpx, pydantic, rich); prompt_toolkit was removed with the old UI. The server's `requirements.txt` gains nothing from this package.
-- `BUILD_PLAN.md` — design record of the 2026-09-18 Textual build and the post-build pivot to terminal-native rendering; historical, not a living contract.
+- `__init__.py` — docstring only, no re-exports.
+- `__main__.py` — CLI `main()`: `--config PATH`, `--config-debug` (store layout, never the api_key), `--login [--endpoint NAME | --base-url URL [--save-as NAME]]` (exits before the chat app); otherwise `app.run(store)`. Exit 1 on store-load failure.
+- `app.py` — `run(store)`: resolves the active endpoint, checks both stdin and stdout are TTYs, connects BEFORE any UI exists (failures print `_connect_guidance` keyed on `ClientError.code`, exit 1; Ctrl+C while connecting exits 130), then hands the live client to `ChatSession`. Owns `INBOX_MAX` and `setup_guidance` (first-run text).
+- `chat.py` — `ChatSession`: the turn/queue/reconnect state machine (`_handle` dispatch, `_send_next`, `_end_reply`, `_lost_connection`, `_teardown`, `_print_remaining`). Private inbox items `ConnectFailed`, `RetrySend` and `ScreenExited` let background tasks report to the single consumer. An attributed `TURN_BUSY` keeps the message in flight and retries (`TURN_BUSY_RETRY_DELAYS`, then every `TURN_BUSY_POLL_SECONDS`, up to `TURN_BUSY_MAX_WAIT_SECONDS`; Ctrl+C cancels) before the text returns to the box: the server sends the terminal frame before releasing its per-user lock (`cns/api/websocket_chat.py:process_turn` `finally`), and heartbeat turns hold the same lock for minutes; `AuthFailed` is ignored because every connect failure also raises out of `connect()`. Ctrl+C: halt a turn, halt-on-start for an in-flight send, cancel a connect, clear the box, else quit; a second Ctrl+C while stopping quits.
+- `screen.py` — `Screen`: owns prompt_toolkit. Pinned bar (live region, rule, input box, rule), `emit`/`set_live`/`consume_input`/`restore_input`/`clear_input`/`close`, and the intents `Submit`/`Interrupt`/`Quit`. Enter submits; Alt+Enter or Ctrl+J inserts a newline; Ctrl+D quits on an empty box. Before `run()` starts or after it ends, `emit` writes direct to stdout.
+- `text.py` — pure, stdlib-only: `sanitize`, `ReplyStream` (streaming think/mira-tag filter that holds back possible tag fragments, blank lines, and a leading `[5:47pm]` stamp), `display_lines` (one-shot path through the same machinery). Gotcha: `feed` sanitizes per delta, so an escape split across deltas can leak its printable tail, never ESC.
+- `transcript.py` — pure: the Rich `Text` look of each scrollback element (`banner`, `you`, `mira_label`, `mira_lines`, `tool_line`, `reply_footer`, `notice`, `alert`). Spacing lives here only.
+- `client.py` — `MiraClient`: WS auth and frame pump (`connect`, `run`, `send_message`, `send_halt`, `close`), the `ClientEvent` dataclass union, `ClientError` (sole exception). `run()` posts `Disconnected` on any unannounced close, clean or not; `connect()` resets `_closing` and `_server_shutdown_seen` so a reconnect is a fresh lifecycle, and raises the frame limit to `MAX_FRAME_BYTES` (server `tool` frames carry untruncated results; the websockets 1 MiB default closes the socket with 1009 mid-turn). VESTIGIAL: `fetch_history` (REST keyset pager), `_fetch_history_page`, `_is_sentinel` have no caller; kept as the history pager for a future history-on-startup feature (it would also read `EndpointConfig.history_fetch`, currently stored but unused). Do not build on them until that feature is wired.
+- `protocol.py` — strict pydantic v2 mirror of all WS frames plus `parse_inbound_frame`/`dump_outbound_frame` and the REST history models. The twin of the server frames (see Rules).
+- `endpoints.py` — `EndpointConfig`, `EndpointStore` (0600 JSON at `~/.config/mira-tui/config.json`), `HISTORY_FETCH_MODES`. Gotcha: the constructor does not read; callers must `store.load()`.
+- `login.py` — `--login` token bootstrap: `mint_api_token()` chains `GET /v0/auth/local/session` (404 → email magic-link flow) → `POST /v0/auth/csrf` → `POST /v0/auth/api-tokens`, mirroring `auth/api.py` (same-commit change on route drift). The token goes into the 0600 store and is never printed except the can't-write-store last resort. Live multi-mode flow is code-verified only.
+- `requirements.txt` — the client's own pin set (websockets, httpx, pydantic, rich, prompt_toolkit); the server's `requirements.txt` gains nothing from it.
+- `BUILD_PLAN.md`, `FRONTEND_PLAN.md` — historical design records (the 2026-09-18 Textual build; the 2026-09-30 streaming rebuild with its pinned contracts and event table); where they differ from the code, the code is truth.
 
 ## Wiring
 
-- Startup: `__main__.main()` → `store.load()` → (no history fetch in this brick) → `app.run()` prints the dim status line and enters the REPL loop.
-- Per turn: `input()` → `_clear_last_line()` (the typed echo must not duplicate the user block — the emitted block is the ONLY copy) → user block → delimiter → `thinking…` → `_post_chat` → MIRA block → delimiter. The server enforces one active turn per user (`UserRequestLock` in `cns/api/chat.py`); a second concurrent request answers 400 — surfaced red by the REPL.
-- Later bricks, in dependency order: history rendering on startup (`client.fetch_history` + `render.history_blocks`), streaming preview over WS (`client.py` + `protocol.py` + an input-preserving rendering strategy), reconnect.
+- Startup: `__main__.main()` → `store.load()` → `app.run()` → `MiraClient.connect()` (bounded; `AuthOk` lands on the inbox) → `ChatSession.run()` → banner emit → `Screen.run` and `MiraClient.run` tasks → inbox loop. Connecting before the UI keeps auth failures plain printed errors; reordering them leaves a half-drawn bar.
+- Send: Enter → `Submit` → `_on_submit` → `consume_input` → outbox → `_send_next` (text shown in the live region as `sending`) → `turn_started` → You block and MIRA label in one emit → `assistant_delta` → `ReplyStream.feed` → committed lines emitted, tail in the live region → `turn_complete`/`turn_stopped`/`turn_error` → `_end_reply` (deferred proactives, then the next queued message). One active turn per user is server-enforced (`TURN_BUSY`).
+- Reconnect: Enter on an empty box (or a send) while disconnected → `_reconnect` → `client.close()` → `_join_pump` → `connect()` task. The old pump's `finally` clears the client connection, so the join must finish before `connect()` installs the new socket.
+- Quit: `/exit`, Ctrl+D on an empty box, Ctrl+C on an idle empty box, or a second Ctrl+C while stopping → `_teardown` (`Screen.close` erases the bar, then the client closes, tasks joined with bounds) → `_print_remaining` prints a cut-off reply, held proactives, and unsent or unconfirmed texts as notices.

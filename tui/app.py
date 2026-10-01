@@ -1,42 +1,31 @@
-"""The MIRA TUI, minimal edition: a bare synchronous REPL.
+"""The MIRA terminal chat client: entry point of the streaming chat app.
 
-One brick of the 2026-09-19 rebuild — deliberately low moving parts:
-alternating cyan/green You/MIRA text blocks, a dark-grey delimiter row
-between turns, and a plain ``input()`` line. No prompt_toolkit, no Rich
-panels, no streaming preview, no reconnect machinery. The turn wire is
-the synchronous REST endpoint ``POST /v0/api/chat`` (``cns/api/chat.py``):
-one request per turn, the whole reply printed as one block when it
-arrives. The retained WebSocket stack (``client.py`` + ``protocol.py``)
-is intentionally unused here; it waits for the streaming brick.
+``run(store)`` resolves the active endpoint, connects the WebSocket BEFORE any
+UI exists (so auth and reachability failures are plain printed errors with
+guidance, not a half-drawn screen), then hands the live connection to
+``ChatSession``, which owns the screen, the turn lifecycle and reconnects.
 
-Display filtering is delegated to ``tui.render.filter_system_tags`` (the
-mirror of the web client's filters) so think blocks and ``<mira:...>``
-tags never leak into a block.
+Exit codes: 0 on a user quit; 1 when no usable endpoint is configured, stdin or
+stdout is not a terminal, or the connection cannot be established; 130 on
+Ctrl+C while connecting. Failures print the real error and what to do about
+it, keyed on the client's error code.
 """
 
 from __future__ import annotations
 
-import shutil
+import asyncio
+import sys
 
-import httpx
-
+from tui.chat import ChatSession
+from tui.client import ClientError, MiraClient
 from tui.endpoints import EndpointConfig, EndpointStore
-from tui.render import filter_system_tags
+from tui.screen import Screen
 
-_CHAT_PATH = "/v0/api/chat"
-# A full turn runs tools and multiple model rounds; this REST call returns
-# only when the whole turn is done. Generous bound by design.
-_CHAT_TIMEOUT = httpx.Timeout(300.0)
-# Startup preflight: one authenticated history request. Short bound — a
-# local/tunneled instance answers in well under a second.
-_PREFLIGHT_TIMEOUT = httpx.Timeout(10.0)
+# Inbox capacity: keyboard intents and wire events share one queue. The client
+# awaits put (backpressure); the Screen rings the bell on QueueFull.
+INBOX_MAX = 1024
 
-# ANSI SGR codes — this client's entire chrome.
-_CYAN = "\033[36m"   # user blocks
-_GREEN = "\033[32m"  # MIRA blocks
-_GREY = "\033[90m"   # turn delimiters (dark grey)
-_RED = "\033[31m"    # errors
-_DIM = "\033[2m"     # meta lines / thinking indicator
+_RED = "\033[31m"
 _RESET = "\033[0m"
 
 _SETUP_GUIDE = """\
@@ -76,232 +65,66 @@ No endpoint is configured yet. Three ways to set up:
 Then rerun: python3 -m tui"""
 
 
-class ChatError(Exception):
-    """One failed turn request — carries the real HTTP/server error text."""
-
-
-# --- ANSI helpers -----------------------------------------------------------
-
-
-def _color(code: str, text: str) -> str:
-    return f"{code}{text}{_RESET}"
-
-
-def _term_width() -> int:
-    return shutil.get_terminal_size().columns
-
-
-def _delimiter() -> str:
-    """The dark-grey row between turns, full terminal width."""
-    return _color(_GREY, "─" * _term_width())
-
-
-def _clear_last_line() -> None:
-    """Erase the last printed/echoed line (typed input, thinking
-    indicator). Single-visual-line assumption: a wrapped or pasted
-    multi-line input leaves debris above the cleared row — accepted MVP
-    limit."""
-    print("\033[1A\033[2K", end="", flush=True)
-
-
-def _block(label: str, color: str, text: str) -> None:
-    """One colored block: sender label, then the message text."""
-    print(_color(color, f"{label}\n{text}"), flush=True)
-
-
-# --- the turn wire (sync REST) ----------------------------------------------
-
-
-def _server_error_text(response: httpx.Response) -> str:
-    """Best-effort server error text for a non-200 turn response."""
-    try:
-        payload = response.json()
-    except ValueError:
-        payload = {}
-    if not isinstance(payload, dict):
-        payload = {}  # a malformed envelope cannot carry an error message
-    error = payload.get("error")
-    if isinstance(error, dict) and error.get("message"):
-        return f"[{error.get('code', '?')}] {error['message']}"
-    return response.text.strip()[:300] or "(no body)"
-
-
-def _post_chat(config: EndpointConfig, message: str) -> str:
-    """One synchronous turn: POST /v0/api/chat, return the response text.
-
-    Mirrors the envelope of ``cns/api/chat.py`` (BaseHandler
-    SuccessResponse): ``{"success": true, "data": {"response": ...}}`` or
-    ``{"success": false, "error": {"code", "message"}}``. Any drift from
-    that shape fails loud with the real payload, never a default.
-    """
-    url = config.base_url.rstrip("/") + _CHAT_PATH
-    try:
-        response = httpx.post(
-            url,
-            json={"message": message},
-            headers={"Authorization": f"Bearer {config.api_key}"},
-            timeout=_CHAT_TIMEOUT,
-        )
-    except httpx.TimeoutException as error:
-        # Mirrors the KeyboardInterrupt caveat below: the request died
-        # client-side at the _CHAT_TIMEOUT bound while the server may
-        # still run the turn to completion.
-        raise ChatError(
-            f"request to {url} timed out ({error}) — the request was "
-            "dropped client-side (the server turn may still complete); "
-            "check history before resubmitting"
-        ) from error
-    except httpx.InvalidURL as error:
-        raise ChatError(
-            f"the stored base_url is malformed ({config.base_url!r}): {error}\n"
-            "  Fix base_url in the endpoint store."
-        ) from error
-    except httpx.HTTPError as error:
-        raise ChatError(f"request to {url} failed: {error}") from error
-    if response.status_code != 200:
-        raise ChatError(f"HTTP {response.status_code}: {_server_error_text(response)}")
-    try:
-        payload = response.json()
-    except ValueError as error:
-        raise ChatError(f"non-JSON response: {response.text[:300]!r}") from error
-    if not isinstance(payload, dict):
-        payload = {}  # a malformed envelope cannot claim success
-    if payload.get("success") is not True:
-        error = payload.get("error") or {}
-        raise ChatError(
-            f"[{error.get('code', 'UNKNOWN')}] "
-            f"{error.get('message', '(no message in error envelope)')}"
-        )
-    reply = (payload.get("data") or {}).get("response")
-    if not isinstance(reply, str):
-        raise ChatError(f"envelope carried no response string: {str(payload)[:300]}")
-    return reply
-
-
-# --- startup preflight --------------------------------------------------------
-
-
-def preflight(config: EndpointConfig, store_path: str) -> None:
-    """Prove the endpoint reachable and the stored key accepted BEFORE the
-    REPL opens: one authenticated history request (GET /v0/api/data,
-    the same surface as client.py's pager). Raises ChatError whose message
-    is the complete user-facing error + directions; never returns silently
-    degraded. """
-    url = config.base_url.rstrip("/") + "/v0/api/data"
-    try:
-        response = httpx.get(
-            url,
-            params={"type": "history", "limit": 1, "message_type": "regular"},
-            headers={"Authorization": f"Bearer {config.api_key}"},
-            timeout=_PREFLIGHT_TIMEOUT,
-        )
-    except httpx.InvalidURL as error:
-        raise ChatError(
-            f"the stored base_url is malformed ({config.base_url!r}): {error}\n"
-            f"  Fix base_url in:\n  {store_path}"
-        ) from error
-    except httpx.HTTPError as error:
-        raise ChatError(
-            f"cannot reach MIRA at {config.base_url} ({error})\n"
-            "  Is the instance running and the address/tunnel up? Fix base_url in:\n"
-            f"  {store_path}"
-        ) from error
-    if response.status_code in (401, 403):
-        raise ChatError(
-            f"the stored API key was rejected (HTTP {response.status_code}) — "
-            "it is missing, stale, or from a different instance.\n"
-            "  Re-mint it automatically:  python3 -m tui --login\n"
-            "  Or mint one by hand via the same auth API chain (POST /v0/auth/api-tokens,\n"
-            f"  as deploy/vm/talktomira.sh scripts) and paste it into: {store_path}"
-        )
-    if response.status_code != 200:
-        raise ChatError(
-            f"MIRA at {config.base_url} answered HTTP {response.status_code}: "
-            f"{_server_error_text(response)}\n"
-            f"  Check the instance is healthy: {config.base_url}/health"
-        )
-    try:
-        payload = response.json()
-    except ValueError:
-        raise ChatError(
-            f"MIRA at {config.base_url} answered HTTP 200 with a non-JSON "
-            f"body: {response.text.strip()[:200]}"
-        ) from None
-    if not isinstance(payload, dict):
-        payload = {}  # a malformed envelope cannot claim success
-    if payload.get("success") is not True:
-        error = payload.get("error") or {}
-        raise ChatError(
-            f"MIRA at {config.base_url} rejected the request (HTTP 200 envelope, "
-            f"success:false): [{error.get('code')}] {error.get('message')}\n"
-            "  The stored API key may be missing, stale, or from a different instance.\n"
-            "  Re-mint it automatically:  python3 -m tui --login\n"
-            "  Or mint one by hand via the same auth API chain (POST /v0/auth/api-tokens,\n"
-            f"  as deploy/vm/talktomira.sh scripts) and paste it into: {store_path}"
-        )
-
-
-# --- the REPL ----------------------------------------------------------------
-
-
 def setup_guidance(store: EndpointStore) -> str:
     """First-run setup guidance naming the exact config path."""
     return _SETUP_GUIDE.format(path=store.path)
 
 
+def _connect_guidance(error: ClientError, config: EndpointConfig, store: EndpointStore) -> str:
+    """What to do about one failed connect, keyed on the client's error code."""
+    if error.code == "AUTH_FAILED":
+        return (
+            "the stored API key was rejected — it is missing, stale, or from a different instance.\n"
+            "  Re-mint it automatically:  python3 -m tui --login\n"
+            f"  Or paste a token into: {store.path}"
+        )
+    if error.code in ("AUTH_CONNECTION_FAILED", "AUTH_TIMEOUT"):
+        return (
+            f"cannot reach MIRA at {config.base_url}: {error.message}\n"
+            "  Is the instance running and the address/tunnel up? Fix base_url in:\n"
+            f"  {store.path}"
+        )
+    if error.code == "BAD_BASE_URL":
+        return f"{error.message}\n  Fix base_url in:\n  {store.path}"
+    return f"{error.message} [{error.code}]"
+
+
+async def _chat(store: EndpointStore, config: EndpointConfig) -> int:
+    inbox: asyncio.Queue = asyncio.Queue(maxsize=INBOX_MAX)
+    client = MiraClient(config, inbox)
+    try:
+        # connect() is bounded by the client; the user can still Ctrl+C (SIGINT
+        # is live here — the terminal is not in raw mode yet).
+        await client.connect()
+    except ClientError as error:
+        print(f"{_RED}error: {_connect_guidance(error, config, store)}{_RESET}", flush=True)
+        return 1
+    try:
+        session = ChatSession(
+            client, Screen(inbox), inbox, store.active_name() or "default", config.base_url
+        )
+        return await session.run()
+    finally:
+        await client.close()
+
+
 def run(store: EndpointStore) -> int:
-    """Entry point: the bare REPL. 0 on /exit, Ctrl+C at the prompt, or
-    EOF; 1 when no usable endpoint is configured (or preflight fails);
-    130 on Ctrl+C during preflight."""
+    """Entry point: 0 on a user quit, 1 on setup/connect failure or no TTY,
+    130 on Ctrl+C while connecting."""
     config = store.active_config()
     if config is None or not config.base_url or not config.api_key:
         print(setup_guidance(store), flush=True)
         return 1
-    try:
-        preflight(config, store.path)
-    except ChatError as error:
-        print(_color(_RED, f"error: {error}"), flush=True)
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print(
+            "error: the MIRA chat client needs an interactive terminal "
+            "(stdin and stdout must both be a TTY).",
+            file=sys.stderr,
+            flush=True,
+        )
         return 1
+    try:
+        return asyncio.run(_chat(store, config))
     except KeyboardInterrupt:
-        print("aborted during preflight", flush=True)
+        print("aborted", flush=True)
         return 130
-    print(_color(_DIM, f"mira · {store.active_name()} · /exit to quit"), flush=True)
-    while True:
-        try:
-            text = input("You: ")
-        except (EOFError, KeyboardInterrupt):
-            print()  # keep the shell prompt off the input row
-            return 0
-        _clear_last_line()
-        stripped = text.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("/"):
-            if stripped == "/exit":
-                return 0
-            print(_color(_DIM, f"unknown command: {stripped}"), flush=True)
-            continue
-        _block("You", _CYAN, filter_system_tags(stripped))
-        print(_delimiter(), flush=True)
-        print(_color(_DIM, "thinking…"), flush=True)
-        try:
-            reply = _post_chat(config, stripped)
-        except ChatError as error:
-            _clear_last_line()
-            print(_color(_RED, f"error: {error}"), flush=True)
-            print(_delimiter(), flush=True)
-            continue
-        except KeyboardInterrupt:
-            # The request died client-side; the server turn may still run
-            # to completion and the exchange lands in server history.
-            _clear_last_line()
-            print(
-                _color(_DIM, "interrupted — the request was dropped client-side "
-                "(the server turn may still complete)"),
-                flush=True,
-            )
-            print(_delimiter(), flush=True)
-            continue
-        _clear_last_line()
-        _block("MIRA", _GREEN, filter_system_tags(reply))
-        print(_delimiter(), flush=True)

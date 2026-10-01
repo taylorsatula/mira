@@ -39,6 +39,9 @@ AUTH_WAIT_TIMEOUT = 12.0  # server closes with AUTH_TIMEOUT at 10 s; cover it
 SEND_TIMEOUT = 10.0
 CLOSE_TIMEOUT = 5.0
 HTTP_PAGE_TIMEOUT = 30.0
+# Server tool frames carry the full, untruncated tool result; the websockets
+# default (1 MiB) would close the socket with 1009 on one large result mid-turn.
+MAX_FRAME_BYTES = 64 * 1024 * 1024
 MAX_HISTORY_PAGES = 200  # paging bound; exceeding it fails loud, never truncates
 
 
@@ -228,10 +231,15 @@ class MiraClient:
         # fresh lifecycle — without this reset, connected stays False
         # forever after /reconnect and _send_frame raises NOT_CONNECTED.
         self._closing = False
+        # Likewise for the shutdown flag: a stale True would make run() swallow
+        # the next unexpected drop.
+        self._server_shutdown_seen = False
         ws_url = self._ws_url()
         try:
             conn = await asyncio.wait_for(
-                websockets.connect(ws_url, open_timeout=WS_OPEN_TIMEOUT),
+                websockets.connect(
+                    ws_url, open_timeout=WS_OPEN_TIMEOUT, max_size=MAX_FRAME_BYTES
+                ),
                 timeout=WS_OPEN_TIMEOUT + 5.0,
             )
         except asyncio.TimeoutError:
@@ -271,6 +279,17 @@ class MiraClient:
                 event = self._frame_to_event(raw)
                 if event is not None:
                     await self._events.put(event)
+            # The loop also ends normally on a clean (1000/1001) server close.
+            if not self._closing and not self._server_shutdown_seen:
+                code = conn.close_code
+                reason = conn.close_reason
+                await self._events.put(
+                    Disconnected(
+                        reason=f"server closed the connection (code {code}"
+                        + (f", {reason}" if reason else "")
+                        + ")"
+                    )
+                )
         except websockets.exceptions.ConnectionClosed as error:
             if not self._closing and not self._server_shutdown_seen:
                 await self._events.put(Disconnected(reason=str(error) or error.__class__.__name__))
