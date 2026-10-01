@@ -344,9 +344,9 @@ class MemoryDomainHandler(BaseDomainHandler):
                 raise ValidationError("Importance score must be between 0 and 1")
             
             # Generate embedding for the memory
-            from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
+            from clients.embeddings_provider import get_embeddings_provider
             from lt_memory.models import ExtractedMemory
-            embeddings_provider = get_hybrid_embeddings_provider()  # Use singleton
+            embeddings_provider = get_embeddings_provider()  # Use singleton
             # Document encoding for memory storage
             embedding = embeddings_provider.encode_deep(content)
 

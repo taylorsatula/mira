@@ -24,7 +24,7 @@ from ..infrastructure.continuum_pool import get_continuum_pool, initialize_conti
 from ..infrastructure.valkey_message_cache import ValkeyMessageCache
 
 if TYPE_CHECKING:
-    from clients.hybrid_embeddings_provider import EmbeddingsProvider
+    from clients.embeddings_provider import EmbeddingsProvider
     from cns.services.memory_relevance_service import MemoryRelevanceService
     from cns.services.subcortical import SubcorticalLayer
     from cns.services.peanutgallery_service import PeanutGalleryService
@@ -158,8 +158,8 @@ class CNSIntegrationFactory:
         """Get or create hybrid embedding provider instance."""
         if self._embedding_model is None:
             logger.info("Initializing hybrid embedding provider")
-            from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
-            self._embedding_model = get_hybrid_embeddings_provider()  # Use singleton
+            from clients.embeddings_provider import get_embeddings_provider
+            self._embedding_model = get_embeddings_provider()  # Use singleton
             logger.info("Hybrid embedding provider initialized")
         return self._embedding_model
         
@@ -365,13 +365,13 @@ class CNSIntegrationFactory:
 
         from ..infrastructure.continuum_repository import get_continuum_repository
         from ..infrastructure.continuum_pool import get_continuum_pool
-        from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
+        from clients.embeddings_provider import get_embeddings_provider
         from lt_memory.factory import get_lt_memory_factory
 
         continuum_repo = get_continuum_repository()
         continuum_pool = get_continuum_pool()
         summary_generator = self._get_summary_generator()
-        embeddings_provider = get_hybrid_embeddings_provider()
+        embeddings_provider = get_embeddings_provider()
 
         # Get lt_memory factory for downstream processing (required)
         lt_memory_factory = get_lt_memory_factory()

@@ -65,13 +65,13 @@ def _embedding_args() -> List[str]:
     """psql -v arguments for the schema's guard, built the way the installer does.
 
     `deploy/lib/embedding_config.sh` resolves local-provider values by calling
-    `clients.hybrid_embeddings_provider.describe_for_installer`; the fixture uses
+    `clients.embeddings_provider.describe_for_installer`; the fixture uses
     that same seam rather than transcribing model or dimension literals. A local
     provider takes no endpoint URL and no API key, so those variables are empty.
     """
     if str(_REPO) not in sys.path:
         sys.path.insert(0, str(_REPO))
-    from clients.hybrid_embeddings_provider import describe_for_installer
+    from clients.embeddings_provider import describe_for_installer
 
     model, dimensions = describe_for_installer(["describe", "local"]).split()
     return [

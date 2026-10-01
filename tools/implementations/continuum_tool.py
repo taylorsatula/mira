@@ -25,7 +25,7 @@ from utils.timezone_utils import (
     ensure_utc, format_utc_iso, parse_time_string, utc_now,
 )
 from utils.user_context import get_current_segment_id, get_user_preferences
-from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
+from clients.embeddings_provider import get_embeddings_provider
 
 
 def _parse_model_wall_time(value: str) -> datetime:
@@ -315,7 +315,7 @@ class ContinuumSearchTool(Tool):
         self._continuum_repo = get_continuum_repository()
 
         # Get embeddings provider for query embeddings
-        self._embeddings_provider = get_hybrid_embeddings_provider()
+        self._embeddings_provider = get_embeddings_provider()
 
     def _escape_like_pattern(self, value: str) -> str:
         """Escape SQL LIKE special characters to prevent wildcard injection."""

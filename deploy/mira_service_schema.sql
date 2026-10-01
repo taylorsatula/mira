@@ -108,7 +108,7 @@ VALUES
 
 -- The one embedding model this install uses, fixed at install time. The
 -- installer supplies these psql variables, deriving model and dimensions from
--- clients/hybrid_embeddings_provider.py:describe_for_installer, which probes a
+-- clients/embeddings_provider.py:describe_for_installer, which probes a
 -- remote endpoint for its vector length:
 --   embedding_provider      'local' or 'remote'
 --   embedding_model         model name ('MongoDB/mdbr-leaf-ir-asym' for local)

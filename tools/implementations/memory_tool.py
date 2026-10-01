@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from tools.repo import Tool
 from tools.registry import registry
-from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
+from clients.embeddings_provider import get_embeddings_provider
 from clients.valkey_client import get_valkey_client
 from lt_memory.db_access import LTMemoryDB
 from lt_memory.hybrid_search import HybridSearcher
@@ -217,7 +217,7 @@ class MemoryTool(Tool):
 
         self._config = config.get_tool_config("memory_tool")
 
-        self._embeddings_provider = get_hybrid_embeddings_provider()
+        self._embeddings_provider = get_embeddings_provider()
         session_manager = get_shared_session_manager()
         self._memory_db = LTMemoryDB(session_manager)
         self._hybrid_searcher = HybridSearcher(self._memory_db)

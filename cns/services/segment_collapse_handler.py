@@ -41,7 +41,7 @@ from cns.infrastructure.continuum_repository import (
     ContinuumRepository,
     COLLAPSE_CLAIM_STALE_MINUTES,
 )
-from clients.hybrid_embeddings_provider import EmbeddingsProvider
+from clients.embeddings_provider import EmbeddingsProvider
 from clients.valkey_client import get_valkey_client
 from cns.integration.event_bus import EventBus
 from utils.timezone_utils import utc_now, format_utc_iso, parse_time_string, ensure_utc, validate_timezone
@@ -1016,7 +1016,7 @@ class SegmentCollapseHandler:
         from pydantic import ValidationError
         from lt_memory.models import PendingManualMemory, ExtractedMemory, MemoryLink
         from lt_memory.db_access import LTMemoryDB
-        from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
+        from clients.embeddings_provider import get_embeddings_provider
         from utils.database_session_manager import get_shared_session_manager
 
         valkey = get_valkey_client()
@@ -1091,7 +1091,7 @@ class SegmentCollapseHandler:
             segment_id, len(work), sum(len(v) for v in consumed_raw.values()),
         )
 
-        embeddings_provider = get_hybrid_embeddings_provider()
+        embeddings_provider = get_embeddings_provider()
         session_manager = get_shared_session_manager()
         db = LTMemoryDB(session_manager)
 

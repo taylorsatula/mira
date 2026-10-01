@@ -14,7 +14,7 @@ from lt_memory.db_access import LTMemoryDB
 from lt_memory.hybrid_search import HybridSearcher
 
 if TYPE_CHECKING:
-    from clients.hybrid_embeddings_provider import EmbeddingsProvider
+    from clients.embeddings_provider import EmbeddingsProvider
 
 logger = logging.getLogger(__name__)
 

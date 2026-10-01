@@ -819,11 +819,11 @@ _EMBEDDING_CONFIG_LOCK_TRIGGER = "embedding_config_locked_once_vectors_exist"
 def _check_embeddings() -> dict[str, Any]:
     import numpy as np
 
-    from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider, load_embedding_config
+    from clients.embeddings_provider import get_embeddings_provider, load_embedding_config
     from clients.postgres_client import PostgresClient
 
     embedding_config = load_embedding_config()
-    provider = get_hybrid_embeddings_provider()
+    provider = get_embeddings_provider()
     dimensions = provider.dimensions
 
     admin_db = PostgresClient("mira_service", admin=True)
@@ -1020,7 +1020,7 @@ def _check_tools() -> dict[str, Any]:
 
 
 def _check_dependency_initialization() -> dict[str, Any]:
-    from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
+    from clients.embeddings_provider import get_embeddings_provider
     from clients.llm_provider import get_llm_provider
     from cns.infrastructure.continuum_pool import get_continuum_pool
     from cns.infrastructure.continuum_repository import get_continuum_repository
@@ -1030,7 +1030,7 @@ def _check_dependency_initialization() -> dict[str, Any]:
     from utils.database_session_manager import get_shared_session_manager
     from utils.user_context import load_model_configs
 
-    embeddings_provider = get_hybrid_embeddings_provider()
+    embeddings_provider = get_embeddings_provider()
     continuum_repo = get_continuum_repository()
     load_model_configs()
     lt_memory_factory = get_lt_memory_factory(

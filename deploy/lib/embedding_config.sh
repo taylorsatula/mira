@@ -4,7 +4,7 @@
 #
 # The schema takes five psql variables (see its embedding_config table). The
 # model name and vector length come from the app itself —
-# clients/hybrid_embeddings_provider.py:describe_for_installer, which probes a
+# clients/embeddings_provider.py:describe_for_installer, which probes a
 # remote endpoint for its vector length — never from literals in this file.
 
 # Vault key name under secret/mira/api_keys for a remote endpoint's bearer token.
@@ -20,7 +20,7 @@ EMBEDDING_VAULT_KEY_NAME="embeddings_key"
 # function returns 1.
 resolve_embedding_schema_args() {
     local python="$1" app_dir="$2" provider="$3" endpoint="$4" model="$5" api_key="$6"
-    local describe='import sys; from clients.hybrid_embeddings_provider import describe_for_installer; print(describe_for_installer(sys.argv[1:]))'
+    local describe='import sys; from clients.embeddings_provider import describe_for_installer; print(describe_for_installer(sys.argv[1:]))'
     local described key_name=""
 
     case "$provider" in

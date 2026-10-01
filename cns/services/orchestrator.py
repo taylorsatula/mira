@@ -58,7 +58,7 @@ from clients.llm.tool_messages import (
 )
 from clients.llm.types import Result, ToolCall, ToolDefinition, ToolResult, Usage
 from cns.services.tool_loop import CircuitBreaker, ToolLoopExecutor
-from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
+from clients.embeddings_provider import get_embeddings_provider
 from cns.services.subcortical import SubcorticalResult, SurfacedMemory
 from lt_memory.models import MemoryDict
 from lt_memory.proactive import (
@@ -355,7 +355,7 @@ class ContinuumOrchestrator:
         self.event_bus = event_bus
 
         # Get singleton embeddings provider for generating embeddings once
-        self.embeddings_provider = get_hybrid_embeddings_provider()
+        self.embeddings_provider = get_embeddings_provider()
 
         # Store composed prompt sections when received via event
         self._cached_content = None

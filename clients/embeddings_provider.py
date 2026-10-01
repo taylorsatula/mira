@@ -387,7 +387,7 @@ _provider: EmbeddingsProvider | None = None
 _provider_lock = threading.Lock()
 
 
-def get_hybrid_embeddings_provider(cache_enabled: bool = True) -> EmbeddingsProvider:
+def get_embeddings_provider(cache_enabled: bool = True) -> EmbeddingsProvider:
     """Process-wide provider built from the `embedding_config` row; failures propagate."""
     global _provider
     if _provider is None:
