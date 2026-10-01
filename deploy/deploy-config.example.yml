@@ -22,7 +22,8 @@
 # ---------------------------------------------------------------------------
 # offline_mode: yes = all five model routes point at llama-server instances
 # (llama.cpp's OpenAI-compatible server). no = hosted providers below.
-offline_mode: yes
+# This template ships the hosted (lunaroute) defaults throughout.
+offline_mode: no
 
 # Only used when offline_mode: yes —
 #   build_llama_cpp: yes  → build llama-server from source on THIS machine
@@ -83,6 +84,22 @@ embedding_provider: local
 embedding_endpoint: ""
 embedding_model: ""
 embedding_api_key: ""
+
+# ---------------------------------------------------------------------------
+# Injection screen (System One decision model)
+# ---------------------------------------------------------------------------
+# yes = external content (fetched pages, email, files) is judged by a System
+# One model before it reaches MIRA; no = it is still wrapped, never raw.
+# no under offline_mode: yes is the sensible default (air-gapped has no djev).
+injection_screen: yes
+# Enabled only (leave "" when injection_screen: no — a disabled screen probes
+# and seeds nothing). local = self-hosted endpoint that takes no token;
+# remote = hosted gateway whose explicit key is required (no chat-key
+# fallback — the same lunaroute key as chat_api_key works here too).
+systemone_provider: remote
+systemone_endpoint: "https://gw.lunaroute.com/v1/systemone"
+systemone_model: "djev"
+systemone_api_key: __SET_ME__
 
 # ---------------------------------------------------------------------------
 # Database

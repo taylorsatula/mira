@@ -9,6 +9,26 @@
 : "${OS:?Error: OS must be set}"
 : "${MIRA_USER:?Error: MIRA_USER must be set}"
 
+# One mechanism for the injection screen's settings on every start path: the
+# systemd unit reads this file via EnvironmentFile, the no-systemd launcher
+# (Step 15b) and the container's s6 mira/run source it when present. Non-secret
+# values only — the bearer token lives in Vault, never in this file.
+echo -ne "${DIM}${ARROW}${RESET} Writing /opt/mira/systemone.env... "
+SYSTEMONE_ENV_FILE="/opt/mira/systemone.env"
+{
+    if [ "${CONFIG_INJECTION_SCREEN}" = "yes" ]; then
+        echo "MIRA_INJECTION_SCREEN_ENABLED=1"
+        echo "MIRA_SYSTEMONE_PROVIDER=${CONFIG_SYSTEMONE_PROVIDER}"
+        echo "MIRA_SYSTEMONE_ENDPOINT=${CONFIG_SYSTEMONE_ENDPOINT}"
+        echo "MIRA_SYSTEMONE_MODEL=${CONFIG_SYSTEMONE_MODEL}"
+    else
+        echo "MIRA_INJECTION_SCREEN_ENABLED=0"
+    fi
+} > "$SYSTEMONE_ENV_FILE"
+chmod 600 "$SYSTEMONE_ENV_FILE"
+chown "$MIRA_USER:$MIRA_GROUP" "$SYSTEMONE_ENV_FILE" 2>/dev/null || chown "$MIRA_USER" "$SYSTEMONE_ENV_FILE"
+echo -e "${CHECKMARK}"
+
 # Systemd service installation (Linux only, if user opted in)
 if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ] && [ "$OS" = "linux" ]; then
     print_header "Step 15: Systemd Service Configuration"
@@ -61,6 +81,7 @@ Type=simple
 User=$MIRA_USER
 Group=$MIRA_GROUP
 WorkingDirectory=/opt/mira/app
+EnvironmentFile=/opt/mira/systemone.env
 Environment="VAULT_ADDR=http://127.0.0.1:8200"
 Environment="VAULT_ROLE_ID=$VAULT_ROLE_ID"
 Environment="VAULT_SECRET_ID=$VAULT_SECRET_ID"
@@ -138,6 +159,7 @@ export VAULT_ADDR=http://127.0.0.1:8200
 export VAULT_ROLE_ID=$(cat /opt/vault/role-id.txt)
 export VAULT_SECRET_ID=$(cat /opt/vault/secret-id.txt)
 export MIRA_LOG_DIR=/opt/mira/logs
+[ -f /opt/mira/systemone.env ] && . /opt/mira/systemone.env
 exec venv/bin/python3 main.py "$@"
 LAUNCHER
     chmod +x "$RUN_SH"
@@ -198,6 +220,11 @@ if [ "$_cred_write_failed" = false ]; then
   subcortical_key:      ${CONFIG_SUBCORTICAL_API_KEY}
   kagi_api_key:         ${CONFIG_KAGI_KEY:-N/A}
 CREDS
+        if [ "$CONFIG_INJECTION_SCREEN" = "yes" ] && [ "$CONFIG_SYSTEMONE_PROVIDER" = "remote" ]; then
+            cat >> "$CRED_FILE" <<CREDS
+  systemone_key:        ${CONFIG_SYSTEMONE_API_KEY}
+CREDS
+        fi
     else
         cat >> "$CRED_FILE" <<CREDS
   (Offline/local mode — no external API keys configured)
@@ -285,6 +312,7 @@ if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
         echo ""
         print_info "Place your GGUF files in /opt/mira/models/ and configure llama-server manually."
     fi
+    echo -e "  Inj. Screen:  ${STATUS_SYSTEMONE}"
 else
     echo -e "${BOLD}${BLUE}Provider Configuration${RESET}"
     echo -e "  Chat Provider:   ${STATUS_CHAT_PROVIDER}"
@@ -304,6 +332,7 @@ else
     echo -e "  Subcortical Key: ${STATUS_SUBCORTICAL_KEY}"
     echo -e "  Kagi:            ${STATUS_KAGI}"
     echo -e "  Embeddings:      ${STATUS_EMBEDDINGS}"
+    echo -e "  Injection Scr:   ${STATUS_SYSTEMONE}"
 
     if [ "${CONFIG_CHAT_API_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ] || [ "${CONFIG_CHAT_API_KEY}" = "PLACEHOLDER_NOT_CONFIGURED" ] || [ "${CONFIG_SUBCORTICAL_API_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ]; then
         echo ""

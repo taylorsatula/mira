@@ -41,6 +41,7 @@ SYSTEM_FEATURE_FLAG_ENVIRONMENT_FIELDS: dict[str, str] = {
     "MIRA_SUBCORTICAL_ENABLED": "subcortical_enabled",
     "MIRA_PEANUTGALLERY_ENABLED": "peanutgallery_enabled",
     "MIRA_PERSONA_ENABLED": "persona_enabled",
+    "MIRA_INJECTION_SCREEN_ENABLED": "injection_screen_enabled",
 }
 
 # Registry of string-valued SystemConfig overrides: environment variable name -> field name.
@@ -49,6 +50,17 @@ SYSTEM_FEATURE_FLAG_ENVIRONMENT_FIELDS: dict[str, str] = {
 SYSTEM_STRING_ENVIRONMENT_FIELDS: dict[str, str] = {
     "MIRA_TIMEZONE": "timezone",
 }
+
+# Registry of string-valued SystemOneConfig overrides: environment variable name -> field
+# name. Deploy writes /opt/mira/systemone.env (EnvironmentFile for the unit, sourced by the
+# no-systemd launcher and the container) so an install's injection-screen model is an
+# explicit operator choice. No secret travels by env — the bearer token stays in Vault.
+SYSTEMONE_STRING_ENVIRONMENT_FIELDS: dict[str, str] = {
+    "MIRA_SYSTEMONE_ENDPOINT": "endpoint_url",
+    "MIRA_SYSTEMONE_MODEL": "model",
+}
+# The provider is an enum, not a free string: validated to exactly local/remote.
+SYSTEMONE_PROVIDER_ENVIRONMENT_FIELD = "MIRA_SYSTEMONE_PROVIDER"
 
 
 def _load_system_feature_flag_overrides() -> dict[str, bool]:
@@ -83,6 +95,30 @@ def _load_system_string_overrides() -> dict[str, str]:
         if raw_value is None or raw_value == "":
             continue
         overrides[field_name] = raw_value
+    return overrides
+
+
+def _load_systemone_overrides() -> dict[str, str]:
+    """Load strict SystemOneConfig overrides from the process environment.
+
+    Unset variables are omitted so the field defaults apply. Set variables
+    must be non-empty; the provider must be exactly "local" or "remote" —
+    anything else raises at config load rather than silently installing a
+    client with the wrong credential model.
+    """
+    overrides: dict[str, str] = {}
+    for environment_name, field_name in SYSTEMONE_STRING_ENVIRONMENT_FIELDS.items():
+        raw_value = os.getenv(environment_name)
+        if raw_value is None or raw_value == "":
+            continue
+        overrides[field_name] = raw_value
+    provider = os.getenv(SYSTEMONE_PROVIDER_ENVIRONMENT_FIELD)
+    if provider is not None:
+        if provider not in {"local", "remote"}:
+            raise ValueError(
+                f"{SYSTEMONE_PROVIDER_ENVIRONMENT_FIELD} must be exactly local or remote, got {provider!r}"
+            )
+        overrides["provider"] = provider
     return overrides
 
 
@@ -122,6 +158,7 @@ class AppConfig(BaseModel):
                     **_load_system_feature_flag_overrides(),
                     **_load_system_string_overrides(),
                 ),
+                systemone=SystemOneConfig(**_load_systemone_overrides()),
             )
             instance._load_system_prompt()
             logger.info("Configuration initialized successfully")

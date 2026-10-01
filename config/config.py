@@ -90,6 +90,10 @@ class SystemConfig(BaseModel):
     subcortical_enabled: bool = Field(default=True, description="Enable subcortical memory surfacing and complexity assessment")
     peanutgallery_enabled: bool = Field(default=True, description="Enable peanut gallery metacognitive observer")
     persona_enabled: bool = Field(default=True, description="Enable Persona evaluation, refinement, and prompt injection")
+    injection_screen_enabled: bool = Field(
+        default=True,
+        description="Enable the semantic prompt-injection screen (screen_untrusted). Disabled mode wraps external content without judging it — never passes it raw. Overridable via MIRA_INJECTION_SCREEN_ENABLED (strict 0/1)",
+    )
 
     # Operational
     log_level: str = Field(default="WARNING", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
@@ -247,8 +251,17 @@ class SystemOneConfig(BaseModel):
 
     Any server speaking that contract works: hosted Jev, the lunaroute
     gateway's djev, or a self-hosted Kev. Consumer: clients/systemone_client.py.
+
+    `provider` picks the credential model: `remote` is a hosted gateway
+    whose bearer token is read from Vault under `api_key_name`; `local` is
+    a self-hosted (Kev) endpoint that takes no Authorization header at all
+    — `api_key_name` is ignored and no Vault field is required.
     """
 
+    provider: Literal["remote", "local"] = Field(
+        default="remote",
+        description="remote = hosted gateway, bearer token from Vault (api_key_name); local = self-hosted endpoint, no Authorization header",
+    )
     endpoint_url: str = Field(
         default="https://gw.lunaroute.com/v1/systemone",
         description="Full URL of the POST /v1/systemone endpoint",

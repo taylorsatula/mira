@@ -124,6 +124,23 @@ else
     exit 1
 fi
 
+# The injection screen's System One model must answer before the install
+# commits: an enabled-but-broken screen parks MIRA's boot gate on every
+# start. Local (self-hosted Kev) and remote gateways go through the same
+# probe — deploy/lib/systemone_config.sh.
+if [ "$CONFIG_INJECTION_SCREEN" = "yes" ]; then
+    echo -ne "${DIM}${ARROW}${RESET} Probing System One injection-screen model... "
+    if probe_systemone /opt/mira/app/venv/bin/python3 /opt/mira/app \
+            "$CONFIG_SYSTEMONE_PROVIDER" "$CONFIG_SYSTEMONE_ENDPOINT" "$CONFIG_SYSTEMONE_MODEL" "$CONFIG_SYSTEMONE_API_KEY"; then
+        echo -e "${CHECKMARK} ${DIM}${CONFIG_SYSTEMONE_MODEL}${RESET}"
+    else
+        echo -e "${ERROR}"
+        print_error "Could not reach the System One endpoint (reason above)."
+        print_info "Point injection_screen at a reachable System One model, or disable it (injection_screen: no / MIRA_INJECTION_SCREEN_ENABLED=0)."
+        exit 1
+    fi
+fi
+
 echo -ne "${DIM}${ARROW}${RESET} Running fresh database schema (tables, indexes, RLS)... "
 SCHEMA_FILE="/opt/mira/app/deploy/mira_service_schema.sql"
 if [ -f "$SCHEMA_FILE" ]; then
@@ -380,6 +397,12 @@ if [ -n "$CONFIG_KAGI_KEY" ]; then
 fi
 if [ "$CONFIG_EMBEDDING_PROVIDER" = "remote" ] && [ -n "$CONFIG_EMBEDDING_API_KEY" ]; then
     API_KEYS_ARGS="$API_KEYS_ARGS ${EMBEDDING_VAULT_KEY_NAME}=\"${CONFIG_EMBEDDING_API_KEY}\""
+fi
+# Injection screen (M16): a remote System One gateway needs its explicit key
+# in Vault — no chat-key fallback. Local (unkeyed) and disabled installs seed
+# nothing.
+if [ "$CONFIG_INJECTION_SCREEN" = "yes" ] && [ "$CONFIG_SYSTEMONE_PROVIDER" = "remote" ]; then
+    API_KEYS_ARGS="$API_KEYS_ARGS ${SYSTEMONE_VAULT_KEY_NAME}=\"${CONFIG_SYSTEMONE_API_KEY}\""
 fi
 eval vault_put_if_not_exists secret/mira/api_keys $API_KEYS_ARGS
 

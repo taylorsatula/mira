@@ -85,6 +85,7 @@ source "${SCRIPT_DIR}/lib/output.sh"
 source "${SCRIPT_DIR}/lib/services.sh"
 source "${SCRIPT_DIR}/lib/vault.sh"
 source "${SCRIPT_DIR}/lib/embedding_config.sh"
+source "${SCRIPT_DIR}/lib/systemone_config.sh"
 
 # ============================================================================
 # Phase 1: Configuration Gathering

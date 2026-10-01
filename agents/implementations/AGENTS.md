@@ -9,6 +9,7 @@
 - `MemoryCuratorAgent` never creates memories: `tool_schema_overrides = {"memory_tool": CURATOR_MEMORY_SCHEMA}` (`CURATOR_MEMORY_SCHEMA` in `tools/implementations/memory_tool.py`) replaces the memory_tool schema handed to the LLM with one excluding `create_memory`. Do not restore the full schema.
 - `MemoryCuratorAgent.on_completion()` stamps `last_tended_at` (via `LTMemoryDB.update_last_tended`) only when `status == 'success'` — a failed/timeout run leaves memories un-tended so the floor trigger re-samples them later. Stamp failure is logged and swallowed; it must never mask a successful run.
 - `ForageAgent.on_overwatch_update()` swallows publish failures at `debug` level — overwatch is observability, not results; do not let it raise into the agent loop.
+- The shared `_sanitize_work_item` gate (owned by `agents/AGENTS.md`, base.py) may now exit any agent `'failed'` with `InjectionScreenUnavailable`'s JSON envelope when the screen is enabled but its System One dependency is broken — one more reason `on_completion()` must not assume the agent reached its LLM loop. `MemoryCuratorAgent` opts out via `sanitize_untrusted_input = False`.
 
 ## Files
 

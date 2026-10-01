@@ -37,5 +37,14 @@ export VAULT_SECRET_ID=$(cat /opt/vault/secret-id.txt)
 export HOME=/home/mira
 export HF_HOME=/home/mira/.cache/huggingface
 export MIRA_LOG_DIR=/opt/mira/logs
+# System One injection-screen settings: same file and variables as the
+# systemd path (/opt/mira/systemone.env, written by finalize.sh). The
+# container cannot provision the Vault key, so the screen is off unless the
+# file (or operator env) enables it; an opting-in operator seeds Vault
+# manually — see deploy/docker/scripts/AGENTS.md.
+if [ -f /opt/mira/systemone.env ]; then
+    . /opt/mira/systemone.env
+fi
+export MIRA_INJECTION_SCREEN_ENABLED="${MIRA_INJECTION_SCREEN_ENABLED:-0}"
 cd /opt/mira/app
 exec s6-setuidgid mira /opt/mira/venv/bin/python3 main.py

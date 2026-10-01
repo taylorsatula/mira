@@ -32,12 +32,18 @@ CONFIG_EMBEDDING_PROVIDER=""         # local / remote
 CONFIG_EMBEDDING_ENDPOINT=""         # remote only: POST /v1/embeddings URL
 CONFIG_EMBEDDING_MODEL=""            # remote only
 CONFIG_EMBEDDING_API_KEY=""          # remote only; empty for an endpoint that takes none
+CONFIG_INJECTION_SCREEN=""           # yes / no
+CONFIG_SYSTEMONE_PROVIDER=""         # enabled only: local / remote
+CONFIG_SYSTEMONE_ENDPOINT=""         # enabled only: POST /v1/systemone URL
+CONFIG_SYSTEMONE_MODEL=""            # enabled only
+CONFIG_SYSTEMONE_API_KEY=""          # remote only; explicit, no chat-key fallback
 STATUS_CHAT_PROVIDER=""
 STATUS_CHAT_KEY=""
 STATUS_SUBCORTICAL=""
 STATUS_SUBCORTICAL_KEY=""
 STATUS_KAGI=""
 STATUS_EMBEDDINGS=""
+STATUS_SYSTEMONE=""
 STATUS_DB_PASSWORD=""
 STATUS_TIMEZONE=""
 STATUS_PLAYWRIGHT=""
@@ -543,8 +549,49 @@ else
     STATUS_EMBEDDINGS="${CHECKMARK} Local model"
 fi
 
+# Injection Screen (System One decision model)
+echo -e "${BOLD}${BLUE}5. Injection Screen${RESET} ${DIM}(screens external content before it reaches MIRA)${RESET}"
+echo -e "${DIM}   Fetched pages, email, and files pass through a System One decision${RESET}"
+echo -e "${DIM}   model that judges manipulation attempts. Disabled mode still wraps them,${RESET}"
+echo -e "${DIM}   never passes them raw.${RESET}"
+if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
+    # Air-gapped has no djev; a local Kev on the LAN can still opt in.
+    SCREEN_DEFAULT_INPUT="n"
+    echo -e "${DIM}   Offline default: no.${RESET}"
+else
+    SCREEN_DEFAULT_INPUT="y"
+fi
+read -p "$(echo -e ${CYAN}Enable the injection screen?${RESET}) (y/n, default=$SCREEN_DEFAULT_INPUT): " INJECTION_SCREEN_INPUT
+INJECTION_SCREEN_INPUT="${INJECTION_SCREEN_INPUT:-$SCREEN_DEFAULT_INPUT}"
+if [[ "$INJECTION_SCREEN_INPUT" =~ ^[Yy](es)?$ ]]; then
+    CONFIG_INJECTION_SCREEN="yes"
+    read -p "$(echo -e ${CYAN}Provider${RESET}) (local=self-hosted no-key endpoint, remote=hosted gateway) [local/remote, default=remote]: " SYSTEMONE_PROVIDER_INPUT
+    CONFIG_SYSTEMONE_PROVIDER="${SYSTEMONE_PROVIDER_INPUT:-remote}"
+    while [ -z "$CONFIG_SYSTEMONE_ENDPOINT" ]; do
+        read -p "$(echo -e ${CYAN}Endpoint URL${RESET}) [default: https://gw.lunaroute.com/v1/systemone]: " SYSTEMONE_ENDPOINT_INPUT
+        CONFIG_SYSTEMONE_ENDPOINT="${SYSTEMONE_ENDPOINT_INPUT:-https://gw.lunaroute.com/v1/systemone}"
+    done
+    while [ -z "$CONFIG_SYSTEMONE_MODEL" ]; do
+        read -p "$(echo -e ${CYAN}Model${RESET}) [default: djev]: " SYSTEMONE_MODEL_INPUT
+        CONFIG_SYSTEMONE_MODEL="${SYSTEMONE_MODEL_INPUT:-djev}"
+    done
+    if [ "$CONFIG_SYSTEMONE_PROVIDER" = "remote" ]; then
+        echo -e "${DIM}    The lunaroute chat key works here too. The installer probes the endpoint${RESET}"
+        echo -e "${DIM}    before committing and stores the key in Vault as systemone_key.${RESET}"
+        while [ -z "$CONFIG_SYSTEMONE_API_KEY" ]; do
+            read -p "$(echo -e ${CYAN}API key${RESET}): " CONFIG_SYSTEMONE_API_KEY
+        done
+        STATUS_SYSTEMONE="${CHECKMARK} On: remote ${CONFIG_SYSTEMONE_MODEL} at ${CONFIG_SYSTEMONE_ENDPOINT}"
+    else
+        STATUS_SYSTEMONE="${CHECKMARK} On: local ${CONFIG_SYSTEMONE_MODEL} at ${CONFIG_SYSTEMONE_ENDPOINT}"
+    fi
+else
+    CONFIG_INJECTION_SCREEN="no"
+    STATUS_SYSTEMONE="${DIM}Disabled${RESET}"
+fi
+
 # Database Password (optional - defaults to changethisifdeployingpwd)
-echo -e "${BOLD}${BLUE}5. Database Password${RESET} ${DIM}(OPTIONAL - default: changethisifdeployingpwd)${RESET}"
+echo -e "${BOLD}${BLUE}6. Database Password${RESET} ${DIM}(OPTIONAL - default: changethisifdeployingpwd)${RESET}"
 read -p "$(echo -e ${CYAN}Enter password${RESET}) (or Enter for default): " DB_PASSWORD_INPUT
 if [ -z "$DB_PASSWORD_INPUT" ]; then
     CONFIG_DB_PASSWORD="changethisifdeployingpwd"
@@ -556,7 +603,7 @@ fi
 
 # Timezone (defaults to this machine's system timezone; the app validates
 # the IANA name at boot and fails fast on garbage)
-echo -e "${BOLD}${BLUE}6. Timezone${RESET} ${DIM}(IANA name — Enter uses this machine's: ${SYSTEM_TIMEZONE})${RESET}"
+echo -e "${BOLD}${BLUE}7. Timezone${RESET} ${DIM}(IANA name — Enter uses this machine's: ${SYSTEM_TIMEZONE})${RESET}"
 read -p "$(echo -e ${CYAN}Timezone${RESET}): " TIMEZONE_INPUT
 if [ -z "$TIMEZONE_INPUT" ]; then
     CONFIG_TIMEZONE="$SYSTEM_TIMEZONE"
@@ -566,7 +613,7 @@ fi
 STATUS_TIMEZONE="${CHECKMARK} ${CONFIG_TIMEZONE}"
 
 # Playwright Browser Installation (optional)
-echo -e "${BOLD}${BLUE}7. Playwright Browser${RESET} ${DIM}(OPTIONAL - for JS-heavy webpage extraction)${RESET}"
+echo -e "${BOLD}${BLUE}8. Playwright Browser${RESET} ${DIM}(OPTIONAL - for JS-heavy webpage extraction)${RESET}"
 read -p "$(echo -e ${CYAN}Install Playwright?${RESET}) (y/n, default=y): " PLAYWRIGHT_INPUT
 # Default to yes if user just presses Enter
 if [ -z "$PLAYWRIGHT_INPUT" ]; then
@@ -581,7 +628,7 @@ else
 fi
 
 # Systemd service option (Linux only)
-echo -e "${BOLD}${BLUE}8. Systemd Service${RESET} ${DIM}(OPTIONAL - Linux only, auto-start on boot)${RESET}"
+echo -e "${BOLD}${BLUE}9. Systemd Service${RESET} ${DIM}(OPTIONAL - Linux only, auto-start on boot)${RESET}"
 if [ "$OS" = "linux" ]; then
     read -p "$(echo -e ${CYAN}Install as systemd service?${RESET}) (y/n): " SYSTEMD_INPUT
     if [[ "$SYSTEMD_INPUT" =~ ^[Yy](es)?$ ]]; then
@@ -636,6 +683,7 @@ else
 fi
 echo -e "  Kagi:            ${STATUS_KAGI}"
 echo -e "  Embeddings:      ${STATUS_EMBEDDINGS}"
+echo -e "  Injection Scr:   ${STATUS_SYSTEMONE}"
 echo -e "  DB Password:     ${STATUS_DB_PASSWORD}"
 echo -e "  Timezone:        ${STATUS_TIMEZONE}"
 echo -e "  Playwright:      ${STATUS_PLAYWRIGHT}"

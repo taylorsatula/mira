@@ -22,6 +22,7 @@ depend only on its own text and the state, whatever the server does.
 import contextvars
 import logging
 import math
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -43,6 +44,30 @@ class SystemOneResponseError(RuntimeError):
     """The endpoint answered, but not with the typed answers that were asked for."""
 
 
+def _parse_noul_answer(body: object, name: str) -> float:
+    """The typed noul answer for `name`; raises unless the body is exactly it."""
+    answers = body.get("answers") if isinstance(body, dict) else None
+    if not isinstance(answers, dict) or set(answers) != {name}:
+        raise SystemOneResponseError(
+            f"System One answers do not match the question asked: asked {name!r}, "
+            f"got {sorted(answers) if isinstance(answers, dict) else answers!r}"
+        )
+    answer = answers[name]
+    value = answer.get("noul") if isinstance(answer, dict) else None
+    if (
+        not isinstance(answer, dict)
+        or answer.get("type") != "noul"
+        or isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not 0.0 <= value <= 1.0
+    ):
+        raise SystemOneResponseError(
+            f"System One answer {name!r} is not a noul probability in [0, 1]: {answer!r}"
+        )
+    return float(value)
+
+
 @dataclass(frozen=True)
 class NoulQuestion:
     """A statement the model judges true or false, answered as P(true)."""
@@ -57,23 +82,24 @@ class NoulQuestion:
 class SystemOneClient:
     """Typed client for one System One endpoint.
 
-    Holds construction-time wiring only (endpoint, model, bearer token, pooled
-    HTTP client, request worker pool sized to the endpoint's in-flight limit),
-    so one instance is safely shared across threads and users.
+    Holds construction-time wiring only (endpoint, model, bearer token when
+    the endpoint takes one, pooled HTTP client, request worker pool sized to
+    the endpoint's in-flight limit), so one instance is safely shared across
+    threads and users.
     """
 
     def __init__(
         self,
         endpoint_url: str,
         model: str,
-        api_key: str,
+        api_key: str | None,
         timeout_seconds: int,
         max_concurrent_requests: int,
     ):
-        if not endpoint_url or not model or not api_key:
+        if not endpoint_url or not model:
             raise ValueError(
-                "SystemOneClient requires endpoint_url, model, and api_key; got "
-                f"endpoint_url={endpoint_url!r}, model={model!r}, api_key={'set' if api_key else 'missing'}"
+                "SystemOneClient requires endpoint_url and model; got "
+                f"endpoint_url={endpoint_url!r}, model={model!r}"
             )
         if timeout_seconds <= 0 or max_concurrent_requests <= 0:
             raise ValueError(
@@ -82,7 +108,11 @@ class SystemOneClient:
             )
         self.endpoint_url = endpoint_url
         self.model = model
-        self._headers = {"Authorization": f"Bearer {api_key}"}
+        # Keyed endpoints get a bearer token; a self-hosted (local) endpoint
+        # gets no Authorization header at all — same idiom as the embeddings
+        # provider, duplicated deliberately: no shared abstraction between
+        # the two clients.
+        self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self._http = http_client.Client(timeout=timeout_seconds, max_retries=_MAX_RETRIES)
         # The pool size is the in-flight cap: every request runs on a pool thread.
         self._pool = ThreadPoolExecutor(max_workers=max_concurrent_requests, thread_name_prefix="systemone")
@@ -132,26 +162,7 @@ class SystemOneClient:
             raise SystemOneResponseError(
                 f"System One endpoint returned non-JSON body: {response.text[:300]!r}"
             ) from e
-        answers = body.get("answers") if isinstance(body, dict) else None
-        if not isinstance(answers, dict) or set(answers) != {name}:
-            raise SystemOneResponseError(
-                f"System One answers do not match the question asked: asked {name!r}, "
-                f"got {sorted(answers) if isinstance(answers, dict) else answers!r}"
-            )
-        answer = answers[name]
-        value = answer.get("noul") if isinstance(answer, dict) else None
-        if (
-            not isinstance(answer, dict)
-            or answer.get("type") != "noul"
-            or isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not math.isfinite(value)
-            or not 0.0 <= value <= 1.0
-        ):
-            raise SystemOneResponseError(
-                f"System One answer {name!r} is not a noul probability in [0, 1]: {answer!r}"
-            )
-        return float(value)
+        return _parse_noul_answer(body, name)
 
 
 _client: SystemOneClient | None = None
@@ -159,20 +170,78 @@ _client_lock = threading.Lock()
 
 
 def get_systemone_client() -> SystemOneClient:
-    """Process-wide client built from `config.systemone` and its Vault key.
+    """Process-wide client built from `config.systemone`.
 
-    Construction failures (missing Vault key, invalid config) propagate.
+    `provider: remote` reads the bearer token from Vault
+    (`api_key_name`); `provider: local` sends no Authorization header and
+    touches no Vault field. Construction failures (missing Vault key, invalid
+    config) propagate.
     """
     global _client
     if _client is None:
         with _client_lock:
             if _client is None:
                 settings = config.systemone
+                api_key = get_api_key(settings.api_key_name) if settings.provider == "remote" else None
                 _client = SystemOneClient(
                     endpoint_url=settings.endpoint_url,
                     model=settings.model,
-                    api_key=get_api_key(settings.api_key_name),
+                    api_key=api_key,
                     timeout_seconds=settings.timeout,
                     max_concurrent_requests=settings.max_concurrent_requests,
                 )
     return _client
+
+
+# Probe bounds for the installer entry — defined locally, not imported from
+# the embeddings module (the two installer entries rhyme, they do not share).
+_PROBE_TIMEOUT_SECONDS = 15
+_PROBE_STATEMENT = "This is a System One reachability probe."
+_PROBE_QUESTION_NAME = "reachability"
+
+
+def describe_for_installer(argv: list[str]) -> str:
+    """Installer entry point: the model name, once the endpoint answers.
+
+    `describe local <endpoint_url> <model>` sends no Authorization header
+    (self-hosted Kev). `describe remote <endpoint_url> <model>` reads the
+    endpoint's bearer token from stdin. One Noul question is asked and its
+    typed [0, 1] answer validated — System One has no schema-sizing output,
+    so a reachable, contract-speaking endpoint is the whole answer.
+    Caller: deploy/lib/systemone_config.sh.
+    """
+    if len(argv) == 4 and argv[0] == "describe" and argv[1] in {"local", "remote"}:
+        provider, endpoint_url, model = argv[1], argv[2], argv[3]
+        if not endpoint_url or not model:
+            raise SystemExit("describe needs a non-empty endpoint URL and model name")
+        api_key = sys.stdin.read().strip() if provider == "remote" else ""
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        with http_client.Client(timeout=_PROBE_TIMEOUT_SECONDS, max_retries=0) as http:
+            response = http.post(
+                endpoint_url,
+                json={
+                    "model": model,
+                    "state": _PROBE_STATEMENT,
+                    "questions": {
+                        _PROBE_QUESTION_NAME: {"type": "noul", "instructions": _PROBE_STATEMENT}
+                    },
+                },
+                headers=headers,
+            )
+        if response.status_code >= 400:
+            raise SystemExit(
+                f"System One endpoint {endpoint_url} returned HTTP {response.status_code}: "
+                f"{response.text[:300]}"
+            )
+        try:
+            body = response.json()
+        except ValueError:
+            raise SystemExit(
+                f"System One endpoint {endpoint_url} returned a non-JSON body: {response.text[:300]!r}"
+            )
+        _parse_noul_answer(body, _PROBE_QUESTION_NAME)
+        return model
+
+    raise SystemExit(
+        "usage: describe local|remote <endpoint_url> <model>  (bearer token on stdin for remote)"
+    )

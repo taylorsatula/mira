@@ -25,6 +25,15 @@ embedding_provider: local
 embedding_endpoint: ""
 embedding_model: ""
 embedding_api_key: ""
+# This file carries no secrets by design (inject.sh replaces the Vault from
+# the sarcophagus), and a remote System One endpoint requires an explicit key —
+# so the dev-VM deploys with the screen off; flip to yes with a real key (or a
+# local unkeyed endpoint) for a screen-on dev instance.
+injection_screen: no
+systemone_provider: ""
+systemone_endpoint: ""
+systemone_model: ""
+systemone_api_key: ""
 db_password: ""
 timezone: America/Chicago
 install_playwright: yes

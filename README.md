@@ -136,6 +136,28 @@ The script handles:
 
 There is no in-place upgrade path: 2.0 installs the greenfield schema into an empty database. To salvage data from an older install, take a `pg_dump` first and restore it manually.
 
+## Injection Screen (optional)
+
+The installer asks whether to enable the injection screen — the System One
+model that judges external content (fetched pages, email, uploaded files)
+before it reaches MIRA's context. Enabled by default on hosted installs
+(defaults to the lunaroute `djev` gateway; the same lunaroute key as
+`chat_api_key` works, stored in Vault as `systemone_key`); off by default for
+offline installs and in Docker, where the container cannot provision the
+Vault key. Operators can also set it directly:
+
+```bash
+MIRA_INJECTION_SCREEN_ENABLED=1        # 0 disables (external content is still wrapped, never raw)
+MIRA_SYSTEMONE_PROVIDER=remote         # remote = hosted gateway, local = self-hosted, unkeyed
+MIRA_SYSTEMONE_ENDPOINT=https://gw.lunaroute.com/v1/systemone
+MIRA_SYSTEMONE_MODEL=djev
+```
+
+The bare-metal installer writes these to `/opt/mira/systemone.env`, which the
+systemd unit (`EnvironmentFile=`), the `run.sh` launcher, and the container's
+start script all read. Secrets never travel by env — the bearer token lives
+only in Vault (`secret/mira/api_keys` `systemone_key`).
+
 ## Install MIRA via Docker
 Build the base image first (heavy, rarely changes), then the thin app layer:
 

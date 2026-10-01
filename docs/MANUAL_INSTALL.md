@@ -79,6 +79,39 @@ psql -U postgres -h localhost -d mira_service "${EMBEDDING_SCHEMA_ARGS[@]}" -f d
 
 Vault stores service credentials and provider keys. The deploy scripts in `deploy/vault.sh` and `deploy/postgresql.sh` are the source of truth for the exact key names used by the automated path.
 
+## Injection Screen (optional)
+
+MIRA screens external content (fetched pages, email, uploaded files) through a
+System One decision model before it enters any model context. On a manual
+install the screen is enabled by app-config default, so either give it a
+reachable model or turn it off — otherwise the first screened content fails
+closed.
+
+Enable it with a reachable System One endpoint (hosted gateway or self-hosted
+Kev):
+
+```bash
+export MIRA_INJECTION_SCREEN_ENABLED=1
+export MIRA_SYSTEMONE_PROVIDER=remote        # or local for a self-hosted, unkeyed endpoint
+export MIRA_SYSTEMONE_ENDPOINT=https://gw.lunaroute.com/v1/systemone
+export MIRA_SYSTEMONE_MODEL=djev
+# remote only: store the bearer token in Vault (no env var for secrets)
+vault kv put secret/mira/api_keys systemone_key="your-token"
+```
+
+Or disable it (external content is still wrapped, never passed raw):
+
+```bash
+export MIRA_INJECTION_SCREEN_ENABLED=0
+```
+
+The bare-metal installer collects these through its interview /
+`deploy-config.example.yml` (`injection_screen`, `systemone_provider`,
+`systemone_endpoint`, `systemone_model`, `systemone_api_key`) and writes them
+to `/opt/mira/systemone.env`; the Docker image ships with the screen off
+because the container cannot provision the Vault key — pass the env vars and
+seed Vault manually to opt in.
+
 ## Running
 
 Once services, credentials, schema, and Python dependencies are in place:

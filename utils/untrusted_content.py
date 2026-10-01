@@ -34,6 +34,7 @@ The screen runs these steps:
 import base64
 import binascii
 import html
+import json
 import logging
 import re
 import threading
@@ -43,6 +44,7 @@ from typing import Literal, Mapping
 
 from clients.llm_provider import LLMProvider, get_llm_provider
 from clients.systemone_client import NoulQuestion, SystemOneClient, get_systemone_client
+from config import config
 from config.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -140,6 +142,45 @@ class InjectionRejected(ValueError):
         self.source = source
         self.verdict = verdict
         self.escalated = escalated
+
+
+class InjectionScreenUnavailable(RuntimeError):
+    """The screen is enabled but its System One dependency is broken.
+
+    Fail closed with a remediation the reader can act on. `str(self)` is the
+    JSON envelope `{"success": false, "error": ..., "message": ...}` — the
+    same shape `web_tool._build_fetch_result` returns for a failed fetch
+    (tools/implementations/web_tool.py), so the commissioning model reads a
+    format it already knows. The true cause is chained via `raise ... from`
+    (`__cause__`) and named by type in the log; the envelope carries only the
+    remediation.
+    """
+
+    def __init__(self, source: str, error_code: str, remediation: str, cause: BaseException):
+        self.source = source
+        self.error_code = error_code
+        self.remediation = remediation
+        envelope = json.dumps(
+            {
+                "success": False,
+                "error": error_code,
+                "message": remediation,
+                "source": source,
+            }
+        )
+        super().__init__(envelope)
+
+
+# Both remedies for an enabled-but-broken screen, verbatim in the envelope the
+# commissioning model sees.
+_INJECTION_SCREEN_REMEDIATION = (
+    "The injection screen could not reach its System One model, so this content "
+    "was not screened. Configure a reachable System One model "
+    "(MIRA_SYSTEMONE_PROVIDER, MIRA_SYSTEMONE_ENDPOINT, MIRA_SYSTEMONE_MODEL; "
+    "Vault systemone_key when the provider is remote), or disable the screen "
+    "with MIRA_INJECTION_SCREEN_ENABLED=0 (external content is still wrapped, "
+    "never passed raw)."
+)
 
 
 class EscalationResponseError(RuntimeError):
@@ -339,8 +380,35 @@ def get_injection_screen() -> InjectionScreen:
 
 
 def screen_untrusted(content: str, source: str) -> str:
-    """Screen external content, then wrap it. Raises InjectionRejected on rejection."""
-    return get_injection_screen().screen(content, source)
+    """Screen external content, then wrap it.
+
+    Raises InjectionRejected on rejection. With the screen disabled
+    (`config.system.injection_screen_enabled`, `MIRA_INJECTION_SCREEN_ENABLED=0`)
+    it wraps without judging — wrapped, never raw — and builds no client.
+    With the screen enabled, any non-rejection failure (missing Vault key,
+    transport, bad answer) raises InjectionScreenUnavailable carrying a
+    remediation envelope: fail closed, never pass unscreened content as
+    screened.
+    """
+    if not config.system.injection_screen_enabled:
+        logger.debug("Injection screen disabled (injection_screen_enabled); wrapping %r unscreened", source)
+        return wrap_untrusted(content, source)
+    try:
+        return get_injection_screen().screen(content, source)
+    except InjectionRejected:
+        # A verdict, not an outage — the screen decided; propagate the verdict.
+        raise
+    except Exception as cause:
+        logger.error(
+            "Injection screen failure for %r: %s: %s. %s",
+            source,
+            type(cause).__name__,
+            cause,
+            _INJECTION_SCREEN_REMEDIATION,
+        )
+        raise InjectionScreenUnavailable(
+            source, "injection_screen_unavailable", _INJECTION_SCREEN_REMEDIATION, cause
+        ) from cause
 
 
 def _escape_markup(text: str) -> str:

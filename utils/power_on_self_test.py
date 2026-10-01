@@ -281,6 +281,7 @@ def run_pre_server_post(
         CheckSpec("postgres_rls", True, _check_postgres_rls),
         CheckSpec("valkey", True, _check_valkey),
         CheckSpec("embeddings", True, _check_embeddings),
+        CheckSpec("injection_screen", True, _check_injection_screen),
         CheckSpec("llm_configuration", True, _check_llm_configuration),
         CheckSpec("llm_provider_reachability", True, _check_llm_provider_reachability),
         CheckSpec("tools", True, _check_tools),
@@ -904,6 +905,37 @@ def _check_embeddings() -> dict[str, Any]:
         "config_lock_trigger": _EMBEDDING_CONFIG_LOCK_TRIGGER,
         "dtype": str(embedding.dtype),
         "query_cache_verified": cache_hit,
+    }
+
+
+def _check_injection_screen() -> dict[str, Any]:
+    """Injection-screen liveness: shape only, never disposition.
+
+    Disabled constructs nothing. Enabled runs one real tier-1 `assess()` —
+    boot never bills the `fast` escalation route — and asserts all six
+    `SCREEN_QUESTIONS` signals came back. Calibration drift moves
+    probabilities, not the signal set, so drift cannot fail boot; an
+    enabled-but-broken screen (missing Vault key, unreachable endpoint)
+    parks the boot gate here instead of surfacing at first dispatch.
+    """
+    from config.config_manager import config
+    from utils.untrusted_content import SCREEN_QUESTIONS, get_injection_screen
+
+    if not config.system.injection_screen_enabled:
+        return {"enabled": False}
+
+    verdict = get_injection_screen().assess(POST_PROBE_TEXT)
+    if set(verdict.signals) != set(SCREEN_QUESTIONS):
+        raise RuntimeError(
+            f"injection screen returned {sorted(verdict.signals)} for the probe text; "
+            f"the screen must answer every question in {list(SCREEN_QUESTIONS)}"
+        )
+    return {
+        "enabled": True,
+        "provider": config.systemone.provider,
+        "model": config.systemone.model,
+        "disposition": verdict.disposition,
+        "chunks_screened": verdict.chunks_screened,
     }
 
 

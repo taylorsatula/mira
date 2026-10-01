@@ -62,7 +62,7 @@ parse_yaml_config() {
             "'"*) value="${value#\'}"; value="${value%\'}" ;;
         esac
         case "$key" in
-            offline_mode|local_model_choice|custom_gguf|build_llama_cpp|llama_main_url|llama_small_url|llama_main_model|llama_small_model|chat_provider_type|chat_endpoint|chat_api_key|chat_model|anthropic_key|anthropic_batch_key|subcortical_endpoint|subcortical_api_key|subcortical_model|kagi_api_key|embedding_provider|embedding_endpoint|embedding_model|embedding_api_key|timezone|db_password|install_playwright|install_systemd|start_mira_now|overwrite_existing|stop_occupied_ports)
+            offline_mode|local_model_choice|custom_gguf|build_llama_cpp|llama_main_url|llama_small_url|llama_main_model|llama_small_model|chat_provider_type|chat_endpoint|chat_api_key|chat_model|anthropic_key|anthropic_batch_key|subcortical_endpoint|subcortical_api_key|subcortical_model|kagi_api_key|embedding_provider|embedding_endpoint|embedding_model|embedding_api_key|injection_screen|systemone_provider|systemone_endpoint|systemone_model|systemone_api_key|timezone|db_password|install_playwright|install_systemd|start_mira_now|overwrite_existing|stop_occupied_ports)
                 yaml_store "$key" "$value" ;;
             *) yaml_fail "Unknown config key: '$key' (see deploy-config.example.yml)" ;;
         esac
@@ -71,7 +71,7 @@ parse_yaml_config() {
     # every key is required — the template ships one line per key, so a
     # missing key means the file was hand-edited badly; name it.
     local k
-    for k in offline_mode local_model_choice custom_gguf build_llama_cpp llama_main_url llama_small_url llama_main_model llama_small_model chat_provider_type chat_endpoint chat_api_key chat_model anthropic_key anthropic_batch_key subcortical_endpoint subcortical_api_key subcortical_model kagi_api_key embedding_provider embedding_endpoint embedding_model embedding_api_key timezone db_password install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports; do
+    for k in offline_mode local_model_choice custom_gguf build_llama_cpp llama_main_url llama_small_url llama_main_model llama_small_model chat_provider_type chat_endpoint chat_api_key chat_model anthropic_key subcortical_endpoint subcortical_api_key subcortical_model kagi_api_key embedding_provider embedding_endpoint embedding_model embedding_api_key injection_screen systemone_provider systemone_endpoint systemone_model systemone_api_key timezone db_password install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports; do
         case ",$YAML_SEEN_KEYS," in
             *",$k,"*) : ;;
             *) yaml_fail "Config file is missing required key: '$k'" ;;
@@ -80,7 +80,7 @@ parse_yaml_config() {
 
     # unfilled template placeholders abort before sudo is requested
     local bad="" v
-    for k in offline_mode local_model_choice custom_gguf build_llama_cpp llama_main_url llama_small_url llama_main_model llama_small_model chat_provider_type chat_endpoint chat_api_key chat_model anthropic_key anthropic_batch_key subcortical_endpoint subcortical_api_key subcortical_model kagi_api_key embedding_provider embedding_endpoint embedding_model embedding_api_key timezone db_password install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports; do
+    for k in offline_mode local_model_choice custom_gguf build_llama_cpp llama_main_url llama_small_url llama_main_model llama_small_model chat_provider_type chat_endpoint chat_api_key chat_model anthropic_key subcortical_endpoint subcortical_api_key subcortical_model kagi_api_key embedding_provider embedding_endpoint embedding_model embedding_api_key injection_screen systemone_provider systemone_endpoint systemone_model systemone_api_key timezone db_password install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports; do
         eval "v=\"\$YAML_$k\""
         [ "$v" = "__SET_ME__" ] && bad="$bad $k"
     done
@@ -117,8 +117,23 @@ parse_yaml_config() {
     elif [ -n "$YAML_embedding_endpoint$YAML_embedding_model$YAML_embedding_api_key" ]; then
         yaml_fail "embedding_endpoint, embedding_model, and embedding_api_key apply only when embedding_provider is remote; set them to \"\""
     fi
+    # Injection screen: an enabled screen needs a reachable System One model
+    # (probed before the install commits); a disabled one probes and seeds
+    # nothing, so all four systemone_* keys must be empty.
+    if [ "$YAML_injection_screen" = "yes" ]; then
+        [ "$YAML_systemone_provider" = "local" ] || [ "$YAML_systemone_provider" = "remote" ] || yaml_fail "systemone_provider must be local or remote"
+        [ -n "$YAML_systemone_endpoint" ] || yaml_fail "systemone_endpoint must not be empty when injection_screen is yes"
+        [ -n "$YAML_systemone_model" ] || yaml_fail "systemone_model must not be empty when injection_screen is yes"
+        if [ "$YAML_systemone_provider" = "remote" ]; then
+            [ -n "$YAML_systemone_api_key" ] || yaml_fail "systemone_api_key must not be empty when systemone_provider is remote"
+        else
+            [ -z "$YAML_systemone_api_key" ] || yaml_fail "systemone_api_key must be \"\" when systemone_provider is local (self-hosted endpoints take no token)"
+        fi
+    elif [ -n "$YAML_systemone_provider$YAML_systemone_endpoint$YAML_systemone_model$YAML_systemone_api_key" ]; then
+        yaml_fail "systemone_* keys apply only when injection_screen is yes; set them to \"\""
+    fi
     local k2 v2
-    for k2 in build_llama_cpp install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports; do
+    for k2 in build_llama_cpp install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports injection_screen; do
         eval "v2=\"\$YAML_$k2\""
         [ "$v2" = "yes" ] || [ "$v2" = "no" ] || yaml_fail "$k2 must be yes or no"
     done
@@ -206,6 +221,16 @@ apply_yaml_config() {
         STATUS_EMBEDDINGS="${CHECKMARK} Remote: ${CONFIG_EMBEDDING_MODEL} at ${CONFIG_EMBEDDING_ENDPOINT}"
     else
         STATUS_EMBEDDINGS="${CHECKMARK} Local model"
+    fi
+    CONFIG_INJECTION_SCREEN="$YAML_injection_screen"
+    CONFIG_SYSTEMONE_PROVIDER="$YAML_systemone_provider"
+    CONFIG_SYSTEMONE_ENDPOINT="$YAML_systemone_endpoint"
+    CONFIG_SYSTEMONE_MODEL="$YAML_systemone_model"
+    CONFIG_SYSTEMONE_API_KEY="$YAML_systemone_api_key"
+    if [ "$CONFIG_INJECTION_SCREEN" = "yes" ]; then
+        STATUS_SYSTEMONE="${CHECKMARK} On: ${CONFIG_SYSTEMONE_PROVIDER} ${CONFIG_SYSTEMONE_MODEL} at ${CONFIG_SYSTEMONE_ENDPOINT}"
+    else
+        STATUS_SYSTEMONE="${DIM}Disabled${RESET}"
     fi
     if [ -z "$YAML_db_password" ]; then
         CONFIG_DB_PASSWORD="changethisifdeployingpwd"
