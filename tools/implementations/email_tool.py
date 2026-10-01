@@ -61,7 +61,11 @@ class EmailToolConfig(BaseModel):
     )
     use_ssl: bool = Field(
         default=True,
-        description="Use SSL/TLS for secure connections"
+        description="Use SSL/TLS for the IMAP connection"
+    )
+    smtp_starttls: bool = Field(
+        default=False,
+        description="Use STARTTLS (typically port 587) for the SMTP submission connection instead of implicit TLS (typically port 465)"
     )
     # Folders - auto-discovered during validation, can be manually overridden
     inbox_folder: str = Field(default="INBOX", description="Inbox folder name")
@@ -348,9 +352,12 @@ class EmailTool(Tool):
         email_address = config.get("email_address")
         password = config.get("password")
         use_ssl = config.get("use_ssl", True)
+        smtp_server = config.get("smtp_server")
+        smtp_port = config.get("smtp_port", 465)
+        smtp_starttls = config.get("smtp_starttls", False)
 
-        if not all([imap_server, email_address, password]):
-            raise ValueError("Missing required fields: imap_server, email_address, password")
+        if not all([imap_server, smtp_server, email_address, password]):
+            raise ValueError("Missing required fields: imap_server, smtp_server, email_address, password")
 
         connection = None
         try:
@@ -427,6 +434,19 @@ class EmailTool(Tool):
 
             # Don't fail on missing folders - let user select manually
 
+            # SMTP submission check: validation must exercise the same
+            # transport the send operations use (STARTTLS vs implicit
+            # TLS), or a STARTTLS-only provider validates green here and
+            # then fails on every send.
+            smtp_context = ssl.create_default_context()
+            if smtp_starttls:
+                with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as smtp_connection:
+                    smtp_connection.starttls(context=smtp_context)
+                    smtp_connection.login(email_address, password)
+            else:
+                with smtplib.SMTP_SSL(smtp_server, smtp_port, context=smtp_context, timeout=30) as smtp_connection:
+                    smtp_connection.login(email_address, password)
+
             return {
                 "folders": folders,
                 "discovered_folders": {
@@ -440,6 +460,10 @@ class EmailTool(Tool):
 
         except imaplib.IMAP4.error as e:
             raise ValueError(f"IMAP authentication failed: {e}")
+        except smtplib.SMTPAuthenticationError as e:
+            raise ValueError(f"SMTP authentication failed: {e}")
+        except smtplib.SMTPException as e:
+            raise ValueError(f"SMTP connection test failed: {e}")
         except ValueError:
             raise
         except Exception as e:
@@ -462,6 +486,7 @@ class EmailTool(Tool):
         self.smtp_port = None
         self.email_address = None
         self.use_ssl = None
+        self.smtp_starttls = None
         self._password = None
         self._config_loaded = False
 
@@ -504,6 +529,7 @@ class EmailTool(Tool):
         self.imap_port = config.get("imap_port", 993)
         self.smtp_port = config.get("smtp_port", 465)
         self.use_ssl = config.get("use_ssl", True)
+        self.smtp_starttls = config.get("smtp_starttls", False)
 
         # Folder configuration (auto-discovered during validation, can be manually set)
         self.inbox_folder = config.get("inbox_folder", "INBOX")
@@ -1568,31 +1594,59 @@ class EmailTool(Tool):
                     if parsed_bcc:
                         recipients.extend([addr.strip() for addr in parsed_bcc.split(",") if addr.strip()])
                     
-                    # Connect to SMTP server
+                    # Connect to the SMTP server. The per-protocol encryption
+                    # setting selects the submission transport: STARTTLS
+                    # (smtplib.SMTP + starttls, typically port 587) or the
+                    # default implicit TLS (SMTP_SSL, typically port 465).
                     context = ssl.create_default_context()
                     
-                    with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port, context=context, timeout=30) as server:
-                        # Login
-                        server.login(self.email_address, self.password)
-                        
-                        # Send the email
-                        server.send_message(msg)
+                    if self.smtp_starttls:
+                        with smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=30) as server:
+                            # Upgrade to TLS, then login and send
+                            server.starttls(context=context)
+                            server.login(self.email_address, self.password)
+                            server.send_message(msg)
+                    else:
+                        with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port, context=context, timeout=30) as server:
+                            # Login
+                            server.login(self.email_address, self.password)
+                            
+                            # Send the email
+                            server.send_message(msg)
                     
-                    # Save to Sent folder
+                    # Save to Sent folder. Best-effort archival: the SMTP
+                    # send above already succeeded, so a failed APPEND must not
+                    # fail the operation — but the result envelope and the audit
+                    # row must not report an unqualified success either.
+                    saved_to_sent = True
                     try:
                         typ, _ = self.connection.append(_quote_mailbox(self.sent_folder), None, None, msg.as_bytes())
                         if typ != "OK":
                             self.logger.warning(f"Failed to save to sent folder (status {typ})")
+                            saved_to_sent = False
                     except Exception as e:
                         self.logger.warning(f"Failed to save to sent folder: {e}")
+                        saved_to_sent = False
                     
-                    self._log_audit("send_email", f"to={to}, subject={subject}", reasoning, "success")
-                    return {
+                    result = {
                         "success": True,
                         "to": to,
                         "subject": subject,
                         "operation": "send_email"
                     }
+                    if saved_to_sent:
+                        self._log_audit("send_email", f"to={to}, subject={subject}", reasoning, "success")
+                    else:
+                        result["saved_to_sent"] = False
+                        result["warning"] = f"Email sent, but no copy was saved to the Sent folder '{self.sent_folder}'"
+                        self._log_audit(
+                            "send_email",
+                            f"to={to}, subject={subject}",
+                            reasoning,
+                            "partial",
+                            f"Sent copy not saved to '{self.sent_folder}'",
+                        )
+                    return result
                 except Exception as e:
                     self.logger.error(f"Failed to send email in email_tool: {e}")
                     self._log_audit("send_email", f"to={to}, subject={subject}", reasoning, "failed", str(e))
@@ -1683,37 +1737,69 @@ class EmailTool(Tool):
                     # Set the content
                     msg.set_content(body)
                     
-                    # Connect to SMTP server
+                    # Connect to the SMTP server. The per-protocol encryption
+                    # setting selects the submission transport: STARTTLS
+                    # (smtplib.SMTP + starttls, typically port 587) or the
+                    # default implicit TLS (SMTP_SSL, typically port 465).
                     context = ssl.create_default_context()
                     
-                    with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port, context=context, timeout=30) as server:
-                        # Login
-                        server.login(self.email_address, self.password)
-                        
-                        # Send the email
-                        server.send_message(msg)
+                    if self.smtp_starttls:
+                        with smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=30) as server:
+                            # Upgrade to TLS, then login and send
+                            server.starttls(context=context)
+                            server.login(self.email_address, self.password)
+                            server.send_message(msg)
+                    else:
+                        with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port, context=context, timeout=30) as server:
+                            # Login
+                            server.login(self.email_address, self.password)
+                            
+                            # Send the email
+                            server.send_message(msg)
                     
-                    # Save to Sent folder
+                    # Save to Sent folder. Best-effort archival: the SMTP
+                    # send above already succeeded, so a failed APPEND must not
+                    # fail the operation — but the result envelope and the audit
+                    # row must not report an unqualified success either.
+                    saved_to_sent = True
                     try:
                         typ, _ = self.connection.append(_quote_mailbox(self.sent_folder), None, None, msg.as_bytes())
                         if typ != "OK":
                             self.logger.warning(f"Failed to save to sent folder (status {typ})")
+                            saved_to_sent = False
                     except Exception as e:
                         self.logger.warning(f"Failed to save to sent folder: {e}")
+                        saved_to_sent = False
                     
-                    # Mark as answered
-                    if not self._set_flag(email_id, "\\Answered", True):
+                    # Mark as answered. Also best-effort: a missed \Answered
+                    # flag is surfaced in the envelope instead of masked.
+                    marked_answered = self._set_flag(email_id, "\\Answered", True)
+                    if not marked_answered:
                         self.logger.warning(f"Failed to mark email {email_id} as answered")
 
                     self._remove_later_reply_id(email_id)
 
-                    self._log_audit("reply_to_email", f"reply to {email_id}", reasoning, "success")
-                    return {
+                    result = {
                         "success": True,
                         "replied_to": email_id,
                         "subject": wrap_untrusted(self._decode_header(str(msg["Subject"])), "email_header"),
                         "operation": "reply_to_email"
                     }
+                    reply_warnings = []
+                    if not saved_to_sent:
+                        result["saved_to_sent"] = False
+                        reply_warnings.append(f"no copy was saved to the Sent folder '{self.sent_folder}'")
+                    if not marked_answered:
+                        result["marked_answered"] = False
+                        reply_warnings.append(f"source email {email_id} was not marked as answered")
+                    if reply_warnings:
+                        result["warning"] = "Reply sent, but " + "; ".join(reply_warnings)
+                        self._log_audit(
+                            "reply_to_email", f"reply to {email_id}", reasoning, "partial", "; ".join(reply_warnings)
+                        )
+                    else:
+                        self._log_audit("reply_to_email", f"reply to {email_id}", reasoning, "success")
+                    return result
                 except Exception as e:
                     self.logger.error(f"Failed to reply to email in email_tool: {e}")
                     self._log_audit("reply_to_email", f"reply to {email_id}", reasoning, "failed", str(e))

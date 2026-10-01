@@ -28,12 +28,16 @@ done
 finish_flags
 [ -n "$SARC" ] || { echo "usage: inject.sh [flags] <sarcophagus>" >&2; exit 2; }
 
+# Resolve + verify unconditionally — directory and name alike: resolve_sarc
+# runs the MANIFEST.sha256 gate (sha256sum -c) for existing directories too,
+# so an unverified payload never reaches a VM. It is idempotent for the
+# already-resolved abs dir oneshot.sh passes in, and still expands bare names
+# (local $SNAP_DIR or --host SNAP_DIR pull). It checks only manifest +
+# SNAPSHOT-FACTS, so the payload presence loop stays.
+SARC=$(resolve_sarc "$SARC")
 for f in postgres/mira_service.dump data-users.tar.gz app-code.tar.gz \
          vault.tar.gz home-ubuntu.tar.gz systemd/mira.service SNAPSHOT-FACTS.txt; do
-  [ -f "$SARC/$f" ] && continue
-  if [ -d "$SARC" ]; then echo "FATAL: $SARC/$f missing" >&2
-  else SARC=$(resolve_sarc "$SARC") && continue; fi
-  exit 1
+  [ -f "$SARC/$f" ] || { echo "FATAL: $SARC/$f missing" >&2; exit 1; }
 done
 echo "sarcophagus: $SARC"
 

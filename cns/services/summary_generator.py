@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from cns.core.message import Message, preprocess_content_blocks
 from cns.infrastructure.continuum_repository import ContinuumRepository
 from clients.llm_provider import LLMProvider, ContextOverflowError, get_llm_provider
-from utils.timezone_utils import utc_now
+from utils.timezone_utils import utc_now, convert_from_utc, validate_timezone
+from utils.user_context import get_user_preferences
 from utils.tag_parser import TagParser
 
 logger = logging.getLogger(__name__)
@@ -313,21 +314,40 @@ class SummaryGenerator:
     
     def _get_segment_time(self, messages: Optional[List[Message]]) -> str:
         """
-        Get formatted timestamp from segment messages.
-        
+        Get formatted timestamp from segment messages, in the user's timezone.
+
+        The anchor fills the template's mandated absolute dates, and it is the
+        model's only calendar reference (_format_messages_for_llm emits no
+        per-message timestamps), so it must be the user's local date. Note:
+        _format_previous_summaries still splices the raw segment_end_time into
+        the same prompt unconverted — same class of residual, separate site.
+
         Args:
             messages: Messages in the segment
-            
+
         Returns:
             Formatted timestamp string
         """
+        # Mirror _resolve_pending_memory_timezone: resolve the per-user tz with
+        # a UTC fallback so a missing/malformed users.timezone row degrades
+        # the anchor instead of failing the collapse (a retryable error).
+        try:
+            user_tz = validate_timezone(get_user_preferences().timezone)
+        except Exception:
+            logger.warning(
+                "User preferences unavailable while resolving segment summary "
+                "time anchor; defaulting to UTC",
+                exc_info=True,
+            )
+            user_tz = "UTC"
+
         if messages and len(messages) > 0:
-            # Use first message timestamp as segment time
+            # Use first message timestamp as segment time, converted from UTC
             first_msg_time = messages[0].created_at
-            return first_msg_time.strftime("%B %d, %Y")
+            return convert_from_utc(first_msg_time, user_tz).strftime("%B %d, %Y")
         else:
             # Fallback to current time if no messages
-            return utc_now().strftime("%B %d, %Y")
+            return convert_from_utc(utc_now(), user_tz).strftime("%B %d, %Y")
 
     # --- Hierarchical summarization for oversized segments ---
 

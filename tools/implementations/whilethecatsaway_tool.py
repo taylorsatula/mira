@@ -166,3 +166,19 @@ class WhileTheCatsAwayTool(Tool):
                 f"{task_id[:8]}: {e}",
                 exc_info=True,
             )
+            self._publish_event(continuum_id, task_id, 'failed', {
+                'error': str(e),
+                'error_type': 'ThreadCrash',
+            })
+
+    def _publish_event(self, continuum_id: str, task_id: str,
+                       status: str, data: Dict[str, Any]) -> None:
+        """Publish a status update to the WhileTheCatsAwayTrinket."""
+        if self.event_bus is None:
+            return
+        from cns.core.events import UpdateTrinketEvent
+        self.event_bus.publish(UpdateTrinketEvent.create(
+            continuum_id=continuum_id,
+            target_trinket='WhileTheCatsAwayTrinket',
+            context={'task_id': task_id, 'status': status, **data},
+        ))

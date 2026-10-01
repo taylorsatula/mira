@@ -192,7 +192,7 @@ def create_collapse_marker() -> Message:
         Message with collapse_marker notification type
     """
     return Message(
-        content='<mira:notification type="collapse_marker">Older messages and summaries available through search. Use continuumsearch to find specific information from past conversations.</mira:notification>',
+        content='<mira:notification type="collapse_marker">Older messages and summaries available through search. Use continuum_tool to find specific information from past conversations.</mira:notification>',
         role="assistant",
         metadata={'system_notification': True, 'notification_type': 'collapse_marker'}
     )

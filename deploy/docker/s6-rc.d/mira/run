@@ -39,9 +39,10 @@ export HF_HOME=/home/mira/.cache/huggingface
 export MIRA_LOG_DIR=/opt/mira/logs
 # System One injection-screen settings: same file and variables as the
 # systemd path (/opt/mira/systemone.env, written by finalize.sh). The
-# container cannot provision the Vault key, so the screen is off unless the
-# file (or operator env) enables it; an opting-in operator seeds Vault
-# manually — see deploy/docker/scripts/AGENTS.md.
+# init-mira.sh's first boot writes /opt/mira/systemone.env when a System One
+# token was collected (wizard step 4); absent -> the fallback below keeps the
+# screen off. A docker recreate re-runs the first-boot gate against the
+# persisted Vault and re-provisions the file.
 if [ -f /opt/mira/systemone.env ]; then
     . /opt/mira/systemone.env
 fi

@@ -102,6 +102,20 @@ if [ -n "$EMBEDDING_API_KEY" ]; then
     echo "  Store the token in Vault as secret/mira/api_keys ${EMBEDDING_VAULT_KEY_NAME}=<token>"
 fi
 
+# (40dz) The injection screen's System One client (provider=remote by
+# default) reads its bearer token from Vault as systemone_key — collect it
+# here like the embedding token so the operator is not left to guess the
+# field name. A local (self-hosted) endpoint takes no token: set
+# MIRA_SYSTEMONE_PROVIDER=local.
+SYSTEMONE_API_KEY=""
+if [ "${MIRA_SYSTEMONE_PROVIDER:-remote}" = "remote" ]; then
+    read -r -s -p "Injection-screen System One bearer token (Enter for none): " SYSTEMONE_API_KEY
+    echo ""
+fi
+if [ -n "$SYSTEMONE_API_KEY" ]; then
+    echo "  Store the token in Vault as secret/mira/api_keys systemone_key=<token>"
+fi
+
 SCHEMA_STATUS=0
 psql -U $SUPERUSER -h localhost -d mira_service -v ON_ERROR_STOP=1 "${EMBEDDING_SCHEMA_ARGS[@]}" -f "${SCRIPT_DIR}/mira_service_schema.sql" > /dev/null 2>&1 || SCHEMA_STATUS=$?
 

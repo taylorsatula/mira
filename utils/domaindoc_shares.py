@@ -100,7 +100,8 @@ def _resolve_shared(user_id: UUID, base_label: str) -> ResolvedDomaindoc:
     pg = _get_pg(user_id)
     share = pg.execute_single(
         "SELECT owner_user_id FROM domaindoc_shares "
-        "WHERE collaborator_user_id = %(uid)s AND domaindoc_label = %(label)s AND status = 'accepted'",
+        "WHERE collaborator_user_id = %(uid)s AND domaindoc_label = %(label)s AND status = 'accepted' "
+        "ORDER BY accepted_at, owner_user_id",
         {"uid": str(user_id), "label": base_label}
     )
     if not share:

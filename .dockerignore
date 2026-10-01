@@ -52,6 +52,15 @@ docs/
 .env.example
 .pre-commit-config.yaml
 
+# Credentials (gitignored credential paths — .gitignore "Vault credentials
+# and data"; never bake into an image). Bare `.env` matches context-root only,
+# so `**/.env` covers nested files like deploy/.env.
+.env
+**/.env
+.vault_env
+.vault_keys
+vault_data/
+
 # Data directories (app data is generated at runtime; user data mounts at
 # /opt/mira/app/data as a volume)
 data/

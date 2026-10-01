@@ -95,7 +95,7 @@ def check_update_endpoint(request: Request, version: str = "") -> UpdateCheckRes
                 checked_at=format_utc_iso(utc_now())
             )
     except pkg_version.InvalidVersion as e:
-        logger.warning(f"Invalid version format in update check: {version} - {e}")
+        logger.warning(f"Invalid version format in update check: {safe_version} - {e}")
 
     return UpdateCheckResponse(
         update_available=False,

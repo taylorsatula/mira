@@ -131,6 +131,9 @@ class LTMemorySessionManager:
                         max_lifetime=3600,  # Recycle connections after 1 hour
                         max_idle=300,       # Close idle connections after 5 minutes
                         check=ConnectionPool.check_connection,
+                        # Register pgvector types once per physical connection
+                        # (pool calls this at connection creation, not per session)
+                        configure=register_vector,
                         kwargs={'options': f'-c statement_timeout={config.database.statement_timeout_ms}'}
                     )
 
@@ -400,14 +403,11 @@ class LTMemorySession:
     
     def _setup_connection(self):
         """
-        Setup connection with pgvector, UUID support, and user context.
+        Setup connection with user context for row-level security.
 
-        Registers pgvector extension, UUID type adapter, and sets user context
-        for row-level security.
+        pgvector registration happens once per physical connection via the
+        pool's configure hook, not per session.
         """
-        # Register pgvector extension on this connection
-        register_vector(self._conn)
-
         # Set user context for row-level security using set_config()
         # Using set_config() instead of SET because it's a proper PostgreSQL
         # function that works correctly with psycopg3 parameter binding.
@@ -461,10 +461,10 @@ class AdminSession:
         return self
 
     def _setup_connection(self):
-        """Setup connection with pgvector support."""
-        # Register pgvector extension
-        register_vector(self._conn)
-
+        """Setup connection; pgvector is registered by the pool configure hook."""
+        # pgvector registration happens once per physical connection via the
+        # pool's configure hook.
+        #
         # Don't set app.current_user_id: this pool authenticates as the
         # mira_admin role, which was provisioned with BYPASSRLS
         # (deploy/postgresql.sh), so RLS policies never apply to these

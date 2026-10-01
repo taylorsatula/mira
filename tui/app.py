@@ -68,8 +68,11 @@ No endpoint is configured yet. Three ways to set up:
     }}
   }}
 
-3. To mint the API token however you can: MIRA web UI → Settings →
-  API tokens → create; the raw token is shown once at mint time.
+3. To mint the API token by hand, drive the same headless auth API chain
+  option 1 uses (scripted end-to-end in deploy/vm/talktomira.sh):
+  log in (auto local session, or emailed magic-link on multi-user), then
+  POST /v0/auth/csrf, then POST /v0/auth/api-tokens — the raw token is
+  shown once at mint time.
 Then rerun: python3 -m tui"""
 
 
@@ -112,11 +115,14 @@ def _block(label: str, color: str, text: str) -> None:
 def _server_error_text(response: httpx.Response) -> str:
     """Best-effort server error text for a non-200 turn response."""
     try:
-        error = response.json().get("error")
-        if isinstance(error, dict) and error.get("message"):
-            return f"[{error.get('code', '?')}] {error['message']}"
+        payload = response.json()
     except ValueError:
-        pass
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}  # a malformed envelope cannot carry an error message
+    error = payload.get("error")
+    if isinstance(error, dict) and error.get("message"):
+        return f"[{error.get('code', '?')}] {error['message']}"
     return response.text.strip()[:300] or "(no body)"
 
 
@@ -158,6 +164,8 @@ def _post_chat(config: EndpointConfig, message: str) -> str:
         payload = response.json()
     except ValueError as error:
         raise ChatError(f"non-JSON response: {response.text[:300]!r}") from error
+    if not isinstance(payload, dict):
+        payload = {}  # a malformed envelope cannot claim success
     if payload.get("success") is not True:
         error = payload.get("error") or {}
         raise ChatError(
@@ -203,7 +211,8 @@ def preflight(config: EndpointConfig, store_path: str) -> None:
             f"the stored API key was rejected (HTTP {response.status_code}) — "
             "it is missing, stale, or from a different instance.\n"
             "  Re-mint it automatically:  python3 -m tui --login\n"
-            f"  Or paste a fresh token (web UI → Settings → API tokens) into: {store_path}"
+            "  Or mint one by hand via the same auth API chain (POST /v0/auth/api-tokens,\n"
+            f"  as deploy/vm/talktomira.sh scripts) and paste it into: {store_path}"
         )
     if response.status_code != 200:
         raise ChatError(
@@ -227,7 +236,8 @@ def preflight(config: EndpointConfig, store_path: str) -> None:
             f"success:false): [{error.get('code')}] {error.get('message')}\n"
             "  The stored API key may be missing, stale, or from a different instance.\n"
             "  Re-mint it automatically:  python3 -m tui --login\n"
-            f"  Or paste a fresh token (web UI → Settings → API tokens) into: {store_path}"
+            "  Or mint one by hand via the same auth API chain (POST /v0/auth/api-tokens,\n"
+            f"  as deploy/vm/talktomira.sh scripts) and paste it into: {store_path}"
         )
 
 

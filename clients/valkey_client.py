@@ -271,6 +271,15 @@ class ValkeyClient:
         data = json.loads(json_str)
         return [data]  # Wrap in list to match expected JSONPath result format
 
+    def getdel(self, key: str) -> Optional[str]:
+        """Atomically get-and-delete a raw string (single-use semantics).
+
+        The atomic single-consume primitive for raw/non-JSON values; returns the
+        value unchanged (None when the key is missing). Use getdel_json for
+        JSON documents.
+        """
+        return self._client.getdel(key)
+
     def getdel_json(self, key: str) -> Optional[list[Dict[str, Any]]]:
         """Atomically get-and-delete JSON data (single-use semantics)."""
         json_str = self._client.getdel(key)
@@ -468,8 +477,15 @@ class ValkeyClient:
         )
         return deleted_count
 
-    def shutdown(self):
+    async def shutdown(self):
         """Clean shutdown of Valkey client."""
+        # Sync pool: module-global and shared by every subsystem's client.
+        if _valkey_pool is not None:
+            _valkey_pool.disconnect()
+        # The binary client owns its own implicit connection pool.
+        self._binary_client.connection_pool.disconnect()
+        # The async client owns a separate async pool; aclose() disconnects it.
+        await self.valkey.aclose()
         logger.toast("Valkey client shutdown complete")
 
 

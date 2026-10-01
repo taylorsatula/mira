@@ -232,6 +232,11 @@ CREATE TABLE users (
     demo_expires_at TIMESTAMPTZ
 );
 
+-- Canonical email identity. Rows are stored lowercased (normalize_email at
+-- the auth seam); this index enforces one mailbox = one account at the
+-- storage boundary, case-variant signups included.
+CREATE UNIQUE INDEX idx_users_email_lower ON users(LOWER(email));
+
 CREATE TABLE magic_links (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -504,7 +509,7 @@ CREATE TABLE entities (
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     entity_type TEXT NOT NULL,
-    embedding vector(300),
+    embedding vector(:embedding_dimensions),
     link_count INTEGER NOT NULL DEFAULT 0,
     last_linked_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -859,7 +864,7 @@ REVOKE EXECUTE ON FUNCTION active_user_identity(uuid) FROM PUBLIC;
 -- Comments
 -- ---------------------------------------------------------------------------
 
-COMMENT ON TABLE model_configs IS 'Exactly five required MIRA routes, each owning dialect, model, endpoint, Vault key, default effort, and output ceiling: primary (main chat only — never shared with async subsystem calls, so background work cannot contend with the main conversation), fast (latency-critical small turns: subcortical analysis, peanut gallery, forage overwatch, descriptor expansion), batch (bulk background work: segment summaries, live-context compaction, persona/portrait/LoRA/user-model synthesis, memory curator, forage, while-the-cat-is-away, repulsion rewriter), assessment (assessment extraction), other (a sidebar turn routed to an outside model, deliberately a different vendor from primary).';
+COMMENT ON TABLE model_configs IS 'Exactly five required MIRA routes, each owning dialect, model, endpoint, Vault key, default effort, and output ceiling: primary (main chat only — never shared with async subsystem calls, so background work cannot contend with the main conversation), fast (latency-critical small turns: subcortical analysis, peanut gallery, forage overwatch, descriptor expansion), batch (bulk background work: segment summaries, live-context compaction, persona/portrait/LoRA/user-model synthesis, memory curator, forage, while-the-cat-is-away, repulsion rewriter), assessment (assessment extraction), other (a sidebar turn routed to an outside model, deliberately a different served model from primary; the default install routes both through one gateway, though an operator can point `other` at an outside vendor).';
 COMMENT ON TABLE embedding_config IS 'The install''s one embedding model (local mdbr-leaf-ir-asym or a remote OpenAI-compatible endpoint) and its vector length, fixed at install; UPDATE/DELETE refused once any vector is stored.';
 COMMENT ON TABLE usage_pricing IS 'Per-route cost lookup keyed by model_configs name; __default__ is the reserved fallback pair.';
 COMMENT ON TABLE users IS 'MIRA account. subject_kind admits member and demo; only member is provisioned today.';

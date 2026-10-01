@@ -4,7 +4,7 @@
 
 MIRA is a FastAPI application with event-driven architecture coordinating three core systems: CNS (conversation management via immutable Continuum aggregate), Working Memory (trinket-based system prompt composition), and LT_Memory (memory extraction/linking/refinement). Subsystems coordinate by event-bus publication, not direct calls — the whole system hangs off a small set of events owned by `cns/core/events.py`. MIRA also models its own relationship with the user as a designed surface: a user model that describes the user, a Persona that prescribes to MIRA, a portrait injected into the system prompt, and metacognitive observers. PostgreSQL RLS with contextvars provides automatic user isolation - all user-scoped queries, tool access, and repository operations enforce `user_id` filtering at the database level.
 
-The User's name is Taylor.
+MIRA models a user as a domain entity (the `users` row with its profile, preferences, and timezone) — end-user identity is a per-installation configuration value (the account the operator provisions), not a property of this repo.
 
 ## 🗺️ Nested AGENTS.md Maps — Shape & Maintenance
 
@@ -140,7 +140,7 @@ The verification homes are indexed in the map registry above; their admission, c
 - **Verify Contracts Before Building On Them**: verify an unfamiliar helper's or internal API's contract at the boundary you depend on — inputs, outputs, types, side effects, failure modes — with the smallest direct probe or existing reference usage before building on it. Most preventable slipups come from trusting names or remembered APIs.
 - **Evidence-Based Position Integrity**: form assessments from evidence and hold them under pushback. Do not adjust conclusions to match the human's apparent preference; when their proposal contradicts the assessment, push back and say why.
 - **Blunt Technical Communication**: reject technically unsound ideas directly — "bad", "infeasible" — and correct wrong assumptions about code or constraints immediately ("That's wrong"). After rejection or correction, provide the working alternative or the accurate facts.
-- **Plain Speech by Audience**: explanations written for Taylor lead in plain English — what the thing does, in ordinary words, symbols and metric names attached only if the subject is the code itself or he asks for them. Precision rules still govern artifacts (code, docs, commit messages) and any statement about specific files. Dense terminology in a human-facing explanation is a communication failure even when every word is accurate.
+- **Plain Speech by Audience**: explanations written for the human operator lead in plain English — what the thing does, in ordinary words, symbols and metric names attached only if the subject is the code itself or the operator asks for them. Precision rules still govern artifacts (code, docs, commit messages) and any statement about specific files. Dense terminology in a human-facing explanation is a communication failure even when every word is accurate.
 - **Concrete Code Communication**: name exact methods, files, and snippets — "the `extract_topic_changed_tag()` method that calls `tag_parser.extract_topic_changed()`", not "the tag processing logic". No vague referents.
 - **Numeric Precision**: no invented numbers. Qualitative language unless the figure comes from measurement, benchmark, requirement, or calculation.
 - **No Tech-Bro Evangelism**: describe work accurately — a feature is a feature, a fix is a fix. No "revolutionary"/"fundamental shift" framing or buzzwords.
@@ -297,28 +297,29 @@ Recurring mistakes kept as incident records — the examples are historical, the
 | UUID mismatches at boundaries | `TypeError: Object of type UUID is not JSON serializable` | Native types internally; convert only at serialization boundaries; early conversion breaks comparisons |
 | Incomplete path replacement | Replacing `_generate_non_streaming()` but missing the buried `_write_firehose()` call | Trace ALL side effects — logging, metrics, state, events; verify by booting |
 
-## 🖥️ Dev-instance deployment — libvirt host (192.168.1.9)
+## 🖥️ Dev-instance deployment — libvirt host
 
 **The toolkit ships IN THIS REPO at `deploy/vm/`** — read `deploy/vm/README.md`
 first. Three modes, all exercised 2026-09-16/17 end-to-end: local libvirt (on the
-host), `--host admin@192.168.1.9` (orchestrated from a workstation, no local libvirt
-needed), and `--ip 192.168.65.2 --vm-user mira_service --vm-pass …` (plain ssh
+host), `--host <user>@<libvirt-host>` (orchestrated from a workstation, no local libvirt
+needed), and `--ip <vm-ip> --vm-user mira_service --vm-pass …` (plain ssh
 onto an existing VM — validated on an aarch64 workstation VM: dev build deployed in 182 s, v3 sarcophagus
 restored, 9/9 facts PASS, chat-continuity confirmed from restored memories).
 `extract.sh` snapshots a live instance into a sealed sarcophagus the same way —
 validated against that aarch64 VM too (cross-arch, cross-user remap: units `User=`,
 credentials, and ownership follow `--vm-user`).
 
-**Reference host recipe** (run on the host, or from a workstation via `--host`):
+**Reference host recipe** (run on the host, or from a workstation via `--host`;
+`$SNAPSHOTS` = the host's snapshot-toolkit directory, `$LIBVIRT_HOST` = `user@host`):
 
 ```bash
-ssh admin@192.168.1.9 \
-  /home/admin/mira_instance_snapshots/bin/oneshot.sh \
-  /home/admin/mira_instance_snapshots/mlfactory_v4_mira   # or another sarcophagus
+ssh "$LIBVIRT_HOST" \
+  "$SNAPSHOTS/bin/oneshot.sh" \
+  "$SNAPSHOTS/mlfactory_v4_mira"   # or another sarcophagus
 ```
 
 That spawns a fresh VM from the host's default-state frozen base template, deploys a
-dev build from `/home/admin/mira-OSS-worktree` (a snapshot of this worktree), injects
+dev build from the host's worktree snapshot of this repo (see the refresh recipe below), injects
 the sarcophagus (Postgres, user data incl. domaindocs, Vault with real keys, units),
 and verifies health + row counts against the sarcophagus's SNAPSHOT-FACTS.txt.
 `--fresh` rebuilds a running VM (old disk preserved); omit it to reuse a running one.
@@ -337,7 +338,7 @@ from its copy, not from here):
 cd ~/Programming/GitHub/mira-OSS && tar --exclude=.git --exclude=data --exclude=logs \
   --exclude=scratch --exclude=__pycache__ --exclude='*.pyc' --exclude=.env \
   --exclude=venv --exclude=.claude -czf - . | \
-  ssh admin@192.168.1.9 'tar -C /home/admin/mira-OSS-worktree -xzf -'
+  ssh "$LIBVIRT_HOST" 'tar -C "$MIRA_HOST_WORKTREE" -xzf -'
 ```
 
 **`deploy/deploy.sh --local` (added 2026-09-16):** installs MIRA from the CURRENT
@@ -360,7 +361,7 @@ is applied live. `chat_provider_type` takes `openai` (any OpenAI-compatible endp
 by `deploy/AGENTS.md`; a staging-copy refresh needs no patch.
 
 **Working with the deployed instance** (minting API tokens, chat endpoint, DB probing,
-turn-in-flight rules, memory/schema maps): read
-`/home/admin/mira_instance_snapshots/AGENTS.md` on the host — the full quickbook of
+turn-in-flight rules, memory/schema maps): read the snapshot toolkit's `AGENTS.md`
+on the host ($SNAPSHOTS/AGENTS.md) — the full quickbook of
 validated commands lives there. Sarcophagi lineage (v1/v2/v3), extraction tooling, and
 restore contracts are documented there too.

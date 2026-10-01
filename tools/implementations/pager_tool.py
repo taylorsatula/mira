@@ -109,10 +109,6 @@ class PagerTool(Tool):
                         "type": "integer",
                         "description": "Integer hours until message expiry. Defaults to 24. Only applies to send_message (send_location always uses 6)"
                     },
-                    "device_secret": {
-                        "type": "string",
-                        "description": "Device secret from register_device response. If provided, must match the sender device's stored secret or the call is rejected"
-                    },
                     "untrusted_device_id": {
                         "type": "string",
                         "description": "Device ID (dev_XXXXXXXX) to untrust. Used with revoke_trust. Must have an existing trust relationship with pager_id"
@@ -195,7 +191,7 @@ class PagerTool(Tool):
         
     11. send_location: Send a location pin message from one pager to another.
         - Required: sender_id, recipient
-        - Optional: priority (0=normal, 1=high, 2=urgent), note, device_secret
+        - Optional: priority (0=normal, 1=high, 2=urgent), note
         - Simulated: no real location source exists, so the pin carries an explicit
           "simulated - no real location available" marker — never coordinates or a
           street address
@@ -832,8 +828,7 @@ class PagerTool(Tool):
         recipient_address: str,
         content: str,
         priority: int,
-        location: Optional[str],
-        device_secret: Optional[str]
+        location: Optional[str]
     ) -> Dict[str, Any]:
         """
         Route a message through Lattice for remote delivery.
@@ -844,7 +839,6 @@ class PagerTool(Tool):
             content: Message content
             priority: Message priority
             location: Optional location data
-            device_secret: Device secret for authentication
 
         Returns:
             Dict with message delivery status
@@ -858,10 +852,6 @@ class PagerTool(Tool):
         if not sender or not sender[0]['active']:
             raise ValueError("Sender device not found or inactive")
         sender = sender[0]
-
-        # Verify device secret
-        if device_secret and device_secret != sender['device_secret']:
-            raise ValueError("Invalid device secret")
 
         # Get our server's domain from Lattice
         identity = self._get_lattice_identity()
@@ -934,7 +924,6 @@ class PagerTool(Tool):
         priority: Optional[int] = 0,
         location: Optional[str] = None,
         expiry_hours: Optional[int] = 24,
-        device_secret: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Send a message to a recipient (local username or federated address).
@@ -950,7 +939,6 @@ class PagerTool(Tool):
             priority: Message priority (0=normal, 1=high, 2=urgent)
             location: Optional location information
             expiry_hours: Hours until message expires (default 24)
-            device_secret: Device secret for authentication
 
         Returns:
             Dict containing the sent message
@@ -966,8 +954,7 @@ class PagerTool(Tool):
                 recipient_address=recipient,
                 content=content,
                 priority=priority,
-                location=location,
-                device_secret=device_secret
+                location=location
             )
 
         # For local delivery, resolve username to pager device ID
@@ -994,11 +981,6 @@ class PagerTool(Tool):
             self.logger.error("Sender device not found or inactive")
             raise ValueError("Sender device not found or inactive")
         sender = sender[0]
-
-        # Verify device secret (optional but recommended)
-        if device_secret and device_secret != sender['device_secret']:
-            self.logger.error("Invalid device secret")
-            raise ValueError("Invalid device secret")
 
         recipient_device = recipient_db.select(
             'pager_devices',
@@ -1654,7 +1636,6 @@ Provide ONLY the distilled message, no explanations or meta-text."""
         recipient: str,
         priority: Optional[int] = 1,  # Default to high priority for location pins
         note: Optional[str] = None,
-        device_secret: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Send a location pin message from one pager to another.
@@ -1664,7 +1645,6 @@ Provide ONLY the distilled message, no explanations or meta-text."""
             recipient: Recipient username or federated address
             priority: Message priority (default 1=high for location pins)
             note: Optional brief note (max 50 chars)
-            device_secret: Device secret for authentication
 
         Returns:
             Dict containing the sent location message
@@ -1694,6 +1674,5 @@ Provide ONLY the distilled message, no explanations or meta-text."""
             content=content,
             priority=priority,
             location=location_marker,
-            expiry_hours=6,  # Location pins expire faster (6 hours)
-            device_secret=device_secret
+            expiry_hours=6  # Location pins expire faster (6 hours)
         )

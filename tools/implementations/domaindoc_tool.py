@@ -14,7 +14,11 @@ from tools.repo import Tool
 from tools.registry import registry
 from utils.timezone_utils import utc_now, format_utc_iso
 from utils.userdata_manager import UserDataManager, get_user_data_manager
-from utils.domaindoc_shares import resolve_domaindoc, get_accepted_shares, invalidate_domaindoc_cache, is_shared_label
+from utils.domaindoc_shares import (
+    resolve_domaindoc, get_accepted_shares, invalidate_domaindoc_cache,
+    is_shared_label, SHARED_SUFFIX,
+)
+from utils.untrusted_content import wrap_untrusted
 
 
 logger = logging.getLogger(__name__)
@@ -115,8 +119,9 @@ class DomaindocTool(Tool):
                         ],
                         "description": (
                             "Operation to perform. 'overview' previews a domaindoc's structure (works on disabled docs). "
-                            "'create' makes a new domaindoc with its first section: new_label is a lowercase kebab "
-                            "identifier (letters, digits, hyphens, underscores; 64 chars max), description is an optional "
+                            "'create' makes a new domaindoc with its first section: new_label is a lowercase "
+                            "identifier (letters, digits, underscores; hyphens are normalized to underscores; "
+                            "64 chars max) and cannot end with the reserved '_shared' suffix; description is an optional "
                             "one-line summary, section and content are the first section's header and body. Reserve "
                             "domaindocs for topics with enough depth to warrant persistent structured reference — an "
                             "ongoing project, a domain the user keeps returning to across conversations — not transient "
@@ -133,8 +138,10 @@ class DomaindocTool(Tool):
                         "type": "string",
                         "description": (
                             "Label for the new domaindoc in 'create': lowercase letters, digits, "
-                            "hyphens, or underscores, starting with a letter or digit, 64 chars max. "
-                            "Must not match an existing label. Only for 'create'."
+                            "or underscores (hyphens are normalized to underscores), starting with a "
+                            "letter or digit, 64 chars max. Must not match an existing label and must "
+                            "not end with the reserved '_shared' suffix — that suffix is reserved for "
+                            "shared documents. Only for 'create'."
                         )
                     },
                     "doc_description": {
@@ -580,7 +587,11 @@ class DomaindocTool(Tool):
                             snippet = "..." + snippet
                         if end < len(content):
                             snippet = snippet + "..."
-                        match_entry["snippet"] = snippet
+                        # Producer-level boundary: doc content entering a tool
+                        # result is wrapped unconditionally — json.dumps adds no
+                        # boundary of its own, and shared docs carry cross-user
+                        # text.
+                        match_entry["snippet"] = wrap_untrusted(snippet, "domaindoc_shared")
 
                     matches.append(match_entry)
 
@@ -689,8 +700,8 @@ class DomaindocTool(Tool):
                 continue  # Skip subsections — they'll be nested under parents
 
             entry: Dict[str, Any] = {
-                "header": sec["header"],
-                "summary": sec.get("encrypted__summary") or "(no summary)",
+                "header": wrap_untrusted(sec["header"], "domaindoc_shared"),
+                "summary": wrap_untrusted(sec.get("encrypted__summary"), "domaindoc_shared") or "(no summary)",
                 "collapsed": sec.get("collapsed", False),
                 "pinned": sec.get("pinned", False),
             }
@@ -698,8 +709,8 @@ class DomaindocTool(Tool):
             # Find subsections
             subsections = [
                 {
-                    "header": sub["header"],
-                    "summary": sub.get("encrypted__summary") or "(no summary)",
+                    "header": wrap_untrusted(sub["header"], "domaindoc_shared"),
+                    "summary": wrap_untrusted(sub.get("encrypted__summary"), "domaindoc_shared") or "(no summary)",
                     "collapsed": sub.get("collapsed", False),
                 }
                 for sub in all_sections
@@ -713,7 +724,7 @@ class DomaindocTool(Tool):
         return {
             "success": True,
             "label": label,
-            "description": doc.get("encrypted__description") or "",
+            "description": wrap_untrusted(doc.get("encrypted__description"), "domaindoc_shared"),
             "enabled": doc.get("enabled", False),
             "section_count": len(all_sections),
             "sections": section_tree
@@ -731,12 +742,23 @@ class DomaindocTool(Tool):
         import re
 
         if not new_label or not new_label.strip():
-            raise ValueError("create requires 'new_label' (lowercase kebab identifier)")
-        label = new_label.strip()
-        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", label):
+            raise ValueError("create requires 'new_label' (lowercase identifier)")
+        # The API's label standard is underscore-separated (actions._validate_label);
+        # normalize hyphens to underscores at the tool boundary so tool-created
+        # labels stay manageable through every API verb.
+        label = new_label.strip().replace("-", "_")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_]{0,63}", label):
             raise ValueError(
-                f"new_label '{label}' is invalid: lowercase letters, digits, hyphens, or "
+                f"new_label '{label}' is invalid: lowercase letters, digits, or "
                 "underscores, starting with a letter or digit, 64 characters max"
+            )
+        if is_shared_label(label):
+            # Same reservation the API enforces (actions._validate_label): an own
+            # doc whose label ends in the shared suffix is unresolvable through
+            # every label-scoped op. Checked before any DB access.
+            raise ValueError(
+                f"Labels cannot end with '{SHARED_SUFFIX}' — this suffix is "
+                "reserved for shared documents"
             )
         if not section or not section.strip():
             raise ValueError("create requires 'section' (the first section's header)")

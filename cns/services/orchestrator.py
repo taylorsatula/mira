@@ -1075,7 +1075,6 @@ class ContinuumOrchestrator:
         system_prompt: str,
         stream: bool = False,
         stream_callback: Callable[[dict[str, object]], None] | None = None,
-        _tried_loading_all_tools: bool = False,
         unit_of_work: UnitOfWork | None = None,
         storage_content: str | list[dict[str, object]] | None = None,
         segment_turn_number: int = 1,
@@ -1094,7 +1093,6 @@ class ContinuumOrchestrator:
             system_prompt: Base system prompt
             stream: Whether to stream response
             stream_callback: Callback for streaming chunks
-            _tried_loading_all_tools: Internal flag to prevent infinite need_tool loops
             unit_of_work: Optional UnitOfWork for batching persistence operations
             storage_content: Content for persistence (optional). For images, this should
                            be the storage tier (512px WebP). If not provided, user_message
@@ -1406,11 +1404,9 @@ class ContinuumOrchestrator:
                 lambda event=committed_event: self._publish_events([event])
             )
 
-        # A tool-loader turn ends with a synthetic continuation prompt, not an
-        # answer, so subscribers must not observe it as a completed turn.
-        # A halted loader pass ends as a stopped turn, not a continuation.
-        auto_continuing = acc.invoked_tool_loader and not _tried_loading_all_tools and not stopped
-        if not stopped and not auto_continuing:
+        # A stopped turn ends without a completed-turn event: subscribers
+        # must not observe a halted turn as completed.
+        if not stopped:
             # Warm the provider cache before registering successful-completion
             # callbacks. A warm failure must not publish TurnCompletedEvent.
             if self.subcortical_layer is not None:
@@ -1418,7 +1414,7 @@ class ContinuumOrchestrator:
 
             # Turn numbering counts user-role rows only: tool and assistant rows
             # must not inflate it, and the transient scaffold is excluded by its
-            # own metadata flag (the continuation adjustment would double-exclude it).
+            # own metadata flag.
             user_message_count = sum(
                 1 for m in continuum.messages
                 if m.role == "user" and not m.metadata.get("transient_system_scaffold")
@@ -1433,35 +1429,6 @@ class ContinuumOrchestrator:
             unit_of_work.add_post_commit_callback(
                 lambda event=completed_event: self._publish_events([event])
             )
-
-        # Auto-continuation: If tools were loaded and we haven't already tried,
-        # automatically continue with the task
-        if auto_continuing:
-            logger.info("Auto-continuing after tool loading...")
-
-            synthetic_message = (
-                "<system-scaffold>The requested tool is now loaded. "
-                "Continue with the original task.</system-scaffold>"
-            )
-
-            synthetic_message_id = uuid4()
-            try:
-                continuum, final_response, metadata = self.process_message(
-                    continuum,
-                    synthetic_message,
-                    system_prompt,
-                    stream=stream,
-                    stream_callback=stream_callback,
-                    _tried_loading_all_tools=True,
-                    unit_of_work=unit_of_work,
-                    segment_turn_number=segment_turn_number,
-                    message_id=synthetic_message_id,
-                    turn_id=active_turn_id,
-                    _internal_continuation=True,
-                )
-            finally:
-                continuum.discard_transient_user_message(synthetic_message_id)
-            logger.info("Auto-continuation completed successfully")
 
         return continuum, final_response, metadata
 

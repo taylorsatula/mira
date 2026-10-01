@@ -919,17 +919,12 @@ class SegmentCollapseHandler:
             segment_id: Segment UUID
             sentinel: Collapsed segment sentinel
             messages: Messages in segment
-            summary: Generated summary text (checked for tombstone)
+            summary: Generated summary text
 
         Raises:
             RuntimeError: If memory extraction submission fails
         """
         user_id = get_current_user_id()
-
-        # Skip memory extraction for tombstoned segments (LLM refused to summarize)
-        if summary == "[Segment content not summarized]":
-            logger.warning(f"Skipping memory extraction for tombstoned segment {segment_id}")
-            return
 
         # Process pending manual memories (from memory_tool.create_memory)
         # FIRST and best-effort: the queue is the sole durable record of

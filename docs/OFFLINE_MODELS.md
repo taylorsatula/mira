@@ -30,7 +30,17 @@ The automatic offline profile is designed around two local llama-server instance
 - Main chat model for primary conversation work
 - Smaller model for lower-cost internal analysis and maintenance tasks
 
-If you bring your own GGUF models, keep the endpoint URLs and model names aligned with the values selected during `deploy/deploy.sh` configuration. MIRA treats those endpoints as OpenAI-compatible dialects.
+If you bring your own GGUF models, keep the endpoint URLs and model names aligned with the values selected during `deploy/deploy.sh` configuration (see [Model Name Configuration](#model-name-configuration) below). MIRA treats those endpoints as OpenAI-compatible dialects.
+
+## Model Name Configuration
+
+`model_configs.model` records the name each llama-server instance serves, and MIRA sends it with every request — llama-server ignores it, but servers such as Ollama and vLLM select the served model by it. The name reaches the database in one of three ways:
+
+- **Interactive install** (`./deploy.sh`): the offline interview prompts for the main and small model names (defaults `local-main` / `local-small`).
+- **Config-file install** (`./deploy.sh --config deploy-config.yml`): the `llama_main_model` and `llama_small_model` keys — see `deploy/deploy-config.example.yml`.
+- **Environment override**: export `MIRA_LLAMA_MAIN_MODEL` / `MIRA_LLAMA_SMALL_MODEL` before running the installer; these take precedence over the config-file values.
+
+To change the names after an install, re-run the installer with one of the non-interactive methods above.
 
 ## Startup Checklist
 

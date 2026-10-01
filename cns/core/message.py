@@ -81,8 +81,9 @@ def preprocess_content_blocks(content: str | list[ContentBlock]) -> Preprocessed
     """Extract text parts and image count from Message content.
 
     Handles: text blocks (extracted), media blocks (counted, stripped),
-    tool_use (marker), tool_result (truncated at 500 chars).
-    Skips thinking/redacted_thinking blocks.
+    tool_use (marker).
+    Skips thinking/redacted_thinking blocks and stray tool_result blocks
+    (results arrive as role="tool" messages).
     """
     if isinstance(content, str):
         return PreprocessedContent(text_parts=[content], image_count=0)
@@ -114,14 +115,7 @@ def preprocess_content_blocks(content: str | list[ContentBlock]) -> Preprocessed
             # Provider-serialized thinking payloads never enter the digest
             # text — the documented skip, enforced instead of implied.
             continue
-        elif block_type == "tool_result":
-            # tool_result is not a normal content block type (results arrive
-            # as role="tool" messages), but a stray block — e.g. replayed
-            # from provider-serialized content — is truncated at the documented
-            # bound rather than silently growing the digest.
-            text = block.get("text", "")
-            if isinstance(text, str) and text:
-                text_parts.append(text[:500])
+        # tool_result is not a content block type; it's role="tool" messages
 
     return PreprocessedContent(text_parts=text_parts, image_count=image_count)
 
@@ -185,6 +179,36 @@ class MessageMetadata(TypedDict, total=False):
     compacted_count: int
     original_start_time: str
     original_end_time: str
+    # Content-type identity tag: stamped at every persisted write and read
+    # back by name to reconstitute content (continuum_repository save paths)
+    content_type: Literal["json", "text"]
+    # Segment sentinel lifecycle fields (segment_helpers, collapse handler,
+    # and the repository's sentinel UPDATEs)
+    segment_turn_count: int
+    last_turn_at: str
+    memories_extracted: bool
+    domain_blocks_updated: bool
+    paused_at: str
+    collapsed_at: str
+    inactive_duration_minutes: int
+    summary_generated_at: str
+    processing_failed: bool
+    collapse_claimed_at: str
+    downstream_failed: bool
+    downstream_failed_at: str
+    extraction_abandoned: bool
+    extraction_content_failures: int
+    # Heartbeat scheduling fields, stamped on the active segment sentinel
+    # (heartbeat_wake_at is a sleep commitment; heartbeat_retry_at a backoff)
+    heartbeat_wake_at: str
+    heartbeat_retry_at: str
+    heartbeat_failures: int
+    # API rejection marker (api/chat.py)
+    type: str  # e.g. "size_limit_rejection"
+    # Same-hazard extension found by the fix-time probe (wider net than the
+    # ticket's sweep: Message(metadata={...}) literals): stamped on
+    # persisted bootstrap messages alongside system_notification (auth/database.py)
+    system_generated: bool
 
 
 @dataclass(frozen=True)

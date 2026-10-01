@@ -673,11 +673,12 @@ class ReminderTool(Tool):
                 "error": "reminder_not_found",
                 "message": f"Reminder '{reminder_id}' not found. Valid reminder IDs start with 'rem_' followed by 8 characters (e.g., 'rem_a1b2c3d4'). You can list all reminders to see valid IDs."
             }
-        # Update reminder
-        update_data = {
-            'completed': 1,
-            'completed_at': format_utc_iso(utc_now())
-        }
+        # Update reminder. Stamp completed_at only when completing a
+        # not-yet-completed row: re-completing must not overwrite the original
+        # completion timestamp.
+        update_data = {'completed': 1}
+        if not reminders[0].get('completed'):
+            update_data['completed_at'] = format_utc_iso(utc_now())
         if resolution_note:
             update_data['encrypted__resolution_note'] = resolution_note
         
@@ -774,6 +775,12 @@ class ReminderTool(Tool):
             except Exception as e:
                 self.logger.error(f"Failed to parse date '{date}': {str(e)}")
                 raise ValueError(f"Failed to parse date '{date}': {str(e)}")
+            # A date change reschedules the reminder: reopen a completed row so
+            # the reschedule resurfaces in active views (which load completed=0).
+            if reminders[0].get('completed'):
+                update_data['completed'] = 0
+                update_data['completed_at'] = None
+                changes.append("reopened")
 
         if description is not None:
             update_data['encrypted__description'] = description
@@ -921,6 +928,12 @@ class ReminderTool(Tool):
                 'reminder_date': format_utc_iso(new_date),
                 'updated_at': format_utc_iso(utc_now())
             }
+
+            # Snoozing always reschedules: reopen a completed row so the new
+            # time actually resurfaces in active views (which load completed=0).
+            if reminders[0].get('completed'):
+                update_data['completed'] = 0
+                update_data['completed_at'] = None
 
             self.db.update(
                 'reminders',

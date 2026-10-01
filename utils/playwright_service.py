@@ -28,6 +28,10 @@ from utils.url_safety import validate_public_http_url
 # Shut down Chromium after 10 minutes of no fetch_rendered_html() calls.
 IDLE_TIMEOUT_SECONDS = 600
 
+# Bounded wait for the Playwright node driver's graceful .stop() teardown.
+# If it expires, teardown continues; the Chromium kill remains the fallback.
+_DRIVER_STOP_TIMEOUT_SECONDS = 10
+
 # Process names Chromium may appear as (varies by OS/install method).
 _CHROMIUM_PROCESS_NAMES = frozenset({'chromium', 'chrome', 'headless_shell'})
 _NON_NETWORK_SCHEMES = frozenset({'about', 'blob', 'data'})
@@ -85,10 +89,41 @@ class PlaywrightService:
                 future.result(timeout=30)
                 self.logger.info("Chromium browser launched successfully")
             except Exception as e:
-                self._executor.shutdown(wait=False)
-                self._executor = None
                 self.logger.error(f"Failed to launch Chromium: {e}")
                 raise RuntimeError(f"Playwright initialization failed: {e}") from e
+            finally:
+                # Covers the launch-failure path: _init_playwright may have
+                # already started the Playwright node driver before failing
+                # (e.g. chromium.launch raises after sync_playwright().start()
+                # succeeded). Stop it on the executor worker before the
+                # executor is discarded, or the driver subprocess leaks.
+                if self._browser is None:
+                    self._stop_playwright_driver()
+                    self._playwright = None
+                    self._executor.shutdown(wait=False)
+                    self._executor = None
+
+    def _stop_playwright_driver(self) -> None:
+        """Stop the Playwright node driver on its executor worker thread.
+
+        Playwright's sync API enforces thread affinity, so .stop() must run on
+        the same single worker thread that called sync_playwright().start().
+        This method's callers (the idle Timer thread, the lifespan thread, the
+        _ensure_browser failure path) are not that thread, so the stop is
+        dispatched to the executor and awaited with a bounded wait. Best-effort:
+        on failure or timeout, teardown continues and the Chromium kill remains
+        the fallback.
+        """
+        playwright = self._playwright
+        executor = self._executor
+        if playwright is None or executor is None:
+            return
+        try:
+            future = executor.submit(playwright.stop)
+            future.result(timeout=_DRIVER_STOP_TIMEOUT_SECONDS)
+            self.logger.info("Playwright node driver stopped")
+        except Exception as e:
+            self.logger.warning(f"Playwright driver stop failed or timed out: {e}")
 
     def _init_playwright(self) -> None:
         """Initialize browser on the executor thread. Must only be called via _executor."""
@@ -206,8 +241,25 @@ class PlaywrightService:
         try:
             return future.result(timeout=timeout + 15)
         except concurrent.futures.TimeoutError:
+            # Python 3.11+ aliases concurrent.futures.TimeoutError to the
+            # built-in TimeoutError, so a TimeoutError raised by the worker
+            # itself surfaces here too. If the future is done, the worker
+            # raised it — re-raise so the worker's own "after {timeout}s"
+            # label propagates unrelabeled instead of being miscounted as a
+            # caller-budget timeout. (Mirror of scheduled_task_monitor.py:124-134.)
+            if future.done() and not future.cancelled():
+                raise
             cancel.set()
             self.logger.warning(f"Caller timed out for {url} — cancellation signalled")
+            if not future.running() and not future.done():
+                # The fetch was still queued on the single-worker executor when
+                # the caller's budget expired: no page load ever began, so the
+                # elapsed time was queue wait behind another fetch. Name that
+                # instead of misreporting it as a page-load timeout.
+                raise TimeoutError(
+                    f"Page fetch timed out after {timeout + 15}s for {url} — "
+                    f"queued behind another fetch, page load never started"
+                )
             raise TimeoutError(f"Page fetch timed out after {timeout + 15}s for {url}")
 
     def _fetch_rendered_html_impl(
@@ -218,6 +270,17 @@ class PlaywrightService:
         cancel: threading.Event,
     ) -> str:
         """Actual fetch implementation — runs on the Playwright thread."""
+        # Queued-fetch entry check: with a single worker, this fetch may have
+        # sat in the executor queue behind another fetch while its caller's
+        # timeout expired. If so the caller is gone, and navigating now would
+        # hold the only Playwright worker through a full page load nobody will
+        # ever read — abort before creating a context or a page.
+        if cancel.is_set():
+            self.logger.warning(
+                f"Fetch cancelled while queued for {url} — skipping navigation"
+            )
+            raise _CancelledError()
+
         context = self._browser.new_context(
             # Disable risky browser features
             geolocation=None,
@@ -346,6 +409,13 @@ class PlaywrightService:
                     self.logger.info(f"Force-killed Chromium process {self._browser_pid}")
                 except Exception as e:
                     self.logger.debug(f"Chromium kill (may already be gone): {e}")
+
+            # Stop the Playwright node driver on its executor worker before
+            # dropping the reference and discarding the executor: without it
+            # the driver subprocess survives and one leaks per idle-relaunch
+            # cycle. Dispatched (thread affinity) and awaited with a bounded
+            # wait; the Chromium kill above remains the fallback.
+            self._stop_playwright_driver()
 
             self._browser = None
             self._playwright = None

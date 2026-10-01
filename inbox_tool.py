@@ -1,3 +1,172 @@
+# ===========================================================================
+#
+# QUARANTINED TOOL — HUMAN CAPABILITY REVIEW (ticket kzt3, run census-20260930b)
+#
+# This file was tools/implementations/inbox_tool.py. MIRA no longer needs it.
+# It was moved out of the application tree to the repo root on 2026-09-30 so
+# a human can review what functionality, if any, folds into a surviving tool.
+# NOTHING BELOW THIS HEADER WAS CHANGED — this is the original tool, code-identical
+# to its last live revision, except that it now lives outside the import path.
+#
+# HOW IT WAS WIRED INTO MIRA (all of this was severed by the move):
+#   - Discovery:  tools/repo.py:ToolRepository.discover_tools() walks the
+#     tools/implementations/ package via pkgutil and registered the InboxTool
+#     class below by its `name` attribute ("inbox_tool"). Outside that package,
+#     this module is never imported, so the class is never registered.
+#   - Config registration: on import, the module called
+#     tools.registry.registry.register("inbox_tool", InboxToolConfig), binding
+#     the name to the config class (config/config.py:InboxToolConfig — removed
+#     from config/config.py by this same retirement; see inbox_tool.py.dep).
+#   - Enablement: enabled=False by default ("disabled-by-default" tool class:
+#     discovered but not loaded at startup; surfaced only via invokeother_tool
+#     when a user enabled it in their per-user tool config). Never in
+#     tools/repo.py:ESSENTIAL_TOOLS; no event-bus subscriptions; no scheduler
+#     jobs; no trinket/poller consumed it. The email "inbox poller"
+#     (cns/services/pollers/inbox_poller.py, IMAP) is a DIFFERENT feature and
+#     was never connected to this tool.
+#
+# WHAT THE TOOL WAS:
+#   A local-filesystem dropbox (NOT email, NOT cloud storage). The user drops
+#   files into a configured real directory on the machine running MIRA, then
+#   asks MIRA to process them. Deliberate routing model: this tool never routed
+#   content itself — the model composed `list` -> `read` -> route the text with
+#   another tool (e.g. domaindoc_tool operation='append', or memory_tool to
+#   create a memory) -> `archive` the original with a `note` recording the
+#   disposition.
+#
+# ---------------------------------------------------------------------------
+# OPERATIONS (each: inputs / outputs / side effects)
+# ---------------------------------------------------------------------------
+#
+# operation="list"  (no other params; parallel-safe)
+#   Inputs:  none.
+#   Outputs: dropbox_path (absolute path), count, files[] — one entry per file
+#     at the dropbox root (archive dir excluded, non-files excluded, sorted):
+#       filename  — wrap_untrusted(p.name, "inbox_listing")  [escapes the name]
+#       size_bytes, size_human ("B"/"KB"/"MB"), mime, kind
+#       (image|pdf|document|other), readable (kind=="document"),
+#       modified (UTC ISO, second precision, format_utc_iso)
+#     plus a `hint` string instructing the read->route->archive flow (or
+#     "Dropbox is empty.").
+#   Side effects: creates the dropbox root and archive/ subdirectory if absent
+#     (mkdir parents=True, exist_ok=True — happens on EVERY operation via
+#     _inbox_root(), including list).
+#
+# operation="read"  (params: filename required; chars default 10000;
+#                   offset default 0; parallel-safe)
+#   Inputs:  filename — bare filename (no path) of a file at the dropbox root,
+#     as obtained from `list`; chars — max characters to return; offset —
+#     character offset to start from (use next_offset from a prior response).
+#   Behavior:
+#     - _safe_file() traversal guard (see SECURITY below); then MIME is chosen
+#       from the module-local EXT_TO_MIME map (authoritative; mimetypes.
+#       guess_type is only a fallback) and classified into kind.
+#     - kind "image" or "pdf" -> ValueError telling the model to have the user
+#       attach the file in chat instead (Claude reads PDFs/images natively
+#       there); kind "other" -> ValueError listing readable types. All three
+#       remain list/archive-able.
+#     - Hard size cap: file larger than cfg.max_read_file_size_mb (default
+#       10 MB) is rejected before extraction.
+#     - chars is clamped to cfg.max_read_chars (default 20000); offset < 0 -> 0;
+#       chars <= 0 -> 10000.
+#     - Extraction (module function _extract_text):
+#         text/plain, text/csv, application/json -> path.read_text(utf-8,
+#           errors="replace")
+#         .docx -> utils/document_processing.extract_docx_text(bytes)
+#         .xlsx -> utils/document_processing.extract_xlsx_text(bytes)
+#       (.md is treated as text/plain via EXT_TO_MIME; extension map also
+#       covers .txt .log .json .pdf .jpg .jpeg .png .gif .webp for listing)
+#   Outputs: filename, mime, total_chars, offset, returned_chars, truncated,
+#     next_offset (set only when truncated — pagination contract), and
+#     content = wrap_untrusted(excerpt, "inbox_file")  [the extracted excerpt,
+#     escaped+wrapped before it can reach model context]. If the request was
+#     clamped, adds chars_capped=True + requested_chars + effective_chars.
+#   Side effects: dropbox dirs (as above). No writes to the file itself.
+#
+# operation="archive"  (params: filename required; note optional; SEQUENTIAL —
+#                      not in _parallel_safe_operations)
+#   Inputs:  filename — as for read; note — short record of what was done with
+#     the file (schema text suggests <200 chars; code hard-trims to 500).
+#   Behavior: moves the file into <inbox>/<archive_subdir>/ named
+#     "<UTC timestamp YYYYmmddTHHMMSSZ>__<original filename>"; on collision
+#     inserts a counter: "<ts>__<N>__<filename>". Writes a JSON sidecar next
+#     to the archived copy, "<archived name>.meta.json", containing:
+#       original_filename, archived_at (UTC ISO w/ ms, format_utc_iso(utc_now())),
+#       mime, kind, size_bytes, note (trimmed; null if absent/blank)
+#   Outputs: archived (original filename), archive_location (absolute path of
+#     the moved file), sidecar (absolute path of the .meta.json), note.
+#   Side effects: filesystem move (shutil.move) + sidecar file creation. This
+#     is the tool's only destructive operation (the file leaves the dropbox
+#     root; nothing is ever deleted).
+#
+# Error contract: run() pops `operation`; missing or unknown operation, and all
+#   ValueErrors above, return {"success": False, "message": <reason>}. Any
+#   unexpected exception is logged (logger.exception, "inbox_tool %s failed")
+#   and returned as {"success": False, "message": "<operation> failed: <e>"}.
+#   Successful ops return plain dicts without a success flag (list/archive) or
+#   the read result shape above.
+#
+# ---------------------------------------------------------------------------
+# STORAGE / DROPBOX LAYOUT
+# ---------------------------------------------------------------------------
+#   <inbox_path>/                 (config; default /tmp/mira-dropbox; MUST be
+#                                 absolute — pydantic validator rejects relative)
+#     <dropped files>            exactly as the user left them; never modified
+#     <archive_subdir>/          (config; default "archive")
+#       <ts>__<original>          archived copies, timestamp-prefixed
+#       <ts>__<original>.meta.json  sidecar recording disposition
+#   Directories are created lazily by _inbox_root() on first use of ANY
+#   operation. No other tool, service, or component reads or writes this tree.
+#
+# ---------------------------------------------------------------------------
+# SECURITY / CONTENT IDIOMS (these are the patterns worth salvaging)
+# ---------------------------------------------------------------------------
+#   - wrap_untrusted (utils/untrusted_content.py) on EVERYTHING leaving toward
+#     model context: filenames in `list` (source="inbox_listing") and extracted
+#     excerpts in `read` (source="inbox_file"). Shared infrastructure, not
+#     owned by this tool — other consumers remain (web_tool, email_tool,
+#     pager_tool, email trinket). Screen/escalation (screen_untrusted) was NOT
+#     used here — only the structural wrap.
+#   - Path-traversal guard (_safe_file): rejects empty/non-string filenames;
+#     rejects any "/" or "\\" and any leading ".."; resolves the candidate and
+#     requires it to stay relative_to() the resolved dropbox root; refuses the
+#     archive directory itself; requires existence and is_file().
+#   - Resource caps: per-file size limit before extraction (max_read_file_size_mb
+#     default 10 MB) and per-response character limit (max_read_chars default
+#     20000), plus explicit pagination (offset/chars/next_offset/truncated).
+#   - Parallelism model: class attribute _parallel_safe_operations =
+#     frozenset({"list", "read"}) with is_call_parallel_safe(tool_input)
+#     override — reads run in parallel, the mutating `archive` is sequential.
+#   - Credential injection shape: NONE. This tool used no Vault secrets and
+#     no credentials of any kind (no secret fields in its config). Config
+#     resolution was: instance method _cfg() -> config.inbox_tool ->
+#     AppConfig.__getattr__ -> get_tool_config("inbox_tool") -> registry class
+#     default instance, overlaid per-user (when a user context exists) by
+#     utils/tool_config_store.load_user_tool_config("inbox_tool",
+#     hydrate_secrets=True). hydrate_secrets=True was the standard call shape,
+#     but there were no secret fields to hydrate.
+#   - Schema/listing model: class attributes tool_schema (full JSON-schema
+#     tool description with per-param descriptions, operation enum
+#     [list, read, archive], required=["operation"]) and simple_description
+#     (one-line form for compact listings); the `list` response carries
+#     machine fields (mime/kind/readable/size) AND a natural-language hint so
+#     the model learns the flow from the listing itself.
+#
+# ---------------------------------------------------------------------------
+# IF SALVAGING FUNCTIONALITY INTO A SURVIVING TOOL, NOTE:
+#   - The dropbox concept (user drops files -> model triages -> archives with
+#     provenance) is the tool's whole identity; `read`'s paginated extraction
+#     for txt/md/csv/json/docx/xlsx could be folded into any file-reading tool.
+#   - Revival requires restoring: config/config.py:InboxToolConfig (removed
+#     by this retirement — full field list preserved in inbox_tool.py.dep),
+#     the registry.register("inbox_tool", InboxToolConfig) line (module top,
+#     below), and moving this file back under tools/implementations/.
+#   - The archive sidecar (self-documenting disposition note) is a pattern,
+#     not a dependency — it can be reimplemented anywhere with stdlib json.
+#   - No user data is lost: whatever files remain in the configured inbox_path
+#     tree on disk are untouched by this retirement.
+#
+# ===========================================================================
 """
 Dropbox tool — process files the user has dropped into a local folder.
 

@@ -52,10 +52,18 @@ parse_yaml_config() {
         key="${key%"${key##*[![:space:]]}"}"
         value="${value#"${value%%[![:space:]]*}"}"
         value="${value%"${value##*[![:space:]]}"}"
-        # strip a trailing comment: ' #' through end of line. A '#' with no
-        # leading whitespace (URL fragments, passwords) survives untouched.
-        value="${value%%[[:space:]]#*}"
-        value="${value#"${value%%[![:space:]]*}"}"
+        # strip a trailing comment: ' #' through end of line — unless the
+        # value is wrapped in a matching quote pair, whose interior is kept
+        # verbatim (an internal ' #' survives; only the quotes are removed).
+        # A '#' with no leading whitespace (URL fragments, passwords)
+        # survives untouched either way.
+        case "$value" in
+            \"?*\"|\'?*\') ;;  # quote-wrapped: skip the comment strip
+            *)
+                value="${value%%[[:space:]]#*}"
+                value="${value#"${value%%[![:space:]]*}"}"
+                ;;
+        esac
         # strip one matching pair of surrounding quotes
         case "$value" in
             '"'*) value="${value#\"}"; value="${value%\"}" ;;
@@ -187,11 +195,6 @@ apply_yaml_config() {
                 CONFIG_ANTHROPIC_KEY="$YAML_anthropic_key"
                 CONFIG_CHAT_API_KEY="$YAML_anthropic_key"
                 STATUS_CHAT_KEY="${CHECKMARK} Configured"
-            fi
-            if [ -z "$YAML_anthropic_batch_key" ]; then
-                CONFIG_ANTHROPIC_BATCH_KEY="$CONFIG_ANTHROPIC_KEY"
-            else
-                CONFIG_ANTHROPIC_BATCH_KEY="$YAML_anthropic_batch_key"
             fi
             STATUS_CHAT_PROVIDER="${CHECKMARK} Anthropic"
         fi

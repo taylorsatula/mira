@@ -19,9 +19,8 @@ source /opt/mira/app/deploy/lib/services.sh
 LOUD_MODE=false
 
 # Initialize configuration state
-CONFIG_ANTHROPIC_KEY=""
-CONFIG_ANTHROPIC_BATCH_KEY=""
 CONFIG_PROVIDER_KEY=""
+CONFIG_SYSTEMONE_API_KEY=""
 CONFIG_KAGI_KEY=""
 CONFIG_DB_PASSWORD=""
 CONFIG_OFFLINE_MODE=""
@@ -48,44 +47,11 @@ print_header "API Key Configuration"
 # (would require llama.cpp bundled or external llama-server)
 CONFIG_OFFLINE_MODE="no"
 
-# Anthropic API Key (required)
-echo -e "${BOLD}${BLUE}1. Anthropic API Key${RESET} ${DIM}(REQUIRED - console.anthropic.com/settings/keys)${RESET}"
-while true; do
-    read -p "$(echo -e ${CYAN}Enter key${RESET}): " ANTHROPIC_KEY_INPUT
-    if [ -z "$ANTHROPIC_KEY_INPUT" ]; then
-        print_warning "Anthropic API key is required for MIRA to function."
-        continue
-    fi
-    # Basic validation
-    if [[ $ANTHROPIC_KEY_INPUT =~ ^sk-ant- ]]; then
-        CONFIG_ANTHROPIC_KEY="$ANTHROPIC_KEY_INPUT"
-        print_success "Anthropic key configured"
-        break
-    else
-        print_warning "This doesn't look like a valid Anthropic API key (should start with 'sk-ant-')"
-        read -p "$(echo -e ${YELLOW}Continue anyway?${RESET}) (y=yes, t=try again): " CONFIRM
-        if [[ "$CONFIRM" =~ ^[Yy](es)?$ ]]; then
-            CONFIG_ANTHROPIC_KEY="$ANTHROPIC_KEY_INPUT"
-            print_success "Anthropic key configured (unvalidated)"
-            break
-        fi
-    fi
-done
-
-# Anthropic Batch API Key (optional)
-echo -e "${BOLD}${BLUE}1b. Anthropic Batch API Key${RESET} ${DIM}(OPTIONAL - separate key for batch operations)${RESET}"
-echo -e "${DIM}    Leave blank to use the same key as above.${RESET}"
-read -p "$(echo -e ${CYAN}Enter batch key${RESET}) (or Enter to use main key): " ANTHROPIC_BATCH_KEY_INPUT
-if [ -z "$ANTHROPIC_BATCH_KEY_INPUT" ]; then
-    CONFIG_ANTHROPIC_BATCH_KEY="$CONFIG_ANTHROPIC_KEY"
-    print_info "Using main Anthropic key for batch operations"
-else
-    CONFIG_ANTHROPIC_BATCH_KEY="$ANTHROPIC_BATCH_KEY_INPUT"
-    print_success "Separate batch key configured"
-fi
+# (hn32) No Anthropic key step: the all-five-routes UPDATE binds every route
+# to subcortical_key, so an Anthropic key would sit in Vault with no reader.
 
 # OpenAI-compatible Provider Selection
-echo -e "${BOLD}${BLUE}2. Fast Inference Provider${RESET} ${DIM}(OpenAI-compatible)${RESET}"
+echo -e "${BOLD}${BLUE}1. Fast Inference Provider${RESET} ${DIM}(OpenAI-compatible)${RESET}"
 echo ""
 echo -e "${DIM}   Select your preferred provider:${RESET}"
 echo "     1. Lunaroute (default — OpenAI-compatible gateway)"
@@ -187,7 +153,7 @@ if [ "$CONFIG_PROVIDER_NAME" != "Groq" ] && [ "$CONFIG_PROVIDER_NAME" != "Lunaro
 fi
 
 # Provider API Key (required)
-echo -e "${BOLD}${BLUE}2b. ${CONFIG_PROVIDER_NAME} API Key${RESET} ${DIM}(REQUIRED)${RESET}"
+echo -e "${BOLD}${BLUE}1b. ${CONFIG_PROVIDER_NAME} API Key${RESET} ${DIM}(REQUIRED)${RESET}"
 while true; do
     read -p "$(echo -e ${CYAN}Enter key${RESET}): " PROVIDER_KEY_INPUT
     if [ -z "$PROVIDER_KEY_INPUT" ]; then
@@ -225,7 +191,7 @@ elif [ "$CONFIG_PROVIDER_NAME" = "Lunaroute" ]; then
 fi
 
 # Kagi API Key (optional)
-echo -e "${BOLD}${BLUE}3. Kagi Search API Key${RESET} ${DIM}(OPTIONAL - kagi.com/settings?p=api)${RESET}"
+echo -e "${BOLD}${BLUE}2. Kagi Search API Key${RESET} ${DIM}(OPTIONAL - kagi.com/settings?p=api)${RESET}"
 read -p "$(echo -e ${CYAN}Enter key${RESET}) (or Enter to skip): " KAGI_KEY_INPUT
 if [ -z "$KAGI_KEY_INPUT" ]; then
     CONFIG_KAGI_KEY=""
@@ -236,7 +202,7 @@ else
 fi
 
 # Database Password (optional)
-echo -e "${BOLD}${BLUE}4. Database Password${RESET} ${DIM}(OPTIONAL - for internal PostgreSQL)${RESET}"
+echo -e "${BOLD}${BLUE}3. Database Password${RESET} ${DIM}(OPTIONAL - for internal PostgreSQL)${RESET}"
 read -p "$(echo -e ${CYAN}Enter password${RESET}) (or Enter for default): " DB_PASSWORD_INPUT
 if [ -z "$DB_PASSWORD_INPUT" ]; then
     CONFIG_DB_PASSWORD="changethisifdeployingpwd"
@@ -246,15 +212,25 @@ else
     print_success "Custom database password set"
 fi
 
+# Injection Screen System One Key (optional)
+# (40dz) The app's injection screen (on for a token-bearing install) reads
+# its bearer token from Vault as systemone_key; without this step no shipped
+# container path ever wrote it, and every gated sidebar dispatch died with a
+# KeyError at first use. Enter skips: the screen stays off (the launcher's
+# default) and external content is structurally wrapped only — fail-closed.
+echo -e "${BOLD}${BLUE}4. Injection Screen System One Key${RESET} ${DIM}(OPTIONAL - hosted /v1/systemone gateway token)${RESET}"
+read -p "$(echo -e ${CYAN}Enter key${RESET}) (or Enter to keep the screen off): " SYSTEMONE_KEY_INPUT
+if [ -z "$SYSTEMONE_KEY_INPUT" ]; then
+    CONFIG_SYSTEMONE_API_KEY=""
+    print_info "Injection screen stays off; external content is structurally wrapped only"
+else
+    CONFIG_SYSTEMONE_API_KEY="$SYSTEMONE_KEY_INPUT"
+    print_success "Injection screen enabled: token stored in Vault as systemone_key"
+fi
+
 # Configuration Summary
 echo ""
 print_header "Configuration Summary"
-echo -e "  Anthropic Key:   ${GREEN}****${CONFIG_ANTHROPIC_KEY: -4}${RESET}"
-if [ "$CONFIG_ANTHROPIC_BATCH_KEY" = "$CONFIG_ANTHROPIC_KEY" ]; then
-    echo -e "  Batch Key:       ${DIM}Using main key${RESET}"
-else
-    echo -e "  Batch Key:       ${GREEN}****${CONFIG_ANTHROPIC_BATCH_KEY: -4}${RESET}"
-fi
 echo -e "  Provider:        ${CYAN}$CONFIG_PROVIDER_NAME${RESET}"
 echo -e "  Provider Key:    ${GREEN}****${CONFIG_PROVIDER_KEY: -4}${RESET}"
 if [ -n "$CONFIG_PROVIDER_MODEL" ]; then
@@ -264,6 +240,11 @@ if [ -n "$CONFIG_KAGI_KEY" ]; then
     echo -e "  Kagi Key:        ${GREEN}Configured${RESET}"
 else
     echo -e "  Kagi Key:        ${DIM}Skipped${RESET}"
+fi
+if [ -n "$CONFIG_SYSTEMONE_API_KEY" ]; then
+    echo -e "  Inj. Screen:     ${GREEN}On (systemone_key in Vault)${RESET}"
+else
+    echo -e "  Inj. Screen:     ${DIM}Off${RESET}"
 fi
 echo ""
 
@@ -279,9 +260,8 @@ if [[ ! "$CONFIRM" =~ ^[Yy](es)?$ ]]; then
 fi
 
 # Export configuration for init-mira.sh to use
-export CONFIG_ANTHROPIC_KEY
-export CONFIG_ANTHROPIC_BATCH_KEY
 export CONFIG_PROVIDER_KEY
+export CONFIG_SYSTEMONE_API_KEY
 export CONFIG_PROVIDER_NAME
 export CONFIG_PROVIDER_ENDPOINT
 export CONFIG_PROVIDER_MODEL

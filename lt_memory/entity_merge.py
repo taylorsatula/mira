@@ -134,17 +134,32 @@ def _parse_merge_response(
 
     decisions: List[Tuple[UUID, List[UUID]]] = []
     for entry in merges:
+        if not isinstance(entry, dict):
+            logger.warning("Entity merge: malformed merge entry %r, skipping", entry)
+            continue
         canonical_short = entry.get('canonical')
         merge_shorts = entry.get('merge', [])
-        if not canonical_short or not isinstance(merge_shorts, list):
+        if not isinstance(canonical_short, str) or not isinstance(merge_shorts, list):
+            logger.warning(
+                "Entity merge: malformed merge entry %r, skipping", entry
+            )
             continue
-        canonical_uuid = short_to_full.get(canonical_short)
+        if not canonical_short:
+            continue
+        # Case-fold the echoed id before lookup, matching every sanctioned
+        # short-ID resolver (utils/tag_parser.py, db_access, orchestrator):
+        # keys are lowercase hex from _format_entity_id, so drifted casing on
+        # an echoed id must not turn a real entity into an unknown one.
+        canonical_uuid = short_to_full.get(canonical_short.lower())
         if canonical_uuid is None:
             logger.warning("Entity merge: unknown canonical id %r, skipping", canonical_short)
             continue
         source_uuids: List[UUID] = []
         for short_id in merge_shorts:
-            uuid = short_to_full.get(short_id)
+            if not isinstance(short_id, str):
+                logger.warning("Entity merge: malformed merge id %r, skipping it", short_id)
+                continue
+            uuid = short_to_full.get(short_id.lower())
             if uuid is None:
                 logger.warning("Entity merge: unknown merge id %r, skipping it", short_id)
                 continue

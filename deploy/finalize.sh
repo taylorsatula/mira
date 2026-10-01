@@ -86,7 +86,6 @@ Environment="VAULT_ADDR=http://127.0.0.1:8200"
 Environment="VAULT_ROLE_ID=$VAULT_ROLE_ID"
 Environment="VAULT_SECRET_ID=$VAULT_SECRET_ID"
 Environment="MIRA_LOG_DIR=/opt/mira/logs"
-Environment="MIRA_TIMEZONE=$CONFIG_TIMEZONE"
 ExecStart=/opt/mira/app/venv/bin/python3 /opt/mira/app/main.py
 Restart=on-failure
 RestartSec=10
@@ -207,7 +206,6 @@ Vault Unseal Key:
 API Keys stored in Vault at secret/mira/api_keys:
 
   anthropic_key:        ${CONFIG_ANTHROPIC_KEY}
-  anthropic_batch_key:  ${CONFIG_ANTHROPIC_BATCH_KEY}
 CREDS
 then
     _cred_write_failed=true
@@ -297,8 +295,8 @@ if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
     echo -e "${BOLD}${BLUE}LLM Provider${RESET}"
     echo -e "  Provider:     ${CYAN}Local llama-server${RESET}"
     if [ "$CONFIG_LOCAL_MODEL_CHOICE" = "auto" ]; then
-        echo -e "  Main Model:   ${CYAN}${CONFIG_LLAMA_MAIN_MODEL:-set CONFIG_LLAMA_MAIN_MODEL}${RESET} ${DIM}(port 3090)${RESET}"
-        echo -e "  Small Model:  ${CYAN}${CONFIG_LLAMA_SMALL_MODEL:-set CONFIG_LLAMA_SMALL_MODEL}${RESET} ${DIM}(port 3092)${RESET}"
+        echo -e "  Main Model:   ${CYAN}${CONFIG_LLAMA_MAIN_MODEL:-configure per docs/OFFLINE_MODELS.md}${RESET} ${DIM}(port 3090)${RESET}"
+        echo -e "  Small Model:  ${CYAN}${CONFIG_LLAMA_SMALL_MODEL:-configure per docs/OFFLINE_MODELS.md}${RESET} ${DIM}(port 3092)${RESET}"
         echo -e "  VRAM Target:  ${DIM}~48GB across two cards${RESET}"
         echo ""
         print_info "Before first MIRA startup, download models & start servers:"
@@ -309,6 +307,8 @@ if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
         print_info "Health check:     curl http://localhost:3090/health"
     else
         echo -e "  Mode:         ${CYAN}Custom (bring your own GGUF)${RESET}"
+        echo -e "  Main Model:   ${CYAN}${CONFIG_LLAMA_MAIN_MODEL:-configure per docs/OFFLINE_MODELS.md}${RESET} ${DIM}(port 3090)${RESET}"
+        echo -e "  Small Model:  ${CYAN}${CONFIG_LLAMA_SMALL_MODEL:-configure per docs/OFFLINE_MODELS.md}${RESET} ${DIM}(port 3092)${RESET}"
         echo ""
         print_info "Place your GGUF files in /opt/mira/models/ and configure llama-server manually."
     fi
@@ -318,15 +318,6 @@ else
     echo -e "  Chat Provider:   ${STATUS_CHAT_PROVIDER}"
     echo -e "  Chat Model:      ${CYAN}${CONFIG_CHAT_MODEL}${RESET}"
     echo -e "  Chat Key:        ${STATUS_CHAT_KEY}"
-    if [ "$CONFIG_CHAT_PROVIDER_TYPE" = "anthropic" ]; then
-        if [ "$CONFIG_ANTHROPIC_BATCH_KEY" = "$CONFIG_ANTHROPIC_KEY" ]; then
-            echo -e "  Batch Key:       ${DIM}Using main key${RESET}"
-        else
-            echo -e "  Batch Key:       ${CHECKMARK} Separate key"
-        fi
-    else
-        echo -e "  Batch Key:       ${DIM}Not set (openai chat mode)${RESET}"
-    fi
     echo -e "  Subcortical:     ${STATUS_SUBCORTICAL}"
     echo -e "  Subcortical Mdl: ${CYAN}${CONFIG_SUBCORTICAL_MODEL}${RESET}"
     echo -e "  Subcortical Key: ${STATUS_SUBCORTICAL_KEY}"
@@ -343,7 +334,6 @@ else
         echo -e "${DIM}    vault login <root-token-from-init-keys.txt>${RESET}"
         echo -e "${DIM}    vault kv put secret/mira/api_keys \\${RESET}"
         echo -e "${DIM}      anthropic_key=\"sk-ant-your-key\" \\${RESET}"
-        echo -e "${DIM}      anthropic_batch_key=\"sk-ant-your-key\" \\${RESET}"
         echo -e "${DIM}      subcortical_key=\"your-lunaroute-key\" \\${RESET}"
         echo -e "${DIM}      provider_key=\"your-chat-provider-key\" \\${RESET}"
         echo -e "${DIM}      kagi_api_key=\"your-kagi-key\"${RESET}"

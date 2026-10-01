@@ -13,6 +13,7 @@ from typing import Any
 
 from clients.llm.events import StreamEvent, ToolCompletedEvent, ToolErrorEvent, ToolExecutingEvent
 from clients.llm.types import ToolCall, ToolResult
+from tools.repo import ParameterError
 from utils.user_context import check_cancelled, get_cancel_event
 
 logger = logging.getLogger(__name__)
@@ -172,7 +173,10 @@ class ToolLoopExecutor:
                 f"{tool_call.invalid_reason}"
             )
             logger.warning("Provider returned invalid tool call for %s: %s", tool_call.tool_name, error)
-            result_content = f"Error: {error}{self._schema_hint(tool_call.tool_name, error)}"
+            hint = self._schema_hint(
+                tool_call.tool_name, error, invalid_reason=tool_call.invalid_reason
+            )
+            result_content = f"Error: {error}{hint}"
             return ToolExecutionResult(tool_call, result_content, None, None, error)
 
         try:
@@ -217,12 +221,13 @@ class ToolLoopExecutor:
     ) -> Any:
         return raw_result
 
-    def _schema_hint(self, tool_name: str, error: Exception) -> str:
-        error_text = str(error).lower()
-        is_parameter_error = isinstance(error, ValueError) or any(
-            keyword in error_text
-            for keyword in ("unknown operation", "invalid", "required", "missing", "parameter")
-        )
+    def _schema_hint(self, tool_name: str, error: Exception, *, invalid_reason: str | None = None) -> str:
+        # Match by type, never by message substring: only genuine argument
+        # errors (ParameterError from tools.repo, or a provider-rejected
+        # call flagged with invalid_reason) get the CORRECT PARAMETERS hint.
+        # Operational failures (connection errors, tool-body TypeErrors,
+        # arbitrary ValueErrors) must not misdirect the model's recovery.
+        is_parameter_error = isinstance(error, ParameterError) or invalid_reason is not None
         if not is_parameter_error:
             return ""
         try:

@@ -691,7 +691,7 @@ class UserDomainHandler(BaseDomainHandler):
 
             if "timezone" in data:
                 update_fields.append("timezone = %(timezone)s")
-                params["timezone"] = data["timezone"]
+                params["timezone"] = validate_timezone(data["timezone"])
 
             if "temperature_unit" in data:
                 update_fields.append("temperature_unit = %(temperature_unit)s")
@@ -1265,7 +1265,7 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         }
 
     def _action_enable(self, db: UserDataManager, data: dict[str, Any]) -> dict[str, Any]:
-        """Enable a domaindoc. Collapses all sections except first."""
+        """Enable a domaindoc. Collapses all unpinned sections."""
         label = data["label"]
         from utils.domaindoc_shares import is_shared_label
         if is_shared_label(label):
@@ -1311,6 +1311,26 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         label = data["label"]
         self._validate_label(label)
         doc = self._get_domaindoc(db, label)
+
+        # Shares are keyed on the mutable label with no FK bridging the
+        # SQLite↔Postgres boundary, so accepted shares must be revoked before
+        # deleting the doc — otherwise delete/recreate of the same label
+        # silently re-grants prior collaborators access to the new document.
+        from utils.domaindoc_shares import invalidate_domaindoc_cache
+        pg = self._get_pg()
+        collaborators = pg.execute_query(
+            "SELECT collaborator_user_id FROM domaindoc_shares "
+            "WHERE owner_user_id = %(uid)s AND domaindoc_label = %(label)s AND status = 'accepted'",
+            {"uid": self.user_id, "label": label}
+        )
+        if collaborators:
+            pg.execute_update(
+                "UPDATE domaindoc_shares SET status = 'revoked' "
+                "WHERE owner_user_id = %(uid)s AND domaindoc_label = %(label)s AND status = 'accepted'",
+                {"uid": self.user_id, "label": label}
+            )
+            for row in collaborators:
+                invalidate_domaindoc_cache(row["collaborator_user_id"])
 
         db.execute("DELETE FROM domaindocs WHERE id = :id", {"id": doc["id"]})
 
@@ -1897,8 +1917,11 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
             elif existing["status"] == "pending":
                 raise ValidationError(f"Already invited {email} to '{label}'")
             elif existing["status"] in ("revoked", "rejected"):
+                # SET deliberately scoped to the granted columns — schema grants mira_dbuser
+                # only UPDATE (status, accepted_at) on domaindoc_shares; writing invited_at
+                # would raise 42501 and surface as a spurious 500 on re-invite.
                 pg.execute_update(
-                    "UPDATE domaindoc_shares SET status = 'pending', invited_at = NOW(), accepted_at = NULL WHERE id = %(sid)s",
+                    "UPDATE domaindoc_shares SET status = 'pending', accepted_at = NULL WHERE id = %(sid)s",
                     {"sid": existing["id"]}
                 )
                 return {"shared": True, "label": label, "email": email, "status": "re-invited"}
@@ -3034,7 +3057,7 @@ def _get_tool_instance(tool_name: str):
 def query_tool(
     tool_name: str,
     operation: str = Query(..., description="Tool operation to execute"),
-    date_type: str | None = Query(None, description="Date filter type (for reminder_tool)"),
+    date_filter: str | None = Query(None, description="Date filter type (for reminder_tool)"),
     category: str | None = Query(None, description="Category filter (for reminder_tool)"),
     current_user: SessionData | APITokenContext = Depends(get_current_user)
 ):
@@ -3069,8 +3092,8 @@ def query_tool(
 
         # Build kwargs from query params (only include non-None values)
         kwargs = {"operation": operation}
-        if date_type is not None:
-            kwargs["date_type"] = date_type
+        if date_filter is not None:
+            kwargs["date_filter"] = date_filter
         if category is not None:
             kwargs["category"] = category
 

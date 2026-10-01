@@ -1,4 +1,11 @@
-"""Asynchronously compact committed tool results in the hot Valkey cache."""
+"""Asynchronously compact committed tool results in the hot Valkey cache.
+
+DISABLED (deadheaded) since 2026-09-30: cns/integration/factory.py no longer
+constructs this service at startup, by human direction — the existing design
+will be REDESIGNED soon (see census-20260930b's sqdf ticket and the
+compaction-flow map attached there). Nothing in this module runs in a shipped
+boot; keep the code for the redesign's reference and do not re-enable it
+piecemeal."""
 
 # DESIGN DEBT — pending summarization-path rework (anchor note).
 #

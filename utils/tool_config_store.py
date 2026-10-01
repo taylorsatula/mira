@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +11,8 @@ from pydantic import BaseModel
 
 from tools.registry import registry
 from utils.user_credentials import UserCredentialService
+from utils.userdata_manager import UserDataManager, get_user_data_manager
+from utils.timezone_utils import format_utc_iso, utc_now
 
 
 SECRET_REDACTION_SENTINEL = "__MIRA_SECRET_CONFIGURED__"
@@ -181,6 +184,101 @@ def persist_secret_updates(tool_name: str, secret_updates: dict[str, str | None]
             service_name=service_name,
             credential_value=value,
         )
+
+
+def _upsert_credential_row(
+    dm: UserDataManager,
+    credential_type: str,
+    service_name: str,
+    credential_value: str,
+) -> None:
+    """Upsert one credentials row WITHOUT committing.
+
+    Mirrors UserCredentialService.store_credential's row shape, but leaves the
+    commit to the caller so several writes can share a single transaction.
+    """
+    now = format_utc_iso(utc_now())
+    row = {
+        "credential_type": credential_type,
+        "service_name": service_name,
+        "encrypted__credential_value": credential_value,
+        "metadata": "{}",
+        "updated_at": now,
+    }
+    encrypted = dm._encrypt_dict(row)
+    cursor = dm.connection.cursor()
+    existing = cursor.execute(
+        "SELECT id FROM credentials "
+        "WHERE credential_type = :ctype AND service_name = :service",
+        {"ctype": credential_type, "service": service_name},
+    ).fetchone()
+    if existing is not None:
+        set_clause = ", ".join(f"{col} = :{col}" for col in encrypted)
+        cursor.execute(
+            f"UPDATE credentials SET {set_clause} "
+            "WHERE credential_type = :ctype AND service_name = :service",
+            {**encrypted, "ctype": credential_type, "service": service_name},
+        )
+    else:
+        encrypted["id"] = str(uuid.uuid4())
+        encrypted["created_at"] = now
+        columns = ", ".join(encrypted)
+        placeholders = ", ".join(f":{col}" for col in encrypted)
+        cursor.execute(
+            f"INSERT INTO credentials ({columns}) VALUES ({placeholders})", encrypted
+        )
+
+
+def save_tool_config_update(
+    tool_name: str,
+    secret_updates: dict[str, str | None],
+    public_config: dict[str, Any],
+) -> None:
+    """Apply secret-field updates and the public tool config in ONE transaction.
+
+    store_credential() commits on every call, so routing the secret rows and
+    the public config through it persists them as separately-committed writes:
+    a failure of the config write would strand the already-committed secret
+    change. This path performs every write on the per-user connection inside
+    a single SQLite transaction and commits once — a failure of the public
+    -config write rolls the secret writes back.
+
+    Sentinel semantics are those of persist_secret_updates: a None value
+    writes nothing (preserve existing), "" deletes the stored secret, and any
+    other value stores it.
+    """
+    credential_service = UserCredentialService()
+    dm = get_user_data_manager(credential_service.user_id)
+    dm._ensure_credentials_table()
+    conn = dm.connection
+    # Close any implicit read transaction left open by earlier statements so
+    # BEGIN IMMEDIATE cannot nest inside it.
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for field_name, value in secret_updates.items():
+            if value is None:
+                # Sentinel: field omitted/echoed — preserve existing, write nothing
+                continue
+            service_name = get_tool_secret_service_name(tool_name, field_name)
+            if value == "":
+                conn.execute(
+                    "DELETE FROM credentials "
+                    "WHERE credential_type = :ctype AND service_name = :service",
+                    {"ctype": SECRET_CREDENTIAL_TYPE, "service": service_name},
+                )
+            else:
+                _upsert_credential_row(dm, SECRET_CREDENTIAL_TYPE, service_name, value)
+        _upsert_credential_row(
+            dm,
+            TOOL_CONFIG_CREDENTIAL_TYPE,
+            tool_name,
+            json.dumps(public_config),
+        )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
 
 
 def strip_secret_fields(tool_name: str, config: dict[str, Any]) -> dict[str, Any]:

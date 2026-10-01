@@ -10,6 +10,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import uuid
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
@@ -134,20 +135,46 @@ class LiveContextCompactionStore:
         self,
         user_id: str,
         ttl_seconds: int = LIVE_CONTEXT_COMPACTION_LOCK_TTL_SECONDS,
-    ) -> bool:
-        """Acquire the non-blocking per-user compaction lock."""
-        return bool(
-            self.valkey.set(
-                self._lock_key(user_id),
-                "1",
-                nx=True,
-                ex=ttl_seconds,
-            )
-        )
+    ) -> str | None:
+        """Acquire the non-blocking per-user compaction lock.
 
-    def release_lock(self, user_id: str) -> bool:
-        """Release the per-user compaction lock."""
-        return self.valkey.delete(self._lock_key(user_id))
+        Mirrors utils.distributed_lock.DistributedLock: the lock value is a
+        unique per-acquisition token, returned to the caller and required by
+        release_lock. A constant value (e.g. "1") would make even a
+        compare-and-delete release unsafe — a second holder's value would
+        compare equal and the stale holder's release would delete the fresh
+        lock.
+
+        Returns the token when the lock was acquired, None when it is held.
+        """
+        token = str(uuid.uuid4())
+        acquired = self.valkey.set(
+            self._lock_key(user_id),
+            token,
+            nx=True,
+            ex=ttl_seconds,
+        )
+        if acquired:
+            return token
+        return None
+
+    def release_lock(self, user_id: str, token: str) -> bool:
+        """Release the per-user compaction lock by token (compare-and-delete).
+
+        A mismatch (the lock expired and was re-acquired by another holder)
+        is a benign no-op: the fresh holder's lock survives. Returns True only
+        when this owner's lock was deleted.
+        """
+        released = bool(
+            self.valkey.compare_and_delete(self._lock_key(user_id), token)
+        )
+        if not released:
+            logger.debug(
+                "Live context compaction lock for user %s not released: "
+                "token mismatch (expired and re-acquired by another holder)",
+                user_id,
+            )
+        return released
 
     @staticmethod
     def _artifact_key(user_id: str) -> str:
@@ -366,7 +393,8 @@ class LiveContextCompactionService:
         """
         user_id = get_current_user_id()
         try:
-            if not self.store.acquire_lock(user_id):
+            token = self.store.acquire_lock(user_id)
+            if token is None:
                 logger.debug("Live context compaction already running for user %s", user_id)
                 return False
         except Exception:
@@ -380,21 +408,22 @@ class LiveContextCompactionService:
                 self._run_compaction_with_lock,
                 continuum_id,
                 user_id,
+                token,
             )
             return True
         except Exception:
-            self.store.release_lock(user_id)
+            self.store.release_lock(user_id, token)
             logger.error("Failed to schedule live context compaction", exc_info=True)
             return False
 
-    def _run_compaction_with_lock(self, continuum_id: str, user_id: str) -> None:
+    def _run_compaction_with_lock(self, continuum_id: str, user_id: str, token: str) -> None:
         try:
             self.compact_once(continuum_id)
         except Exception:
             logger.error("Live context compaction failed", exc_info=True)
         finally:
             try:
-                self.store.release_lock(user_id)
+                self.store.release_lock(user_id, token)
             except Exception:
                 logger.error("Failed to release live context compaction lock", exc_info=True)
 

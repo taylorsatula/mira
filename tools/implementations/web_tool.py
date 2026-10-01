@@ -10,7 +10,7 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Dict, Any, List, Literal, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
 from pydantic import BaseModel, Field, field_validator
@@ -345,7 +345,7 @@ class WebTool(Tool):
         if input.include_metadata:
             result["title"] = wrap_untrusted(self._extract_title(html), "web_fetch")
             result["metadata"] = {
-                "content_type": response_info.get("content_type", "text/html"),
+                "content_type": wrap_untrusted(response_info.get("content_type", "text/html"), "web_fetch"),
                 "size": len(html),
             }
         return result
@@ -667,6 +667,18 @@ class WebTool(Tool):
         **kwargs: Any,
     ):
         """Issue an HTTP request while validating every redirect hop."""
+        # Fold query params into the initial URL once, then never pass `params`
+        # on a hop: httpx applies `params` against the URL query on every
+        # request (merging on <=0.27.x, replacing on >=0.28), which dropped
+        # the Location's own query and re-sent the original params to the
+        # redirect host. Building the hop URLs explicitly avoids both
+        # version-dependent semantics.
+        params = kwargs.pop("params", None)
+        if params:
+            parsed = urlparse(url)
+            query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+            query.update({str(k): "" if v is None else str(v) for k, v in params.items()})
+            url = urlunparse(parsed._replace(query=urlencode(query)))
         current_url = url
         current_method = method
         body_kwargs = {

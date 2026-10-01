@@ -308,12 +308,11 @@ class PersonaService:
 
         valkey = get_valkey_client()
         key = f"{PERSONA_PREVIEW_PREFIX}:{user_id}:{preview_id}"
-        raw = valkey.get(key)
+        raw = valkey.getdel(key)
         if raw is None:
             if not required:
                 return None
             raise ValueError("Persona preview not found; it may have expired")
-        valkey.delete(key)
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8")
         return PersonaPreview.model_validate_json(raw)

@@ -225,7 +225,7 @@ def _pop_preview(user_id: str, preview_id: str, required: bool = True) -> Option
     from clients.valkey_client import get_valkey_client
     valkey = get_valkey_client()
 
-    proposed = valkey.get(valkey_key)
+    proposed = valkey.getdel(valkey_key)
     if proposed is None:
         if not required:
             return None
@@ -233,9 +233,6 @@ def _pop_preview(user_id: str, preview_id: str, required: bool = True) -> Option
             "User model preview not found — it may have expired (10-minute lifetime). "
             "Please generate a new preview."
         )
-
-    # Single-consume: delete after read
-    valkey.delete(valkey_key)
 
     # Valkey returns bytes
     if isinstance(proposed, bytes):

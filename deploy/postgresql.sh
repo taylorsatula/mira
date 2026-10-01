@@ -189,18 +189,25 @@ if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
     LLAMA_SMALL_MODEL="${MIRA_LLAMA_SMALL_MODEL:-${CONFIG_LLAMA_SMALL_MODEL:-local-small}}"
     OFFLINE_SQL="UPDATE model_configs SET dialect_name = 'openai', endpoint_url = '$LLAMA_MAIN_URL', model = '$LLAMA_MAIN_MODEL', api_key_name = '' WHERE name IN ('primary', 'batch', 'assessment'); UPDATE model_configs SET dialect_name = 'openai', endpoint_url = '$LLAMA_SMALL_URL', model = '$LLAMA_SMALL_MODEL', api_key_name = '' WHERE name IN ('fast', 'other');"
     if [ "$OS" = "linux" ]; then
+        # NOTE: like the hosted chat-tier branch below, the failure is handled
+        # inside the if/else so set -e cannot abort before this report.
+        # The "run manually" guidance stays for the genuinely air-gapped
+        # install whose UPDATE failed — it keys on the UPDATE's exit status,
+        # not on offline_mode, and a successful rewrite never sees it.
         if sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 -c "$OFFLINE_SQL" > /dev/null 2>&1; then
             echo -e "${CHECKMARK}"
         else
             echo -e "${ERROR}"
-            print_warning "Failed to configure offline mode - you may need to run manually"
+            print_error "Failed to configure offline mode - you may need to run the UPDATE manually; aborting so the install cannot complete with lunaroute routes and no stored credential"
+            exit 1
         fi
     elif [ "$OS" = "macos" ]; then
         if psql -d mira_service -v ON_ERROR_STOP=1 -c "$OFFLINE_SQL" > /dev/null 2>&1; then
             echo -e "${CHECKMARK}"
         else
             echo -e "${ERROR}"
-            print_warning "Failed to configure offline mode - you may need to run manually"
+            print_error "Failed to configure offline mode - you may need to run the UPDATE manually; aborting so the install cannot complete with lunaroute routes and no stored credential"
+            exit 1
         fi
     fi
 fi
@@ -280,8 +287,9 @@ if [ "$CONFIG_OFFLINE_MODE" != "yes" ]; then
 fi
 
 # Update PostgreSQL passwords if custom password was set
-# NOTE: the ALTER pairs run as `if` conditions so a failure reaches the warning
-# branch instead of aborting under set -e.
+# NOTE: the ALTER pairs run as `if` conditions so a failure reaches the
+# explicit error report below (and its exit 1) instead of aborting silently
+# under set -e before the operator sees why the install stopped.
 # Percent-encode reserved characters so the embedded password forms a
 # valid URL credential. The reader (PostgresClient._parse_database_url) hands
 # the URL to libpq, which percent-decodes userinfo — both deploy writers
@@ -361,13 +369,18 @@ EOF
         print_info "Credential access guide written to /opt/vault/howtoaccess.txt"
     fi
     echo -ne "${DIM}${ARROW}${RESET} Updating database passwords... "
+    # Abort on ALTER failure (sm9d): Step 14 below writes the custom
+    # password into secret/mira/database, so continuing after a failed ALTER
+    # would seed Vault with a credential the roles never received. The
+    # `if`-shape is kept so the failure reaches this report under set -e.
     if [ "$OS" = "linux" ]; then
         if sudo -u postgres psql -c "ALTER USER mira_admin WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1 && \
            sudo -u postgres psql -c "ALTER USER mira_dbuser WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1; then
             echo -e "${CHECKMARK}"
         else
             echo -e "${ERROR}"
-            print_warning "Failed to update passwords - you may need to update manually"
+            print_error "Failed to update database passwords - aborting before Vault stores the new credential (roles still hold the previous password)"
+            exit 1
         fi
     elif [ "$OS" = "macos" ]; then
         if psql postgres -c "ALTER USER mira_admin WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1 && \
@@ -375,7 +388,8 @@ EOF
             echo -e "${CHECKMARK}"
         else
             echo -e "${ERROR}"
-            print_warning "Failed to update passwords - you may need to update manually"
+            print_error "Failed to update database passwords - aborting before Vault stores the new credential (roles still hold the previous password)"
+            exit 1
         fi
     fi
 fi
@@ -384,27 +398,31 @@ print_success "PostgreSQL configured"
 
 print_header "Step 14: Vault Credential Storage"
 
-# Build api_keys arguments based on chat provider type
+# Build api_keys arguments based on chat provider type.
+# (tsvt) The arguments are assembled as a bash array and passed directly:
+# an eval re-parse would re-expand $ / quotes / backticks inside secret
+# values and seed a mangled credential under a "Configured" status.
+API_KEYS_ARGS=(secret/mira/api_keys)
 if [ "$CONFIG_CHAT_PROVIDER_TYPE" = "openai" ]; then
     # OpenAI-compatible chat: provider_key = chat key, subcortical_key = subcortical key
-    API_KEYS_ARGS="anthropic_key=\"${CONFIG_ANTHROPIC_KEY}\" anthropic_batch_key=\"${CONFIG_ANTHROPIC_BATCH_KEY}\" provider_key=\"${CONFIG_CHAT_API_KEY}\" subcortical_key=\"${CONFIG_SUBCORTICAL_API_KEY}\""
+    API_KEYS_ARGS+=(anthropic_key="${CONFIG_ANTHROPIC_KEY}" provider_key="${CONFIG_CHAT_API_KEY}" subcortical_key="${CONFIG_SUBCORTICAL_API_KEY}")
 else
     # Anthropic chat: no provider_key needed
-    API_KEYS_ARGS="anthropic_key=\"${CONFIG_ANTHROPIC_KEY}\" anthropic_batch_key=\"${CONFIG_ANTHROPIC_BATCH_KEY}\" subcortical_key=\"${CONFIG_SUBCORTICAL_API_KEY}\""
+    API_KEYS_ARGS+=(anthropic_key="${CONFIG_ANTHROPIC_KEY}" subcortical_key="${CONFIG_SUBCORTICAL_API_KEY}")
 fi
 if [ -n "$CONFIG_KAGI_KEY" ]; then
-    API_KEYS_ARGS="$API_KEYS_ARGS kagi_api_key=\"${CONFIG_KAGI_KEY}\""
+    API_KEYS_ARGS+=(kagi_api_key="${CONFIG_KAGI_KEY}")
 fi
 if [ "$CONFIG_EMBEDDING_PROVIDER" = "remote" ] && [ -n "$CONFIG_EMBEDDING_API_KEY" ]; then
-    API_KEYS_ARGS="$API_KEYS_ARGS ${EMBEDDING_VAULT_KEY_NAME}=\"${CONFIG_EMBEDDING_API_KEY}\""
+    API_KEYS_ARGS+=("${EMBEDDING_VAULT_KEY_NAME}=${CONFIG_EMBEDDING_API_KEY}")
 fi
 # Injection screen (M16): a remote System One gateway needs its explicit key
 # in Vault — no chat-key fallback. Local (unkeyed) and disabled installs seed
 # nothing.
 if [ "$CONFIG_INJECTION_SCREEN" = "yes" ] && [ "$CONFIG_SYSTEMONE_PROVIDER" = "remote" ]; then
-    API_KEYS_ARGS="$API_KEYS_ARGS ${SYSTEMONE_VAULT_KEY_NAME}=\"${CONFIG_SYSTEMONE_API_KEY}\""
+    API_KEYS_ARGS+=("${SYSTEMONE_VAULT_KEY_NAME}=${CONFIG_SYSTEMONE_API_KEY}")
 fi
-eval vault_put_if_not_exists secret/mira/api_keys $API_KEYS_ARGS
+vault_put_if_not_exists "${API_KEYS_ARGS[@]}"
 
 vault_put_if_not_exists secret/mira/database \
     admin_url="postgresql://mira_admin:${DB_PASSWORD_URL_ENC}@localhost:5432/mira_service" \
@@ -415,28 +433,35 @@ vault_put_if_not_exists secret/mira/database \
 CONFIG_USERDATA_ENCRYPTION_KEY=$(openssl rand -base64 32)
 CONFIG_DIAGNOSTICS_TOKEN=$(openssl rand -base64 32)
 
-# Optional SMTP relay for multi-user mode (MIRA_AUTH_MODE=multi). The mail
-# sender reads MIRA_SMTP_* from the environment first and these Vault
-# fields second (auth/email_service.py), so exporting MIRA_SMTP_* while
-# running the deployer persists a relay for the systemd service, which only
-# receives VAULT_* Environment lines. Nothing here is required in the
-# default single-user mode: no send happens, and no boot check demands it.
-SMTP_ARGS=""
+# Optional SMTP relay for multi-user mode (MIRA_AUTH_MODE=multi). Vault is
+# the only runtime SMTP source: the mail sender reads these Vault fields
+# only and never reads MIRA_SMTP_* at runtime (auth/email_service.py).
+# Exporting MIRA_SMTP_* while running the deployer persists a relay for
+# the systemd service, which receives only VAULT_* Environment lines — but
+# the write below uses vault_put_if_not_exists, so it takes effect only at
+# first creation of secret/mira/services; after that, the live post-install
+# remedy is a direct `vault kv patch secret/mira/services smtp_host=...
+# smtp_from=...`. Nothing here is required in the default single-user
+# mode: no send happens, and no boot check demands it.
+# (tsvt) Same array discipline as the api_keys write above: SMTP values are
+# passed as single argv entries so $ / quotes / backticks in a relay password
+# survive byte-identical and never see a second shell parse.
+SMTP_ARGS=()
 if [ -n "${MIRA_SMTP_HOST:-}" ]; then
-    SMTP_ARGS="smtp_host=\"${MIRA_SMTP_HOST}\""
-    [ -n "${MIRA_SMTP_PORT:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_port=\"${MIRA_SMTP_PORT}\""
-    [ -n "${MIRA_SMTP_FROM:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_from=\"${MIRA_SMTP_FROM}\""
-    [ -n "${MIRA_SMTP_USER:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_user=\"${MIRA_SMTP_USER}\""
-    [ -n "${MIRA_SMTP_PASSWORD:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_password=\"${MIRA_SMTP_PASSWORD}\""
-    [ -n "${MIRA_SMTP_STARTTLS:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_starttls=\"${MIRA_SMTP_STARTTLS}\""
+    SMTP_ARGS+=(smtp_host="${MIRA_SMTP_HOST}")
+    [ -n "${MIRA_SMTP_PORT:-}" ] && SMTP_ARGS+=(smtp_port="${MIRA_SMTP_PORT}")
+    [ -n "${MIRA_SMTP_FROM:-}" ] && SMTP_ARGS+=(smtp_from="${MIRA_SMTP_FROM}")
+    [ -n "${MIRA_SMTP_USER:-}" ] && SMTP_ARGS+=(smtp_user="${MIRA_SMTP_USER}")
+    [ -n "${MIRA_SMTP_PASSWORD:-}" ] && SMTP_ARGS+=(smtp_password="${MIRA_SMTP_PASSWORD}")
+    [ -n "${MIRA_SMTP_STARTTLS:-}" ] && SMTP_ARGS+=(smtp_starttls="${MIRA_SMTP_STARTTLS}")
 fi
 
-eval vault_put_if_not_exists secret/mira/services \
-    app_url=\"http://localhost:1993\" \
-    valkey_url=\"valkey://localhost:6379\" \
-    userdata_encryption_key=\"\${CONFIG_USERDATA_ENCRYPTION_KEY}\" \
-    diagnostics_token=\"\${CONFIG_DIAGNOSTICS_TOKEN}\" \
-    $SMTP_ARGS
+vault_put_if_not_exists secret/mira/services \
+    app_url="http://localhost:1993" \
+    valkey_url="valkey://localhost:6379" \
+    userdata_encryption_key="${CONFIG_USERDATA_ENCRYPTION_KEY}" \
+    diagnostics_token="${CONFIG_DIAGNOSTICS_TOKEN}" \
+    "${SMTP_ARGS[@]}"
 
 if ! vault kv get -field=userdata_encryption_key secret/mira/services > /dev/null 2>&1; then
     vault kv patch secret/mira/services userdata_encryption_key="${CONFIG_USERDATA_ENCRYPTION_KEY}" > /dev/null

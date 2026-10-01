@@ -133,8 +133,9 @@ bootstrap_ssh() {
     return
   fi
   local pub; pub=$(pubkey) || return 1
-  vmexec "grep -qF '$pub' /home/$VM_USER/.ssh/authorized_keys 2>/dev/null || echo '$pub' >> /home/$VM_USER/.ssh/authorized_keys
-mkdir -p /home/$VM_USER/.ssh; chown -R $VM_USER:$VM_USER /home/$VM_USER/.ssh; chmod 700 /home/$VM_USER/.ssh; chmod 600 /home/$VM_USER/.ssh/authorized_keys"
+  vmexec "mkdir -p /home/$VM_USER/.ssh && chmod 700 /home/$VM_USER/.ssh
+grep -qF '$pub' /home/$VM_USER/.ssh/authorized_keys 2>/dev/null || echo '$pub' >> /home/$VM_USER/.ssh/authorized_keys
+chown -R $VM_USER:$VM_USER /home/$VM_USER/.ssh; chmod 600 /home/$VM_USER/.ssh/authorized_keys"
 }
 
 # MIRA turn-in-flight gate: refuse extract/flush/stop when valkey holds a

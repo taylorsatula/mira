@@ -151,8 +151,10 @@ def get_users_due_for_job(interval: int) -> list[dict]:
 
     Uses MOD() for stateless use-day scheduling: a user is "due" when
     MOD(cumulative_activity_days, interval) = 0. The 2-day recency window
-    on last_activity_date handles timezone skew and prevents re-processing
-    users whose counter is stuck on a multiple.
+    on last_activity_date handles timezone skew. It does NOT eliminate
+    re-processing of a user whose counter is stuck on a multiple: such a
+    user is re-selected on each daily tick across the window, so the
+    window merely bounds re-processing to that 2-day tail.
 
     Args:
         interval: Use-day interval (e.g., 7 = every 7th activity day)

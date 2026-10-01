@@ -582,9 +582,11 @@ def _check_vault() -> dict[str, Any]:
 
         if get_mail_sender() is None:
             raise RuntimeError(
-                "MIRA_AUTH_MODE=multi requires an email transport: set "
-                "MIRA_SMTP_HOST (and MIRA_SMTP_FROM) in the environment or "
-                "smtp_host/smtp_from in Vault mira/services"
+                "MIRA_AUTH_MODE=multi requires an email transport: Vault "
+                "secret/mira/services (the only runtime SMTP source) has "
+                "no smtp_host/smtp_from. Post-install, write them directly: "
+                "vault kv patch secret/mira/services smtp_host=... "
+                "smtp_from=..."
             )
 
     return {

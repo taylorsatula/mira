@@ -7,11 +7,13 @@ import json
 import logging
 import random
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping as MappingABC
 from typing import Any, TYPE_CHECKING
 
 import anthropic
 from anthropic._exceptions import OverloadedError
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 from clients.llm.artifacts import FileArtifactSink
 from clients.llm.events import (
@@ -135,6 +137,11 @@ class AnthropicDialect(Dialect):
             # httpx Timeout class (httpx on SDK 0.x, httpx2 on SDK 1.x) - passing
             # an externally-constructed httpx.Timeout is rejected by SDK 1.x.
             timeout=anthropic.Timeout(connect=30.0, read=600.0, write=30.0, pool=30.0),
+            # config.api.timeout is accepted-but-not-applied on the Anthropic
+            # route by design (hrzs, declined): the 600s read window is kept
+            # for long non-streaming/extended-thinking responses. The tradeoff
+            # of wiring the knob was weighed at census-20260930b and declined
+            # (Taylor, 2026-09-30).
         )
         from utils.logging_config import instrument_anthropic_client
 
@@ -167,10 +174,29 @@ class AnthropicDialect(Dialect):
 
     def complete(self, request: Request) -> Result:
         params = self._build_params(request)
-        message = self._call_with_overload_retry(
-            lambda: self.client.beta.messages.create(**params, betas=ANTHROPIC_BETA_FLAGS),
-            mode="non-streaming",
-        )
+        # Hold the transport on the abort handle before the blocking call
+        # (9d29): a non-streaming create() blocks inside the SDK client with
+        # no request/stream object exposed to the caller, so
+        # abort_active_stream() found nothing to close and a stalled
+        # non-streaming worker kept its connection open past the lifecycle's
+        # ProviderStallError until the SDK's read timeout. Closing the SDK
+        # client closes its connection pool including the checked-out
+        # connection, releasing the peer's socket at abort time. The handle
+        # here is the SDK client itself — the SDK (0.52.2) exposes no
+        # request/stream object for a non-streaming create() before it
+        # blocks — and the dialect (with its client) is per-request
+        # (llm_provider._dialect_for_selection), so closing it cannot
+        # disturb another request's connection. current_partial_usage()
+        # stays safe: it getattr-guards current_message_snapshot, which the
+        # client does not expose, and returns None as before.
+        self._active_stream = self.client
+        try:
+            message = self._call_with_overload_retry(
+                lambda: self.client.beta.messages.create(**params, betas=ANTHROPIC_BETA_FLAGS),
+                mode="non-streaming",
+            )
+        finally:
+            self._active_stream = None
         result = self._normalize_message(message, request)
         self._log_response(result, request.model)
         return result
@@ -239,15 +265,22 @@ class AnthropicDialect(Dialect):
 
         # Download artifacts before emitting the code-execution summary so the
         # summary can advertise what actually landed, not what the provider
-        # listed. Consumer-visible event order is unchanged.
+        # listed. Each artifact downloads inside its own generator resume
+        # (yield between files, ticket ejnp): the lifecycle's per-event stall
+        # watchdog bounds ONE files.download per resume, never the whole
+        # batch. The artifact events must therefore be yielded as each
+        # download lands, ahead of the summary below, so the summary still
+        # reads a fully populated landed_files — landed-vs-missing
+        # advertising and CompleteEvent-last are preserved. NOTE: this
+        # artifact-path change is UNTESTED against live infrastructure, and
+        # Anthropic's artifact support is known buggy (Taylor, census-20260930b).
         landed_files: set[str] = set()
-        artifact_events = list(
-            self._file_artifact_events(final_message.content, landed_files=landed_files)
+        yield from self._file_artifact_events(
+            final_message.content, landed_files=landed_files
         )
         yield from self._server_tool_completed_events(
             final_message.content, landed_files=landed_files
         )
-        yield from artifact_events
         yield CompleteEvent(response=result)
 
     def abort_active_stream(self) -> None:
@@ -605,6 +638,15 @@ class AnthropicDialect(Dialect):
                     elif sig.get("type") == "redacted_thinking":
                         thinking_blocks.append({"type": "redacted_thinking", "data": sig["data"]})
                 if not matched:
+                    # Written-in-blood (z5g5, refuted as a defect,
+                    # census-20260930b): this hard-fail on unpaired/foreign
+                    # reasoning blocks is INTENDED protection for the
+                    # signed-blocks contract — OpenAI-family reasoning carries
+                    # no signatures and must not be silently replayed on a
+                    # deliberating Anthropic route. If it fires, recovery
+                    # requires rewinding stored history (SQL access) or waiting
+                    # for segment collapse. Do NOT soften the one-to-one
+                    # invariant (Taylor, 2026-09-30).
                     # Co-occurrence invariant: every reasoning block must pair
                     # with exactly one thinking signature, positionally. An
                     # unmatched block means the stored metadata drifted from
@@ -808,10 +850,72 @@ class AnthropicDialect(Dialect):
             elif block_type == "redacted_thinking":
                 redacted_data.append(block.data)
             elif block_type == "tool_use":
+                # Validate the block's input against the matching request tool's
+                # input_schema, mirroring openai_chat_base._coerce_tool_input's
+                # rejection semantics (fj8h): a schema-violating native-
+                # Anthropic tool call must be flagged via invalid_reason here,
+                # not executed and persisted. request is None on the no-request
+                # path — there are no schemas to validate against, so no-op;
+                # an unknown tool name likewise has no matching schema. This
+                # normalization is also the streaming final-message path, so
+                # validation cost lands once per turn there too.
+                invalid_reason = None
+                if request is not None:
+                    tool = next(
+                        (t for t in request.tools if t.name == block.name),
+                        None,
+                    )
+                    if tool is not None:
+                        required = tool.input_schema.get("required", [])
+                        required = (
+                            tuple(required)
+                            if isinstance(required, (list, tuple))
+                            else ()
+                        )
+                        raw_input = block.input
+                        if raw_input is not None and not isinstance(raw_input, MappingABC):
+                            invalid_reason = (
+                                f"Tool call '{block.id}' for '{block.name}' "
+                                "input must be a JSON object"
+                            )
+                        else:
+                            missing = [
+                                field for field in required
+                                if field not in (raw_input or {})
+                            ]
+                            if missing:
+                                invalid_reason = (
+                                    f"Tool call '{block.id}' for '{block.name}' "
+                                    f"missing required fields: {missing}"
+                                )
+                            else:
+                                try:
+                                    validator = Draft202012Validator(dict(tool.input_schema))
+                                except SchemaError as error:
+                                    raise RuntimeError(
+                                        f"Tool '{block.name}' has an invalid input schema: {error.message}"
+                                    ) from error
+                                validation_errors = sorted(
+                                    validator.iter_errors(dict(raw_input or {})),
+                                    key=lambda error: (
+                                        tuple(str(part) for part in error.absolute_path),
+                                        error.message,
+                                    ),
+                                )
+                                if validation_errors:
+                                    error = validation_errors[0]
+                                    location = ".".join(
+                                        str(part) for part in error.absolute_path
+                                    ) or "input"
+                                    invalid_reason = (
+                                        f"Tool call '{block.id}' for '{block.name}' "
+                                        f"violates schema at {location}: {error.message}"
+                                    )
                 tool_calls.append(ToolCall(
                     id=block.id,
                     tool_name=block.name,
                     input=block.input,
+                    invalid_reason=invalid_reason,
                 ))
             else:
                 # server_tool_use and code_execution_tool_result are server-side
@@ -846,14 +950,40 @@ class AnthropicDialect(Dialect):
                 redacted_data=tuple(redacted_data),
             )
 
+        # Unknown stop reasons are a provider contract violation, not a client
+        # message problem: a bare ValueError from coerce_stop_reason is
+        # classified as TURN_VALIDATION_FAILED on the WebSocket transport and
+        # bypasses overflow remediation (ticket 8cs3). The documented
+        # model_context_window_exceeded is an overflow condition and maps to
+        # ProviderContextOverflowError so llm_provider converts it to
+        # ContextOverflowError and the orchestrator's recovery fires; every
+        # other unknown value raises ProviderProtocolError (a RuntimeError),
+        # which the WS classifier emits as TURN_PROCESSING_FAILED. Whatever
+        # survives coercion is a StopReason member, so Result.__post_init__'s
+        # re-coercion cannot raise.
+        raw_stop_reason = getattr(message, "stop_reason", "end_turn") or "end_turn"
+        if raw_stop_reason == "model_context_window_exceeded":
+            raise ProviderContextOverflowError(
+                "anthropic",
+                "message-normalization",
+                "stop_reason 'model_context_window_exceeded': "
+                "the conversation exceeds the model's context window",
+            )
+        try:
+            normalized_stop_reason = coerce_stop_reason(raw_stop_reason)
+        except ValueError as error:
+            raise ProviderProtocolError(
+                "anthropic",
+                "message-normalization",
+                f"Unknown stop_reason: {raw_stop_reason!r}",
+            ) from error
+
         return Result(
             text="".join(text_parts),
             tool_calls=tuple(tool_calls),
             reasoning=reasoning,
             usage=usage,
-            stop_reason=coerce_stop_reason(
-                getattr(message, "stop_reason", "end_turn") or "end_turn"
-            ),
+            stop_reason=normalized_stop_reason,
             provider_metadata=ProviderMetadata(
                 dialect_name=self.dialect_name,
             ),

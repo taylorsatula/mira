@@ -24,7 +24,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import http_exception_handler
 from pydantic import ValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from auth import api as auth_api
 from auth.mode import auth_mode
@@ -308,8 +310,7 @@ async def lifespan(app: FastAPI):
     from clients.valkey_client import get_valkey_client
     valkey = get_valkey_client()
     if valkey:
-        valkey.shutdown()
-        logger.info("Valkey client shutdown complete")
+        await valkey.shutdown()
     
     # Clean up singleton resources
     logger.info("Cleaning up singleton resources...")
@@ -407,6 +408,25 @@ def create_app() -> FastAPI:
             status_code=422,
             content={"detail": formatted_errors}
         )
+    
+    @app.exception_handler(StarletteHTTPException)
+    async def starlette_http_exception_handler(request: Request, exc: StarletteHTTPException):
+        """Handle HTTPExceptions raised with the standard error envelope as detail.
+
+        The auth dependency ladder raises HTTPException(detail=<flat envelope
+        dict>); FastAPI's default wrapper would nest it under "detail", which
+        the TUI's error extractor misses. Flatten only when the detail carries
+        the success/error envelope keys; string details keep the default
+        {"detail": ...} shape for their non-TUI consumers.
+        """
+        detail = exc.detail
+        if isinstance(detail, dict) and "success" in detail and "error" in detail:
+            return JSONResponse(
+                status_code=exc.status_code,
+                headers=exc.headers,
+                content=detail,
+            )
+        return await http_exception_handler(request, exc)
     
     @app.exception_handler(APIError)
     async def api_error_handler(request: Request, exc: APIError):
@@ -579,8 +599,12 @@ def main():
         hypercorn_config.alpn_protocols = ["h2", "http/1.1"]  # Prefer HTTP/2, fallback to HTTP/1.1
         hypercorn_config.log_level = config.api_server.log_level
 
-        # Trust proxy headers from nginx (localhost only)
-        # This allows proper client IP logging from X-Forwarded-For header
+        # NOTE (recorded topology decision): this assignment is a NO-OP — Hypercorn's
+        # Config has never had a `forwarded_allow_ips` attribute, and no proxy-header
+        # trust is configured anywhere. X-Forwarded-For is deliberately ignored:
+        # no proxy ships with MIRA, so request.client.host is the socket peer. If a
+        # reverse proxy is ever put in front of MIRA, add a loopback-gated
+        # proxy-header middleware here rather than re-flagging this line.
         hypercorn_config.forwarded_allow_ips = ["127.0.0.1", "::1"]
         
         

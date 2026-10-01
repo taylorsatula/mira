@@ -265,8 +265,11 @@ class ContinuumPool:
         self.repository = repository
         self.session_loader = session_loader
         self.valkey_cache = ValkeyMessageCache()
-        # Lock for thread-safe operations
-        self._lock = threading.Lock()
+        # Per-user locks keyed by user_id: same-user get_or_create calls stay
+        # serialized, while cross-user IO (Valkey/Postgres) does not block on
+        # one another. The epoch compare-and-set remains the collapse guard.
+        self._user_locks: dict[str, threading.Lock] = {}
+        self._user_locks_guard = threading.Lock()
         # Collapse epoch captured at load, per user — consumed by begin_work()
         # so UnitOfWork.commit() can compare-and-set against the live epoch.
         self._loaded_epochs: dict[str, int] = {}
@@ -283,7 +286,13 @@ class ContinuumPool:
         """
         user_id = get_current_user_id()
 
-        with self._lock:
+        # Serialize only same-user get_or_create calls; cross-user turns no
+        # longer contend on one process-global lock.
+        user_key = str(user_id)
+        with self._user_locks_guard:
+            user_lock = self._user_locks.setdefault(user_key, threading.Lock())
+
+        with user_lock:
             # Check Valkey cache first. The epoch is captured BEFORE the message
             # read: any collapse that invalidates the messages we are about to
             # read also bumps the epoch past what we capture, so the commit's

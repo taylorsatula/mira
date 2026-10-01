@@ -10,7 +10,7 @@
 #
 # --local installs the MIRA code from the CURRENT DIRECTORY (a mira-OSS
 # checkout, typically with uncommitted dev changes) instead of downloading
-# the main-branch tarball from GitHub. Run it from the repo root:
+# the tagged release tarball from GitHub. Run it from the repo root:
 #   cd /path/to/mira-OSS && ./deploy/deploy.sh --config deploy-config.yml --local --loud
 # Untracked runtime junk the GitHub tarball never contains is excluded
 # (.git, venv, __pycache__, *.pyc, .env, data, logs, scratch); everything
@@ -18,7 +18,7 @@
 # with the same ownership and downstream steps as the GitHub path.
 #
 # Quick start (downloads and runs):
-#   git clone https://github.com/taylorsatula/mira-OSS.git /tmp/mira-install && /tmp/mira-install/deploy/deploy.sh
+#   git clone --depth 1 --branch v2026.06.25 https://github.com/taylorsatula/mira-OSS.git /tmp/mira-install && /tmp/mira-install/deploy/deploy.sh
 #
 # Options:
 #   --loud     Show verbose output during installation
@@ -41,6 +41,13 @@
 
 set -e
 
+# Single source of truth for the release the installer deploys. All fetch
+# sites are pinned to this tag: the bootstrap clone below, python.sh's
+# installer tarball, and the README's curl entrypoint. Cut a release by
+# moving this constant (and the README URL) per deploy/RELEASE.md.
+RELEASE_TAG="v2026.06.25"
+export RELEASE_TAG
+
 # Get the directory where this script lives
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -49,9 +56,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ============================================================================
 # If lib/output.sh doesn't exist, we were likely curl'd standalone - clone the repo
 if [ ! -f "${SCRIPT_DIR}/lib/output.sh" ]; then
-    echo "Cloning MIRA repository..."
+    echo "Cloning MIRA repository (release ${RELEASE_TAG})..."
     CLONE_DIR="/tmp/mira-install-$$"
-    git clone --depth 1 https://github.com/taylorsatula/mira-OSS.git "$CLONE_DIR"
+    git clone --depth 1 --branch "$RELEASE_TAG" https://github.com/taylorsatula/mira-OSS.git "$CLONE_DIR"
     exec "$CLONE_DIR/deploy/deploy.sh" "$@"
 fi
 

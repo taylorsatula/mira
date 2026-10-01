@@ -33,8 +33,8 @@ defaults to the repo containing this toolkit, **including uncommitted changes**)
 ```bash
 # A. New VM from template + dev build + instance restored + verified
 ./oneshot.sh mlfactory_v4_mira                  # local libvirt
-./oneshot.sh --host admin@192.168.1.9 mlfactory_v4_mira   # orchestrated remotely
-./oneshot.sh --ip 192.168.65.2 --vm-user mira_service --vm-pass '…' mlfactory_v4_mira
+./oneshot.sh --host <user>@<libvirt-host> mlfactory_v4_mira   # orchestrated remotely
+./oneshot.sh --ip <vm-ip> --vm-user mira_service --vm-pass '…' mlfactory_v4_mira
 ./oneshot.sh mlfactory_v4_mira --fresh          # rebuild a running VM (gated on
                                                  # no in-flight MIRA turn; old disk
                                                  # kept as <disk>.pre-oneshot-<ts>)
@@ -158,7 +158,7 @@ Cookie-auth POSTs need `X-CSRF-Token`; Bearer does not. Probe health first:
 
 ## Reference deployment
 
-The canonical deployment lives on host `192.168.1.9` (libvirt, Ubuntu 26.04):
+The canonical deployment lives on the operator's libvirt host (<libvirt-host>, Ubuntu 26.04):
 domain `ubuntu_vm`, base template `/home/admin/virtual_machine/ubuntu_vm-template.qcow2`
 (default-state, purged + verified), sarcophagi v1–v4 under
 `/home/admin/mira_instance_snapshots/` (see that dir's AGENTS.md for the full

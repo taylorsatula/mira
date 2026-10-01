@@ -592,7 +592,8 @@ class WeatherTool(Tool):
     def cache_directory(self):
         """Lazy-load cache directory."""
         if self._cache_directory is None:
-            self._cache_directory = self.make_dir("cache")
+            from config import config
+            self._cache_directory = self.make_dir(config.weather_tool.cache_directory)
         return self._cache_directory
     
     def _geocode_location(self, location: str) -> tuple:
@@ -933,8 +934,10 @@ class WeatherTool(Tool):
         # Process forecast data to ensure all timestamps are properly handled
         forecast_data = weather_data.get(forecast_type, {})
         
-        # Process timestamps in time data if they exist in the response
-        if "time" in forecast_data:
+        # Process timestamps in time data if they exist in the response.
+        # Only hourly timestamps are UTC-normalized; daily 'time' entries are
+        # date-only local labels from the API and are passed through unchanged.
+        if "time" in forecast_data and forecast_type == "hourly":
             times = forecast_data["time"]
             processed_times = []
             
@@ -1075,12 +1078,20 @@ class WeatherTool(Tool):
                     wind_speed[i]
                 )
             except (TypeError, ValueError):
+                # Pad skipped hours with None so each index stays aligned with time[i]
+                wbgt_values.append(None)
+                risk_levels.append(None)
                 continue
             wbgt_values.append(round(wbgt, 1))
             
             # Determine risk level
             risk_level = self._get_heat_stress_risk_level(wbgt)
             risk_levels.append(risk_level)
+        
+        # Pad to the length of the time series so truncated trailing hours stay aligned
+        while len(wbgt_values) < len(time_series):
+            wbgt_values.append(None)
+            risk_levels.append(None)
         
         # Add WBGT and risk levels to hourly data
         hourly_data["wbgt"] = wbgt_values

@@ -44,6 +44,17 @@ LOCAL_SESSION_LAST_NAME: Optional[str] = None
 LOCAL_SESSION_CURRENT_FOCUS = "Get oriented with MIRA"
 
 
+def normalize_email(email: str) -> str:
+    """Canonical email identity: the lowercased address.
+
+    Applied at every seam where an email address enters the auth service,
+    so the stored row, the WHERE-email lookup, and the rate-limit key all
+    key on one form — a case-variant address is one mailbox, never two
+    accounts.
+    """
+    return email.lower()
+
+
 class AuthService:
     """Lean magic-link authentication service."""
 
@@ -103,6 +114,10 @@ class AuthService:
         Returns:
             User ID (UUID as string)
         """
+        # One canonical form for identity: validation, the rate-limit key,
+        # the stored row, and the WHERE-email lookup all see lowercased.
+        email = normalize_email(email)
+
         # Public account creation requires a routable deliverable address;
         # the single-mode local bootstrap bypasses this method deliberately.
         import re
@@ -182,8 +197,33 @@ class AuthService:
             email=email
         )
 
-        # Send magic link to new user
-        self.request_magic_link(email, ip_address, user_agent)
+        # Send magic link to new user. The account row has already committed:
+        # a delivery failure is not a creation failure, and the row is never
+        # torn down for it. Surface the distinct delivery-failed outcome with
+        # a resend cue — the user already owns the account and can sign in
+        # by requesting a magic link. Rate-limit refusals still propagate
+        # unchanged.
+        try:
+            self.request_magic_link(email, ip_address, user_agent)
+        except AuthError as error:
+            if error.code != "service_error":
+                raise
+            self.security_logger.log_event(
+                "auth.magic_link_delivery_failed",
+                success=False,
+                user_id=user_id,
+                email=email,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                details={"reason": "signup_link_send_failed"},
+            )
+            raise AuthError(
+                "magic_link_delivery_failed",
+                "Your account was created, but the sign-in email could not "
+                "be delivered. Your account exists — request a magic link "
+                "to sign in.",
+                {},
+            ) from error
 
         return user_id
 
@@ -285,8 +325,11 @@ class AuthService:
         if mailer is None:
             raise AuthError(
                 "email_not_configured",
-                "Email transport is not configured. Set MIRA_SMTP_HOST (or "
-                "Vault smtp_host) to enable magic-link delivery.",
+                "Email transport is not configured. Set smtp_host (and "
+                "smtp_from) in Vault secret/mira/services — the only runtime "
+                "SMTP source; post-install, `vault kv patch "
+                "secret/mira/services smtp_host=... smtp_from=...` — to "
+                "enable magic-link delivery.",
             )
         return mailer
 
@@ -319,6 +362,9 @@ class AuthService:
         user_agent: str = ""
     ) -> bool:
         """Request a magic link for authentication."""
+        # Same canonical form as signup: the rate-limit key and the
+        # WHERE-email lookup see the lowercased address.
+        email = normalize_email(email)
         # Check rate limit (both email and IP-based)
         allowed, retry_after = self.rate_limiter.is_allowed(email, ip_address or None)
         if not allowed:

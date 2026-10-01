@@ -34,8 +34,11 @@ from utils import http_client
 
 logger = logging.getLogger(__name__)
 
-# Retries per request on 429/5xx/connect errors (utils/http_client policy);
-# http_client caps each retry sleep at 30 s.
+# Per-request retries on 429/5xx (status) and connect errors via the shared
+# http_client policy. Its default verb guard never status-retries a POST; this
+# client opts in with retry_non_idempotent=True because its POSTs are pure
+# inference queries — no server-side writes — so a retryable status is
+# pre-execution and re-sending is safe. http_client caps each sleep at 30 s.
 _MAX_RETRIES = 2
 _MAX_RETRY_SLEEP_SECONDS = 30
 
@@ -113,7 +116,15 @@ class SystemOneClient:
         # provider, duplicated deliberately: no shared abstraction between
         # the two clients.
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        self._http = http_client.Client(timeout=timeout_seconds, max_retries=_MAX_RETRIES)
+        # retry_non_idempotent=True: every request this client sends is a
+        # read-only inference POST (no server-side writes), so status retries
+        # on 429/5xx apply to it — the shared default verb guard stays in
+        # force for every other caller.
+        self._http = http_client.Client(
+            timeout=timeout_seconds,
+            max_retries=_MAX_RETRIES,
+            retry_non_idempotent=True,
+        )
         # The pool size is the in-flight cap: every request runs on a pool thread.
         self._pool = ThreadPoolExecutor(max_workers=max_concurrent_requests, thread_name_prefix="systemone")
         # Longest one request can legitimately take: every attempt times out

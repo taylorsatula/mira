@@ -20,6 +20,8 @@ from cns.infrastructure.continuum_repository import (
     ContinuumRepository,
     EXTRACTION_MAX_CONTENT_FAILURES,
 )
+from clients.llm.dialects.base import ProviderError
+from clients.llm_provider import ContextOverflowError
 from lt_memory.models import ProcessingChunk, MemoryContextSnapshot
 from lt_memory.processing.extraction_engine import ExtractionEngine
 from lt_memory.processing.execution_strategy import DirectExecutionStrategy
@@ -37,13 +39,17 @@ def _is_content_caused_extraction_failure(error: Exception) -> bool:
     Only failures that are deterministic given the segment's own data count
     against the abandonment budget: a missing boundary row (RuntimeError) or
     a segment with no extractable payload (ValueError). Everything else is
-    infra/LLM class and must NOT consume the budget — provider/network/DB
+    infra/LLM class and must NOT consume the budget — provider transport
+    failures are raised as ProviderError (which subclasses RuntimeError, so
+    it is explicitly excluded first) or ContextOverflowError, network/DB
     outages raise arbitrary library exception types, and degenerate model
     output raises LLMResponseFormatError (checked first: it subclasses
     ValueError). Pinned doctrine: retry counters never gate data on
     infrastructure failure.
     """
     if isinstance(error, LLMResponseFormatError):
+        return False
+    if isinstance(error, (ProviderError, ContextOverflowError)):
         return False
     return isinstance(error, (RuntimeError, ValueError))
 

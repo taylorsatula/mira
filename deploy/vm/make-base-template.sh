@@ -1,6 +1,6 @@
 #!/bin/bash
 # deploy/vm/make-base-template.sh — EXPERIMENTAL (not yet exercised end-to-end;
-# the canonical 192.168.1.9 template was built by hand) — build a frozen
+# (the reference base template was built by hand) — build a frozen
 # default-state base template for oneshot.sh from an Ubuntu cloud image.
 #
 # Prerequisites: libvirt, qemu-utils, and cloud-localds (cloud-image-utils) or
@@ -81,15 +81,41 @@ fi
 
 echo "== boot builder domain =="
 sed -e "s|__DOMAIN__|$DOMAIN-basebuild|g" -e "s|__DISK__|$WORK|" "$VM_XML" > /tmp/basebuild.xml
+# Attach the cloud-init seed as a read-only sata cdrom: Ubuntu cloud images
+# have no path-based datasource, so the seed must be a domain device for
+# cloud-init to consume it. base-vm.xml stays the shared template skeleton
+# (oneshot.sh renders it with __DOMAIN__/__DISK__ only), so the builder's
+# cdrom is injected into the rendered XML here, not into the skeleton.
+SEEDFRAG=$(mktemp)
+printf '%s\n' \
+  "    <disk type='file' device='cdrom'>" \
+  "      <driver name='qemu' type='raw'/>" \
+  "      <source file='$SEED'/>" \
+  "      <target dev='sda' bus='sata'/>" \
+  "      <readonly/>" \
+  "    </disk>" > "$SEEDFRAG"
+sed "/^    <\/disk>$/r $SEEDFRAG" /tmp/basebuild.xml > /tmp/basebuild.xml.cd
+mv /tmp/basebuild.xml.cd /tmp/basebuild.xml
+rm -f "$SEEDFRAG"
 VIRSH define /tmp/basebuild.xml
 VIRSH start "$DOMAIN-basebuild"
+# wait_guest_agent/vmexec bind to the file-global $DOMAIN (lib.sh) — the live
+# VM's name, not the builder's. Scope DOMAIN to the started builder for the
+# boot/verify block so the readiness probes target $DOMAIN-basebuild, and
+# restore the caller's domain right after (the shutdown block and $OUT/$SEED
+# paths use the original $DOMAIN).
+SAVED_DOMAIN=$DOMAIN
+DOMAIN=$DOMAIN-basebuild
 wait_guest_agent
 vmexec "cloud-init status --wait >/dev/null 2>&1; echo CLOUDINIT-OK"
 vmexec "id $VM_USER >/dev/null && sudo -n true && echo BASE-READY"
+DOMAIN=$SAVED_DOMAIN
 
 echo "== shutdown + freeze =="
 VIRSH shutdown "$DOMAIN-basebuild"
 for _ in $(seq 1 60); do [ "$(VIRSH domstate "$DOMAIN-basebuild")" = "shut off" ] && break; sleep 2; done
+[ "$(VIRSH domstate "$DOMAIN-basebuild")" = "shut off" ] \
+  || { echo "FATAL: shutdown timed out" >&2; exit 1; }
 VIRSH undefine "$DOMAIN-basebuild"
 mv "$WORK" "$OUT"
 rm -f "$SEED" /tmp/basebuild.xml

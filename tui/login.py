@@ -80,6 +80,8 @@ def _envelope(response: httpx.Response, step: str) -> dict:
         payload = response.json()
     except ValueError as error:
         raise LoginError(f"{step}: non-JSON response: {error}") from error
+    if not isinstance(payload, dict):
+        payload = {}  # a malformed envelope cannot claim success
     if payload.get("error"):
         error = payload["error"]
         raise LoginError(f"{step}: [{error.get('code')}] {error.get('message')}")
@@ -154,6 +156,8 @@ def _verify_emailed_token(client: httpx.Client, base_url: str) -> str | None:
         if response.status_code == 200:
             return _envelope(response, "verify").get("session_token")
         payload = response.json() if _is_json(response) else {}
+        if not isinstance(payload, dict):
+            payload = {}  # a malformed envelope cannot carry an error code
         code = (payload.get("error") or {}).get("code", "")
         if code in ("expired_token", "invalid_token") and attempt == 1:
             print(f"token rejected ({code}); one more try", flush=True)
@@ -286,11 +290,17 @@ def run_login(
             include_thinking=prior.include_thinking,
         )
     else:
+        # The resolved target name may already exist in the store: bare
+        # --login targets the ACTIVE endpoint, and --save-as may collide
+        # with a stored name. Carry the stored per-endpoint settings forward
+        # so a re-mint does not silently reset them; defaults are only for a
+        # genuinely new name.
+        prior = store.get(name) if name in store.names() else None
         new_config = EndpointConfig(
             base_url=target_url.rstrip("/"),
             api_key=token,
-            history_fetch="session_plus_summary",
-            include_thinking=True,
+            history_fetch=prior.history_fetch if prior is not None else "session_plus_summary",
+            include_thinking=prior.include_thinking if prior is not None else True,
         )
     try:
         store.upsert(name, new_config)

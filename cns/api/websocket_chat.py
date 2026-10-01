@@ -677,6 +677,16 @@ class WebSocketChatHandler:
                 "message": str(error),
             })
             return
+        except Exception:
+            # Authentication infrastructure failed (e.g. Valkey unreachable
+            # inside validate_session). Framing the failure keeps the client
+            # from seeing a silent socket close; no internal detail is leaked.
+            await connection.send({
+                "type": "protocol_error",
+                "code": "AUTH_UNAVAILABLE",
+                "message": "Authentication temporarily unavailable",
+            })
+            return
 
         connection.user_id = user_id  # stamped for proactive push fan-out
         await connection.send({"type": "auth_success", "user_id": user_id})

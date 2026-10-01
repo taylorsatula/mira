@@ -11,8 +11,10 @@
 #     the deploy proceeds with placeholder values and the final banner
 #     explains how to set the real value in Vault later).
 #   - Only flat `key: value` lines are supported — no nesting, no lists.
-#   - `#` starts a comment only when preceded by whitespace. A ` #` inside
-#     a value truncates it; a `#` without leading space is kept literally.
+#   - `#` starts a comment only when preceded by whitespace. In an unquoted
+#     value a ` #` truncates it; a `#` without leading space is kept
+#     literally. Wrapping the value in a matching quote pair ("like # this")
+#     keeps an internal ` #` as part of the value.
 #   - The installer still asks for your sudo password once (preflight).
 #
 # The only interactive prompt left is sudo; everything else comes from here.
@@ -56,8 +58,6 @@ chat_model: "glm-5.3"
 # otherwise). chat_model above is then the Anthropic model (e.g.
 # claude-opus-4-6) and chat_endpoint is ignored.
 anthropic_key: ""
-# "" = use the same key for batch operations.
-anthropic_batch_key: ""
 # Fast subcortical inference (runs on every message). Default: the lunaroute
 # gateway; the chat_api_key value works here too.
 subcortical_endpoint: "https://gw.lunaroute.com/v1/chat/completions"

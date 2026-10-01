@@ -156,7 +156,7 @@ def _extract_uid(response_line: bytes) -> int | None:
         text = response_line.decode('utf-8', errors='replace')
         parts = text.split()
         for i, part in enumerate(parts):
-            if part.upper() == 'UID' and i + 1 < len(parts):
+            if part.strip('()').upper() == 'UID' and i + 1 < len(parts):
                 return int(parts[i + 1].rstrip(')'))
     except (ValueError, IndexError):
         pass

@@ -370,7 +370,7 @@ class MyTaskTrinket(StatefulTrinket):
 
     def _clear_all_state(self) -> None:
         """Called by WorkingMemory on segment collapse."""
-        self._user_results.clear()
+        self._user_results.pop(get_current_user_id(), None)
 
     def generate_content(self, context: Dict[str, Any]) -> str:
         results = self._user_results.get(get_current_user_id(), {})

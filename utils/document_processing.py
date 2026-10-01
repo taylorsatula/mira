@@ -142,12 +142,14 @@ def extract_text_file(doc_bytes: bytes) -> str:
     """
     Extract text from TXT or CSV file.
 
-    Attempts UTF-8 decoding, falls back to latin-1 if that fails.
+    Rejects non-UTF-8 bytes rather than decoding them to mojibake, and
+    enforces the same extracted-text cap as the PDF/DOCX/XLSX extractors.
     """
     try:
-        return doc_bytes.decode('utf-8')
-    except UnicodeDecodeError:
-        return doc_bytes.decode('latin-1')
+        text = doc_bytes.decode('utf-8')
+    except UnicodeDecodeError as error:
+        raise ValueError("Document is not valid UTF-8 text") from error
+    return _cap_extracted_text(text)
 
 
 def extract_pdf_text(doc_bytes: bytes) -> str:

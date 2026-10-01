@@ -359,6 +359,14 @@ if [[ "$USE_LOCAL_LLM_INPUT" =~ ^[Yy](es)?$ ]]; then
     else
         CONFIG_LOCAL_MODEL_CHOICE="auto"
     fi
+    # Both interview branches (auto and custom) seed model_configs.model via
+    # postgresql.sh, so collect the two names here either way — mirroring
+    # the --config path (deploy/lib/config_file.sh, llama_main_model/llama_small_model).
+    echo ""
+    read -p "$(echo -e ${CYAN}Main model name${RESET}) (default=local-main): " LLAMA_MAIN_MODEL_INPUT
+    CONFIG_LLAMA_MAIN_MODEL="${LLAMA_MAIN_MODEL_INPUT:-local-main}"
+    read -p "$(echo -e ${CYAN}Small model name${RESET}) (default=local-small): " LLAMA_SMALL_MODEL_INPUT
+    CONFIG_LLAMA_SMALL_MODEL="${LLAMA_SMALL_MODEL_INPUT:-local-small}"
 else
     CONFIG_OFFLINE_MODE="no"
 
@@ -444,33 +452,6 @@ else
             # Model (default: claude-opus-4-6)
             read -p "$(echo -e ${CYAN}Model${RESET}) [default: claude-opus-4-6]: " CHAT_MODEL_INPUT
             CONFIG_CHAT_MODEL="${CHAT_MODEL_INPUT:-claude-opus-4-6}"
-
-            # Batch API Key (optional)
-            echo -e "${BOLD}${BLUE}   Batch API Key${RESET} ${DIM}(OPTIONAL - separate key for batch operations)${RESET}"
-            echo -e "${DIM}    Leave blank to use the same key. Separate keys allow independent rate limits.${RESET}"
-            while true; do
-                read -p "$(echo -e ${CYAN}Enter batch key${RESET}) (or Enter to use main key): " ANTHROPIC_BATCH_KEY_INPUT
-                if [ -z "$ANTHROPIC_BATCH_KEY_INPUT" ]; then
-                    CONFIG_ANTHROPIC_BATCH_KEY="$CONFIG_ANTHROPIC_KEY"
-                    break
-                fi
-                if [[ $ANTHROPIC_BATCH_KEY_INPUT =~ ^sk-ant- ]]; then
-                    CONFIG_ANTHROPIC_BATCH_KEY="$ANTHROPIC_BATCH_KEY_INPUT"
-                    break
-                else
-                    print_warning "This doesn't look like a valid Anthropic API key (should start with 'sk-ant-')"
-                    read -p "$(echo -e ${YELLOW}Continue anyway?${RESET}) (y=yes, n=use main key, t=try again): " CONFIRM
-                    if [[ "$CONFIRM" =~ ^[Yy](es)?$ ]]; then
-                        CONFIG_ANTHROPIC_BATCH_KEY="$ANTHROPIC_BATCH_KEY_INPUT"
-                        break
-                    elif [[ "$CONFIRM" =~ ^[Tt](ry)?$ ]]; then
-                        continue
-                    else
-                        CONFIG_ANTHROPIC_BATCH_KEY="$CONFIG_ANTHROPIC_KEY"
-                        break
-                    fi
-                fi
-            done
 
             STATUS_CHAT_PROVIDER="${CHECKMARK} Anthropic"
             ;;
@@ -672,6 +653,8 @@ if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
     else
         echo -e "  LLM Provider:    ${CYAN}Local llama-server (custom)${RESET}"
         echo -e "  Model:           ${CYAN}${CONFIG_CUSTOM_GGUF:-TBD}${RESET}"
+        echo -e "  Main Model:      ${CYAN}${CONFIG_LLAMA_MAIN_MODEL:-configure per docs/OFFLINE_MODELS.md}${RESET}"
+        echo -e "  Small Model:     ${CYAN}${CONFIG_LLAMA_SMALL_MODEL:-configure per docs/OFFLINE_MODELS.md}${RESET}"
     fi
 else
     echo -e "  Chat Provider:   ${STATUS_CHAT_PROVIDER}"

@@ -35,10 +35,6 @@ has_tty() {
 check_env_vars() {
     local missing=""
 
-    if [ -z "$MIRA_ANTHROPIC_KEY" ]; then
-        missing="$missing MIRA_ANTHROPIC_KEY"
-    fi
-
     if [ -z "$MIRA_PROVIDER_KEY" ]; then
         missing="$missing MIRA_PROVIDER_KEY"
     fi
@@ -47,15 +43,14 @@ check_env_vars() {
         print_error "Missing required environment variables:$missing"
         print_info ""
         print_info "Required environment variables for non-interactive setup:"
-        print_info "  MIRA_ANTHROPIC_KEY    - Your Anthropic API key (sk-ant-...)"
         print_info "  MIRA_PROVIDER_KEY     - OpenAI-compatible provider API key (e.g., Lunaroute)"
         print_info ""
         print_info "Optional environment variables:"
-        print_info "  MIRA_ANTHROPIC_BATCH_KEY  - Separate batch API key (defaults to main key)"
         print_info "  MIRA_PROVIDER_NAME        - Provider name (default: Lunaroute)"
         print_info "  MIRA_PROVIDER_ENDPOINT    - Custom endpoint URL"
         print_info "  MIRA_PROVIDER_MODEL       - Model name (defaults are verified live per provider)"
         print_info "  MIRA_KAGI_KEY             - Kagi search API key"
+        print_info "  MIRA_SYSTEMONE_API_KEY    - Injection-screen System One gateway token (enables the screen)"
         print_info "  MIRA_DB_PASSWORD          - Database password"
         print_info ""
         print_info "Or run with -it flag for interactive setup:"
@@ -68,9 +63,8 @@ setup_from_env_vars() {
     print_header "Configuring MIRA from Environment Variables"
 
     # Set defaults
-    export CONFIG_ANTHROPIC_KEY="$MIRA_ANTHROPIC_KEY"
-    export CONFIG_ANTHROPIC_BATCH_KEY="${MIRA_ANTHROPIC_BATCH_KEY:-$MIRA_ANTHROPIC_KEY}"
     export CONFIG_PROVIDER_KEY="$MIRA_PROVIDER_KEY"
+    export CONFIG_SYSTEMONE_API_KEY="${MIRA_SYSTEMONE_API_KEY:-}"
     export CONFIG_PROVIDER_NAME="${MIRA_PROVIDER_NAME:-Lunaroute}"
     export CONFIG_KAGI_KEY="${MIRA_KAGI_KEY:-}"
     export CONFIG_DB_PASSWORD="${MIRA_DB_PASSWORD:-changethisifdeployingpwd}"
@@ -127,7 +121,6 @@ setup_from_env_vars() {
     esac
 
     print_success "Configuration loaded from environment"
-    print_info "  Anthropic Key: ****${CONFIG_ANTHROPIC_KEY: -4}"
     print_info "  Provider: $CONFIG_PROVIDER_NAME"
     print_info "  Provider Key: ****${CONFIG_PROVIDER_KEY: -4}"
 }
@@ -274,12 +267,34 @@ init_vault() {
     # routes to subcortical_key, so no row can name provider_key. Only
     # subcortical_key is written here. provider_key exists for the bare-metal
     # installer (deploy/postgresql.sh), which keeps primary on the chat-tier
-    # credential — not this script.
-    vault kv put secret/mira/api_keys \
-        anthropic_key="$CONFIG_ANTHROPIC_KEY" \
-        anthropic_batch_key="$CONFIG_ANTHROPIC_BATCH_KEY" \
-        subcortical_key="$CONFIG_PROVIDER_KEY" \
-        kagi_api_key="$CONFIG_KAGI_KEY"
+    # credential — not this script. (hn32) anthropic_key is not written: no
+    # container route names it, so it would be loaded into memory and never
+    # consumed — a mandatory-looking credential with no reader.
+    # (40dz) systemone_key is written whenever a token was collected (wizard
+    # step or MIRA_SYSTEMONE_API_KEY): the app's injection screen defaults to
+    # provider=remote, whose client reads this Vault field, so a screened
+    # install without it dies with a KeyError at first sidebar dispatch. No
+    # token -> no field: the screen stays off (s6-rc.d/mira/run defaults
+    # MIRA_INJECTION_SCREEN_ENABLED=0) and external content stays
+    # structurally wrapped — the gate remains fail-closed either way.
+    API_KEYS_ARGS=(subcortical_key="$CONFIG_PROVIDER_KEY" kagi_api_key="$CONFIG_KAGI_KEY")
+    if [ -n "${CONFIG_SYSTEMONE_API_KEY:-}" ]; then
+        API_KEYS_ARGS+=(systemone_key="${CONFIG_SYSTEMONE_API_KEY}")
+    fi
+    vault kv put secret/mira/api_keys "${API_KEYS_ARGS[@]}"
+
+    # (40dz) When a System One token was provisioned, also enable the screen:
+    # the s6 launcher sources this file (same file and variable names as the
+    # bare-metal systemd path written by deploy/finalize.sh) and otherwise
+    # defaults the screen to disabled. provider=remote matches the Vault
+    # field just written; endpoint/model keep the app defaults.
+    if [ -n "${CONFIG_SYSTEMONE_API_KEY:-}" ]; then
+        cat > /opt/mira/systemone.env <<EOF
+MIRA_INJECTION_SCREEN_ENABLED=1
+MIRA_SYSTEMONE_PROVIDER=remote
+EOF
+        chmod 600 /opt/mira/systemone.env
+    fi
 
     # Percent-encode reserved characters so the embedded password forms
     # a valid URL credential (standard URL parsers percent-decode userinfo).
@@ -302,25 +317,31 @@ init_vault() {
     CONFIG_DIAGNOSTICS_TOKEN=$(openssl rand -base64 32)
 
     # Optional SMTP relay for multi-user mode: MIRA_SMTP_* set on the
-    # container at init time is persisted to Vault, which the mail sender
-    # reads after the environment (auth/email_service.py). Unset everywhere
-    # is fine outside MIRA_AUTH_MODE=multi.
-    SMTP_ARGS=""
+    # container at first boot is persisted to Vault, which is the mail
+    # sender's only runtime source — MIRA_SMTP_* is never read at runtime
+    # (auth/email_service.py), and init_vault runs only on the first boot,
+    # so afterwards the live post-install remedy is a direct `vault kv
+    # patch secret/mira/services smtp_host=... smtp_from=...`.
+    # Unset everywhere is fine outside MIRA_AUTH_MODE=multi.
+    # (tsvt) The SMTP values are assembled as a bash array and passed
+    # directly: an eval second parse would retain the built-in quotes and
+    # word-split a value on spaces, seeding a mangled relay credential.
+    SMTP_ARGS=()
     if [ -n "${MIRA_SMTP_HOST:-}" ]; then
-        SMTP_ARGS="smtp_host=\"${MIRA_SMTP_HOST}\""
-        [ -n "${MIRA_SMTP_PORT:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_port=\"${MIRA_SMTP_PORT}\""
-        [ -n "${MIRA_SMTP_FROM:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_from=\"${MIRA_SMTP_FROM}\""
-        [ -n "${MIRA_SMTP_USER:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_user=\"${MIRA_SMTP_USER}\""
-        [ -n "${MIRA_SMTP_PASSWORD:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_password=\"${MIRA_SMTP_PASSWORD}\""
-        [ -n "${MIRA_SMTP_STARTTLS:-}" ] && SMTP_ARGS="$SMTP_ARGS smtp_starttls=\"${MIRA_SMTP_STARTTLS}\""
+        SMTP_ARGS+=(smtp_host="${MIRA_SMTP_HOST}")
+        [ -n "${MIRA_SMTP_PORT:-}" ] && SMTP_ARGS+=(smtp_port="${MIRA_SMTP_PORT}")
+        [ -n "${MIRA_SMTP_FROM:-}" ] && SMTP_ARGS+=(smtp_from="${MIRA_SMTP_FROM}")
+        [ -n "${MIRA_SMTP_USER:-}" ] && SMTP_ARGS+=(smtp_user="${MIRA_SMTP_USER}")
+        [ -n "${MIRA_SMTP_PASSWORD:-}" ] && SMTP_ARGS+=(smtp_password="${MIRA_SMTP_PASSWORD}")
+        [ -n "${MIRA_SMTP_STARTTLS:-}" ] && SMTP_ARGS+=(smtp_starttls="${MIRA_SMTP_STARTTLS}")
     fi
 
-    eval vault kv put secret/mira/services \
-        app_url=\"http://localhost:1993\" \
-        valkey_url=\"valkey://localhost:6379\" \
-        userdata_encryption_key=\"\$CONFIG_USERDATA_ENCRYPTION_KEY\" \
-        diagnostics_token=\"\$CONFIG_DIAGNOSTICS_TOKEN\" \
-        \$SMTP_ARGS
+    vault kv put secret/mira/services \
+        app_url="http://localhost:1993" \
+        valkey_url="valkey://localhost:6379" \
+        userdata_encryption_key="${CONFIG_USERDATA_ENCRYPTION_KEY}" \
+        diagnostics_token="${CONFIG_DIAGNOSTICS_TOKEN}" \
+        "${SMTP_ARGS[@]}"
 
     # Stop Vault (s6 will manage it from here)
     print_step "Stopping temporary Vault instance..."

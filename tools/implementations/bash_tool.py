@@ -1150,7 +1150,29 @@ class BashTool(Tool):
                         os.killpg(proc.pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
-                    stdout, stderr = proc.communicate()
+                    except OSError as kill_exc:
+                        # The group kill itself failed (e.g. EPERM on a
+                        # zombie-led, live-member-free group). Raise the
+                        # timeout-shaped error here so the outer OSError
+                        # handler cannot relabel a kill failure as a
+                        # launch failure.
+                        raise ValueError(
+                            f"Command exceeded {effective:.0f}s and its "
+                            f"process group was killed."
+                        ) from kill_exc
+                    try:
+                        stdout, stderr = proc.communicate(timeout=effective)
+                    except subprocess.TimeoutExpired:
+                        # The second bounded wait also expired: a descendant
+                        # escaped the killed process group (setsid or
+                        # double-fork) and holds the inherited pipe ends, so
+                        # the drain can never reach EOF. Abandon it — close
+                        # both pipes and report the timeout instead of
+                        # blocking forever.
+                        if proc.stdout:
+                            proc.stdout.close()
+                        if proc.stderr:
+                            proc.stderr.close()
                     raise ValueError(
                         f"Command exceeded {effective:.0f}s and its process "
                         f"group was killed."

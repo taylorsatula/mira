@@ -67,6 +67,20 @@ for u in "$SRC"/systemd/*.service; do
 done
 [ -f "$SRC/systemd/valkey.conf" ] && sudo -n cp "$SRC/systemd/valkey.conf" /etc/valkey/valkey.conf
 sudo -n systemctl daemon-reload
+# A copied conf is inert until valkey re-reads it — daemon-reload re-reads unit
+# files, not the running process — so restart valkey when a restored conf was
+# actually staged (gated on the cp's own condition). Unit name per distro, same
+# detection as deploy/finalize.sh:66-69: Ubuntu ships valkey-server.service,
+# Fedora ships valkey.service. mira is still stopped here, so nothing depends
+# on valkey mid-restart; volatile in-memory state is disposable by design.
+if [ -f "$SRC/systemd/valkey.conf" ]; then
+  if systemctl cat valkey-server.service > /dev/null 2>&1; then
+    VALKEY_SERVICE="valkey-server.service"
+  else
+    VALKEY_SERVICE="valkey.service"
+  fi
+  sudo -n systemctl restart "$VALKEY_SERVICE"
+fi
 
 echo "== 8. venv drift guard =="
 $VENV/bin/python3 -m pip install -q -r "$APP/requirements.txt" 2>/dev/null \

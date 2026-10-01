@@ -1390,6 +1390,10 @@ class ContinuumRepository:
 
         Called only during session cache loading after timeout, when all segments are collapsed.
         Provides conversational continuity by showing the tail end of the previous session.
+        Excludes keepsleeping heartbeat turns (and their same-turn rows) exactly
+        as load_segment_messages does, so they cannot displace genuine
+        continuity pairs in the row budget; breakout heartbeats are real
+        conversation and stay in context.
 
         Args:
             continuum_id: Continuum ID
@@ -1424,6 +1428,21 @@ class ContinuumRepository:
                 AND COALESCE(m.metadata->>'is_segment_boundary', 'false') = 'false'
                 AND COALESCE(m.metadata->>'system_notification', 'false') = 'false'
                 AND COALESCE(m.metadata->>'has_tool_calls', 'false') != 'true'
+                AND NOT (
+                    COALESCE(m.metadata->>'heartbeat', 'false') = 'true'
+                    AND COALESCE(m.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
+                )
+                AND (
+                    m.metadata->>'turn_id' IS NULL
+                    OR m.metadata->>'turn_id' NOT IN (
+                        SELECT other.metadata->>'turn_id'
+                        FROM messages other
+                        WHERE other.continuum_id = m.continuum_id
+                            AND other.metadata->>'heartbeat' = 'true'
+                            AND COALESCE(other.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
+                            AND other.metadata->>'turn_id' IS NOT NULL
+                    )
+                )
             ORDER BY m.created_at DESC
             LIMIT %s
         """

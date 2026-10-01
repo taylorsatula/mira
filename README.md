@@ -119,7 +119,7 @@ This project would not be possible without the hard work and dedication of peopl
 
 ## Install MIRA local machine
 ```bash
-curl -fsSL https://raw.githubusercontent.com/taylorsatula/mira-OSS/refs/heads/main/deploy/deploy.sh -o deploy.sh && chmod +x deploy.sh && ./deploy.sh
+curl -fsSL https://raw.githubusercontent.com/taylorsatula/mira-OSS/refs/tags/v2026.06.25/deploy/deploy.sh -o deploy.sh && chmod +x deploy.sh && ./deploy.sh
 ```
 That's it. Answer the configuration questions onscreen and provide the provider credentials or local-provider settings you want MIRA to use.
 
@@ -177,6 +177,27 @@ docker run -e MIRA_ANTHROPIC_KEY=sk-ant-xxx -e MIRA_PROVIDER_KEY=gsk_xxx -v mira
 ```
 
 Vault data persists in the `mira-data` volume. User data (uploaded and generated files, per-user tool data) persists in the `mira-userdata` volume, conversations in the `mira-pgdata` volume, and Valkey state in the `mira-valkey` volume. Always re-create the container with the same named volumes — without them, recreating the container attaches fresh empty volumes and loses those files and every conversation.
+
+## Chatting with MIRA in your terminal
+
+The terminal client (`tui/`) is the chat interface for a local install. Its
+dependencies are separate from the server's — install them once, then log in:
+
+```bash
+pip install -r tui/requirements.txt
+python3 -m tui --login
+```
+
+`--login` mints an API token against your MIRA instance over its auth API
+(zero prompts on single-user instances; an emailed magic-link token on
+multi-user) and stores it in the 0600 endpoint store
+(`~/.config/mira-tui/config.json`). Then start chatting:
+
+```bash
+python3 -m tui
+```
+
+`/exit` quits.
 
 ## Trying MIRA without installing anything
 I run a hosted copy of MIRA on [miraos.org](https://miraos.org/). It has a macOS app that can be downloaded [here](https://miraos.org/assets/MIRA-for-Mac.dmg).

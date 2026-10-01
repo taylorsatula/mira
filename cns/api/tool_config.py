@@ -28,9 +28,9 @@ from utils.user_credentials import UserCredentialService
 from utils.tool_config_store import (
     delete_user_tool_config,
     load_user_tool_config,
-    persist_secret_updates,
     prepare_tool_config_for_validation,
     redact_tool_config,
+    save_tool_config_update,
     save_user_tool_config,
     strip_secret_fields,
 )
@@ -279,10 +279,15 @@ def update_tool_config(
                 },
             )
 
-        # Save the validated config
+        # Save the validated config: secret updates and public config go
+        # through one SQLite transaction so a config-write failure rolls the
+        # secret change back instead of stranding it.
         config_dict = validated_config.model_dump()
-        persist_secret_updates(tool_name, prepared.secret_updates)
-        _save_user_tool_config(tool_name, strip_secret_fields(tool_name, config_dict))
+        save_tool_config_update(
+            tool_name,
+            prepared.secret_updates,
+            strip_secret_fields(tool_name, config_dict),
+        )
         redacted_config = redact_tool_config(tool_name, config_dict)
 
         api_response = create_success_response(

@@ -142,7 +142,7 @@ Every tool needs these core patterns. Anchors name a file and a symbol; line num
 | **SSRF-Safe Requests** | `web_tool.py:_request_with_validated_redirects` | Per-hop validation + IP pinning |
 | **Content-Block Results** | `imagegen_tool.py` | Returning a list of provider content blocks instead of a dict |
 | **Restricted Agent Schema** | `memory_tool.py:CURATOR_MEMORY_SCHEMA` | Exporting a narrowed schema for sidebar agents |
-| **Spawning an Agent** | `forage_tool.py:_dispatch` / `_run_agent_thread` | Daemon thread under `copy_context()` |
+| **Spawning an Agent** | `forage_tool.py:_dispatch` / `_run_agent` | Daemon thread under `copy_context()` |
 
 ## Architecture Deep Dive
 
@@ -942,7 +942,7 @@ import uuid
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 
-from tools.repo import Tool
+from tools.repo import Tool, ToolRepository
 from tools.registry import registry
 from utils.timezone_utils import utc_now, format_utc_iso
 
@@ -1202,8 +1202,9 @@ class MyAPITool(Tool):
     # Name of the credential users must store (documented in description)
     CREDENTIAL_NAME = "example_api"
 
-    def __init__(self):
+    def __init__(self, tool_repo: ToolRepository):
         super().__init__()
+        self.tool_repo = tool_repo
         self.logger = logging.getLogger(__name__)
 
     def run(self, operation: str, **kwargs) -> Dict[str, Any]:

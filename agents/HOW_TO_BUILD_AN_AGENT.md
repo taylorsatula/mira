@@ -266,7 +266,7 @@ def available_tools(self) -> list[str]:
     mode = self._work_item.context.get('mode') if self._work_item else None
     if mode == 'digest':
         return ['sidebar_tool']          # digest needs no domain tools
-    return ['inbox_tool', 'domaindoc_tool']
+    return ['memory_tool', 'domaindoc_tool']
 ```
 
 This is safe **only** because of loop ordering: `run()` assigns `self._work_item` before `_build_tool_schemas()` reads the property (verified in `base.py`). `self._work_item` is `None` before `run()` — guard for that, as above. If the tool difference between modes is one you'd rather not explain to every reader, prefer two agent classes over a clever property.
@@ -462,7 +462,7 @@ class MyAgent(SidebarAgent):
     max_retries = 1  # one retry: two total attempts, third poll skips
 ```
 
-The retry decision (`agents/sidebar.py:_dispatch_decision`) is exact: `status == 'failed' and run_count <= max_retries`. With `run_count` starting at 1, `max_retries=1` gives run 1 → retry (run 2) → skip. `timeout` never retries either — `dismissed` is terminal (`_TERMINAL_STATUSES`: `handled`/`escalated`/`resolved`/`dismissed`), while `timeout` simply falls through to `skip`. `run_count` itself is dispatcher-managed: it sets `work_item.context['run_count']` before spawn and `_exit()` writes it back — your agent never touches it.
+The retry decision (`agents/sidebar.py:_dispatch_decision`) is exact: `status == 'failed' and run_count <= max_retries`. With `run_count` starting at 1, `max_retries=1` gives run 1 → retry (run 2) → skip. `timeout` counts toward `max_retries` exactly like any other failure: both timeout exits call `_exit('timeout', ...)`, and `_exit()` writes the activity record with the default `activity_status='failed'` — so the `sidebar_activity` row a timeout leaves behind holds `status='failed'`, never `'timeout'`, and `_dispatch_decision` retries it. Only the terminal statuses are never re-dispatched (`_TERMINAL_STATUSES`: `handled`/`escalated`/`resolved`/`dismissed`). `run_count` itself is dispatcher-managed: it sets `work_item.context['run_count']` before spawn and `_exit()` writes it back — your agent never touches it.
 
 `prior_run` is the `sidebar_activity` row **restricted to two fields** — `_get_prior_run()` selects only `status` and `run_count`. There is no `summary`, no `agent_id`, no timestamp; indexing anything else raises `KeyError`:
 

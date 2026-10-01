@@ -176,6 +176,17 @@ def _auth_http_exception(error: AuthError, status_code: int) -> HTTPException:
 
 
 # Dependency for getting current user from session token
+#
+# KNOWN, DELIBERATELY UNFIXED (census-20260930b, kata ticket hs02): this async
+# dependency — and the async auth handlers below — run synchronous Valkey/Postgres
+# IO directly on the event loop on every authenticated request. In the default
+# single-worker process one infrastructure stall (Valkey/Postgres) freezes the
+# whole server, streaming included, until the socket/pool bound. Not observed in
+# production (Taylor, 2026-09-30); left as-is. If a whole-server freeze under an
+# infra stall is ever investigated, reference kata ticket hs02 before redesigning —
+# note the trap: converting to plain `def` runs the body in a worker thread whose
+# ContextVar mutations (set_current_user_id below) do NOT propagate back to the
+# request context, silently dropping user context.
 async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
@@ -460,6 +471,24 @@ def signup(
         response.status_code = 201
         return api_response.to_dict()
     except AuthError as e:
+        # A committed account with a failed link delivery is not a creation
+        # failure: answer with a distinct delivery-failed outcome carrying a
+        # resend cue, never the bare creation-error envelope.
+        if e.code == "magic_link_delivery_failed":
+            api_response = create_auth_success_response(
+                data={
+                    "email": request.email,
+                    "message": (
+                        "Account created, but the sign-in email could not be "
+                        "delivered. Your account exists — request a magic "
+                        "link to sign in."
+                    )
+                },
+                http_status=201,
+                request_id=request_id
+            )
+            response.status_code = 201
+            return api_response.to_dict()
         # Determine HTTP status code based on error
         http_status = 400
         if e.code == "user_already_exists":

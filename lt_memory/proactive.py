@@ -253,7 +253,7 @@ class ProactiveService:
                         score += debut_boost
                     elif age_in_days <= debut_end_days:
                         remaining = debut_end_days - age_in_days
-                        trailoff_window = debut_end_days - debut_full_boost_days
+                        trailoff_window = debut_end_days - debut_full_boost_days + 1
                         score += debut_boost * (remaining / trailoff_window)
 
             # Supersedes penalty (soft demotion for superseded memories)

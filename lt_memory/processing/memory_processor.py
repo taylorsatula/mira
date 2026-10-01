@@ -22,6 +22,7 @@ from json_repair import repair_json
 
 from lt_memory.models import ExtractedMemory, ExtractionResult, MemoryContext
 from lt_memory.vector_ops import VectorOps
+from utils.tag_parser import parse_memory_id
 from utils.timezone_utils import ensure_utc, parse_time_string, validate_timezone
 from utils.user_context import get_user_preferences
 
@@ -298,10 +299,28 @@ class MemoryProcessor:
                         if not self._validate_memory_list_structure(memories):
                             raise LLMResponseFormatError("Parsed 'memories' field contains invalid structures")
                         return memories
+                    elif memories:
+                        # A non-list, non-empty value (e.g. {"memories": "none"})
+                        # is not a genuine zero-memory response; returning it
+                        # unvalidated lets the per-memory validator silently
+                        # drop it into a zero-memory success.
+                        raise LLMResponseFormatError(
+                            "Parsed 'memories' field is a non-list, non-empty "
+                            "value; a genuine zero-memory response is "
+                            "{\"memories\": []}"
+                        )
                     else:
-                        return [memories] if memories else []
+                        # Genuine empty (null, "", 0, {})
+                        return []
                 else:
-                    # Single memory object
+                    # Single memory object — must be a well-formed memory dict,
+                    # otherwise it is silently dropped into a zero-memory
+                    # success and the segment is marked extracted forever.
+                    if not self._validate_memory_list_structure([parsed]):
+                        raise LLMResponseFormatError(
+                            "Parsed object is not a well-formed memory dict "
+                            "(missing or unusable 'text' field)"
+                        )
                     return [parsed]
             else:
                 raise LLMResponseFormatError(
@@ -353,9 +372,25 @@ class MemoryProcessor:
                                 logger.debug(f"Repaired JSON 'memories' field invalid: {memories}")
                                 raise LLMResponseFormatError("Repaired JSON memories field does not match schema")
                             return memories
+                        elif memories:
+                            # Non-list, non-empty value: not a genuine empty —
+                            # same degenerate-shape failure as the primary parse.
+                            raise LLMResponseFormatError(
+                                "Repaired JSON 'memories' field is a non-list, "
+                                "non-empty value; a genuine zero-memory "
+                                "response is {\"memories\": []}"
+                            )
                         else:
-                            return [memories] if memories else []
+                            # Genuine empty (null, "", 0, {})
+                            return []
                     else:
+                        # Single memory object — must be well-formed
+                        if not self._validate_memory_list_structure([parsed]):
+                            logger.debug(f"Repaired JSON object not a memory dict: {parsed}")
+                            raise LLMResponseFormatError(
+                                "Repaired JSON object is not a well-formed "
+                                "memory dict (missing or unusable 'text' field)"
+                            )
                         return [parsed]
                 else:
                     raise LLMResponseFormatError(
@@ -406,6 +441,17 @@ class MemoryProcessor:
                 logger.warning(f"Memory list item {idx} missing required 'text' field")
                 return False
 
+            text = item["text"]
+            if not isinstance(text, str) or not text.strip():
+                # An empty/whitespace/non-string text is unusable: it would be
+                # silently dropped by the per-memory validator and the response
+                # would degrade into a zero-memory success. Reject it here so
+                # the degenerate response raises instead.
+                logger.warning(
+                    f"Memory list item {idx} has an unusable 'text' field: {text!r}"
+                )
+                return False
+
         return True
 
     def _remap_short_ids_to_full(
@@ -425,6 +471,19 @@ class MemoryProcessor:
         Returns:
             Updated memory dicts with full UUIDs
         """
+        # Normalize the vocabulary once per response, the way every sanctioned
+        # short-ID resolver does (utils/tag_parser.py match_memory_id,
+        # lt_memory/db_access.py, orchestrator): fold case first, then strip
+        # the optional mem_ prefix. Keys here are format_memory_id outputs
+        # ("mem_<8 hex>"), so they reduce to bare lowercase hex — and an id the
+        # model echoes with drifted casing (MEM_/MeM_) or without the mem_
+        # prefix resolves against that lowercased vocabulary instead of being
+        # dropped. A miss still falls through to the drop-and-warn path below
+        # unchanged.
+        lowered_map = {
+            parse_memory_id(key.lower()): full
+            for key, full in short_to_full.items()
+        }
         for memory_dict in memories_data:
             # Remap related_memory_ids: remap id field inside dicts, drop unresolved
             if "related_memory_ids" in memory_dict:
@@ -433,7 +492,11 @@ class MemoryProcessor:
                     valid_refs = []
                     for ref in related_ids:
                         if isinstance(ref, dict) and "id" in ref:
-                            ref["id"] = short_to_full.get(ref["id"], ref["id"])
+                            ref_id = ref["id"]
+                            if isinstance(ref_id, str):
+                                ref["id"] = lowered_map.get(
+                                    parse_memory_id(ref_id.lower()), ref_id
+                                )
                             try:
                                 UUID(ref["id"])
                                 valid_refs.append(ref)

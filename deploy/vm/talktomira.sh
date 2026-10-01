@@ -9,7 +9,8 @@
 # HTTP call — we wait up to 15 min and stream nothing back until it lands.
 #
 # Environment overrides:
-#   MIRA_HOST   ssh target of the libvirt host (default admin@192.168.1.9)
+#   MIRA_HOST   ssh target of the libvirt host (required; no default — export
+#               it or pass --host USER@HOST)
 #   MIRA_DOMAIN libvirt domain to resolve (default ubuntu_vm)
 #   MIRA_VM_IP  skip domifaddr resolution if you already know the IP
 #
@@ -25,7 +26,7 @@
 
 set -euo pipefail
 
-HOST="${MIRA_HOST:-admin@192.168.1.9}"
+HOST="${MIRA_HOST:-}"
 DOMAIN="${MIRA_DOMAIN:-ubuntu_vm}"
 VM_IP="${MIRA_VM_IP:-}"
 MSG=""
@@ -40,6 +41,11 @@ while [[ $# -gt 0 ]]; do
         *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
     esac
 done
+
+if [[ -z "$HOST" ]]; then
+    echo "error: no libvirt host set — export MIRA_HOST=<user>@<libvirt-host> or pass --host <user>@<libvirt-host> (see --help)" >&2
+    exit 2
+fi
 
 if [[ -z "$MSG" ]]; then
     echo "error: --message is required (see --help)" >&2

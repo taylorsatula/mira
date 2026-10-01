@@ -6,7 +6,6 @@ Only values that operators change without code changes belong here:
 feature flags, infrastructure coordinates, scheduling cadences, deployment settings.
 """
 
-from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -79,8 +78,6 @@ class ApiServerConfig(BaseModel):
 
     # Operational
     log_level: str = Field(default="warning", description="Log level for uvicorn server")
-    extended_thinking: bool = Field(default=False, description="Enable extended thinking capability")
-    extended_thinking_budget: int = Field(default=1024, description="Token budget for extended thinking (min: 1024)")
 
 
 class SystemConfig(BaseModel):
@@ -399,37 +396,3 @@ class HeartbeatConfig(BaseModel):
     )
 
 
-class InboxToolConfig(BaseModel):
-    """Configuration for the inbox_tool."""
-
-    enabled: bool = Field(default=False, description="Whether this tool is enabled by default")
-    inbox_path: str = Field(
-        default="/tmp/mira-dropbox",
-        description=(
-            "Absolute filesystem path for the local file drop-off folder used by inbox_tool. "
-            "Choose a narrowly scoped directory you intentionally want MIRA to inspect — "
-            "do not point this at a broad or sensitive location unless that access is explicitly desired."
-        ),
-    )
-    archive_subdir: str = Field(
-        default="archive",
-        description="Subdirectory inside inbox_path where archived files land.",
-    )
-    max_read_file_size_mb: int = Field(
-        default=10,
-        ge=1,
-        description="Maximum file size in MB that inbox_tool will attempt to read before rejecting the request.",
-    )
-    max_read_chars: int = Field(
-        default=20000,
-        ge=1000,
-        description="Maximum character count inbox_tool will return from a single read operation.",
-    )
-
-    @field_validator("inbox_path")
-    @classmethod
-    def validate_inbox_path(cls, value: str) -> str:
-        path = Path(value)
-        if not path.is_absolute():
-            raise ValueError("inbox_path must be an absolute path")
-        return str(path)

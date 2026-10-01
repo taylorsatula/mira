@@ -323,8 +323,11 @@ class SidebarAgent(ABC):
 
         Called by the base class before the LLM loop when retrying a
         previously failed item. Override in subclasses to provide
-        failure-aware initial context. The prior_run dict contains the
-        sidebar_activity row (summary, status, run_count, etc.).
+        failure-aware initial context. The prior_run dict carries ONLY
+        the dispatcher-selected keys 'status' and 'run_count' — it is
+        not a copy of the sidebar_activity row; reading other keys
+        (e.g. prior_run['summary']) raises KeyError inside run()'s
+        try block and consumes the retry.
 
         Returns text prepended to the initial message, or None (default).
         """

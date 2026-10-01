@@ -96,8 +96,8 @@ tui/
 
 ## 6. Verification environment (live, ready as of 2026-09-18)
 
-- Fresh deploy-only dev VM on the libvirt host (admin@192.168.1.9), all five routes live on lunaroute (glm-5.3 / glm-5.3-flash family), healthy, ~152 s deploy. VM sits on the host's NAT: reach it from this Mac via tunnel:
-  `ssh -L 1993:192.168.122.252:1993 admin@192.168.1.9` → base URL `http://localhost:1993`.
+- Fresh deploy-only dev VM on the libvirt host (<user>@<libvirt-host>), all five routes live on lunaroute (glm-5.3 / glm-5.3-flash family), healthy, ~152 s deploy. VM sits on the host's NAT: reach it from the dev machine via tunnel:
+  `ssh -L 1993:<vm-nat-ip>:1993 <user>@<libvirt-host>` → base URL `http://localhost:1993`.
 - Minted API token for this instance: `<redacted 2026-09-26: instance decommissioned, token dead>`. **Note:** the fresh instance's history is nearly empty (one probe message, no collapsed segments yet). For summary-banner verification either (a) collapse the active segment via `POST /v0/api/actions {"domain":"continuum","action":"collapse_segment"}` with the Bearer token, then chat more to open a new segment, or (b) restore the 1079-message v4 sarcophagus with `oneshot.sh mlfactory_v4_mira --fresh` on the host.
 - Verification battery (Tier 2, live, NO MOCKS): boot gate = app connects + auths + renders; probes = history load (all modes), streaming turn with a tool call, context_reset handling, follow-up queue + undo-until-sent, halt, endpoint switching reloads history, auth-failure path (bad token → clear error), proactive_message rendering (if a heartbeat breakout can be coaxed). Adversarial pass: second agent re-derives the diff.
 

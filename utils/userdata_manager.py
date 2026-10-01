@@ -12,6 +12,7 @@ import hmac
 import json
 import logging
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from uuid import UUID
@@ -25,6 +26,13 @@ if TYPE_CHECKING:
 
 # Module-level cache for UserDataManager instances
 _manager_cache: Dict[str, "UserDataManager"] = {}
+
+# Guards every access to _manager_cache: get_user_data_manager's check-then-act
+# (create-and-cache runs entirely under the lock so two concurrent first
+# accesses can never overwrite each other's slot and orphan a live SQLite
+# connection) and clear_manager_cache's per-user close/delete and full-cache
+# iteration. A plain Lock is sufficient — no guarded path re-enters the cache.
+_manager_cache_lock = threading.Lock()
 
 # Canonical CREATE statements for the domaindoc tables.
 # id columns use AUTOINCREMENT so a deleted doc's rowid is never reused
@@ -672,12 +680,13 @@ def get_user_data_manager(user_id: UUID) -> UserDataManager:
     """
     cache_key = str(user_id)
 
-    if cache_key not in _manager_cache:
-        session_key = derive_session_key(cache_key)
-        _manager_cache[cache_key] = UserDataManager(user_id, session_key)
-        logger.debug(f"Created new UserDataManager for user {user_id}")
+    with _manager_cache_lock:
+        if cache_key not in _manager_cache:
+            session_key = derive_session_key(cache_key)
+            _manager_cache[cache_key] = UserDataManager(user_id, session_key)
+            logger.debug(f"Created new UserDataManager for user {user_id}")
 
-    return _manager_cache[cache_key]
+        return _manager_cache[cache_key]
 
 
 def clear_manager_cache(user_id: Optional[UUID] = None) -> None:
@@ -690,14 +699,16 @@ def clear_manager_cache(user_id: Optional[UUID] = None) -> None:
     """
     if user_id is not None:
         cache_key = str(user_id)
-        if cache_key in _manager_cache:
-            _manager_cache[cache_key].close()
-            del _manager_cache[cache_key]
-            logger.debug(f"Cleared UserDataManager cache for user {user_id}")
+        with _manager_cache_lock:
+            if cache_key in _manager_cache:
+                _manager_cache[cache_key].close()
+                del _manager_cache[cache_key]
+                logger.debug(f"Cleared UserDataManager cache for user {user_id}")
     else:
-        for manager in _manager_cache.values():
-            manager.close()
-        _manager_cache.clear()
+        with _manager_cache_lock:
+            for manager in _manager_cache.values():
+                manager.close()
+            _manager_cache.clear()
         logger.info("Cleared all UserDataManager caches")
 
 

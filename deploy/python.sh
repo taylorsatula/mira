@@ -3,13 +3,16 @@
 # Source this file - do not execute directly
 #
 # Requires: lib/output.sh and lib/services.sh sourced first
-# Requires: OS, PYTHON_VER, CONFIG_*, LOUD_MODE variables set
+# Requires: OS, PYTHON_VER, CONFIG_*, LOUD_MODE, RELEASE_TAG variables set
+# (RELEASE_TAG is defined and exported by deploy/deploy.sh — the single
+# source of truth for the release the installer deploys)
 #
 # Sets: PYTHON_CMD, MIRA_USER, MIRA_GROUP
 
 # Validate required variables
 : "${OS:?Error: OS must be set}"
 : "${PYTHON_VER:?Error: PYTHON_VER must be set (run dependencies.sh first)}"
+: "${RELEASE_TAG:?Error: RELEASE_TAG must be set (deploy.sh defines and exports it)}"
 
 print_header "Step 2: Python Verification"
 
@@ -89,18 +92,24 @@ else
     # Download to /tmp to keep user's home directory clean
     cd /tmp
 
-    run_with_status "Downloading MIRA from main branch" \
-        wget -q -O mira-main.tar.gz https://github.com/taylorsatula/mira-OSS/archive/refs/heads/main.tar.gz
+    # Pinned release tag: RELEASE_TAG (from deploy/deploy.sh) is the single
+    # source of truth; this is the deploy/RELEASE.md procedure, now wired.
+    # GitHub's tag archive extracts to mira-<tag without the leading "v">.
+    TARBALL="mira-${RELEASE_TAG#v}.tar.gz"
+    SRC_DIR="/tmp/mira-${RELEASE_TAG#v}"
+
+    run_with_status "Downloading MIRA release ${RELEASE_TAG}" \
+        wget -q -O "$TARBALL" "https://github.com/taylorsatula/mira-OSS/archive/refs/tags/${RELEASE_TAG}.tar.gz"
 
     run_with_status "Extracting archive" \
-        tar -xzf mira-main.tar.gz -C /tmp
+        tar -xzf "$TARBALL" -C /tmp
 
     run_with_status "Copying files to /opt/mira/app" \
-        sudo cp -r /tmp/mira-OSS-main/* /opt/mira/app/
+        sudo cp -r "$SRC_DIR"/* /opt/mira/app/
 
     # Clean up immediately after copying
-    run_quiet rm -f /tmp/mira-main.tar.gz
-    run_quiet rm -rf /tmp/mira-OSS-main
+    run_quiet rm -f "/tmp/$TARBALL"
+    run_quiet rm -rf "$SRC_DIR"
 fi
 
 run_with_status "Setting ownership to $MIRA_USER:$MIRA_GROUP" \
@@ -111,11 +120,6 @@ print_success "MIRA installed to /opt/mira/app"
 # Offline mode: LLM endpoints are configured post-schema by postgresql.sh
 # (UPDATEs all five model_configs rows to llama-server endpoints and models)
 if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
-    echo ""
-    echo -e "${DIM}NOTE: Tools (web_tool, forage_tool) use hardcoded LLM configs.${RESET}"
-    echo -e "${DIM}For local providers, edit the tool config classes directly:${RESET}"
-    echo -e "${DIM}  - tools/implementations/web_tool.py (WebToolConfig)${RESET}"
-    echo -e "${DIM}  - tools/implementations/forage_tool.py (ForageToolConfig)${RESET}"
     echo ""
     echo -e "${DIM}NOTE: the 'other' route has no outside vendor to consult when air-gapped.${RESET}"
     echo -e "${DIM}postgresql.sh points it at the small local instance so routing stays valid.${RESET}"
@@ -128,14 +132,6 @@ fi
 # the config's chat + subcortical providers. The seed rows in
 # mira_service_schema.sql are the lunaroute defaults; nothing string-patches
 # them here anymore.
-if [ "$CONFIG_OFFLINE_MODE" != "yes" ]; then
-    echo ""
-    echo -e "${DIM}NOTE: Tools (web_tool, forage_tool) use hardcoded LLM configs.${RESET}"
-    echo -e "${DIM}For custom providers, edit the tool config classes directly:${RESET}"
-    echo -e "${DIM}  - tools/implementations/web_tool.py (WebToolConfig)${RESET}"
-    echo -e "${DIM}  - tools/implementations/forage_tool.py (ForageToolConfig)${RESET}"
-    echo ""
-fi
 
 print_header "Step 4: Python Environment Setup"
 

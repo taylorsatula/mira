@@ -199,12 +199,46 @@ class OpenAIChatBase(Dialect):
         headers = self._headers()
         self._log_request(request, payload)
 
-        response = httpx.post(
-            self.endpoint_url,
-            headers=headers,
-            json=payload,
-            timeout=self.timeout,
-        )
+        try:
+            # Hold the per-call transport on the abort handle for the whole
+            # in-flight window (9d29): httpx.post keeps the only closeable
+            # handle inside the blocking call, so abort_active_stream() found
+            # nothing to close and a stalled non-streaming worker kept its
+            # connection open past the lifecycle's ProviderStallError until
+            # this dialect's own timeout. Closing the client closes the
+            # pool's checked-out connection, releasing the peer's socket at
+            # abort time. The handle here is the httpx.Client, not the
+            # httpx.Response stream() registers: a non-streaming response
+            # object exists only after the blocked read completes, so the
+            # client is the only handle available before the block. The
+            # dialect instance is per-request (llm_provider
+            # ._dialect_for_selection), so this client has no other
+            # in-flight request to disturb.
+            with httpx.Client(timeout=self.timeout) as client:
+                self._active_response = client
+                try:
+                    response = client.post(
+                        self.endpoint_url,
+                        headers=headers,
+                        json=payload,
+                    )
+                finally:
+                    self._active_response = None
+        except httpx.TimeoutException as error:
+            raise ProviderRetryableError(
+                self.endpoint_url, 504, "non-streaming", "Request timed out"
+            ) from error
+        except httpx.ConnectError as error:
+            raise ProviderRetryableError(
+                self.endpoint_url, 503, "non-streaming", f"Connection failed: {error}"
+            ) from error
+        except httpx.RequestError as error:
+            # Network-layer failures must not escape the dialect boundary raw;
+            # normalize to the provider hierarchy (anthropic.py's
+            # _call_with_overload_retry pattern).
+            raise ProviderProtocolError(
+                self.endpoint_url, "non-streaming", f"Transport error: {error}"
+            ) from error
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -234,76 +268,25 @@ class OpenAIChatBase(Dialect):
         usage: Usage | None = None
         detected_tool_ids: set[str] = set()
         saw_reasoning_delta = False
+        saw_refusal = False
         saw_done = False
 
-        with http_client.stream(
-            "POST",
-            self.endpoint_url,
-            json=payload,
-            headers=headers,
-            timeout=self.timeout,
-        ) as response:
-            self._active_response = response
-            if response.status_code >= 400:
-                error_text = response.read().decode("utf-8", errors="replace")
-                self._raise_provider_http_error(
-                    status=response.status_code,
-                    envelope=parse_error_body(
-                        response.status_code,
-                        error_text,
-                        endpoint=self.endpoint_url,
-                        mode="streaming",
-                        dialect_name=self.dialect_name,
-                    ),
-                    mode="streaming",
-                )
-
-            for line in response.iter_lines():
-                line = line.strip()
-                if not line:
-                    continue
-                if isinstance(line, bytes):
-                    line = line.decode("utf-8", errors="replace")
-                if line == "data: [DONE]":
-                    saw_done = True
-                    break
-                if not line.startswith("data: "):
-                    continue
-
-                try:
-                    chunk = json.loads(line[6:])
-                except json.JSONDecodeError:
-                    raise ProviderProtocolError(
-                        self.endpoint_url,
-                        "streaming",
-                        f"Malformed SSE JSON chunk: {line[:200]}",
-                    )
-                if not isinstance(chunk, dict):
-                    raise ProviderProtocolError(
-                        self.endpoint_url,
-                        "streaming",
-                        "SSE JSON chunk must be an object",
-                    )
-
-                if "error" in chunk:
-                    # An error chunk is terminal for the stream, after partial
-                    # events may have been yielded — same mid-stream failure
-                    # semantics as the truncation raise below. Route through the
-                    # HTTP-path status mapping; the stream's own status (200)
-                    # lands in the terminal ProviderProtocolError branch.
-                    error_value = chunk["error"]
-                    if not isinstance(error_value, dict):
-                        raise ProviderProtocolError(
-                            self.endpoint_url,
-                            "streaming",
-                            f"In-band stream error value must be an object, got {type(error_value).__name__}: {line[:200]!r}",
-                        )
+        try:
+            with http_client.stream(
+                "POST",
+                self.endpoint_url,
+                json=payload,
+                headers=headers,
+                timeout=self.timeout,
+            ) as response:
+                self._active_response = response
+                if response.status_code >= 400:
+                    error_text = response.read().decode("utf-8", errors="replace")
                     self._raise_provider_http_error(
                         status=response.status_code,
-                        envelope=_envelope_from_error_object(
+                        envelope=parse_error_body(
                             response.status_code,
-                            error_value,
-                            line[:200],
+                            error_text,
                             endpoint=self.endpoint_url,
                             mode="streaming",
                             dialect_name=self.dialect_name,
@@ -311,149 +294,241 @@ class OpenAIChatBase(Dialect):
                         mode="streaming",
                     )
 
-                if llm_tap.is_active():
-                    llm_tap.log_stream_chunk(
-                        provider=self.dialect_name,
-                        endpoint=self.endpoint_url,
-                        model=request.model,
-                        chunk=chunk,
-                    )
+                for line in response.iter_lines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if isinstance(line, bytes):
+                        line = line.decode("utf-8", errors="replace")
+                    if line == "data: [DONE]":
+                        saw_done = True
+                        break
+                    if not line.startswith("data: "):
+                        continue
 
-                if chunk.get("usage"):
-                    chunk_usage = self._parse_usage(chunk["usage"])
-                    if usage is None:
-                        usage = chunk_usage
-                    else:
-                        usage = Usage(
-                            input_tokens=max(usage.input_tokens, chunk_usage.input_tokens),
-                            output_tokens=max(usage.output_tokens, chunk_usage.output_tokens),
-                            cache_creation_input_tokens=max(
-                                usage.cache_creation_input_tokens,
-                                chunk_usage.cache_creation_input_tokens,
-                            ),
-                            cache_read_input_tokens=max(
-                                usage.cache_read_input_tokens,
-                                chunk_usage.cache_read_input_tokens,
-                            ),
-                        )
-                    self._partial_usage = usage
-
-                choices = chunk.get("choices")
-                if not choices:
-                    continue
-
-                if not isinstance(choices, list):
-                    raise ProviderProtocolError(self.endpoint_url, "streaming", "SSE choices must be a list")
-                choice = choices[0]
-                if not isinstance(choice, MappingABC):
-                    raise ProviderProtocolError(self.endpoint_url, "streaming", "SSE choice must be an object")
-                finish_reason = choice.get("finish_reason") or finish_reason
-                delta = choice.get("delta") or {}
-                if not isinstance(delta, MappingABC):
-                    raise ProviderProtocolError(self.endpoint_url, "streaming", "SSE delta must be an object")
-
-                if delta.get("content"):
-                    text = delta["content"]
-                    if not isinstance(text, str):
+                    try:
+                        chunk = json.loads(line[6:])
+                    except json.JSONDecodeError:
                         raise ProviderProtocolError(
                             self.endpoint_url,
                             "streaming",
-                            "SSE content delta must be a string",
+                            f"Malformed SSE JSON chunk: {line[:200]}",
                         )
-                    accumulated_text += text
-                    yield TextEvent(content=text)
-
-                reasoning_text = self._extract_reasoning_delta(delta)
-                if reasoning_text:
-                    saw_reasoning_delta = True
-                    reasoning_delta = self._new_reasoning_text(accumulated_reasoning, reasoning_text)
-                    if reasoning_delta:
-                        accumulated_reasoning += reasoning_delta
-                        yield ThinkingEvent(content=reasoning_delta)
-
-                if delta.get("reasoning_details"):
-                    details = delta["reasoning_details"]
-                    if not isinstance(details, list):
+                    if not isinstance(chunk, dict):
                         raise ProviderProtocolError(
                             self.endpoint_url,
                             "streaming",
-                            "SSE reasoning_details delta must be a list",
+                            "SSE JSON chunk must be an object",
                         )
-                    self._accumulate_reasoning_details(
-                        accumulated_reasoning_details,
-                        details,
-                        mode="streaming",
-                    )
-                    if not saw_reasoning_delta:
-                        details_text = self._reasoning_details_text(details)
-                        reasoning_delta = self._new_reasoning_text(accumulated_reasoning, details_text)
+
+                    if "error" in chunk:
+                        # An error chunk is terminal for the stream, after partial
+                        # events may have been yielded — same mid-stream failure
+                        # semantics as the truncation raise below. Route through the
+                        # HTTP-path status mapping; the stream's own status (200)
+                        # lands in the terminal ProviderProtocolError branch.
+                        error_value = chunk["error"]
+                        if not isinstance(error_value, dict):
+                            raise ProviderProtocolError(
+                                self.endpoint_url,
+                                "streaming",
+                                f"In-band stream error value must be an object, got {type(error_value).__name__}: {line[:200]!r}",
+                            )
+                        self._raise_provider_http_error(
+                            status=response.status_code,
+                            envelope=_envelope_from_error_object(
+                                response.status_code,
+                                error_value,
+                                line[:200],
+                                endpoint=self.endpoint_url,
+                                mode="streaming",
+                                dialect_name=self.dialect_name,
+                            ),
+                            mode="streaming",
+                        )
+
+                    if llm_tap.is_active():
+                        llm_tap.log_stream_chunk(
+                            provider=self.dialect_name,
+                            endpoint=self.endpoint_url,
+                            model=request.model,
+                            chunk=chunk,
+                        )
+
+                    if chunk.get("usage"):
+                        chunk_usage = self._parse_usage(chunk["usage"])
+                        if usage is None:
+                            usage = chunk_usage
+                        else:
+                            usage = Usage(
+                                input_tokens=max(usage.input_tokens, chunk_usage.input_tokens),
+                                output_tokens=max(usage.output_tokens, chunk_usage.output_tokens),
+                                cache_creation_input_tokens=max(
+                                    usage.cache_creation_input_tokens,
+                                    chunk_usage.cache_creation_input_tokens,
+                                ),
+                                cache_read_input_tokens=max(
+                                    usage.cache_read_input_tokens,
+                                    chunk_usage.cache_read_input_tokens,
+                                ),
+                            )
+                        self._partial_usage = usage
+
+                    choices = chunk.get("choices")
+                    if not choices:
+                        continue
+
+                    if not isinstance(choices, list):
+                        raise ProviderProtocolError(self.endpoint_url, "streaming", "SSE choices must be a list")
+                    choice = choices[0]
+                    if not isinstance(choice, MappingABC):
+                        raise ProviderProtocolError(self.endpoint_url, "streaming", "SSE choice must be an object")
+                    finish_reason = choice.get("finish_reason") or finish_reason
+                    delta = choice.get("delta") or {}
+                    if not isinstance(delta, MappingABC):
+                        raise ProviderProtocolError(self.endpoint_url, "streaming", "SSE delta must be an object")
+
+                    if delta.get("content"):
+                        text = delta["content"]
+                        if not isinstance(text, str):
+                            raise ProviderProtocolError(
+                                self.endpoint_url,
+                                "streaming",
+                                "SSE content delta must be a string",
+                            )
+                        accumulated_text += text
+                        yield TextEvent(content=text)
+
+                    # Provider refusal signal, parsed upstream of
+                    # finish-reason normalization (ticket d554). Streaming
+                    # refusals arrive as delta.refusal (SDK: ChoiceDelta.refusal,
+                    # openai/types/chat/chat_completion_chunk.py:77) and can
+                    # co-exist with finish_reason "stop", so the field itself
+                    # drives the typed refusal. Terminality contract (d554,
+                    # full statement at _parse_response's refusal parse): the
+                    # refusal is terminal for the turn; already-streamed
+                    # partial text stays in Result.text — the refusal payload
+                    # is streamed to the user as text and accumulated into
+                    # Result.text rather than discarded.
+                    if delta.get("refusal") is not None:
+                        refusal_delta = delta["refusal"]
+                        if not isinstance(refusal_delta, str):
+                            raise ProviderProtocolError(
+                                self.endpoint_url,
+                                "streaming",
+                                "SSE refusal delta must be a string",
+                            )
+                        if refusal_delta:
+                            saw_refusal = True
+                            accumulated_text += refusal_delta
+                            yield TextEvent(content=refusal_delta)
+
+                    reasoning_text = self._extract_reasoning_delta(delta)
+                    if reasoning_text:
+                        saw_reasoning_delta = True
+                        reasoning_delta = self._new_reasoning_text(accumulated_reasoning, reasoning_text)
                         if reasoning_delta:
                             accumulated_reasoning += reasoning_delta
                             yield ThinkingEvent(content=reasoning_delta)
 
-                if delta.get("tool_calls"):
-                    if not isinstance(delta["tool_calls"], list):
-                        raise ProviderProtocolError(
-                            self.endpoint_url,
-                            "streaming",
-                            "SSE tool_calls delta must be a list",
+                    if delta.get("reasoning_details"):
+                        details = delta["reasoning_details"]
+                        if not isinstance(details, list):
+                            raise ProviderProtocolError(
+                                self.endpoint_url,
+                                "streaming",
+                                "SSE reasoning_details delta must be a list",
+                            )
+                        self._accumulate_reasoning_details(
+                            accumulated_reasoning_details,
+                            details,
+                            mode="streaming",
                         )
-                    for tool_call_delta in delta["tool_calls"]:
-                        if not isinstance(tool_call_delta, MappingABC):
-                            raise ProviderProtocolError(
-                                self.endpoint_url,
-                                "streaming",
-                                "SSE tool_call delta must be an object",
-                            )
-                        index = tool_call_delta.get("index")
-                        if type(index) is not int:
-                            raise ProviderProtocolError(
-                                self.endpoint_url,
-                                "streaming",
-                                "SSE tool_call delta index must be an integer",
-                            )
-                        state = accumulated_tool_calls.setdefault(
-                            index,
-                            {"id": "", "name": "", "arguments": ""},
-                        )
-                        if tool_call_delta.get("id"):
-                            if not isinstance(tool_call_delta["id"], str):
-                                raise ProviderProtocolError(
-                                    self.endpoint_url,
-                                    "streaming",
-                                    "SSE tool_call id delta must be a string",
-                                )
-                            state["id"] = tool_call_delta["id"]
-                        function_delta = tool_call_delta.get("function") or {}
-                        if not isinstance(function_delta, MappingABC):
-                            raise ProviderProtocolError(
-                                self.endpoint_url,
-                                "streaming",
-                                "SSE tool_call function delta must be an object",
-                            )
-                        if function_delta.get("name"):
-                            if not isinstance(function_delta["name"], str):
-                                raise ProviderProtocolError(
-                                    self.endpoint_url,
-                                    "streaming",
-                                    "SSE tool_call name delta must be a string",
-                                )
-                            state["name"] = function_delta["name"]
-                        if function_delta.get("arguments"):
-                            if not isinstance(function_delta["arguments"], str):
-                                raise ProviderProtocolError(
-                                    self.endpoint_url,
-                                    "streaming",
-                                    "SSE tool_call arguments delta must be a string",
-                                )
-                            state["arguments"] += function_delta["arguments"]
+                        if not saw_reasoning_delta:
+                            details_text = self._reasoning_details_text(details)
+                            reasoning_delta = self._new_reasoning_text(accumulated_reasoning, details_text)
+                            if reasoning_delta:
+                                accumulated_reasoning += reasoning_delta
+                                yield ThinkingEvent(content=reasoning_delta)
 
-                        if state["id"] and state["name"] and state["id"] not in detected_tool_ids:
-                            detected_tool_ids.add(state["id"])
-                            yield ToolDetectedEvent(
-                                tool_name=state["name"],
-                                tool_id=state["id"],
+                    if delta.get("tool_calls"):
+                        if not isinstance(delta["tool_calls"], list):
+                            raise ProviderProtocolError(
+                                self.endpoint_url,
+                                "streaming",
+                                "SSE tool_calls delta must be a list",
                             )
+                        for tool_call_delta in delta["tool_calls"]:
+                            if not isinstance(tool_call_delta, MappingABC):
+                                raise ProviderProtocolError(
+                                    self.endpoint_url,
+                                    "streaming",
+                                    "SSE tool_call delta must be an object",
+                                )
+                            index = tool_call_delta.get("index")
+                            if type(index) is not int:
+                                raise ProviderProtocolError(
+                                    self.endpoint_url,
+                                    "streaming",
+                                    "SSE tool_call delta index must be an integer",
+                                )
+                            state = accumulated_tool_calls.setdefault(
+                                index,
+                                {"id": "", "name": "", "arguments": ""},
+                            )
+                            if tool_call_delta.get("id"):
+                                if not isinstance(tool_call_delta["id"], str):
+                                    raise ProviderProtocolError(
+                                        self.endpoint_url,
+                                        "streaming",
+                                        "SSE tool_call id delta must be a string",
+                                    )
+                                state["id"] = tool_call_delta["id"]
+                            function_delta = tool_call_delta.get("function") or {}
+                            if not isinstance(function_delta, MappingABC):
+                                raise ProviderProtocolError(
+                                    self.endpoint_url,
+                                    "streaming",
+                                    "SSE tool_call function delta must be an object",
+                                )
+                            if function_delta.get("name"):
+                                if not isinstance(function_delta["name"], str):
+                                    raise ProviderProtocolError(
+                                        self.endpoint_url,
+                                        "streaming",
+                                        "SSE tool_call name delta must be a string",
+                                    )
+                                state["name"] = function_delta["name"]
+                            if function_delta.get("arguments"):
+                                if not isinstance(function_delta["arguments"], str):
+                                    raise ProviderProtocolError(
+                                        self.endpoint_url,
+                                        "streaming",
+                                        "SSE tool_call arguments delta must be a string",
+                                    )
+                                state["arguments"] += function_delta["arguments"]
+
+                            if state["id"] and state["name"] and state["id"] not in detected_tool_ids:
+                                detected_tool_ids.add(state["id"])
+                                yield ToolDetectedEvent(
+                                    tool_name=state["name"],
+                                    tool_id=state["id"],
+                                )
+        except httpx.TimeoutException as error:
+            raise ProviderRetryableError(
+                self.endpoint_url, 504, "streaming", "Request timed out"
+            ) from error
+        except httpx.ConnectError as error:
+            raise ProviderRetryableError(
+                self.endpoint_url, 503, "streaming", f"Connection failed: {error}"
+            ) from error
+        except httpx.RequestError as error:
+            # Network-layer failures must not escape the dialect boundary raw;
+            # normalize to the provider hierarchy (anthropic.py's
+            # _call_with_overload_retry pattern).
+            raise ProviderProtocolError(
+                self.endpoint_url, "streaming", f"Transport error: {error}"
+            ) from error
 
         self._active_response = None
 
@@ -485,7 +560,9 @@ class OpenAIChatBase(Dialect):
                 reasoning_details=accumulated_reasoning_details or None,
             ),
             usage=usage,
-            stop_reason=self._normalize_finish_reason(finish_reason),
+            stop_reason=(
+                "refusal" if saw_refusal else self._normalize_finish_reason(finish_reason)
+            ),
             provider_metadata=ProviderMetadata(
                 dialect_name=self.dialect_name,
                 endpoint_url=self.endpoint_url,
@@ -713,19 +790,18 @@ class OpenAIChatBase(Dialect):
                 if block.get("type") == "text":
                     text_parts.append(block["text"])
                 elif block.get("type") == "tool_call":
+                    # Historical assistant tool call: serialize the stored input
+                    # verbatim. Replay-time validation against the current
+                    # request's tools would raise ToolNotLoadedError every turn
+                    # for the rest of a conversation that used an ephemeral tool;
+                    # argument validation belongs in the response-parse path.
                     tool_calls.append({
                         "id": block["id"],
                         "type": "function",
                         "function": {
                             "name": block["name"],
                             "arguments": json.dumps(
-                                self._coerce_tool_input(
-                                    block.get("input") if "input" in block else None,
-                                    tool_name=block["name"],
-                                    tool_id=block["id"],
-                                    request=request,
-                                    mode="message-conversion",
-                                )
+                                block.get("input") if "input" in block else {}
                             ),
                         },
                     })
@@ -736,26 +812,13 @@ class OpenAIChatBase(Dialect):
             for tool_call in message["tool_calls"]:
                 function = tool_call["function"]
                 arguments = function.get("arguments") if "arguments" in function else None
-                if isinstance(arguments, str):
-                    arguments = json.dumps(
-                        self._parse_tool_arguments(
-                            arguments,
-                            tool_name=function["name"],
-                            tool_id=tool_call["id"],
-                            request=request,
-                            mode="message-conversion",
-                        )
-                    )
-                else:
-                    arguments = json.dumps(
-                        self._coerce_tool_input(
-                            arguments,
-                            tool_name=function["name"],
-                            tool_id=tool_call["id"],
-                            request=request,
-                            mode="message-conversion",
-                        )
-                    )
+                # Historical assistant tool call: a stored JSON-arguments string
+                # is replayed verbatim; any other stored value is serialized as-is.
+                # No validation against the current request's tools — replay-time
+                # validation would raise ToolNotLoadedError every turn for the
+                # rest of a conversation that used an ephemeral tool.
+                if not isinstance(arguments, str):
+                    arguments = json.dumps(arguments if arguments is not None else {})
                 tool_calls.append({
                     "id": tool_call["id"],
                     "type": "function",
@@ -848,6 +911,28 @@ class OpenAIChatBase(Dialect):
                 "Response message content must be a string, list, or null",
             )
 
+        # Provider refusal signal, parsed upstream of finish-reason
+        # normalization (ticket d554). OpenAI structured-output refusals
+        # populate message.refusal (SDK: ChatCompletionMessage.refusal,
+        # openai/types/chat/chat_completion_message.py:63) and can arrive
+        # with finish_reason "stop", so the field itself — not the finish
+        # reason alone — must drive the typed refusal. Terminality contract
+        # (d554): a refusal is TERMINAL for the turn — no tool loop, no
+        # retry at this layer — and the already-produced partial text is
+        # preserved: Result.text carries the content plus the surfaced
+        # refusal payload; a filter that stops output mid-generation must
+        # not discard what was generated before it.
+        refusal = message.get("refusal")
+        if refusal is not None:
+            if not isinstance(refusal, str):
+                raise ProviderProtocolError(
+                    self.endpoint_url,
+                    "non-streaming",
+                    "Response message refusal must be a string",
+                )
+            if refusal:
+                text = f"{text}\n\n{refusal}" if text else refusal
+
         tool_calls = message.get("tool_calls") or ()
         if not isinstance(tool_calls, (list, tuple)):
             raise ProviderProtocolError(self.endpoint_url, "non-streaming", "Response tool_calls must be a list")
@@ -863,7 +948,13 @@ class OpenAIChatBase(Dialect):
                 reasoning_details=reasoning_details,
             ),
             usage=self._parse_usage(response["usage"]),
-            stop_reason=self._normalize_finish_reason(choice.get("finish_reason")),
+            # Refusal field beats the finish reason: a structured-output
+            # refusal can carry finish_reason "stop" (see the contract
+            # comment above); content_filter reaches "refusal" through
+            # _normalize_finish_reason's mapping.
+            stop_reason=(
+                "refusal" if refusal else self._normalize_finish_reason(choice.get("finish_reason"))
+            ),
             provider_metadata=ProviderMetadata(
                 dialect_name=self.dialect_name,
                 endpoint_url=self.endpoint_url,
@@ -1108,6 +1199,10 @@ class OpenAIChatBase(Dialect):
                 request=request,
                 mode="non-streaming",
             )
+        except ToolNotLoadedError:
+            # Subclasses ProviderProtocolError: must escape the broad schema-repair
+            # catch below so the lifecycle's invokeother_tool recovery runs.
+            raise
         except ProviderProtocolError as error:
             invalid_reason = str(error)
             tool_input = {}
@@ -1141,6 +1236,10 @@ class OpenAIChatBase(Dialect):
                     request=request,
                     mode="streaming",
                 )
+            except ToolNotLoadedError:
+                # Subclasses ProviderProtocolError: must escape the broad schema-repair
+                # catch below so the lifecycle's invokeother_tool recovery runs.
+                raise
             except ProviderProtocolError as error:
                 invalid_reason = str(error)
                 tool_input = {}
@@ -1199,14 +1298,67 @@ class OpenAIChatBase(Dialect):
         return value
 
     def _normalize_finish_reason(self, finish_reason: str | None) -> StopReason:
+        # Every documented value maps deliberately (ticket d554); no known
+        # value falls to the end_turn default. Unknown values still fall
+        # through with the unmapped warning below.
+        #
+        # Documented sources:
+        #   - OpenAI SDK Choice.finish_reason literal set — installed openai
+        #     package, types/chat/chat_completion.py:25 (Choice.finish_reason)
+        #     and types/chat/chat_completion_chunk.py:100 (ChoiceDelta-bearing
+        #     chunk): "stop", "length", "tool_calls", "content_filter",
+        #     "function_call".
+        #   - OpenRouter normalizes every provider to (OpenRouter API
+        #     reference, openrouter.ai/docs/api_reference/overview): "stop",
+        #     "length", "tool_calls", "content_filter", "error"; the raw
+        #     provider value rides along in native_finish_reason.
+        #
+        # Per-value decisions:
+        #   stop           -> end_turn   (SDK literal; normal completion)
+        #   length         -> max_tokens (SDK literal; output hit the token
+        #                                limit)
+        #   tool_calls     -> tool_use   (SDK literal; the model invoked tools)
+        #   content_filter -> refusal    (SDK literal + OpenRouter normalized;
+        #                                a provider filter stopped output —
+        #                                typed refusal, partial text kept;
+        #                                see the terminality contract at
+        #                                _parse_response's refusal parse)
+        #   function_call  -> end_turn   (SDK literal; legacy function
+        #                                calling. This transport parses only
+        #                                message.tool_calls, so no ToolCall
+        #                                exists to justify tool_use — end_turn
+        #                                is the honest terminal state.)
+        #   error          -> error      (OpenRouter normalized value; a
+        #                                provider error reported in-band on a
+        #                                200. Consumers verified to tolerate
+        #                                StopReason "error": coerce_stop_reason
+        #                                (STOP_REASONS member, clients/llm/
+        #                                types.py:24-32), orchestrator metadata
+        #                                (opaque str, cns/services/
+        #                                orchestrator.py:1363), actions debug
+        #                                log (cns/api/actions.py:2120), POST
+        #                                probe dict output
+        #                                (utils/power_on_self_test.py:1347) —
+        #                                nothing branches on the value.)
+        #   max_tokens     -> max_tokens (non-SDK spelling some OpenAI-family
+        #                                providers emit instead of "length")
+        #   safety         -> refusal    (native filter stop, e.g. Gemini
+        #                                "SAFETY" — same hazard as
+        #                                content_filter: a filter stopped
+        #                                output)
+        #   recitation     -> refusal    (native filter stop, e.g. Gemini
+        #                                "RECITATION" — same hazard as
+        #                                content_filter)
         mapping: dict[str, StopReason] = {
             "stop": "end_turn",
             "tool_calls": "tool_use",
             "length": "max_tokens",
             "max_tokens": "max_tokens",
-            "recitation": "end_turn",
-            "safety": "end_turn",
-            "error": "end_turn",
+            "content_filter": "refusal",
+            "function_call": "end_turn",
+            "error": "error",
+            "safety": "refusal",
+            "recitation": "refusal",
         }
         normalized = finish_reason.lower() if isinstance(finish_reason, str) else None
         if normalized not in mapping and normalized is not None:

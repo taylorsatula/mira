@@ -615,6 +615,15 @@ class SubcorticalLayer:
         pairs_found = 0
         i = len(continuum.messages) - 1
 
+        # Resolve the user's timezone from the user-context contextvar — the same
+        # source the message_formatter idiom (message_formatter.py:102) reads —
+        # so the model-facing <turn time=...> attributes render the user's local
+        # wall clock instead of raw UTC. warm_cache() copies contextvars before
+        # spawning its background thread, so this resolves on that path too.
+        from utils.timezone_utils import convert_from_utc
+        from utils.user_context import get_user_preferences
+        user_tz = get_user_preferences().timezone
+
         # Walk backwards to extract user/assistant pairs
         while i >= 0 and pairs_found < max_pairs:
             # Find assistant message (skip segment summaries)
@@ -636,9 +645,9 @@ class SubcorticalLayer:
             user_msg = continuum.messages[i]
             i -= 1
 
-            # Format timestamps as HH:MM
-            user_time = user_msg.created_at.strftime("%H:%M")
-            assistant_time = assistant_msg.created_at.strftime("%H:%M")
+            # Format timestamps as HH:MM in the user's local timezone
+            user_time = convert_from_utc(user_msg.created_at, user_tz).strftime("%H:%M")
+            assistant_time = convert_from_utc(assistant_msg.created_at, user_tz).strftime("%H:%M")
 
             # Prepend pair (we're walking backwards), truncating long messages.
             # Strip all <mira:*> internal tags (emotion emojis, memory refs, etc.)

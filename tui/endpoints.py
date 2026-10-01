@@ -55,6 +55,11 @@ class EndpointStore:
             self._active = None
             self._write()
             return
+        # chmod follows symlinks: a symlinked store path protects the target file.
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError as error:
+            raise OSError(f"cannot chmod 0600 {self.path}: {error}") from error
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as error:
@@ -71,6 +76,16 @@ class EndpointStore:
         for name, fields in endpoints_raw.items():
             if not isinstance(fields, dict):
                 raise ValueError(f"Corrupt endpoint config {self.path}: endpoint {name!r} must be an object")
+            for field, expected_type in (
+                ("base_url", str),
+                ("api_key", str),
+                ("include_thinking", bool),
+            ):
+                if field in fields and not isinstance(fields[field], expected_type):
+                    raise ValueError(
+                        f"Corrupt endpoint config {self.path}: endpoint {name!r} "
+                        f"field {field!r} must be {expected_type.__name__}"
+                    )
             try:
                 cfg = EndpointConfig(
                     base_url=fields["base_url"],

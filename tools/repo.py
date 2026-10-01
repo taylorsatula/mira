@@ -21,6 +21,18 @@ from clients.llm.types import ToolDefinition
 from tools.registry import registry
 
 
+class ParameterError(ValueError):
+    """A tool call's arguments violate the tool's declared contract.
+
+    Raised by schema coercion, argument-shape validation, and the dispatch
+    signature check in ToolRepository.invoke_tool. Kept distinct from
+    operational failures (connection errors, tool-body exceptions) so the
+    tool loop appends the CORRECT PARAMETERS hint only when the model can
+    actually repair the call. Subclasses ValueError for backward
+    compatibility with existing handlers.
+    """
+
+
 def _coerce_to_schema_type(param_name: str, value: Any, prop_spec: Dict[str, Any], tool_name: str, logger) -> Any:
     """
     Coerce one LLM-supplied tool argument to its declared input_schema type.
@@ -29,7 +41,7 @@ def _coerce_to_schema_type(param_name: str, value: Any, prop_spec: Dict[str, Any
     ("10" -> 10, [10] -> 10, "true" -> True) are applied with a warning so
     callers emitting malformed arguments stay visible in the logs instead of
     being silently repaired at N tool sites. Values that cannot be repaired
-    raise ValueError naming the tool and parameter.
+    raise ParameterError naming the tool and parameter.
     """
     declared = prop_spec.get('type')
     if value is None or not declared:
@@ -41,6 +53,10 @@ def _coerce_to_schema_type(param_name: str, value: Any, prop_spec: Dict[str, Any
     try:
         if declared == 'integer':
             if isinstance(coerced, bool):
+                coerced, mutated = int(coerced), True
+            elif isinstance(coerced, float) and coerced.is_integer():
+                # Integral floats (model-emitted 5.0) repair losslessly;
+                # non-integral floats still fall through and are rejected.
                 coerced, mutated = int(coerced), True
             elif not isinstance(coerced, int):
                 coerced, mutated = int(str(coerced).strip()), True
@@ -71,7 +87,7 @@ def _coerce_to_schema_type(param_name: str, value: Any, prop_spec: Dict[str, Any
                     raise ValueError(coerced)
         # Any other declared type ('object', custom formats) passes through.
     except (ValueError, TypeError):
-        raise ValueError(
+        raise ParameterError(
             f"Tool '{tool_name}' parameter '{param_name}' cannot be coerced to declared type "
             f"'{declared}': got {value!r}"
         )
@@ -550,6 +566,16 @@ class ToolRepository:
         # Check if tool is invocable: enabled for the current user OR a gated
         # tool that's available
         user_id = get_current_user_id() if has_user_context() else _BOOT_ENABLED_KEY
+        # Per-user config gate, applied before the enabled-set check: a tool
+        # whose config.<name>.enabled is falsy is refused even when it sits in
+        # the user's enabled set (e.g. pinned before the setting flipped to
+        # off) — the explicit off must hold at invocation time, not only for
+        # tools absent from the set. Same lookup idiom as the auto-enable
+        # path below; gated tools pass through this gate unchanged.
+        tool_config = getattr(get_config(), name, None)
+        if tool_config and not getattr(tool_config, 'enabled', True):
+            self.logger.error(f"Cannot invoke tool '{name}': Tool is disabled in config")
+            raise RuntimeError(f"Cannot invoke tool '{name}': Tool is disabled in config")
         if name not in self._enabled_tools.get(user_id, set()):
             if name in self.gated_tools:
                 # Gated tool - check is_available() at invocation time
@@ -562,13 +588,9 @@ class ToolRepository:
                 # A tool absent from the enabled set is usually one that
                 # ephemeral cleanup removed at the last turn boundary —
                 # auto-enabling it back is the load-bearing cross-turn reload
-                # path. But a tool the user/config deliberately disabled
-                # (config.<name>.enabled falsy) is never auto-enabled: that
-                # is the disable contract invokeother_tool enforces on load.
-                tool_config = getattr(get_config(), name, None)
-                if tool_config and not getattr(tool_config, 'enabled', True):
-                    self.logger.error(f"Cannot invoke tool '{name}': Tool is disabled in config")
-                    raise RuntimeError(f"Cannot invoke tool '{name}': Tool is disabled in config")
+                # path. Config-disabled tools never reach here: the gate above
+                # already refused them, preserving the disable contract
+                # invokeother_tool enforces on load.
                 # Auto-enable the tool on first invocation
                 self.logger.info(f"Auto-enabling tool '{name}' on first invocation")
                 self.enable_tool(name)
@@ -588,7 +610,7 @@ class ToolRepository:
                 name,
                 type(params).__name__
             )
-            raise TypeError(f"Parameters for tool '{name}' must be a mapping or JSON string")
+            raise ParameterError(f"Parameters for tool '{name}' must be a mapping or JSON string")
 
         tool = self.get_tool(name)  # This creates a fresh instance with current user context
 
@@ -625,12 +647,18 @@ class ToolRepository:
                 for key, value in params.items()
             }
 
+        # Signature pre-check: bind the arguments to run()'s signature so
+        # arity/keyword mismatches (missing required argument, unexpected
+        # keyword) are classified as ParameterError before dispatch. A
+        # TypeError raised inside tool.run then surfaces as itself instead
+        # of being relabeled "Invalid parameters".
         try:
-            result = tool.run(**params)
-            return result
+            inspect.signature(tool.run).bind(**params)
         except TypeError as e:
             self.logger.error(f"Invalid parameters for tool '{name}': {str(e)}")
-            raise TypeError(f"Invalid parameters for tool '{name}': {str(e)}")
+            raise ParameterError(f"Invalid parameters for tool '{name}': {str(e)}") from e
+
+        return tool.run(**params)
     
     def list_all_tools(self) -> List[str]:
         return list(self.tool_classes.keys())
@@ -690,6 +718,17 @@ class ToolRepository:
         user_id = get_current_user_id() if has_user_context() else _BOOT_ENABLED_KEY
         enabled = (self._enabled_tools.get(_BOOT_ENABLED_KEY, set())
                    | self._enabled_tools.get(user_id, set()))
+
+        # Per-user config gate, mirroring invoke_tool: a tool whose
+        # config.<name>.enabled is falsy is not advertised even while it
+        # sits in the enabled set (e.g. pinned before the setting flipped
+        # to off). Advertising it would invite a call invoke_tool must
+        # then reject. Gated tools are unaffected — they self-determine via
+        # is_available() and never enter the enabled set.
+        enabled = {
+            name for name in enabled
+            if getattr(getattr(get_config(), name, None), 'enabled', True)
+        }
 
         # Standard enabled tools (explicit enable/disable)
         for name in sorted(enabled):

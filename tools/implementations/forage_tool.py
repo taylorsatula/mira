@@ -156,13 +156,40 @@ class ForageTool(Tool):
         user_id = get_current_user_id()
         continuum_id = user_context.get('continuum_id', user_id)
 
-        # If refining, extract previous result and auto-dismiss it
+        # If refining, validate the prior result resolves before dispatching —
+        # an unresolvable id must not silently degrade to a fresh ungrounded
+        # search under the same success envelope.
         previous_result = None
-        if refine_task_id and self.working_memory:
-            trinket = self.working_memory.get_trinket('ForageTrinket')
-            if trinket and refine_task_id in trinket.active_results:
-                previous_data = trinket.active_results[refine_task_id].get('data', {})
-                previous_result = previous_data.get('result', '')
+        if refine_task_id:
+            trinket = None
+            if self.working_memory:
+                trinket = self.working_memory.get_trinket('ForageTrinket')
+            entry = trinket.active_results.get(refine_task_id) if trinket else None
+            if entry is None:
+                return {
+                    "success": False,
+                    "task_id": refine_task_id,
+                    "message": (
+                        f"Refine not dispatched: task {refine_task_id[:8]} is not an "
+                        f"active forage result — it may have been dismissed, "
+                        f"expired, or never existed. Dispatch a fresh forage "
+                        f"with query and context instead."
+                    ),
+                }
+            previous_result = entry.get('data', {}).get('result', '')
+            if not previous_result:
+                entry_type = entry.get('type', 'unknown')
+                return {
+                    "success": False,
+                    "task_id": refine_task_id,
+                    "message": (
+                        f"Refine not dispatched: task {refine_task_id[:8]} is a "
+                        f"{entry_type} forage result with no prior content to "
+                        f"build on. Wait for it to finish if still running, or "
+                        f"dispatch a fresh forage with query and context."
+                    ),
+                }
+            # Resolved — auto-dismiss the prior entry and pass it as context
             self._publish_event(continuum_id, refine_task_id, 'dismissed', {})
 
         # Resolve trace directory while user context is available (main thread)
@@ -226,6 +253,18 @@ class ForageTool(Tool):
         user_context = get_current_user()
         user_id = get_current_user_id()
         continuum_id = user_context.get('continuum_id', user_id)
+
+        # Existence-aware: the trinket removes only a present entry, so a
+        # dismiss of an absent/stale task_id must not report success.
+        trinket = None
+        if self.working_memory:
+            trinket = self.working_memory.get_trinket('ForageTrinket')
+        if trinket is None or task_id not in trinket.active_results:
+            return {
+                "success": False,
+                "task_id": task_id,
+                "error": "not found",
+            }
 
         self._publish_event(continuum_id, task_id, 'dismissed', {})
 

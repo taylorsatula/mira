@@ -194,7 +194,9 @@ class ModelConfig:
     Routes are capability-addressed: a caller names the capability it needs
     and the model_configs row owns dialect, model, endpoint, Vault key,
     default effort, and output-token ceiling for it. `other` is seeded to a
-    different vendor than `primary` so it can consult an outside model.
+    different served model than `primary` so it can consult an outside model;
+    the default install routes both through one gateway, though an operator can
+    point `other` at an outside vendor.
 
     `api_key_name` is None when the route requires no credential. The column is
     `text NOT NULL` and stores '' for that case, so `load_model_configs()`

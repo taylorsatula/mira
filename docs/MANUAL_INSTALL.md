@@ -74,8 +74,16 @@ store the token in Vault as `secret/mira/api_keys` `embeddings_key`):
 createdb mira_service
 source deploy/lib/embedding_config.sh
 resolve_embedding_schema_args venv/bin/python "$PWD" local "" "" ""
-psql -U postgres -h localhost -d mira_service "${EMBEDDING_SCHEMA_ARGS[@]}" -f deploy/mira_service_schema.sql
+psql -d postgres -v ON_ERROR_STOP=1 -c "DO \$roles\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_admin') THEN CREATE ROLE mira_admin LOGIN PASSWORD 'changethisifdeployingpwd' BYPASSRLS; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_dbuser') THEN CREATE ROLE mira_dbuser LOGIN PASSWORD 'changethisifdeployingpwd'; END IF; END \$roles\$;"
+psql -U postgres -h localhost -d mira_service -v ON_ERROR_STOP=1 "${EMBEDDING_SCHEMA_ARGS[@]}" -f deploy/mira_service_schema.sql
 ```
+
+The `DO` block provisions the `mira_admin` and `mira_dbuser` roles the schema
+grants to (mirroring Step 13 of `deploy/postgresql.sh`): it is idempotent, gives
+both roles a LOGIN password (TCP connections use scram-sha-256, so a role with
+no password can never authenticate), and `mira_admin` gets `BYPASSRLS`.
+`ON_ERROR_STOP` makes `psql` exit nonzero on the first failing statement —
+without it, a failed `GRANT` or `CREATE POLICY` is reported as success.
 
 Vault stores service credentials and provider keys. The deploy scripts in `deploy/vault.sh` and `deploy/postgresql.sh` are the source of truth for the exact key names used by the automated path.
 

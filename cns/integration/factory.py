@@ -20,7 +20,7 @@ from .event_bus import EventBus
 from ..services.summary_generator import SummaryGenerator
 from ..core.segment_cache_loader import SegmentCacheLoader
 from ..services.segment_collapse_handler import SegmentCollapseHandler
-from ..infrastructure.continuum_pool import get_continuum_pool, initialize_continuum_pool
+from ..infrastructure.continuum_pool import initialize_continuum_pool
 from ..infrastructure.valkey_message_cache import ValkeyMessageCache
 
 if TYPE_CHECKING:
@@ -143,13 +143,21 @@ class CNSIntegrationFactory:
         from cns.services.async_work_barrier import initialize_async_work_barrier
         initialize_async_work_barrier()
 
-        # Initialize retrieval-backed tool result compaction for the hot cache.
-        from cns.services.tool_result_summarizer import initialize_tool_result_summarizer
-        initialize_tool_result_summarizer(
-            llm_provider,
-            event_bus,
-            get_continuum_pool().valkey_cache,
-        )
+        # Tool-result compaction is DEADHEADED (2026-09-30, human-directed):
+        # the existing design is too convoluted (two uncoordinated size-reduction
+        # layers whose interaction is self-defeating — see census run
+        # census-20260930b and the compaction-flow map attached to that run's
+        # sqdf ticket) and will be REDESIGNED soon. Until the redesign lands,
+        # the hot cache keeps full tool results; the only bound is
+        # orchestrator._truncate_tool_result's raw 31999-char truncation.
+        # Do not re-enable initialize_tool_result_summarizer() piecemeal —
+        # replace this whole block with the redesigned mechanism.
+        # from cns.services.tool_result_summarizer import initialize_tool_result_summarizer
+        # initialize_tool_result_summarizer(
+        #     llm_provider,
+        #     event_bus,
+        #     get_continuum_pool().valkey_cache,
+        # )
 
         logger.info("CNS orchestrator initialized successfully with full integration")
         return orchestrator

@@ -251,7 +251,9 @@ class AuthDatabase:
         Prepopulate welcome messages and domaindoc for new user.
 
         Called after user + memories are created atomically in create_user().
-        Failures here are logged but don't prevent account creation.
+        Raises on failure: an exception propagates unswallowed through
+        initialize_mira_account/_initialize_account into AuthService.create_user,
+        whose cleanup tears the just-created account back down.
 
         Args:
             user_id: UUID of the user
@@ -451,7 +453,9 @@ So, now that that's out of the way: What do you want to chat about first? I can 
         """Atomically update one credential's sign_count and last_used_at.
 
         Single-statement UPDATE so concurrent verifications cannot lose an
-        increment via read-modify-write on the whole JSONB column.
+        increment via read-modify-write on the whole JSONB column. Guarded on
+        the credential ID being present, so a credential removed mid-flight
+        cannot be resurrected as a public_key-less phantom entry.
         """
         with self.session_manager.get_admin_session() as session:
             rows_updated = session.execute_update("""
@@ -466,8 +470,10 @@ So, now that that's out of the way: What do you want to chat about first? I can 
                         to_jsonb(%(last_used_at)s::text)
                     )
                 WHERE id = %(user_id)s
+                  AND jsonb_exists(webauthn_credentials, %(credential_id)s)
             """, {
                 'user_id': user_id,
+                'credential_id': credential_id,
                 'sign_count_path': [credential_id, 'sign_count'],
                 'sign_count': new_sign_count,
                 'last_used_at_path': [credential_id, 'last_used_at'],
