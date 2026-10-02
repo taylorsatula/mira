@@ -228,6 +228,24 @@ cp "${SCRIPT_DIR}/_mira_log_levels.py" "$SITE_PACKAGES/"
 echo "import _mira_log_levels" > "$SITE_PACKAGES/mira-log-levels.pth"
 echo -e "${CHECKMARK}"
 
+print_header "Step 5b: TUI Client Environment"
+
+# The terminal chat client (tui/) ships its own pinned dependency set
+# (tui/requirements.txt); its pydantic pin would fight the server venv's
+# unpinned pydantic, so the client gets a separate venv at /opt/mira/tui-venv
+# (outside /opt/mira/app so Step 3's code-clear never touches it).
+# finalize.sh Step 15d wires /usr/local/bin/mira onto it.
+if [ -f /opt/mira/tui-venv/bin/python3 ]; then
+    print_info "Reusing existing TUI virtual environment"
+else
+    run_with_status "Creating TUI virtual environment" \
+        $PYTHON_CMD -m venv /opt/mira/tui-venv
+    run_with_status "Initializing TUI pip" \
+        /opt/mira/tui-venv/bin/python3 -m ensurepip
+fi
+run_with_status "Installing TUI client dependencies" \
+    /opt/mira/tui-venv/bin/python3 -m pip install -q -r /opt/mira/app/tui/requirements.txt
+
 print_header "Step 6: Embedding Model Download"
 if [ "$CONFIG_EMBEDDING_PROVIDER" = "local" ]; then
 

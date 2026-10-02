@@ -64,3 +64,6 @@ training_data/
 /.pi/reports
 /.pi/workflows
 .kata.local.toml
+
+# local TUI venv
+.venv-tui/

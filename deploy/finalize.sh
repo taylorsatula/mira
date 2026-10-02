@@ -260,6 +260,24 @@ EOF
     fi
 fi
 
+# The `mira` command: the deployed TUI chat client on its own venv
+# (python.sh Step 5b), runnable from any directory — PYTHONPATH puts the
+# tui/ package inside /opt/mira/app on sys.path so the user's cwd
+# does not matter.
+print_header "Step 15d: Terminal Chat Command (/usr/local/bin/mira)"
+MIRA_BIN=/usr/local/bin/mira
+echo -ne "${DIM}${ARROW}${RESET} Writing $MIRA_BIN... "
+sudo tee "$MIRA_BIN" >/dev/null <<'MIRA_CLI'
+#!/bin/sh
+# MIRA terminal chat client — deployed by finalize.sh. Talk to this
+# instance from any directory: `mira` (first run: mira --login --base-url
+# http://localhost:1993 --chat).
+export PYTHONPATH="/opt/mira/app${PYTHONPATH:+:$PYTHONPATH}"
+exec /opt/mira/tui-venv/bin/python3 -m tui "$@"
+MIRA_CLI
+sudo chmod 755 "$MIRA_BIN"
+echo -e "${CHECKMARK}"
+
 # Write one-time credential dump to user's home directory
 print_header "Step 15c: Credential Dump"
 
@@ -448,6 +466,7 @@ fi
 
 echo ""
 echo -e "${BOLD}${GREEN}Next Steps${RESET}"
+echo -e "  ${CYAN}→${RESET} Chat from any terminal: ${BOLD}mira${RESET} (first run: ${BOLD}mira --login --base-url http://localhost:1993 --chat${RESET})"
 if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ] && [ "$OS" = "linux" ]; then
     if [[ "${STATUS_MIRA_SERVICE}" == *"Running"* ]]; then
         echo -e "  ${CYAN}→${RESET} MIRA is running at: ${BOLD}http://localhost:1993${RESET}"

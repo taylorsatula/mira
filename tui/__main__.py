@@ -8,6 +8,9 @@ CLI:
   instances; email magic-link on multi-user) and store it 0600. Targets
   the ACTIVE endpoint; ``--endpoint NAME`` or ``--base-url URL
   [--save-as NAME]`` pick the target. Prints a summary, exits 0/1.
+- ``--chat``           with ``--login``: continue into the chat app after
+  a successful mint (mint failures still exit 1) — the mint-and-chat
+  one-liner.
 - ``--config-debug``  print the resolved store path and, per endpoint,
   name / base_url / history_fetch / include_thinking — never the api_key —
   then exit 0.
@@ -67,6 +70,12 @@ def main(argv: list[str] | None = None) -> int:
         "multi-mode: email magic-link) and store it in the endpoint store, then exit.",
     )
     parser.add_argument(
+        "--chat",
+        action="store_true",
+        help="With --login: continue into the chat app after a successful mint "
+        "(mint failures still exit 1). Requires --login.",
+    )
+    parser.add_argument(
         "--endpoint",
         default=None,
         help="With --login: mint against this stored endpoint (default: the active one).",
@@ -101,7 +110,14 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         from tui.login import run_login
 
-        return run_login(store, args.endpoint, args.base_url, args.save_as)
+        rc = run_login(store, args.endpoint, args.base_url, args.save_as)
+        if rc != 0 or not args.chat:
+            return rc
+        return run_app(store)
+
+    if args.chat:
+        print("fatal: --chat requires --login", file=sys.stderr)
+        return 1
 
     if args.config_debug:
         _print_config_debug(store)
