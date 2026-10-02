@@ -6,9 +6,11 @@ The preferred installation path is still `deploy/deploy.sh`. Use this document w
 
 The installer supports:
 
-- macOS with Homebrew
+- macOS with Homebrew (supervised by per-user launchd agents)
 - Debian/Ubuntu-family Linux with `apt`
-- Fedora/RHEL/CentOS/Rocky/Alma-family Linux with `dnf`
+- Fedora/RHEL/CentOS/Rocky/Alma-family Linux with `dnf` (x86_64 only — PGDG
+  publishes no aarch64 Fedora repos)
+- Arch-family Linux with `pacman`
 
 Other platforms need equivalent services and packages installed manually.
 
@@ -16,10 +18,19 @@ Other platforms need equivalent services and packages installed manually.
 
 Install and start:
 
-- PostgreSQL 17 with the `pgvector` extension
+- PostgreSQL 17 or newer with the `pgvector` extension (the installer pins 17
+  where PGDG/Homebrew provide it; Arch uses the distro's current major — the
+  schema floor is 14)
 - Valkey
 - HashiCorp Vault
-- Python 3.12
+- Python 3.12 or newer (the installer prefers the newest available of
+  3.12–3.14)
+
+On Arch, the `postgresql` package creates the `postgres` user but does not
+initialize the cluster; before first start run
+`sudo -u postgres initdb -D /var/lib/postgres/data --locale C.UTF-8 --encoding UTF8`
+then `systemctl enable --now postgresql valkey` (the automated installer does
+this for you).
 
 The default local ports are:
 
@@ -33,7 +44,7 @@ The default local ports are:
 From the repository root:
 
 ```bash
-python3.12 -m venv venv
+python3 -m venv venv   # any Python ≥ 3.12; use the versioned binary if needed
 venv/bin/pip install --upgrade pip
 venv/bin/pip install -r requirements.txt
 ```

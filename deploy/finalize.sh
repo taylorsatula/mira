@@ -9,13 +9,21 @@
 : "${OS:?Error: OS must be set}"
 : "${MIRA_USER:?Error: MIRA_USER must be set}"
 
-# One mechanism for the injection screen's settings on every start path: the
+# One mechanism for the install-time environment on every start path: the
 # systemd unit reads this file via EnvironmentFile, the no-systemd launcher
 # (Step 15b) and the container's s6 mira/run source it when present. Non-secret
 # values only — the bearer token lives in Vault, never in this file.
 echo -ne "${DIM}${ARROW}${RESET} Writing /opt/mira/systemone.env... "
 SYSTEMONE_ENV_FILE="/opt/mira/systemone.env"
 {
+    # The install's timezone choice, explicit on every start path: the app maps
+    # MIRA_TIMEZONE → SystemConfig.timezone (config/config_manager.py). It was
+    # collected by config.sh and dropped on the floor here — without this line
+    # the app silently falls back to host detection and the interview/YAML
+    # answer never reaches the installed instance.
+    if [ -n "${CONFIG_TIMEZONE:-}" ]; then
+        echo "MIRA_TIMEZONE=${CONFIG_TIMEZONE}"
+    fi
     if [ "${CONFIG_INJECTION_SCREEN}" = "yes" ]; then
         echo "MIRA_INJECTION_SCREEN_ENABLED=1"
         echo "MIRA_SYSTEMONE_PROVIDER=${CONFIG_SYSTEMONE_PROVIDER}"
@@ -50,23 +58,12 @@ if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ] && [ "$OS" = "linux" ]; then
         # Create systemd service file
         echo -ne "${DIM}${ARROW}${RESET} Creating systemd service file... "
 
-        # Set correct PostgreSQL service name based on distro
-        if [ "$DISTRO" = "fedora" ]; then
-            PG_SERVICE="postgresql-17.service"
-        else
-            PG_SERVICE="postgresql.service"
-        fi
-
-        # Set correct Valkey service unit by detecting what this host actually
-        # ships: Ubuntu's valkey-server package installs valkey-server.service
-        # (redis-style naming), Fedora's valkey package installs
-        # valkey.service. A wrong name in Requires= would make systemd refuse
-        # to start mira.service.
-        if systemctl cat valkey-server.service > /dev/null 2>&1; then
-            VALKEY_SERVICE="valkey-server.service"
-        else
-            VALKEY_SERVICE="valkey.service"
-        fi
+        # Resolve both dependency unit names by what this host actually ships
+        # (lib/services.sh resolvers — one sanctioned mechanism, shared with
+        # config.sh's port-stop path). A wrong name in Requires= would make
+        # systemd refuse to start mira.service.
+        PG_SERVICE=$(resolve_pg_unit || echo "postgresql.service")
+        VALKEY_SERVICE=$(resolve_valkey_unit || echo "valkey.service")
 
         sudo tee /etc/systemd/system/mira.service > /dev/null <<EOF
 [Unit]
@@ -149,21 +146,118 @@ if [ "$OS" = "macos" ] || { [ "$OS" = "linux" ] && [ "${CONFIG_INSTALL_SYSTEMD}"
 
     RUN_SH="/opt/mira/app/run.sh"
     echo -ne "${DIM}${ARROW}${RESET} Writing $RUN_SH... "
+    # The PATH prefix covers launchd's minimal environment (brew tools, and
+    # anything bash_tool shells out to); the bounded seal-status wait covers
+    # launchd's lack of agent ordering — the POST gate treats a sealed or
+    # unreachable Vault as infrastructure failure, so the launcher waits for
+    # Vault to be up AND unsealed before starting the server.
     cat > "$RUN_SH" <<'LAUNCHER'
 #!/bin/bash
 # MIRA launcher — exports Vault env vars and starts the server.
 set -e
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 cd "$(dirname "$0")"
 export VAULT_ADDR=http://127.0.0.1:8200
+for i in $(seq 1 120); do
+    S=$(curl -sf http://127.0.0.1:8200/v1/sys/seal-status 2>/dev/null || true)
+    case "$S" in *'"sealed":false'*) break;; esac
+    sleep 1
+done
 export VAULT_ROLE_ID=$(cat /opt/vault/role-id.txt)
 export VAULT_SECRET_ID=$(cat /opt/vault/secret-id.txt)
 export MIRA_LOG_DIR=/opt/mira/logs
-[ -f /opt/mira/systemone.env ] && . /opt/mira/systemone.env
+# set -a: sourced assignments must be EXPORTED to reach the server process —
+# a plain `.` sets shell variables only, so python never saw
+# MIRA_INJECTION_SCREEN_ENABLED=0 and the boot gate parked (observed live on
+# macOS; systemd's EnvironmentFile= exports natively, run.sh must too).
+if [ -f /opt/mira/systemone.env ]; then
+    set -a
+    . /opt/mira/systemone.env
+    set +a
+fi
 exec venv/bin/python3 main.py "$@"
 LAUNCHER
     chmod +x "$RUN_SH"
     echo -e "${CHECKMARK}"
     print_info "Start MIRA with: $RUN_SH"
+fi
+
+# macOS supervision: a per-user LaunchAgent runs run.sh at login and restarts
+# it after a failed exit — the platform equivalent of mira.service
+# (Restart=on-failure). Written even when start_mira_now is no: agents in
+# ~/Library/LaunchAgents load at the next login.
+if [ "$OS" = "macos" ]; then
+    print_header "Step 15b2: MIRA LaunchAgent"
+    echo -ne "${DIM}${ARROW}${RESET} Writing com.mira.app.plist... "
+    mkdir -p "$HOME/Library/LaunchAgents" /opt/mira/logs
+    cat > "$HOME/Library/LaunchAgents/com.mira.app.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mira.app</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/mira/app/run.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/opt/mira/app</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/opt/mira/logs/mira-launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/opt/mira/logs/mira-launchd.log</string>
+</dict>
+</plist>
+EOF
+    echo -e "${CHECKMARK}"
+    launchctl bootout "gui/$(id -u)/com.mira.app" 2>/dev/null || true
+    if [ "${CONFIG_START_MIRA_NOW}" = "yes" ]; then
+        echo -ne "${DIM}${ARROW}${RESET} Starting MIRA (launchd)... "
+        # One sanctioned launchd reload path (lib/services.sh) — bootstrap
+        # during the bootout teardown above fails with "Bootstrap failed: 5".
+        if launchd_reload_agent "$HOME/Library/LaunchAgents/com.mira.app.plist"; then
+            echo -e "${CHECKMARK}"
+            # The POST gate runs real infrastructure probes before the server
+            # binds; on a first boot with a local embedding model this can
+            # take minutes — poll generously before calling it failed.
+            echo -ne "${DIM}${ARROW}${RESET} Waiting for MIRA to become healthy... "
+            MIRA_HEALTHY=0
+            for i in $(seq 1 120); do
+                if curl -sf http://127.0.0.1:1993/v0/api/health 2>/dev/null | grep -q '"status":"healthy"'; then
+                    MIRA_HEALTHY=1
+                    break
+                fi
+                sleep 5
+            done
+            if [ "$MIRA_HEALTHY" = 1 ]; then
+                echo -e "${CHECKMARK} ${DIM}(healthy after ~$((i * 5))s)${RESET}"
+                STATUS_MIRA_SERVICE="${CHECKMARK} Running"
+                print_info "View logs: tail -f /opt/mira/logs/mira-launchd.log"
+            else
+                echo -e "${ERROR}"
+                print_warning "MIRA did not report healthy within 600 s"
+                print_info "Check status: launchctl print gui/$(id -u)/com.mira.app"
+                print_info "View logs: tail -100 /opt/mira/logs/mira-launchd.log"
+                STATUS_MIRA_SERVICE="${ERROR} Start failed"
+            fi
+        else
+            echo -e "${ERROR}"
+            print_error "Failed to load the com.mira.app launchd agent"
+            STATUS_MIRA_SERVICE="${ERROR} Start failed"
+        fi
+    else
+        print_info "Agent written but not started (start_mira_now: no) — it loads at the next login."
+        print_info "Start now: launchctl bootstrap gui/$(id -u) $HOME/Library/LaunchAgents/com.mira.app.plist"
+        STATUS_MIRA_SERVICE="${DIM}Not started${RESET}"
+    fi
 fi
 
 # Write one-time credential dump to user's home directory
@@ -286,10 +380,6 @@ echo -e "${BOLD}${BLUE}Important Files${RESET} ${DIM}(/opt/vault/)${RESET}"
 print_info "init-keys.txt (Vault unseal key and root token)"
 print_info "role-id.txt (AppRole role ID)"
 print_info "secret-id.txt (AppRole secret ID)"
-if [ "$OS" = "macos" ]; then
-    print_info "vault.pid (Vault process ID)"
-fi
-
 echo ""
 if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
     echo -e "${BOLD}${BLUE}LLM Provider${RESET}"
@@ -351,8 +441,9 @@ if [ "$OS" = "linux" ]; then
     fi
 elif [ "$OS" = "macos" ]; then
     print_info "Valkey: localhost:6379 (brew services)"
-    print_info "Vault: http://localhost:8200 (background process)"
+    print_info "Vault: http://localhost:8200 (launchd agent com.mira.vault)"
     print_info "PostgreSQL: localhost:5432 (brew services)"
+    print_info "MIRA: http://localhost:1993 (launchd agent com.mira.app - ${STATUS_MIRA_SERVICE})"
 fi
 
 echo ""
@@ -383,8 +474,11 @@ else
         echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/chat${RESET}"
         echo -e "  ${CYAN}→${RESET} After a reboot, unseal Vault first: ${BOLD}/opt/vault/unseal.sh${RESET}"
     else
-        echo -e "  ${CYAN}→${RESET} Start MIRA: ${BOLD}/opt/mira/app/run.sh${RESET}"
+        echo -e "  ${CYAN}→${RESET} MIRA runs as a LaunchAgent: ${BOLD}com.mira.app${RESET} (starts at login)"
         echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/chat${RESET}"
+        echo -e "  ${CYAN}→${RESET} Status: ${BOLD}launchctl print gui/$(id -u)/com.mira.app${RESET}"
+        echo -e "  ${CYAN}→${RESET} Logs: ${BOLD}tail -f /opt/mira/logs/mira-launchd.log${RESET}"
+        echo -e "  ${CYAN}→${RESET} Stop: ${BOLD}launchctl bootout gui/$(id -u)/com.mira.app${RESET}"
     fi
 fi
 
@@ -405,11 +499,12 @@ fi
 if [ "$OS" = "macos" ]; then
     echo ""
     echo -e "${BOLD}${YELLOW}macOS Notes${RESET}"
-    print_info "Start MIRA with /opt/mira/app/run.sh (exports Vault env vars)"
-    print_info "Vault is running as a background process"
-    print_info "To stop: kill \$(cat /opt/vault/vault.pid)"
-    print_info "After system restart, manually start Vault and unseal:"
-    echo -e "${DIM}    /opt/vault/unseal.sh${RESET}"
+    print_info "Supervision is via per-user LaunchAgents (start at login, restart on failure):"
+    print_info "  com.mira.vault        — Vault server"
+    print_info "  com.mira.vault.unseal — auto-unseal at login (bounded wait)"
+    print_info "  com.mira.app          — MIRA via /opt/mira/app/run.sh"
+    print_info "Inspect one: launchctl print gui/$(id -u)/<label>"
+    print_info "Stop one:    launchctl bootout gui/$(id -u)/<label>"
     print_info "PostgreSQL and Valkey are managed by brew services"
 fi
 

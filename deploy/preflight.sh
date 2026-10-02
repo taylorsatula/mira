@@ -21,11 +21,14 @@ case "$OS" in
             fedora)
                 echo -e "${CHECKMARK} ${DIM}Linux (Fedora/RHEL)${RESET}"
                 ;;
+            arch)
+                echo -e "${CHECKMARK} ${DIM}Linux (Arch)${RESET}"
+                ;;
             *)
                 echo -e "${ERROR}"
                 print_error "Unsupported Linux distribution"
                 print_info "Detected: $([ -f /etc/os-release ] && . /etc/os-release && echo "$PRETTY_NAME" || echo "Unknown")"
-                print_info "Supported: Debian/Ubuntu, Fedora/RHEL/CentOS/Rocky/Alma"
+                print_info "Supported: Debian/Ubuntu, Fedora/RHEL/CentOS/Rocky/Alma, Arch"
                 print_info "For other distros, see manual installation: docs/MANUAL_INSTALL.md"
                 exit 1
                 ;;
@@ -54,10 +57,21 @@ echo ""
 # operation that demands a terminal even when NOPASSWD satisfies
 # elevation (sudo 1.9.x, timestamp_type=tty): it aborts headless runs
 # with "a terminal is required to authenticate". Probe elevation with
-# a real command instead; prompt for a password only when the probe
-# shows one is needed (interactive tty runs).
+# a real command instead; prompt for a password only when a terminal exists.
+# Without a tty and without passwordless sudo there is no supported
+# elevation path — say so with the two real options instead of dying on
+# sudo's own error text. (macOS sudo ignores SUDO_ASKPASS unless every
+# call carries -A, so an askpass env var is NOT a third option here.)
 if ! sudo -n true 2>/dev/null; then
-    sudo -v
+    if [ -t 0 ]; then
+        sudo -v
+    else
+        echo ""
+        print_error "sudo requires a password but this session has no terminal."
+        print_info "Run the installer from a terminal, or configure passwordless sudo"
+        print_info "for this account for unattended/CI installs."
+        exit 1
+    fi
 fi
 
 # Keep sudo alive (Linux only)

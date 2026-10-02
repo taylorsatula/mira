@@ -13,8 +13,25 @@
 if [ "$OS" = "macos" ]; then
     print_header "Step 12: Starting Services"
 
+    # Homebrew postgresql@17 is keg-only: psql/createdb are NOT symlinked
+    # into /opt/homebrew/bin. One resolver, prepended once — every bare
+    # psql/createdb/pg_isready call in this file and in later phases of this
+    # same shell then resolves against the keg.
+    PG_BINDIR="$(brew --prefix postgresql@17)/bin"
+    if [ ! -x "$PG_BINDIR/psql" ]; then
+        print_error "PostgreSQL 17 client not found at $PG_BINDIR"
+        print_info "Expected brew postgresql@17 (installed by dependencies.sh Step 1)."
+        exit 1
+    fi
+    PATH="$PG_BINDIR:$PATH"
+    export PATH
+
     start_service valkey brew
     start_service postgresql@17 brew
+
+    # brew services clears the sudo timestamp as well (ensure_sudo docs) —
+    # re-establish elevation for any later sudo step.
+    ensure_sudo
 
     sleep 2
 fi
@@ -80,11 +97,14 @@ print_header "Step 13: PostgreSQL Configuration"
 # schema deliberately assumes these contracts already exist and targets an
 # empty database, so provision them before applying it.
 echo -ne "${DIM}${ARROW}${RESET} Provisioning database roles and database... "
-# Roles are created with the default sentinel password because pg_hba uses
-# scram-sha-256 for TCP connections on every supported platform: a role with
-# no password can never authenticate the postgresql://mira_dbuser:...
-# (and admin) URLs that Step 14 stores in Vault. The custom-password block
-# further down replaces the sentinel when CONFIG_DB_PASSWORD differs.
+# Roles are created with the default sentinel password because the Vault URLs
+# stored in Step 14 are postgresql://mira_dbuser:<password>@localhost:5432/… —
+# libpq always presents a password. On Linux, pg_hba uses scram-sha-256 for
+# TCP connections, so the password is verified; a role without one could
+# never authenticate. Homebrew's macOS pg_hba defaults to trust for
+# localhost, so the password is carried but not challenged there. The
+# custom-password block further down replaces the sentinel when
+# CONFIG_DB_PASSWORD differs.
 ROLE_SQL="DO \$roles\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_admin') THEN CREATE ROLE mira_admin LOGIN PASSWORD 'changethisifdeployingpwd' BYPASSRLS; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_dbuser') THEN CREATE ROLE mira_dbuser LOGIN PASSWORD 'changethisifdeployingpwd'; END IF; END \$roles\$;"
 if [ "$OS" = "linux" ]; then
     if ! sudo -u postgres psql -d postgres -v ON_ERROR_STOP=1 -c "$ROLE_SQL" > /dev/null 2>&1; then

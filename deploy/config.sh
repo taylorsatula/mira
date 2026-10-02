@@ -146,6 +146,9 @@ case "$OS_TYPE" in
                     debian|ubuntu|linuxmint|pop)
                         DISTRO="debian"
                         ;;
+                    arch)
+                        DISTRO="arch"
+                        ;;
                     *)
                         # Check ID_LIKE for derivatives
                         case "$ID_LIKE" in
@@ -154,6 +157,9 @@ case "$OS_TYPE" in
                                 ;;
                             *debian*|*ubuntu*)
                                 DISTRO="debian"
+                                ;;
+                            *arch*)
+                                DISTRO="arch"
                                 ;;
                             *)
                                 DISTRO="unknown"
@@ -173,7 +179,7 @@ case "$OS_TYPE" in
     *)
         echo ""
         print_error "Unsupported operating system: $OS_TYPE"
-        print_info "Supported: Linux (Debian/Ubuntu, Fedora/RHEL/CentOS) and macOS"
+        print_info "Supported: Linux (Debian/Ubuntu, Fedora/RHEL/CentOS, Arch) and macOS"
         print_info "For other platforms, see manual installation: docs/MANUAL_INSTALL.md"
         exit 1
         ;;
@@ -184,8 +190,9 @@ esac
 # apply_yaml_config runs before detection and cannot see it).
 if [ -n "$CONFIG_FILE" ] && [ "$OS" = "macos" ]; then
     CONFIG_INSTALL_SYSTEMD="no"
-    CONFIG_START_MIRA_NOW="no"
-    STATUS_SYSTEMD="${DIM}N/A (macOS)${RESET}"
+    # start_mira_now flows through from the YAML: macOS supervision is a
+    # launchd agent (finalize.sh Step 15b2), so "start now" is meaningful.
+    STATUS_SYSTEMD="${DIM}N/A (macOS — launchd agent)${RESET}"
 fi
 
 print_header "Port Availability Check"
@@ -193,22 +200,20 @@ print_header "Port Availability Check"
 echo -ne "${DIM}${ARROW}${RESET} Checking ports 1993, 8200, 6379, 5432... "
 PORTS_IN_USE=""
 for PORT in 1993 8200 6379 5432; do
-    if command -v lsof &> /dev/null; then
-        if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
-            PORTS_IN_USE="$PORTS_IN_USE $PORT"
-        fi
-    elif command -v netstat &> /dev/null; then
-        if netstat -an | grep -q "LISTEN.*:$PORT"; then
-            PORTS_IN_USE="$PORTS_IN_USE $PORT"
-        fi
-    else
-        # Indeterminate check must never report a false pass: neither lsof
-        # nor netstat is available, so port occupancy cannot be verified.
-        echo -e "${ERROR}"
-        print_error "Port check indeterminate: neither lsof nor netstat is installed."
-        print_info "Install lsof (or netstat) so port availability can be verified, then re-run."
-        exit 1
-    fi
+    # One sanctioned probe (lib/services.sh:port_probe_status — lsof → ss →
+    # netstat). Indeterminate must never report a false pass: with no probe
+    # tool at all, port occupancy cannot be verified and the deploy stops.
+    # `|| PROBE=$?` form: a bare call returning 1 (free) would trip set -e.
+    PROBE=0
+    port_probe_status "$PORT" || PROBE=$?
+    case $PROBE in
+        0) PORTS_IN_USE="$PORTS_IN_USE $PORT";;
+        2)
+            echo -e "${ERROR}"
+            print_error "Port check indeterminate: no port probe tool (lsof, ss, or netstat) is installed."
+            print_info "Install lsof or iproute2 (ss) so port availability can be verified, then re-run."
+            exit 1;;
+    esac
 done
 
 if [ -n "$PORTS_IN_USE" ]; then
@@ -247,8 +252,13 @@ if [ -n "$PORTS_IN_USE" ]; then
                     fi
                 elif [ "$OS" = "macos" ]; then
                     echo -ne "${DIM}${ARROW}${RESET} Stopping Vault (port 8200)... "
-                    if [ -f /opt/vault/vault.pid ]; then
-                        stop_service "Vault" pid_file /opt/vault/vault.pid && echo -e "${CHECKMARK}" || echo -e "${WARNING}"
+                    # launchd agent: bootout, not kill — the KeepAlive agent
+                    # resurrects a killed process, and the legacy vault.pid
+                    # file no longer exists (the background-process path is
+                    # gone). Port-based kill is the fallback for pre-launchd
+                    # installs.
+                    if [ -f "$HOME/Library/LaunchAgents/com.mira.vault.plist" ]; then
+                        launchctl bootout "gui/$(id -u)/com.mira.vault" 2>/dev/null && echo -e "${CHECKMARK}" || echo -e "${WARNING}"
                     else
                         stop_service "Vault" port 8200 && echo -e "${CHECKMARK}" || echo -e "${WARNING}"
                     fi
@@ -258,8 +268,11 @@ if [ -n "$PORTS_IN_USE" ]; then
                 # Valkey - canonical method per OS
                 echo -ne "${DIM}${ARROW}${RESET} Stopping Valkey (port 6379)... "
                 if [ "$OS" = "linux" ]; then
-                    if check_exists service_systemctl valkey; then
-                        stop_service valkey systemctl && echo -e "${CHECKMARK}" || echo -e "${WARNING}"
+                    # One sanctioned resolver (lib/services.sh): Debian/Ubuntu
+                    # ship valkey-server.service, Fedora/Arch valkey.service.
+                    VUNIT=$(resolve_valkey_unit || true)
+                    if [ -n "$VUNIT" ] && systemctl is-active --quiet "$VUNIT"; then
+                        stop_service "${VUNIT%.service}" systemctl && echo -e "${CHECKMARK}" || echo -e "${WARNING}"
                     else
                         stop_service "Valkey" port 6379 && echo -e "${CHECKMARK}" || echo -e "${WARNING}"
                     fi
@@ -275,11 +288,11 @@ if [ -n "$PORTS_IN_USE" ]; then
                 # PostgreSQL - canonical method per OS
                 echo -ne "${DIM}${ARROW}${RESET} Stopping PostgreSQL (port 5432)... "
                 if [ "$OS" = "linux" ]; then
-                    # Fedora/RHEL uses postgresql-17 service name, Debian uses postgresql
-                    if check_exists service_systemctl postgresql-17; then
-                        stop_service postgresql-17 systemctl && echo -e "${CHECKMARK}" || echo -e "${WARNING}"
-                    elif check_exists service_systemctl postgresql; then
-                        stop_service postgresql systemctl && echo -e "${CHECKMARK}" || echo -e "${WARNING}"
+                    # One sanctioned resolver (lib/services.sh): PGDG Fedora
+                    # ships postgresql-17.service, Debian/Arch postgresql.service.
+                    PUNIT=$(resolve_pg_unit || true)
+                    if [ -n "$PUNIT" ] && systemctl is-active --quiet "$PUNIT"; then
+                        stop_service "${PUNIT%.service}" systemctl && echo -e "${CHECKMARK}" || echo -e "${WARNING}"
                     else
                         stop_service "PostgreSQL" port 5432 && echo -e "${CHECKMARK}" || echo -e "${WARNING}"
                     fi
@@ -609,7 +622,7 @@ else
 fi
 
 # Systemd service option (Linux only)
-echo -e "${BOLD}${BLUE}9. Systemd Service${RESET} ${DIM}(OPTIONAL - Linux only, auto-start on boot)${RESET}"
+echo -e "${BOLD}${BLUE}9. Service Supervision${RESET} ${DIM}(OPTIONAL - auto-start on boot; systemd on Linux, launchd on macOS)${RESET}"
 if [ "$OS" = "linux" ]; then
     read -p "$(echo -e ${CYAN}Install as systemd service?${RESET}) (y/n): " SYSTEMD_INPUT
     if [[ "$SYSTEMD_INPUT" =~ ^[Yy](es)?$ ]]; then
@@ -629,8 +642,14 @@ if [ "$OS" = "linux" ]; then
     fi
 elif [ "$OS" = "macos" ]; then
     CONFIG_INSTALL_SYSTEMD="no"
-    CONFIG_START_MIRA_NOW="no"
-    STATUS_SYSTEMD="${DIM}N/A (macOS)${RESET}"
+    read -p "$(echo -e ${CYAN}Start MIRA now and at every login via launchd?${RESET}) (y/n): " START_NOW_INPUT
+    if [ -z "$START_NOW_INPUT" ] || [[ "$START_NOW_INPUT" =~ ^[Yy](es)?$ ]]; then
+        CONFIG_START_MIRA_NOW="yes"
+        STATUS_SYSTEMD="${CHECKMARK} LaunchAgent will be installed and started"
+    else
+        CONFIG_START_MIRA_NOW="no"
+        STATUS_SYSTEMD="${CHECKMARK} LaunchAgent will be installed (starts at login)"
+    fi
 fi
 
 fi

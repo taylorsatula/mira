@@ -42,11 +42,16 @@ if [ "$OS" = "linux" ]; then
 
     run_quiet sudo chmod +x /usr/local/bin/vault
 
-    # Set SELinux context for vault binary on Fedora/RHEL (if SELinux is enabled)
+    # Persistent SELinux label for the vault binary on Fedora/RHEL. chcon is
+    # ephemeral — any restorecon/relabel reverts it and Vault then fails to
+    # exec from systemd. semanage records the rule in policy (-a add, -m
+    # modify when a re-deploy finds it already there) and restorecon applies
+    # it. semanage ships in policycoreutils-python-utils, installed by the
+    # dependencies.sh dnf branch.
     if [ "$DISTRO" = "fedora" ] && command -v getenforce &> /dev/null; then
         if [ "$(getenforce)" != "Disabled" ]; then
-            run_with_status "Setting SELinux context for Vault binary" \
-                sudo chcon -t bin_t /usr/local/bin/vault
+            run_with_status "Labeling Vault binary for SELinux (persistent)" \
+                bash -c "sudo semanage fcontext -a -t bin_t /usr/local/bin/vault 2>/dev/null || sudo semanage fcontext -m -t bin_t /usr/local/bin/vault; sudo restorecon -F /usr/local/bin/vault"
         fi
     fi
 elif [ "$OS" = "macos" ]; then
@@ -65,11 +70,14 @@ run_with_status "Creating Vault directories" \
 run_with_status "Setting Vault directory ownership" \
     sudo chown -R $MIRA_USER:$MIRA_GROUP /opt/vault
 
-# Set SELinux context for /opt/vault on Fedora/RHEL (if SELinux is enabled)
+# Persistent SELinux labels for /opt/vault on Fedora/RHEL (see the binary
+# block above for why semanage+restorecon, not chcon). var_lib_t is the
+# service-data type Vault's file backend needs to read/write under an
+# enforcing policy.
 if [ "$OS" = "linux" ] && [ "$DISTRO" = "fedora" ] && command -v getenforce &> /dev/null; then
     if [ "$(getenforce)" != "Disabled" ]; then
-        run_with_status "Setting SELinux context for Vault directories" \
-            sudo chcon -R -t var_lib_t /opt/vault
+        run_with_status "Labeling Vault directories for SELinux (persistent)" \
+            bash -c "sudo semanage fcontext -a -t var_lib_t '/opt/vault(/.*)?' 2>/dev/null || sudo semanage fcontext -m -t var_lib_t '/opt/vault(/.*)?'; sudo restorecon -RF /opt/vault"
     fi
 fi
 
@@ -133,20 +141,52 @@ EOF
     start_service vault.service systemctl
     sleep 2
 elif [ "$OS" = "macos" ]; then
-    echo -ne "${DIM}${ARROW}${RESET} Starting Vault service... "
-    # Start Vault in the background
-    vault server -config=/opt/vault/config/vault.hcl > /opt/vault/logs/vault.log 2>&1 &
-    VAULT_PID=$!
-    echo $VAULT_PID > /opt/vault/vault.pid
-    sleep 2
+    echo -ne "${DIM}${ARROW}${RESET} Installing Vault launchd agent... "
+    # Supervisor parity with the vault.service unit above: a per-user
+    # LaunchAgent with RunAtLoad+KeepAlive starts Vault at login and
+    # restarts it on crash. A bare backgrounded process (the old path)
+    # survived neither logout nor reboot while the deploy still claimed
+    # "service configured and running".
+    VAULT_BIN=$(command -v vault)
+    mkdir -p "$HOME/Library/LaunchAgents"
+    cat > "$HOME/Library/LaunchAgents/com.mira.vault.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mira.vault</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${VAULT_BIN}</string>
+        <string>server</string>
+        <string>-config=/opt/vault/config/vault.hcl</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/opt/vault</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/opt/vault/logs/vault.log</string>
+    <key>StandardErrorPath</key>
+    <string>/opt/vault/logs/vault.log</string>
+</dict>
+</plist>
+EOF
+    echo -e "${CHECKMARK}"
 
-    # Verify Vault started
-    if ! kill -0 $VAULT_PID 2>/dev/null; then
+    echo -ne "${DIM}${ARROW}${RESET} Starting Vault service... "
+    # One sanctioned launchd reload path (lib/services.sh:launchd_reload_agent):
+    # re-deploys must replace a loaded agent, and killing the process alone
+    # would just make KeepAlive resurrect it.
+    if ! launchd_reload_agent "$HOME/Library/LaunchAgents/com.mira.vault.plist"; then
         echo -e "${ERROR}"
-        print_error "Vault failed to start. Check /opt/vault/logs/vault.log for details."
+        print_error "Vault launchd agent failed to load. Check /opt/vault/logs/vault.log"
         exit 1
     fi
-    echo -e "${CHECKMARK} ${DIM}PID $VAULT_PID${RESET}"
+    echo -e "${CHECKMARK} ${DIM}(com.mira.vault)${RESET}"
 fi
 
 print_success "Vault service configured and running"
@@ -200,12 +240,29 @@ fi
 print_header "Step 11: Auto-Unseal Configuration"
 
 echo -ne "${DIM}${ARROW}${RESET} Creating unseal script... "
+# One script for every platform. systemd runs it as a oneshot ordered
+# After=vault.service; launchd runs it at login with NO ordering guarantee,
+# so the bounded wait for the server lives here. Idempotent: unsealing an
+# already-unsealed Vault is a no-op success (the old unconditional call
+# exited 400 on re-runs, marking vault-unseal.service failed).
+# The PATH prefix covers launchd's minimal environment (brew vault) and is
+# a no-op on Linux.
 cat > /opt/vault/unseal.sh <<'EOF'
 #!/bin/bash
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 export VAULT_ADDR='http://127.0.0.1:8200'
-sleep 5
-UNSEAL_KEY=$(grep 'Unseal Key 1:' /opt/vault/init-keys.txt | awk '{print $NF}')
-vault operator unseal "$UNSEAL_KEY"
+for i in $(seq 1 60); do
+    curl -sf http://127.0.0.1:8200/v1/sys/seal-status > /dev/null 2>&1 && break
+    sleep 1
+done
+if ! curl -sf http://127.0.0.1:8200/v1/sys/seal-status > /dev/null 2>&1; then
+    echo "unseal.sh: vault not reachable after 60 s" >&2
+    exit 1
+fi
+if curl -sf http://127.0.0.1:8200/v1/sys/seal-status | grep -q '"sealed":true'; then
+    UNSEAL_KEY=$(grep 'Unseal Key 1:' /opt/vault/init-keys.txt | awk '{print $NF}')
+    vault operator unseal "$UNSEAL_KEY"
+fi
 EOF
 echo -e "${CHECKMARK}"
 
@@ -233,7 +290,33 @@ EOF
     run_with_status "Enabling auto-unseal service" \
         sudo systemctl enable vault-unseal.service
 elif [ "$OS" = "macos" ]; then
-    print_info "On macOS, manually unseal Vault after restart using: /opt/vault/unseal.sh"
+    echo -ne "${DIM}${ARROW}${RESET} Installing auto-unseal launchd agent... "
+    cat > "$HOME/Library/LaunchAgents/com.mira.vault.unseal.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mira.vault.unseal</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/opt/vault/unseal.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/opt/vault/logs/unseal.log</string>
+    <key>StandardErrorPath</key>
+    <string>/opt/vault/logs/unseal.log</string>
+</dict>
+</plist>
+EOF
+    if ! launchd_reload_agent "$HOME/Library/LaunchAgents/com.mira.vault.unseal.plist"; then
+        echo -e "${WARNING} ${DIM}(unseal agent failed to load; run /opt/vault/unseal.sh manually after restarts)${RESET}"
+    else
+        echo -e "${CHECKMARK} ${DIM}(com.mira.vault.unseal)${RESET}"
+    fi
 fi
 
 print_success "Auto-unseal configured"

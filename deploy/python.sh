@@ -55,14 +55,11 @@ fi
 
 print_header "Step 3: MIRA Download & Installation"
 
-# Determine user/group for ownership
-if [ "$OS" = "linux" ]; then
-    MIRA_USER="$(whoami)"
-    MIRA_GROUP="$(id -gn)"
-elif [ "$OS" = "macos" ]; then
-    MIRA_USER="$(whoami)"
-    MIRA_GROUP="staff"
-fi
+# Ownership: the invoking account and its actual primary group on every
+# platform — the macOS arm used to hardcode `staff`, which breaks
+# enterprise/LDAP accounts whose primary group differs.
+MIRA_USER="$(whoami)"
+MIRA_GROUP="$(id -gn)"
 
 run_with_status "Creating /opt/mira/app directory" \
     sudo mkdir -p /opt/mira/app
@@ -311,25 +308,28 @@ if [ "${CONFIG_INSTALL_PLAYWRIGHT}" = "yes" ]; then
         exit 1
     fi
 
-    # Check if Playwright Chromium is already installed
-    PLAYWRIGHT_CACHE="$HOME/.cache/ms-playwright"
-    echo -ne "${DIM}${ARROW}${RESET} Checking Playwright cache... "
-    if [ -d "$PLAYWRIGHT_CACHE" ] && ls "$PLAYWRIGHT_CACHE"/chromium-* >/dev/null 2>&1; then
-        echo -e "${CHECKMARK} ${DIM}(already installed)${RESET}"
-        print_info "To update browsers: venv/bin/playwright install chromium"
+    # Let Playwright itself decide whether the browser is present: its
+    # `install chromium` is build-specific and idempotent (a fast no-op when
+    # the exact build it wants is already cached). A directory-existence
+    # pre-check is build-agnostic — a stale cache from an older Playwright
+    # skipped the download and left chromium unlaunchable (observed live on
+    # macOS with chromium-1234 cached and build 1243 required).
+    if [ "$LOUD_MODE" = true ]; then
+        print_step "Installing Playwright Chromium browser..."
+        venv/bin/playwright install chromium
     else
-        echo -e "${DIM}(not found)${RESET}"
-        if [ "$LOUD_MODE" = true ]; then
-            print_step "Installing Playwright Chromium browser..."
-            venv/bin/playwright install chromium
-        else
-            (venv/bin/playwright install chromium > /dev/null 2>&1) &
-            show_progress $! "Installing Playwright Chromium"
-        fi
+        (venv/bin/playwright install chromium > /dev/null 2>&1) &
+        show_progress $! "Installing Playwright Chromium"
     fi
 
-    # System dependencies - optional, may fail on newer Ubuntu
-    if [ "$OS" = "linux" ]; then
+    # System dependencies: `playwright install-deps` shells out to apt-get —
+    # upstream supports Debian-family only. On Fedora/Arch the Chromium
+    # runtime libs are installed by dependencies.sh's system-package step, so
+    # running it there would only produce a spurious apt failure warning.
+    if [ "$OS" = "linux" ] && [ "$DISTRO" != "debian" ]; then
+        echo -ne "${DIM}${ARROW}${RESET} Playwright system dependencies... "
+        echo -e "${CHECKMARK} ${DIM}(installed with system packages)${RESET}"
+    elif [ "$OS" = "linux" ]; then
         echo -ne "${DIM}${ARROW}${RESET} Installing Playwright system dependencies... "
         if sudo venv/bin/playwright install-deps > /tmp/playwright-deps.log 2>&1; then
             echo -e "${CHECKMARK}"

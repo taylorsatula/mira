@@ -5,6 +5,105 @@
 # Requires: lib/output.sh sourced first
 # Requires: OS variable set for db/db_user checks
 
+# Port occupancy probe — the single sanctioned mechanism for every caller.
+# Tool ladder: lsof → ss → netstat. lsof is guaranteed on macOS; ss (iproute2)
+# is guaranteed on every supported Linux target; netstat is the legacy rung.
+# A clean minimal system may have only ss — probing with lsof alone made the
+# pre-package-install port check fail on stock Debian/Fedora images.
+# Returns: 0 = occupied, 1 = free, 2 = indeterminate (no probe tool at all;
+# callers must fail loud, never treat 2 as free).
+# Usage: port_probe_status PORT
+port_probe_status() {
+    local port="$1"
+    if command -v lsof &> /dev/null; then
+        lsof -Pi ":$port" -sTCP:LISTEN -t &> /dev/null && return 0 || return 1
+    elif command -v ss &> /dev/null; then
+        ss -ltn "sport = :$port" | tail -n +2 | grep -q . && return 0 || return 1
+    elif command -v netstat &> /dev/null; then
+        # Portable form: GNU renders :PORT, BSD/macOS renders .PORT; -ltn is
+        # GNU-only, so parse the generic listing and require a LISTEN row.
+        netstat -an | grep -i listen | grep -qE "[:.]$port( |\$)" && return 0 || return 1
+    fi
+    return 2
+}
+
+# Re-establish sudo elevation if the credential timestamp was lost.
+# Homebrew clears the sudo ticket as part of its startup checks (observed
+# live on brew 7.0.7: `sudo -n true` fails immediately after any brew
+# command), so a deploy that interleaves brew and sudo — every macOS
+# install — must re-probe or die at its next sudo with "Password:" on a
+# session nobody is watching. With passwordless sudo (headless/CI) the
+# probe passes silently; on a terminal the user is prompted again; with
+# neither, fail loud with the two real options.
+ensure_sudo() {
+    if ! sudo -n true 2>/dev/null; then
+        if [ -t 0 ]; then
+            print_warning "Re-authenticating sudo (Homebrew clears the credential timestamp)..."
+            sudo -v
+        else
+            print_error "sudo credentials were lost (Homebrew clears the ticket) and this session has no terminal."
+            print_info "Re-run from a terminal, or configure passwordless sudo for unattended installs."
+            exit 1
+        fi
+    fi
+}
+
+# (Re)load a per-user LaunchAgent idempotently — the one sanctioned launchd
+# path for every MIRA agent. bootout is asynchronous: a bootstrap issued
+# while the old instance is still tearing down fails with "Bootstrap failed:
+# 5: Input/output error" (observed live on macOS 15). Wait for the removal
+# to settle, then bootstrap + enable. Returns non-zero when the load fails.
+# Usage: launchd_reload_agent /path/to/<label>.plist
+launchd_reload_agent() {
+    local plist="$1"
+    local label
+    label=$(basename "$plist" .plist)
+    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+    local i
+    for i in $(seq 1 20); do
+        launchctl print "gui/$(id -u)/$label" > /dev/null 2>&1 || break
+        sleep 0.5
+    done
+    launchctl bootstrap "gui/$(id -u)" "$plist" && launchctl enable "gui/$(id -u)/$label"
+}
+
+# CPU count for parallel builds: nproc on GNU/Linux, sysctl on macOS/BSD
+# (stock macOS has no nproc). No silent fallback — if neither exists the
+# build fails loudly, which is the honest signal.
+cpu_count() {
+    nproc 2>/dev/null || sysctl -n hw.ncpu
+}
+
+# Resolve the PostgreSQL systemd unit this host actually ships.
+# PGDG installs (Fedora) provide postgresql-17.service; Debian/Ubuntu and
+# Arch ship postgresql.service (postgresql-common wrapper / native unit).
+# Existence-based (systemctl cat), not distro-name-based: a wrong name in a
+# Requires= dependency makes systemd refuse to start mira.service.
+# Echoes the unit name; returns 1 when neither unit exists.
+resolve_pg_unit() {
+    if systemctl cat postgresql-17.service > /dev/null 2>&1; then
+        echo "postgresql-17.service"
+    elif systemctl cat postgresql.service > /dev/null 2>&1; then
+        echo "postgresql.service"
+    else
+        return 1
+    fi
+}
+
+# Resolve the Valkey systemd unit this host actually ships.
+# Ubuntu/Debian's valkey-server package installs valkey-server.service
+# (redis-style naming); Fedora's and Arch's valkey package installs
+# valkey.service. Echoes the unit name; returns 1 when neither exists.
+resolve_valkey_unit() {
+    if systemctl cat valkey-server.service > /dev/null 2>&1; then
+        echo "valkey-server.service"
+    elif systemctl cat valkey.service > /dev/null 2>&1; then
+        echo "valkey.service"
+    else
+        return 1
+    fi
+}
+
 # Check if something exists with consistent pattern
 # Usage: check_exists TYPE TARGET [EXTRA]
 # Types: file, dir, command, package, db, db_user, service_systemctl, service_brew
@@ -117,13 +216,20 @@ stop_service() {
             ;;
         port)
             local port="$extra"
+            local pids=""
+            # `|| true`: an empty result makes lsof/grep exit non-zero, which
+            # must read as "nothing on port", never as a failed command.
             if command -v lsof &> /dev/null; then
-                local pids=$(lsof -ti ":$port" 2>/dev/null)
-                if [ -z "$pids" ]; then
-                    return 0  # Nothing on port
-                fi
-                kill $pids 2>/dev/null
+                pids=$(lsof -ti ":$port" 2>/dev/null || true)
+            elif command -v ss &> /dev/null; then
+                # Non-root sees only own-user pids here — same visibility as lsof
+                pids=$(ss -ltnp "sport = :$port" 2>/dev/null | tail -n +2 \
+                    | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true)
             fi
+            if [ -z "$pids" ]; then
+                return 0  # Nothing on port
+            fi
+            kill $pids 2>/dev/null || true
             ;;
     esac
 }
