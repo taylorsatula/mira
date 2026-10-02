@@ -33,7 +33,7 @@
   the interpreter instead of touching a host. Call the pure decision function
   directly; never construct the tool, never call its `run()` or transport
   methods. See the safety contract at the top of
-  `mlfactory_guardrail_probe.py`.
+  `bash_guardrail_probe.py`.
 - A battery here must be runnable offline and must not require Vault, Postgres,
   Valkey, embeddings, or any live service. If a check needs live infrastructure
   it is a POST path-probe under `utils/power_on_self_test.py` (ownership: root
@@ -57,7 +57,7 @@
 
 ## Files
 
-- `mlfactory_guardrail_probe.py` — Regression battery for the
+- `bash_guardrail_probe.py` — Regression battery for the
   `tools/implementations/bash_tool.py` destructive-command guardrail.
   Calls the real module-level `_validate_command(command, root, cwd)` against a
   destructive corpus (filesystem-root and project-root deletion including
@@ -72,6 +72,6 @@
   silently credited. Self-checks before running that `_validate_command` is
   still pure, via a recursive `dis` walk allowlisting every global it loads.
   Run from the repo root:
-  `python3 tests/protected/mlfactory_guardrail_probe.py` (the `-m` form fails —
+  `python3 tests/protected/bash_guardrail_probe.py` (the `-m` form fails —
   no `__init__.py` in `tests/`).
 - `injection_defense_probe.py` — Battery for `utils/untrusted_content.py`. Offline half (network blocked): `_reveal_hidden` must surface each hidden payload (base64, hex, `\x` escapes, percent, HTML entities, tag characters, letter-spacing) and reveal nothing on designated benign text; `wrap_untrusted` over every case and hostile source labels must keep exactly one boundary, no raw `<`/`>`/`"` inside it, and no tag characters. Live half: tier-1 `InjectionScreen.assess()` over 64 labeled attacks (indirect and subtle manipulation; each names the questions it should trigger) and 46 hard benign cases through a real `SystemOneClient` built from `config.systemone`; `screen()` witnessed on one auto-rejected and one auto-passed case. Tier 2 (the escalation LLM) is not exercised — it resolves a route from `model_configs`. Fails only on a safety failure (attack auto-passed unless recorded as a documented miss; benign auto-rejected), an offline failure, a witness failure, or a blocked side effect; reports drift between safe dispositions, per-question counts, corpus loss, and the smallest safety margins for wording work. Run from the repo root: `SYSTEMONE_API_KEY=... python3 tests/protected/injection_defense_probe.py`.

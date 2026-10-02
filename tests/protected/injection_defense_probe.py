@@ -87,7 +87,7 @@ if _REPO_ROOT not in sys.path:
 sys.dont_write_bytecode = True
 
 # -- audit barrier ------------------------------------------------------------
-# Event names match tests/protected/mlfactory_guardrail_probe.py, where each is
+# Event names match tests/protected/bash_guardrail_probe.py, where each is
 # verified genuine for CPython 3.12.
 _BLOCKED_AUDIT_EVENTS = frozenset({
     "subprocess.Popen", "os.exec", "os.posix_spawn", "os.system", "os.fork",

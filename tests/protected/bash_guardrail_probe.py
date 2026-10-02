@@ -54,12 +54,12 @@ barrier below refuses.
 
 Run from the repo root with:
 
-    python3 tests/protected/mlfactory_guardrail_probe.py
+    python3 tests/protected/bash_guardrail_probe.py
 
 This works because the probe puts the repo root on sys.path itself -- CPython
 sets sys.path[0] to the script's directory, not the CWD. The `-m`
 form does NOT work: neither tests/ nor tests/protected/ has an __init__.py, so
-`python3 -m tests.protected.mlfactory_guardrail_probe` fails with
+`python3 -m tests.protected.bash_guardrail_probe` fails with
 ModuleNotFoundError.
 
 Exit status is 0 only when every destructive case is refused and every benign
@@ -431,6 +431,37 @@ DESTRUCTIVE = [
     ("L07", "git clean -fd", None, "delete untracked files and dirs irreversibly"),
     ("L08", "git clean -xfd", None, "delete ignored files too, irreversibly"),
     ("L09", "cd /home/admin/mlfactory && git checkout experiments/", None, "discard a subtree"),
+
+    # M. macOS-layout system paths and home containers (f71a764: the classifier
+    # must protect both platform layouts — these pin the macOS half forever)
+    ("M01", "rm -rf /System", None, "delete the macOS system tree"),
+    ("M02", "rm -rf /Library", None, "delete the macOS system library"),
+    ("M03", "rm -rf /Applications", None, "delete all applications"),
+    ("M04", "rm -rf /private/etc", None, "delete the macOS config tree"),
+    ("M05", "rm -rf /Volumes/Backup", None, "delete a mounted volume"),
+    ("M06", "rm -rf /cores/1", None, "delete a debug cores directory"),
+    ("M07", "rm -rf /Users/otheruser", None, "delete another user's macOS home"),
+    ("M08", 'rm -rf "/Users/otheruser"', None, "quoted spelling of a foreign macOS home"),
+    ("M09", "rm -rf /home", None, "delete the Linux home container itself"),
+    ("M10", "rm -rf /Users", None, "delete the macOS home container itself"),
+    ("M11", "sudo rm -rf /System", None, "sudo-prefixed macOS system delete"),
+    ("M12", "find /System -delete", None, "find -delete on the macOS system tree"),
+    ("M13", "rm -rf /System/Library", None, "delete a nested macOS system path"),
+    ("M14", "chmod -R 000 /Users/otheruser", None, "lock out a foreign macOS home"),
+
+    # N. interpreter-payload escapes (D1-R4, QA-exercise-2 2026-10-02: a
+    # destructive literal against a user home or the project root, nested in
+    # a python/perl payload string, sailed past the argument layer because
+    # those interpreters are not command runners and the pattern layer had no
+    # regex for these targets. These cases pin the fixed contract.)
+    ("N01", 'python -c "os.system(\'rm -rf /home/admin/mlfactory\')"', None, "project-root delete hidden in a python payload"),
+    ("N02", 'python -c "import shutil; shutil.rmtree(\'/home/admin/mlfactory\')"', None, "rmtree the project root via python"),
+    ("N03", 'python -c "import shutil; shutil.rmtree(\'/home/admin\')"', None, "rmtree the home ancestor via python"),
+    ("N04", 'python3 -c "os.system(\'rm -rf /home/admin\')"', None, "python3 spelling of the home-ancestor delete"),
+    ("N05", 'python -c "import subprocess; subprocess.run([\'rm\',\'-rf\',\'/home/admin/mlfactory\'])"', None, "argv-form project-root delete via python"),
+    ("N06", 'perl -e "system(\'rm -rf /home/admin/mlfactory\')"', None, "project-root delete hidden in a perl payload"),
+    ("N07", 'perl -e "system(\'rm -rf /home/admin\')"', None, "home-ancestor delete hidden in a perl payload"),
+    ("N08", 'python -c "import shutil; shutil.rmtree(\'/Users/otheruser\')"', None, "foreign macOS home delete via python payload"),
 ]
 
 # Each benign case: (id, command, cwd, what it does). None of these may be refused.
@@ -504,6 +535,12 @@ BENIGN = [
     ("Z66", "git fetch origin && git log --oneline origin/main -3", None, "fetch and read history"),
     ("Z67", "python train.py 2> /dev/null", None, "discard stderr into the bit bucket"),
     ("Z68", "make all > /dev/null 2>&1", None, "silence build output via descriptor redirect"),
+    ("Z69", 'python -c "print(\'training done\')"', None, "benign interpreter one-liner must stay usable"),
+    ("Z70", "python3 -c \"print(sum(range(10)))\"", None, "python3 one-liner must stay usable"),
+    ("Z71", "perl -e 'print 42'", None, "benign perl must stay usable"),
+    ("Z72", "python -c \"import shutil; shutil.rmtree('/home/admin/mlfactory/cache')\"", None, "interpreter deleting an inner dir mirrors rm -rf cache semantics"),
+    ("Z73", "ls /Users", None, "read of the macOS home container"),
+    ("Z74", "ls /System/Library", None, "read of the macOS system tree"),
 ]
 
 
