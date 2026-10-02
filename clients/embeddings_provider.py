@@ -203,6 +203,20 @@ class EmbeddingsProvider(ABC):
         return result
 
 
+# Serializes every call into a local model. PyTorch's MPS backend is NOT
+# thread-safe, and sentence-transformers auto-selects it on Apple Silicon
+# (`model.device == mps:0`, verified live on macOS 15 / torch 2.x). Two
+# concurrent encodes — exactly the two-thread path in
+# cns/services/orchestrator.py:_compute_embeddings_parallel — race in the
+# Metal shader-kernel cache, observed live both as a hang past the 60 s encode
+# bound and as a SIGSEGV inside MetalShaderLibrary::exec_unary_kernel.
+# Module-level rather than per-instance: every provider in this process drives
+# the same device and must serialize against the same lock. Single-threaded
+# MPS is correct and fast (8 sequential encodes in 0.22 s measured), so the
+# serialization costs nothing measurable.
+_LOCAL_INFERENCE_LOCK = threading.Lock()
+
+
 class LocalEmbeddingsProvider(EmbeddingsProvider):
     """mdbr-leaf-ir-asym through sentence-transformers (asymmetric, 768 dimensions)."""
 
@@ -241,9 +255,11 @@ class LocalEmbeddingsProvider(EmbeddingsProvider):
 
     def _encode(self, texts: List[str], role: EmbeddingRole) -> np.ndarray:
         batch_size = config.lt_memory.embeddings_batch_size
-        if role == "query":
-            return self.model.encode_query(texts, batch_size=batch_size)
-        return self.model.encode_document(texts, batch_size=batch_size)
+        # Serialized: the MPS backend is not thread-safe (_LOCAL_INFERENCE_LOCK).
+        with _LOCAL_INFERENCE_LOCK:
+            if role == "query":
+                return self.model.encode_query(texts, batch_size=batch_size)
+            return self.model.encode_document(texts, batch_size=batch_size)
 
 
 def request_embeddings(
