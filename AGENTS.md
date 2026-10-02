@@ -332,13 +332,23 @@ up healthy with live model routes and no inject. To redeploy onto an already-run
 VM, run `deploy/deploy.sh --config <yml> --local` by hand inside it.
 
 **Refresh the host's source snapshot after changing this worktree** (the host deploys
-from its copy, not from here):
+from its copy, not from here). The remote side MUST clear the worktree before
+extracting: a tar overlay never deletes files removed from the source, so a stale
+overlay silently ships retired modules (observed 2026-09-30: a quarantined tool left
+in `tools/implementations/` parked MIRA's boot gate with an ImportError). The clear
+preserves the host-local state the tarball excludes and cannot restore (`.git`,
+`venv`, `.env`, `data`, `logs`, `scratch`, `.claude`, `.DS_Store`) and removes
+everything else at the top level:
 
 ```bash
 cd ~/Programming/GitHub/mira-OSS && tar --exclude=.git --exclude=data --exclude=logs \
   --exclude=scratch --exclude=__pycache__ --exclude='*.pyc' --exclude=.env \
   --exclude=venv --exclude=.claude -czf - . | \
-  ssh "$LIBVIRT_HOST" 'tar -C "$MIRA_HOST_WORKTREE" -xzf -'
+  ssh "$LIBVIRT_HOST" 'mkdir -p "$MIRA_HOST_WORKTREE" \
+    && find "$MIRA_HOST_WORKTREE" -mindepth 1 -maxdepth 1 \
+    ! -name .git ! -name venv ! -name .env ! -name data ! -name logs \
+    ! -name scratch ! -name .claude ! -name .DS_Store -exec rm -rf {} + \
+    && tar -C "$MIRA_HOST_WORKTREE" -xzf -'
 ```
 
 **`deploy/deploy.sh --local` (added 2026-09-16):** installs MIRA from the CURRENT

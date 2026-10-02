@@ -21,6 +21,7 @@ next due activity day re-samples.
 import logging
 
 from agents.sidebar import WorkItem
+from agents.triggers.rule_filter import apply_trigger_rules
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,13 @@ class MemoryFloorTrigger:
 
     trigger_id = "memory_floor"
     interface_name = "memory_curator_floor"
+
+    # Filterable work-item context fields, derived from FloorContext
+    # (agents/implementations/memory_curator_agent.py): 'mode' is the only
+    # scalar string key — 'memories' is a list and not regex-matchable. This
+    # declaration is what the trigger-rules API validates 'field' against
+    # (agents/triggers/registry.py) and what rule_filter matches on.
+    FILTERABLE_FIELDS = ("mode",)
 
     # agent_class is resolved lazily at class-access time so registering this
     # trigger does not eagerly initialize the heavy infra clients that
@@ -98,7 +106,10 @@ class MemoryFloorTrigger:
             len(floor_memories), user_id, activity_days,
         )
 
-        return [WorkItem(
+        # The user's trigger-rules filter (opt-in: no rules → item passes
+        # unchanged). Discovery shaping, not a dispatch decision — the
+        # dispatcher still owns dedup below.
+        items = [WorkItem(
             item_id=item_id,
             interface_name=self.interface_name,
             context={
@@ -106,6 +117,7 @@ class MemoryFloorTrigger:
                 "memories": floor_memories,
             },
         )]
+        return apply_trigger_rules(user_id, self.trigger_id, items)
 
     def on_dispatched(self, user_id: str, item_id: str) -> None:
         """No side effects (floor curation leaves no IMAP-style flags)."""

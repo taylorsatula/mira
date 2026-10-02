@@ -1,3 +1,7 @@
+## Valid Section Anchors
+Every observation and check-in topic must be anchored to one of these sections:
+{section_id_list}
+
 ## Current User Model
 {current_user_model}
 

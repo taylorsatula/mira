@@ -38,14 +38,32 @@ CRITIC_MAX_ATTEMPTS = 3
 
 
 def _load_prompts() -> None:
-    """Load refinement and critic prompt templates (lazy, once per process)."""
+    """Load refinement and critic prompt templates (lazy, once per process).
+
+    The refinement system prompt is a template: its example's section anchors
+    ({example_section_a}/{example_section_b}) are filled from the assessable
+    section vocabulary — the same source validate_section_anchors() enforces —
+    so the example the model imitates can never drift from the taxonomy the
+    code checks (Generated, Not Transcribed).
+    """
     global _refinement_system_prompt, _critic_system_prompt, _critic_user_template
 
     if _refinement_system_prompt is not None:
         return
 
     from config.prompts.loader import load_prompt
-    _refinement_system_prompt = load_prompt("lora_refinement_system.txt")
+    from cns.services.system_prompt_parser import get_assessable_section_ids
+    from config import config
+    section_ids = get_assessable_section_ids(config.system_prompt)
+    if len(section_ids) < 2:
+        raise ValueError(
+            f"System prompt defines {len(section_ids)} assessable section(s); the "
+            "refinement prompt example needs at least 2"
+        )
+    _refinement_system_prompt = load_prompt("lora_refinement_system.txt").format(
+        example_section_a=section_ids[0],
+        example_section_b=section_ids[1],
+    )
     _critic_system_prompt = load_prompt("user_model_critic_system.txt")
     _critic_user_template = load_prompt("user_model_critic_user.txt")
 
@@ -147,6 +165,16 @@ def refine_lora(user_id: str, instructions: str) -> dict[str, str]:
     if not candidate_xml or not candidate_xml.strip():
         raise ValueError("LoRA refinement produced no output — try different instructions.")
 
+    # Deterministic section-anchor validation, before the preview is stored:
+    # an observation anchored to a section the system prompt does not define
+    # (e.g. a hallucinated anchor like "context") fails loud here with the
+    # valid set named — never stored as a preview, never left for the LLM
+    # critic or the user to catch. This also gates the critic-exhaustion
+    # circuit breaker above: an invalid anchor is not presentable.
+    from cns.services.system_prompt_parser import validate_section_anchors
+    from config import config
+    validate_section_anchors(candidate_xml, config.system_prompt)
+
     # Store preview in Valkey with TTL
     preview_id = str(uuid4())
     valkey_key = f"{_LORA_PREVIEW_PREFIX}:{user_id}:{preview_id}"
@@ -246,6 +274,9 @@ def _run_refinement(current_xml: str, instructions: str) -> str:
     assert _refinement_system_prompt is not None
 
     user_message = (
+        f"## Valid Section Anchors\n"
+        f"Every observation and check-in topic must be anchored to one of these "
+        f"sections:\n{_get_section_list()}\n\n"
         f"## Existing User Model\n{current_xml}\n\n"
         f"## Instructions\n{instructions.strip()}"
     )
@@ -266,6 +297,9 @@ def _rerun_refinement_with_feedback(
     assert _refinement_system_prompt is not None
 
     user_message = (
+        f"## Valid Section Anchors\n"
+        f"Every observation and check-in topic must be anchored to one of these "
+        f"sections:\n{_get_section_list()}\n\n"
         f"## Existing User Model\n{current_xml}\n\n"
         f"## Instructions\n{instructions.strip()}\n\n"
         f"## Quality Critic Feedback\n"

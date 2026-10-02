@@ -17,13 +17,20 @@ from lt_memory.vector_ops import VectorOps
 logger = logging.getLogger(__name__)
 
 
-def _persist_llm_entities(
+def persist_llm_entities(
     user_id: str,
     memories: list[ExtractedMemory],
     memory_ids: list[UUID],
     db: LTMemoryDB,
 ) -> int:
-    """Persist LLM-extracted entity links for stored memories."""
+    """Persist LLM-extracted entity links for stored memories.
+
+    The one sanctioned entity-linking treatment for every producer that
+    stores memories outside consolidation: extraction storage
+    (``store_and_tend_extraction``) and the pending-manual drain
+    (``cns/services/segment_collapse_handler.py``) both route their entity
+    links through here, so the two store paths cannot diverge on linking.
+    """
     if len(memories) != len(memory_ids):
         raise ValueError(
             f"Memory/ID length mismatch: {len(memories)} memories vs {len(memory_ids)} IDs"
@@ -104,7 +111,7 @@ def store_and_tend_extraction(
     memory_ids = vector_ops.store_memories_with_embeddings(memories)
 
     try:
-        _persist_llm_entities(user_id, memories, memory_ids, db)
+        persist_llm_entities(user_id, memories, memory_ids, db)
     except Exception:
         logger.exception(
             "Entity persistence failed after %d memories were stored; "
@@ -206,6 +213,7 @@ class DirectExecutionStrategy:
             response_text=response_text,
             short_to_uuid=payload.short_to_uuid,
             memory_context=payload.memory_context,
+            segment_id=segment_id,
         )
         if not result.memories:
             return []

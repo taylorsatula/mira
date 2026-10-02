@@ -244,12 +244,17 @@ class DomaindocTool(Tool):
         header: str,
         parent_header: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Get section by header, optionally under a parent. Raises ValueError if not found."""
+        """Get section by header, optionally under a parent. Raises ValueError if not found.
+
+        The parent resolves at any nesting depth (a subsection can itself be
+        targeted as a parent), so sub-subsections are addressable — mirrors the
+        API's DomainKnowledgeDomainHandler._get_section.
+        """
         normalized = self._normalize_section_name(header)
 
         if parent_header:
             # Get parent first, then find child under it
-            parent = self._get_section(db, domaindoc_id, parent_header)
+            parent = self._resolve_section_by_header(db, domaindoc_id, parent_header)
             results = db.fetchall(
                 "SELECT * FROM domaindoc_sections WHERE domaindoc_id = :doc_id AND header = :header AND parent_section_id = :parent_id",
                 {"doc_id": domaindoc_id, "header": normalized, "parent_id": parent["id"]}
@@ -266,6 +271,70 @@ class DomaindocTool(Tool):
                 raise ValueError(f"Section '{header}' not found")
 
         return db._decrypt_dict(results[0])
+
+    def _resolve_section_by_header(
+        self,
+        db: UserDataManager,
+        domaindoc_id: int,
+        header: str
+    ) -> Dict[str, Any]:
+        """Resolve a section by header at any nesting depth.
+
+        Parent targeting (parent="X") must find X whether X is a top-level
+        section, a subsection, or a sub-subsection — resolving only top-level
+        parents made depth-2 sections impossible to address. When a header
+        matches sections at several depths the shallowest wins (the match the
+        old top-level-only lookup would have returned); a header matching
+        several sections at the same depth is ambiguous and rejected rather
+        than silently targeting one of them.
+
+        Twin of cns/api/actions.py:DomainKnowledgeDomainHandler._resolve_section_by_header
+        (scheme owner — see cns/api/AGENTS.md). A cross-import from the tool
+        layer into the API layer is not sanctioned, so the resolution scheme is
+        replicated here faithfully; change both in the same commit.
+        """
+        normalized = self._normalize_section_name(header)
+        rows = db.fetchall(
+            "SELECT * FROM domaindoc_sections WHERE domaindoc_id = :doc_id AND header = :header ORDER BY id",
+            {"doc_id": domaindoc_id, "header": normalized}
+        )
+        if not rows:
+            raise ValueError(f"Section '{header}' not found")
+        if len(rows) > 1:
+            with_depth = [(self._section_depth(db, row), row) for row in rows]
+            min_depth = min(depth for depth, _ in with_depth)
+            shallowest = [row for depth, row in with_depth if depth == min_depth]
+            if len(shallowest) > 1:
+                raise ValueError(
+                    f"Section header '{normalized}' is ambiguous — it names sections under multiple "
+                    "parents at the same level. A parent target requires a unique header."
+                )
+            return db._decrypt_dict(shallowest[0])
+        return db._decrypt_dict(rows[0])
+
+    def _section_depth(self, db: UserDataManager, section: Dict[str, Any]) -> int:
+        """Nesting depth of a section: 0 = top-level, 1 = subsection, 2 = sub-subsection.
+
+        Twin of cns/api/actions.py:DomainKnowledgeDomainHandler._section_depth
+        (depth-accounting owner — see cns/api/AGENTS.md); replicated rather
+        than imported, change both in the same commit.
+        """
+        depth = 0
+        parent_id = section.get("parent_section_id")
+        seen = {section["id"]}
+        while parent_id is not None:
+            if parent_id in seen:
+                raise ValueError("Corrupt domaindoc section tree: parent cycle detected")
+            seen.add(parent_id)
+            parent = db.fetchone(
+                "SELECT id, parent_section_id FROM domaindoc_sections WHERE id = :id",
+                {"id": parent_id}
+            )
+            if not parent:
+                raise ValueError("Corrupt domaindoc section tree: parent section missing")
+            depth += 1
+            parent_id = parent.get("parent_section_id")
+        return depth
 
     def _get_all_sections(
         self,
@@ -311,7 +380,24 @@ class DomaindocTool(Tool):
         diff_data: Dict[str, Any],
         section_id: Optional[int] = None
     ) -> int:
-        """Record a version entry. Calculates version_num atomically via subquery."""
+        """Record a version entry. Calculates version_num atomically via subquery.
+
+        Converged with the actions API scheme (owner:
+        cns/api/actions.py:DomainKnowledgeDomainHandler._record_version, cited
+        in cns/api/AGENTS.md): version numbers are contiguous per section — the
+        subquery filters by domaindoc_id AND section_id, so each section's
+        history starts at 1 — and every section-scoped payload carries the
+        section's content as of this version under "content", so the API's
+        rollback_section restores tool-written versions (and vice versa). The
+        diff payload is sealed with the manager's Fernet before this raw
+        INSERT (raw execute does not apply the encrypted__ transparency), so
+        the row decrypts on read through db._decrypt_dict exactly like an
+        API-written row. The tool is the twin writer of the same table; the
+        API helper is not importable from the tool layer, so the scheme is
+        replicated here — change both in the same commit. Doc-level rows
+        (section_id None) number within their own NULL bucket and are not
+        restorable targets.
+        """
         now = format_utc_iso(utc_now())
 
         db.execute(
@@ -321,7 +407,8 @@ class DomaindocTool(Tool):
             VALUES (
                 :domaindoc_id,
                 :section_id,
-                (SELECT COALESCE(MAX(version_num), 0) + 1 FROM domaindoc_versions WHERE domaindoc_id = :domaindoc_id),
+                (SELECT COALESCE(MAX(version_num), 0) + 1 FROM domaindoc_versions
+                 WHERE domaindoc_id = :domaindoc_id AND section_id IS :section_id),
                 :operation,
                 :diff_data,
                 :now
@@ -331,14 +418,14 @@ class DomaindocTool(Tool):
                 "domaindoc_id": domaindoc_id,
                 "section_id": section_id,
                 "operation": operation,
-                "diff_data": json.dumps(diff_data),
+                "diff_data": db._encrypt_value(json.dumps(diff_data)),
                 "now": now
             }
         )
 
         result = db.fetchone(
-            "SELECT MAX(version_num) as ver FROM domaindoc_versions WHERE domaindoc_id = :doc_id",
-            {"doc_id": domaindoc_id}
+            "SELECT MAX(version_num) as ver FROM domaindoc_versions WHERE domaindoc_id = :doc_id AND section_id IS :section_id",
+            {"doc_id": domaindoc_id, "section_id": section_id}
         )
         return result.get("ver", 1)
 
@@ -706,16 +793,29 @@ class DomaindocTool(Tool):
                 "pinned": sec.get("pinned", False),
             }
 
-            # Find subsections
-            subsections = [
-                {
+            # Find subsections (depth 1), each with its sub-subsections (depth 2)
+            # — the trinket renders all three levels, so the overview must too
+            subsections: List[Dict[str, Any]] = []
+            for sub in all_sections:
+                if sub.get("parent_section_id") != sec["id"]:
+                    continue
+                sub_entry: Dict[str, Any] = {
                     "header": wrap_untrusted(sub["header"], "domaindoc_shared"),
                     "summary": wrap_untrusted(sub.get("encrypted__summary"), "domaindoc_shared") or "(no summary)",
                     "collapsed": sub.get("collapsed", False),
                 }
-                for sub in all_sections
-                if sub.get("parent_section_id") == sec["id"]
-            ]
+                subsubs = [
+                    {
+                        "header": wrap_untrusted(ss["header"], "domaindoc_shared"),
+                        "summary": wrap_untrusted(ss.get("encrypted__summary"), "domaindoc_shared") or "(no summary)",
+                        "collapsed": ss.get("collapsed", False),
+                    }
+                    for ss in all_sections
+                    if ss.get("parent_section_id") == sub["id"]
+                ]
+                if subsubs:
+                    sub_entry["subsubsections"] = subsubs
+                subsections.append(sub_entry)
             if subsections:
                 entry["subsections"] = subsections
 
@@ -944,7 +1044,7 @@ class DomaindocTool(Tool):
             {"now": now, "id": sec["id"]}
         )
 
-        self._record_version(db, domaindoc_id, "pin", {"section": sec["header"], **self._actor_suffix()}, sec["id"])
+        self._record_version(db, domaindoc_id, "pin", {"section": sec["header"], "content": sec.get("encrypted__content", ""), **self._actor_suffix()}, sec["id"])
         self._update_domaindoc_timestamp(db, domaindoc_id)
         return {"success": True, "pinned": sec["header"]}
 
@@ -970,7 +1070,7 @@ class DomaindocTool(Tool):
             {"now": now, "id": sec["id"]}
         )
 
-        self._record_version(db, domaindoc_id, "unpin", {"section": sec["header"], **self._actor_suffix()}, sec["id"])
+        self._record_version(db, domaindoc_id, "unpin", {"section": sec["header"], "content": sec.get("encrypted__content", ""), **self._actor_suffix()}, sec["id"])
         self._update_domaindoc_timestamp(db, domaindoc_id)
         return {"success": True, "unpinned": sec["header"]}
 
@@ -995,33 +1095,20 @@ class DomaindocTool(Tool):
         parent_section_id = None
 
         if parent:
-            # Creating a nested section - validate parent exists and depth limit
-            try:
-                parent_sec = self._get_section(db, domaindoc_id, parent)
-            except ValueError:
-                # Parent not found as top-level section - check if it's a subsection
-                subsec_check = db.fetchone(
-                    "SELECT id, parent_section_id FROM domaindoc_sections WHERE domaindoc_id = :doc_id AND header = :header",
-                    {"doc_id": domaindoc_id, "header": self._normalize_section_name(parent)}
-                )
-                if subsec_check and subsec_check.get("parent_section_id") is not None:
-                    # Parent is a subsection (depth 2) - a child under it would be at
-                    # depth 3, which is unreachable in render/traversal (bound: depth 2)
-                    raise ValueError(
-                        f"Maximum nesting depth is 2. '{parent}' is already a subsection; "
-                        "a subsection under it (depth 3) would be unreachable."
-                    )
-                else:
-                    raise  # Section truly not found
-
-            # Depth check: refuse if the parent is itself a subsection — the new
-            # section would land at depth 3, beyond the reachable bound of 2
-            if parent_sec.get("parent_section_id") is not None:
+            # Creating a nested section — resolve the parent at any depth and
+            # enforce the nesting bound. Unified contract (owner:
+            # cns/api/actions.py:DomainKnowledgeDomainHandler, cited in
+            # cns/api/AGENTS.md): depths 0/1/2 are supported on every surface
+            # and the trinket renders all three levels (TAG_NAMES[0..2] in
+            # working_memory/trinkets/domaindoc_trinket.py); only depth 3 — a
+            # child under a sub-subsection — is rejected. Twin implementation
+            # of _action_create_section's guard; change both in the same
+            # commit.
+            parent_sec = self._resolve_section_by_header(db, domaindoc_id, parent)
+            if self._section_depth(db, parent_sec) >= 2:
                 raise ValueError(
-                    f"Maximum nesting depth is 2. '{parent}' is already a subsection; "
-                    "a subsection under it (depth 3) would be unreachable."
+                    "Maximum nesting depth is 2. Cannot add children to a sub-subsection."
                 )
-
             parent_section_id = parent_sec["id"]
             # Get siblings for ordering
             all_sections = self._get_all_sections(db, domaindoc_id, parent_id=parent_section_id)
@@ -1070,7 +1157,7 @@ class DomaindocTool(Tool):
 
         self._record_version(db, domaindoc_id, "create_section", {
             "header": header,
-            "content_length": len(content),
+            "content": content,
             "insert_after": insert_after,
             "parent": parent,
             "expanded_by_default": start_expanded,
@@ -1115,6 +1202,7 @@ class DomaindocTool(Tool):
         self._record_version(db, domaindoc_id, "rename_section", {
             "old_name": old_name,
             "new_name": normalized_new,
+            "content": sec.get("encrypted__content", ""),
             "parent": parent,
             **self._actor_suffix()
         }, sec["id"])
@@ -1208,7 +1296,7 @@ class DomaindocTool(Tool):
             raise ValueError("reorder_sections requires 'order' parameter")
 
         if parent:
-            parent_sec = self._get_section(db, domaindoc_id, parent)
+            parent_sec = self._resolve_section_by_header(db, domaindoc_id, parent)
             all_sections = self._get_all_sections(db, domaindoc_id, parent_id=parent_sec["id"])
         else:
             all_sections = self._get_all_sections(db, domaindoc_id)
@@ -1281,6 +1369,7 @@ class DomaindocTool(Tool):
         self._record_version(db, domaindoc_id, "append", {
             "section": sec["header"],
             "appended_content": content,
+            "content": new_content,
             "result_length": len(new_content),
             "parent": parent,
             **self._actor_suffix()
@@ -1349,6 +1438,7 @@ class DomaindocTool(Tool):
             "find": find,
             "replace": replace,
             "replacements": count,
+            "content": new_content,
             "parent": parent,
             **self._actor_suffix()
         }, sec["id"])
@@ -1396,7 +1486,7 @@ class DomaindocTool(Tool):
             "section": sec["header"],
             "old_length": len(previous_content),
             "new_length": len(content),
-            "previous_content": previous_content,
+            "content": content,
             "parent": parent,
             **self._actor_suffix()
         }, sec["id"])

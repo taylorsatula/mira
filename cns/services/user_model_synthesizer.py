@@ -12,7 +12,12 @@ from typing import List, Literal, Optional
 
 from cns.infrastructure.feedback_repository import FeedbackRepository, FeedbackSignalRow
 from cns.infrastructure.feedback_tracker import FeedbackTracker
-from cns.services.system_prompt_parser import format_section_list, get_assessable_sections
+from cns.services.system_prompt_parser import (
+    format_section_list,
+    get_assessable_section_ids,
+    get_assessable_sections,
+    validate_section_anchors,
+)
 from clients.llm_provider import LLMProvider, get_llm_provider
 from config import config
 
@@ -82,7 +87,7 @@ class UserModelSynthesizer:
         self.llm_provider = llm_provider or get_llm_provider()
         self._load_prompts()
 
-        # Pre-compute section list for critic context
+        # Pre-compute section list for critic and synthesis prompt context
         raw_prompt = config.system_prompt
         sections = get_assessable_sections(raw_prompt)
         self._section_list = format_section_list(sections)
@@ -90,9 +95,25 @@ class UserModelSynthesizer:
         logger.info("UserModelSynthesizer initialized")
 
     def _load_prompts(self) -> None:
-        """Load synthesis and critic prompts."""
+        """Load synthesis and critic prompts.
+
+        The synthesis system prompt is a template: its changelog examples'
+        section names ({example_section_a}/{example_section_b}) are filled
+        from the assessable section vocabulary — the same source
+        validate_section_anchors() enforces — so the examples the model
+        imitates can never drift from the taxonomy the code checks.
+        """
         from config.prompts.loader import load_prompt
-        self._synthesis_system_prompt = load_prompt("user_model_synthesis_system.txt")
+        section_ids = get_assessable_section_ids(config.system_prompt)
+        if len(section_ids) < 2:
+            raise ValueError(
+                f"System prompt defines {len(section_ids)} assessable section(s); "
+                "the synthesis prompt examples need at least 2"
+            )
+        self._synthesis_system_prompt = load_prompt("user_model_synthesis_system.txt").format(
+            example_section_a=section_ids[0],
+            example_section_b=section_ids[1],
+        )
         self._synthesis_user_template = load_prompt("user_model_synthesis_user.txt")
         self._critic_system_prompt = load_prompt("user_model_critic_system.txt")
         self._critic_user_template = load_prompt("user_model_critic_user.txt")
@@ -137,7 +158,16 @@ class UserModelSynthesizer:
 
         # Critic validation loop
         for attempt in range(CRITIC_MAX_ATTEMPTS):
-            critic = self._validate_with_critic(candidate_xml)
+            # Deterministic section-anchor validation runs BEFORE the LLM
+            # critic: an invalid anchor is a code-checked failure, never left
+            # for the critic to catch. On failure it feeds the same retry loop
+            # (feedback names the valid set); exhaustion raises via the
+            # circuit breaker below, so no invalid anchor is ever published.
+            anchor_result = self._validate_section_anchors(candidate_xml)
+            if anchor_result.passed:
+                critic = self._validate_with_critic(candidate_xml)
+            else:
+                critic = anchor_result
 
             if critic.passed:
                 logger.info("User model passed critic validation (attempt %d)", attempt + 1)
@@ -190,6 +220,7 @@ class UserModelSynthesizer:
     ) -> str:
         """Run the synthesis LLM call and return raw XML output."""
         user_prompt = self._synthesis_user_template.format(
+            section_id_list=self._section_list,
             current_user_model=current_model_text,
             assessment_signals=signals_text
         )
@@ -208,6 +239,29 @@ class UserModelSynthesizer:
         )
 
         return self.llm_provider.extract_text_content(response)
+
+    def _validate_section_anchors(self, candidate_xml: str) -> CriticResult:
+        """
+        Deterministic section-anchor validation, run before the LLM critic.
+
+        Wraps system_prompt_parser.validate_section_anchors into the loop's
+        CriticResult shape: an invalid anchor fails validation with feedback
+        naming the valid set, the synthesis retry loop re-runs with that
+        feedback, and exhaustion raises CriticExhaustedError like any other
+        validation failure. The check itself is code, not the critic.
+        """
+        try:
+            validate_section_anchors(candidate_xml, config.system_prompt)
+        except ValueError as e:
+            logger.warning("Section anchor validation failed: %s", e)
+            return CriticResult(
+                passed=False,
+                feedback=(
+                    f"{e} Re-anchor every observation and check-in topic to a "
+                    "valid section."
+                )
+            )
+        return CriticResult(passed=True, feedback="")
 
     def _validate_with_critic(self, candidate_xml: str) -> CriticResult:
         """
@@ -277,6 +331,7 @@ class UserModelSynthesizer:
     ) -> str:
         """Rerun synthesis with critic feedback appended to the prompt."""
         user_prompt = self._synthesis_user_template.format(
+            section_id_list=self._section_list,
             current_user_model=current_model_text,
             assessment_signals=signals_text
         )

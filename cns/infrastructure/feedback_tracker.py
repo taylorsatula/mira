@@ -247,24 +247,38 @@ class FeedbackTracker:
 
     def reset_synthesis(self, user_id: str) -> None:
         """
-        Clear synthesis output and snapshot current activity days.
+        Reset the tracking row to the fresh-install baseline (initialize_user state).
+
+        Reset means what the API response says: the user model is gone AND
+        the synthesis countdown restarts from zero. Every tracking field the
+        tracker owns returns to its initialize_user value —
+        last_synthesis_output NULL, last_synthesis_at NULL, needs_checkin
+        FALSE, checkin_response NULL, activity_days_at_last_synthesis 0 — so
+        use_days_since_synthesis again equals cumulative_activity_days exactly
+        as on a fresh install. A pending
+        (unconsumed) check-in response is discarded with the model it
+        referred to — it is feedback about content the user just destroyed.
 
         Args:
             user_id: User ID
         """
         session_manager = get_shared_session_manager()
-        activity_days = get_user_cumulative_activity_days(user_id)
 
         with session_manager.get_session(user_id) as session:
             session.execute_single("""
                 UPDATE feedback_synthesis_tracking
                 SET last_synthesis_output = NULL,
-                    activity_days_at_last_synthesis = %s,
-                    needs_checkin = FALSE
+                    last_synthesis_at = NULL,
+                    activity_days_at_last_synthesis = 0,
+                    needs_checkin = FALSE,
+                    checkin_response = NULL
                 WHERE user_id = %s
-            """, (activity_days, user_id))
+            """, (user_id,))
 
-        logger.debug("User %s: reset synthesis output, snapshot activity_days=%d", user_id, activity_days)
+        # Logged only after the session exits: the commit in __exit__ re-raises
+        # on failure, so "reset to baseline" is never reported for a reset that
+        # did not persist.
+        logger.info("User %s: synthesis tracking reset to fresh-install baseline", user_id)
 
     def acknowledge_checkin(self, user_id: str, checkin_response: str) -> None:
         """

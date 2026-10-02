@@ -1,0 +1,7 @@
+Tag the entities in each stored memory below.
+
+<memories>
+{memories}
+</memories>
+
+Respond with only the JSON array described in the system instructions.

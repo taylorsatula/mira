@@ -1412,7 +1412,7 @@ Gated is for availability that genuinely varies at runtime. A tool that is simpl
 
 **See `tools/repo.py:Tool.validate_config`** for the base pattern; `email_tool.py:validate_config` is the live override.
 
-Tools that need custom validation (connection tests, auto-discovery) can override the `validate_config` classmethod. This is called by the `/actions/tools/{tool}/validate` API endpoint.
+Tools that need custom validation (connection tests, auto-discovery) can override the `validate_config` classmethod. This is called by the `/actions/tools/{tool}/validate` API endpoint — only when the tool actually overrides it; without an override the response reports `live_validation: false` and a schema-checked-only message, never a bare success claim. Incoming config data (PUT and validate) is first checked by `tools/registry.py:registry.validate_config_data`, which rejects unknown fields with a 400 naming the key(s) — config classes use Pydantic's default extra-tolerance because the stored-row read path depends on it.
 
 ```python
 @classmethod

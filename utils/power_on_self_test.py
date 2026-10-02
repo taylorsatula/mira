@@ -27,6 +27,12 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+# Importing logging_config is load-bearing for the gate verdict: on
+# checkouts where the deploy-installed _mira_log_levels .pth is absent it
+# registers the TOAST level name (60); deployed instances get the same
+# registration at interpreter startup via site-packages.
+from utils.logging_config import TOAST
+
 from utils.timezone_utils import format_utc_iso, utc_now
 
 logger = logging.getLogger(__name__)
@@ -162,7 +168,12 @@ def _run_pre_server_post_round(deadline_seconds: int) -> PostReport:
     report_json = report.model_dump_json(indent=2)
 
     if report.required_passed:
-        logger.info("Pre-server POST passed:\n%s", report_json)
+        # The pass verdict is the system itself speaking about its own boot:
+        # emit at TOAST (60) so it survives the WARNING root filter and
+        # reaches the journal. An operator must be able to confirm a healthy
+        # boot actually ran and passed the gate (RLS canary, injection
+        # screen, model routes). Failures stay at CRITICAL (below).
+        logger.log(TOAST, "Pre-server POST passed:\n%s", report_json)
         return report
 
     logger.critical("Pre-server POST failed:\n%s", report_json)

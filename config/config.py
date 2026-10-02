@@ -386,6 +386,23 @@ class HeartbeatConfig(BaseModel):
             "renewal itself fails"
         )
     )
+    turn_deadline_seconds: int = Field(
+        default=120, ge=30,
+        description=(
+            "Wall-clock deadline for one heartbeat turn, enforced by setting "
+            "the turn's cancel event: the orchestrator stops the turn at the "
+            "next stream or tool boundary, the stop counts as neither a "
+            "decision nor a failure (keepsleeping fallback, normal re-arm). "
+            "A heartbeat turn holds the same per-user lock a chat turn needs, "
+            "so this bounds how long chat can bounce TURN_BUSY on a tick's "
+            "account — without it a slow gateway plus tool-loop retries can "
+            "stretch one background turn to minutes. Worst-case lock hold is "
+            "this deadline plus one stalled provider pull (up to "
+            "api.provider_response_timeout): a cancel cannot interrupt a "
+            "stream already stalled mid-pull; the bounded async-work-barrier "
+            "wait before the timer starts adds api.async_work_barrier_timeout"
+        )
+    )
     device_power_binding: DevicePowerBindingConfig = Field(
         default_factory=DevicePowerBindingConfig,
         description=(

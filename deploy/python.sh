@@ -67,6 +67,17 @@ fi
 run_with_status "Creating /opt/mira/app directory" \
     sudo mkdir -p /opt/mira/app
 
+# Clear any previous install's code before the new payload lands: a
+# retired module left behind by an overlay is imported at boot and parks
+# the POST gate. Host-local state the install payload never contains
+# (venv, .env, data, logs — the same set both install paths exclude) is
+# preserved; data/ holds per-user storage (utils/userdata_manager.py
+# base_dir) and venv/ is reused by Step 4.
+run_with_status "Clearing previous install (code only)" \
+    sudo find /opt/mira/app -mindepth 1 -maxdepth 1 \
+        ! -name venv ! -name .env ! -name data ! -name logs \
+        -exec rm -rf {} +
+
 if [ "${LOCAL_SOURCE:-false}" = "true" ]; then
     # --local: install from the repo checkout deploy.sh was invoked from
     # (cwd captured at argument-parsing time) instead of wget-ing GitHub.

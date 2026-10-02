@@ -33,6 +33,41 @@ DEDUP_SIMILARITY_THRESHOLD = 0.92  # Cosine similarity for duplicate detection
 DEFAULT_IMPORTANCE_SCORE = 0.5     # Default importance for newly extracted memories
 
 
+def sanitize_entity_list(entities: Any) -> List[Dict[str, str]]:
+    """Filter a raw LLM-emitted ``entities`` value to well-formed link candidates.
+
+    The single shape contract for every entity source entering the memory
+    pipeline: extraction responses (``_validate_extracted_memory`` here) and
+    the pending-drain entity pass
+    (``cns/services/segment_collapse_handler.py``). Accepts the untrusted raw
+    value and projects each kept entry to exactly ``{"name": str, "type": str}``
+    — extra keys emitted by the model are dropped, so a noisy entry can never
+    fail Pydantic's ``Dict[str, str]`` validation downstream (which would burn
+    a drain item's content-caused attempts budget on LLM noise); a malformed
+    entry degrades to "no entity" instead of poisoning the entity table.
+    Absent/None is a legitimate "no entities" answer and returns ``[]``
+    silently.
+    """
+    if not isinstance(entities, list):
+        if entities is not None:
+            logger.warning(f"Fixing entities: converting {type(entities)} to empty list")
+        return []
+    valid_entities: List[Dict[str, str]] = []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        if 'name' not in entity or 'type' not in entity:
+            continue
+        if not isinstance(entity['name'], str) or not isinstance(entity['type'], str):
+            continue
+        # Normalize entity name (strip whitespace)
+        entity['name'] = entity['name'].strip()
+        if len(entity['name']) < 2:
+            continue
+        valid_entities.append({"name": entity["name"], "type": entity["type"]})
+    return valid_entities
+
+
 class LLMResponseFormatError(ValueError):
     """The extraction LLM's response is empty or otherwise unusable.
 
@@ -149,7 +184,8 @@ class MemoryProcessor:
         self,
         response_text: str,
         short_to_uuid: Dict[str, str],
-        memory_context: MemoryContext
+        memory_context: MemoryContext,
+        segment_id: Optional[str] = None,
     ) -> ExtractionResult:
         """
         Process a direct extraction result from the LLM response.
@@ -160,6 +196,10 @@ class MemoryProcessor:
             response_text: LLM response text (JSON format)
             short_to_uuid: Mapping from shortened IDs to full UUIDs
             memory_context: Memory context used during extraction (for deduplication)
+            segment_id: UUID string of the segment being extracted — threaded
+                into every built ExtractedMemory as source_segment_id so
+                db_access.store_memories persists the extraction provenance
+                anchor. None only when the chunk genuinely has no segment.
 
         Returns:
             ExtractionResult containing validated memories
@@ -226,7 +266,8 @@ class MemoryProcessor:
                     if happens_at_raw else None
                 ),
                 related_memory_ids=memory_dict.get("related_memory_ids", []),
-                entities=memory_dict.get("entities", [])
+                entities=memory_dict.get("entities", []),
+                source_segment_id=UUID(segment_id) if segment_id else None,
             )
 
             # Track mapping from original index to filtered index
@@ -576,28 +617,10 @@ class MemoryProcessor:
                 logger.warning(f"Fixing invalid importance_score {importance} -> None (will use default)")
                 memory_dict.pop("importance_score", None)
 
-        # Validate and filter entities list
-        if "entities" in memory_dict:
-            entities = memory_dict["entities"]
-            if not isinstance(entities, list):
-                logger.warning(f"Fixing entities: converting {type(entities)} to empty list")
-                memory_dict["entities"] = []
-            else:
-                # Filter to valid entity dicts
-                valid_entities = []
-                for entity in entities:
-                    if not isinstance(entity, dict):
-                        continue
-                    if 'name' not in entity or 'type' not in entity:
-                        continue
-                    if not isinstance(entity['name'], str) or not isinstance(entity['type'], str):
-                        continue
-                    # Normalize entity name (strip whitespace)
-                    entity['name'] = entity['name'].strip()
-                    if len(entity['name']) < 2:
-                        continue
-                    valid_entities.append(entity)
-                memory_dict["entities"] = valid_entities
+        # Validate and filter entities list — one shared shape contract for
+        # every entity source (extraction responses and the pending drain's
+        # entity pass use the same sanitizer).
+        memory_dict["entities"] = sanitize_entity_list(memory_dict.get("entities"))
 
         return True
 

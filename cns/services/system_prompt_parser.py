@@ -103,3 +103,57 @@ def get_assessable_sections(raw_prompt: str) -> List[SystemPromptSection]:
     Convenience function combining parse + filter.
     """
     return _filter_sections(_parse_system_prompt_sections(raw_prompt))
+
+
+def get_assessable_section_ids(raw_prompt: str) -> List[str]:
+    """
+    The canonical assessable section vocabulary, in system-prompt order.
+
+    Single source for every consumer of the section taxonomy: prompt
+    examples that name sections (generated, never hand-written) and
+    validate_section_anchors() both derive from this list, so the vocabulary
+    cannot drift between what the LLM is shown and what the code enforces.
+    """
+    return [s.section_id for s in get_assessable_sections(raw_prompt)]
+
+
+def validate_section_anchors(user_model_xml: str, raw_prompt: str) -> None:
+    """
+    Deterministically validate every section anchor in a user model XML.
+
+    The single sanctioned check for the section-anchor hazard: LLM-emitted
+    <mira:observation>/<mira:topic> anchors must name an assessable system
+    prompt section. Attribute regions are matched order-independently (same
+    approach as LoraTrinket), so attribute-order drift cannot bypass the
+    check. Callers must run this before a user model is stored or previewed —
+    an invalid anchor is never left for the LLM critic to catch.
+
+    Args:
+        user_model_xml: Candidate user model XML (<mira:user_model> document)
+        raw_prompt: The system prompt whose sections define the valid anchors
+
+    Raises:
+        ValueError: naming every invalid anchor and the full valid set
+    """
+    valid = get_assessable_section_ids(raw_prompt)
+    valid_set = set(valid)
+
+    invalid: List[str] = []
+    for tag in ("mira:observation", "mira:topic"):
+        for match in re.finditer(rf"<{tag}\b([^>]*)>", user_model_xml):
+            section_match = re.search(r'\bsection="([^"]*)"', match.group(1))
+            if section_match is None:
+                # A tag with no section attribute at all is a malformed-model
+                # problem, owned by the parsers; this check owns only anchors
+                # that exist and are wrong.
+                continue
+            section = section_match.group(1).strip()
+            if section not in valid_set and section not in invalid:
+                invalid.append(section)
+
+    if invalid:
+        raise ValueError(
+            f"Invalid section anchor(s): {', '.join(invalid)}. Every "
+            "<mira:observation> and <mira:topic> section attribute must be "
+            f"one of the assessable system prompt sections: {', '.join(valid)}."
+        )

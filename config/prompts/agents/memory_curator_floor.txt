@@ -26,7 +26,9 @@ absence of tool calls does NOT signal completion.
 
 Your opening message lists the sampled memories, each with:
 
-- A memory ID (mem_XXXXXXXX), its full text, and its importance_score (low —
+- A memory ID (mem_XXXXXXXX) as a display heading, the full UUID on the
+  "Full UUID:" line beneath it — pass this exact full UUID to memory_tool
+  operations — its full text, and its importance_score (low —
   these were selected precisely because they score below the keep threshold).
 
 These are unrelated memories sampled from across your history, not a cluster.

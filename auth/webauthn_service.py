@@ -15,6 +15,7 @@ from webauthn import (
     options_to_json
 )
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
+from webauthn.helpers.exceptions import WebAuthnException
 from webauthn.helpers.structs import (
     AuthenticatorSelectionCriteria,
     UserVerificationRequirement,
@@ -32,6 +33,19 @@ from .database import AuthDatabase
 from .exceptions import AuthError
 
 logger = logging.getLogger(__name__)
+
+
+# WebAuthn origin/RP-ID mismatches compare CLIENT data against SERVER
+# configuration (self.origin comes from config.APP_URL and self.rp_id is
+# derived from it): with a misconfigured APP_URL every ceremony fails this
+# way, so classifying them as 400 invalid_credential masks a server fault
+# as client error. Matched on the library's message text (stable in the 2.x
+# line); if the wording ever drifts, classification falls back to
+# invalid_credential — the pre-narrowing behavior, never a crash.
+def _is_server_config_validation_error(e: WebAuthnException) -> bool:
+    """True when the failure is a server origin/RP-ID misconfiguration."""
+    msg = str(e)
+    return "Unexpected client data origin" in msg or "Unexpected RP ID hash" in msg
 
 
 class WebAuthnService:
@@ -213,6 +227,22 @@ class WebAuthnService:
 
         except AuthError:
             raise
+        except WebAuthnException as e:
+            # The library raises WebAuthnException for every failure to
+            # validate the CLIENT-SUPPLIED credential (malformed structure,
+            # wrong challenge, bad signature). That is client input, not an
+            # internal fault: classify it as a 4xx `invalid_credential` and log
+            # the specifics server-side — the client envelope must not leak
+            # validation internals. The one exception is an origin/RP-ID
+            # mismatch, which indicts SERVER configuration and surfaces as
+            # `internal_error` (see _is_server_config_validation_error).
+            if _is_server_config_validation_error(e):
+                logger.error(
+                    "WebAuthn origin/RP-ID mismatch — check APP_URL configuration: %s", e)
+                raise AuthError(
+                    "internal_error", "WebAuthn server configuration mismatch (origin/RP ID)")
+            logger.warning("WebAuthn registration credential validation failed: %s", e)
+            raise AuthError("invalid_credential", "The supplied credential could not be validated")
         except Exception as e:
             logger.error(f"Failed to verify registration: {e}", exc_info=True)
             raise AuthError("internal_error", "Failed to verify registration")
@@ -400,6 +430,17 @@ class WebAuthnService:
 
         except AuthError:
             raise
+        except WebAuthnException as e:
+            # Client-supplied credential failed validation — see the matching
+            # branch in verify_registration for the classification rationale
+            # (origin/RP-ID mismatch = server config, internal_error).
+            if _is_server_config_validation_error(e):
+                logger.error(
+                    "WebAuthn origin/RP-ID mismatch — check APP_URL configuration: %s", e)
+                raise AuthError(
+                    "internal_error", "WebAuthn server configuration mismatch (origin/RP ID)")
+            logger.warning("WebAuthn authentication credential validation failed: %s", e)
+            raise AuthError("invalid_credential", "The supplied credential could not be validated")
         except Exception as e:
             logger.error(f"Failed to verify authentication: {e}", exc_info=True)
             raise AuthError("internal_error", "Failed to verify authentication")
@@ -423,7 +464,13 @@ class WebAuthnService:
             if not user_handle:
                 raise AuthError("unknown_credential", "Credential did not disclose a user handle")
 
-            user_id = base64url_to_bytes(user_handle).decode("utf-8")
+            try:
+                user_id = base64url_to_bytes(user_handle).decode("utf-8")
+            except ValueError:
+                # A malformed client-supplied userHandle (bad base64url or
+                # non-UTF-8 — UnicodeDecodeError is a ValueError) is client
+                # input, not an internal fault.
+                raise AuthError("invalid_credential", "The supplied credential could not be validated")
 
             user = self.db.get_user_by_id(user_id)
             if not user:
@@ -442,6 +489,17 @@ class WebAuthnService:
 
         except AuthError:
             raise
+        except WebAuthnException as e:
+            # Client-supplied credential failed validation — see the matching
+            # branch in verify_registration for the classification rationale
+            # (origin/RP-ID mismatch = server config, internal_error).
+            if _is_server_config_validation_error(e):
+                logger.error(
+                    "WebAuthn origin/RP-ID mismatch — check APP_URL configuration: %s", e)
+                raise AuthError(
+                    "internal_error", "WebAuthn server configuration mismatch (origin/RP ID)")
+            logger.warning("WebAuthn discoverable authentication credential validation failed: %s", e)
+            raise AuthError("invalid_credential", "The supplied credential could not be validated")
         except Exception as e:
             logger.error(f"Failed to verify discoverable authentication: {e}", exc_info=True)
             raise AuthError("internal_error", "Failed to verify authentication")

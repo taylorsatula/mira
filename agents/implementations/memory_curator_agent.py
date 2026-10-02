@@ -44,7 +44,10 @@ logger = logging.getLogger(__name__)
 #
 # Full UUID strings are carried (not short IDs) because last_tended_at updates
 # need full UUIDs and short IDs are an irreversible prefix. build_initial_message
-# formats them to mem_XXXXXXXX for display and tool calls.
+# renders BOTH forms per memory: a mem_XXXXXXXX display heading plus the full
+# UUID as the actionable identity for tool calls — memory_tool resolves full
+# UUIDs exactly, while a short ID resolves only when unambiguous (an 8-hex
+# prefix collision would otherwise make the memory un-actionable).
 
 class CandidateRef(TypedDict):
     """A pre-computed candidate relationship for the agent to judge.
@@ -54,7 +57,7 @@ class CandidateRef(TypedDict):
     see that two memories touch; it cannot classify HOW they relate -- that is
     the agent's job.
     """
-    memory_id: str               # SHORT id (mem_XXXXXXXX) -- for the LLM's tool calls
+    memory_id: str               # SHORT id (mem_XXXXXXXX) — discovery-side pointer to an existing memory; resolvable by memory_tool when unambiguous (collision → search by text to recover the full UUID)
     bond: str                    # 3-word extraction bond, "" if none
     discovery_signal: str         # "extraction" | "vector" | "entity" | "tfidf"
     similarity: float | None     # vector similarity if discovery_signal == "vector"
@@ -62,7 +65,7 @@ class CandidateRef(TypedDict):
 
 class NewMemory(TypedDict):
     """A freshly extracted memory for the integration agent to tend."""
-    memory_id: str               # FULL UUID string -- for on_completion's last_tended stamp
+    memory_id: str               # FULL UUID string — identity for tool calls AND on_completion's last_tended stamp
     text: str
 
 
@@ -76,7 +79,7 @@ class IntegrationContext(TypedDict):
 
 class FloorMemory(TypedDict):
     """A sampled low-value memory for the floor agent to triage."""
-    memory_id: str               # FULL UUID string -- for on_completion's last_tended stamp
+    memory_id: str               # FULL UUID string — identity for tool calls AND on_completion's last_tended stamp
     text: str
     importance_score: float
 
@@ -164,12 +167,16 @@ class MemoryCuratorAgent(SidebarAgent):
             "decide: MERGE, LINK (with the exact link_type), or STAND ALONE. "
             "Decide every memory, then call sidebar_tool complete_task.",
             "",
+            "Each memory is listed with its full UUID — pass the full UUID to "
+            "memory_tool operations (short IDs resolve only when unambiguous).",
+            "",
         ]
 
         for mem in new_memories:
             full_id = mem['memory_id']
             short_id = _short(full_id)
             lines.append(f"## {short_id}")
+            lines.append(f"Full UUID: {full_id}")
             lines.append(mem['text'].strip())
             lines.append("")
 
@@ -205,12 +212,16 @@ class MemoryCuratorAgent(SidebarAgent):
             "the evidence supports it. Decide every memory, then call sidebar_tool "
             "complete_task.",
             "",
+            "Each memory is listed with its full UUID — pass the full UUID to "
+            "memory_tool operations (short IDs resolve only when unambiguous).",
+            "",
         ]
 
         for mem in memories:
             short_id = _short(mem['memory_id'])
             score = mem.get('importance_score', 0.0)
             lines.append(f"## {short_id} (score {score:.2f})")
+            lines.append(f"Full UUID: {mem['memory_id']}")
             lines.append(mem['text'].strip())
             lines.append("")
 

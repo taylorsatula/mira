@@ -1452,6 +1452,13 @@ class LTMemoryDB:
                 if not target:
                     raise ValueError(f"Target entity {target_id} not found")
 
+                # Every parameter inside a variadic jsonb function
+                # (jsonb_build_object's any-variadic args) MUST carry an
+                # explicit cast: Postgres cannot infer a parameter type from a
+                # variadic argument, so an untyped %(x)s there fails the whole
+                # statement at PARSE time with IndeterminateDatatype — before
+                # any row is touched (this silently no-op'd every production
+                # entity merge on first observation).
                 update_query = """
                 UPDATE memories
                 SET entity_links = (
@@ -1462,9 +1469,9 @@ class LTMemoryDB:
                             SELECT CASE
                                 WHEN elem->>'uuid' = %(source_id)s
                                 THEN jsonb_build_object(
-                                    'uuid', %(target_id_str)s,
-                                    'name', %(target_name)s,
-                                    'type', %(target_type)s
+                                    'uuid', %(target_id_str)s::text,
+                                    'name', %(target_name)s::text,
+                                    'type', %(target_type)s::text
                                 )
                                 ELSE elem
                             END AS elem_out

@@ -21,9 +21,23 @@ Design constraints honored here:
   stamps heartbeat_retry_at instead — a backoff, not a sleep commitment: the
   dispatcher honors both keys for pacing, but the timeout sweep defers only on
   heartbeat_wake_at, so a persistently failing heartbeat cannot starve the
-  sweep. The pre-turn liveness stamp is likewise suspended after a streak of
-  consecutive failures (heartbeat_failures counter, reset on success), because
-  it resets the sweep's inactivity clock the same way.
+  sweep. Failure has two forms with one accounting: a turn that raises, and a
+  turn that completes without a valid confirm record — the heartbeat_tool
+  call failed or was never validly made, which the tool loop reports to the
+  model instead of raising, so the turn ends with no heartbeat_log row.
+  Both forms count into the same consecutive-failure streak and stamp the
+  same retry backoff (never a wake commitment); only a valid confirm
+  decision (or an externally cancelled turn, which is neither a decision
+  nor a failure by design) resets the streak. The pre-turn liveness stamp is
+  likewise suspended after a streak of consecutive failures, because it
+  resets the sweep's inactivity clock the same way.
+- Heartbeat turns are wall-clock bounded (heartbeat.turn_deadline_seconds):
+  the deadline sets the turn's cancel event and the orchestrator stops the
+  turn at the next stream or tool boundary. A heartbeat turn holds the same
+  per-user lock a chat turn needs, so the deadline bounds how long chat can
+  bounce TURN_BUSY on a tick's account; the stop follows the same contract
+  as an external cancel — keepsleeping fallback, normal re-arm, no failure-
+  streak entry.
   The dispatcher skips users whose wake time is in the future, and the segment
   timeout service defers collapse until wake_at plus a grace window, so a
   long sleep never collapses the session out from under MIRA.
@@ -46,7 +60,6 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
-from clients.llm.events import GenerationCancelled
 from clients.valkey_client import get_valkey
 from config.config_manager import config as app_config
 from utils.distributed_lock import UserRequestLock
@@ -138,7 +151,13 @@ _PAUSED_KEY = "heartbeat:paused:{user_id}"
 # last_turn_at on every retry and starves the segment timeout sweep forever
 # (the sweep's last_turn_at guard resets its inactivity clock). Three strikes
 # balance the two: the first attempts of a streak keep hang protection, a
-# persistent failure lets the sweep fire at the normal threshold.
+# persistent failure lets the sweep fire at the normal threshold. Failures
+# counted: whole-turn exceptions AND completed turns that produced no valid
+# confirm record — in-turn heartbeat_tool failures never raise out of the
+# turn, so the decision readback (no heartbeat_log row for the tick) is the
+# only place they become visible; _execute_heartbeat_turn routes them into
+# this same counter. This is a non-destructive anti-starvation escape, not a
+# data-gating budget: infrastructure and model failures both belong in it.
 _LIVENESS_STAMP_FAILURE_CAP = 3
 
 
@@ -277,6 +296,27 @@ def _run_heartbeat_turn(user_id: str, tick_id: str) -> dict[str, Any]:
     from utils.user_context import set_cancel_event
     set_cancel_event(cancel_event)
     _active_cancel_events[user_id] = cancel_event
+    # Turn deadline: a heartbeat turn is a background courtesy turn, but it
+    # holds the same per-user lock a chat turn needs — without a bound, a slow
+    # provider or a model wandering through tool retries can stretch one turn
+    # to minutes and bounce every chat message with TURN_BUSY for the whole
+    # stretch. The deadline sets the turn's cancel event; the orchestrator
+    # stops the turn at the next stream/tool boundary, and the stop is neither
+    # a decision nor a failure (keepsleeping fallback, normal re-arm). A late
+    # firing after the turn ended only touches this turn's orphaned event.
+    deadline_seconds = app_config.heartbeat.turn_deadline_seconds
+
+    def _deadline_reached(event: threading.Event = cancel_event) -> None:
+        logger.warning(
+            "Heartbeat turn %s for user %s hit the %ds turn deadline; "
+            "stopping the turn (keepsleeping fallback, normal re-arm)",
+            tick_id, user_id, deadline_seconds,
+        )
+        event.set()
+
+    deadline_timer = threading.Timer(deadline_seconds, _deadline_reached)
+    deadline_timer.daemon = True
+    deadline_timer.start()
     try:
         return _execute_heartbeat_turn(
             pool, continuum, user_id, tick_id, segment_turn_number,
@@ -300,6 +340,7 @@ def _run_heartbeat_turn(user_id: str, tick_id: str) -> dict[str, Any]:
             )
         raise
     finally:
+        deadline_timer.cancel()
         _active_cancel_events.pop(user_id, None)
 
 
@@ -330,7 +371,7 @@ def _execute_heartbeat_turn(
         pool.repository.stamp_segment_liveness(continuum.id, user_id)
 
     uow = pool.begin_work(continuum)
-    continuum, response_text, _metadata = get_orchestrator().process_message(
+    continuum, response_text, turn_metadata = get_orchestrator().process_message(
         continuum,
         stimulus,
         app_config.system_prompt + _build_system_prompt_addendum(display_name),
@@ -347,35 +388,65 @@ def _execute_heartbeat_turn(
         "ORDER BY created_at DESC LIMIT 1",
         {"tick_id": tick_id},
     )
-    decision = decision_row.get("decision") if decision_row else None
-    if decision is None:
+    # The confirm record is the turn's validity signal. heartbeat_tool._confirm
+    # inserts it only after every argument check passes, so a turn whose
+    # heartbeat_tool calls all failed (dialect-rejected arguments, validation
+    # errors) or that never validly called the tool leaves no row. In-turn tool
+    # failures never raise out of process_message — the tool loop feeds the
+    # error back to the model — so a completed turn with no row is a FAILED
+    # decision turn, not a keepsleeping decision the model made.
+    confirm_valid = decision_row is not None
+    decision = decision_row.get("decision") if decision_row else "keepsleeping"
+    # An externally cancelled turn (orchestrator stopped-turn semantics:
+    # metadata["stopped"]) is neither a model decision nor a model failure —
+    # the documented cancel contract keeps it out of the failure accounting
+    # entirely (keepsleeping fallback, normal re-arm, no streak entry).
+    turn_stopped = bool(turn_metadata.get("stopped"))
+    if not confirm_valid and not turn_stopped:
         logger.warning(
-            "Heartbeat turn %s for user %s produced no confirm record; "
-            "treating as keepsleeping", tick_id, user_id,
+            "Heartbeat turn %s for user %s completed without a valid confirm "
+            "record (heartbeat_tool call failed or was never validly made); "
+            "counting the turn as failed", tick_id, user_id,
         )
-        decision = "keepsleeping"
 
-    # Stamp the next wake time on the sentinel. A keepsleeping decision with a
-    # requested wake_in_seconds sleeps that long with no intervening ticks;
-    # every other path (keepsleeping without a request, breakout, missing
-    # record) falls back to the default interval. The dispatcher and the
-    # timeout service both read this stamp.
-    requested_wake_in = decision_row.get("wake_in_seconds") if decision_row else None
-    if (
-        decision == "keepsleeping"
-        and isinstance(requested_wake_in, int)
-        and requested_wake_in > 0
-    ):
-        delay_seconds = requested_wake_in
-        sleep_source = "requested"
+    if confirm_valid or turn_stopped:
+        # Stamp the next wake time on the sentinel. A keepsleeping decision
+        # with a requested wake_in_seconds sleeps that long with no
+        # intervening ticks; every other valid decision (keepsleeping without
+        # a request, breakout) falls back to the default interval. The
+        # dispatcher and the timeout service both read this stamp.
+        requested_wake_in = decision_row.get("wake_in_seconds") if decision_row else None
+        if (
+            decision == "keepsleeping"
+            and isinstance(requested_wake_in, int)
+            and requested_wake_in > 0
+        ):
+            delay_seconds = requested_wake_in
+        else:
+            delay_seconds = app_config.heartbeat.interval_seconds
+        wake_at = _stamp_wake_at(pool, continuum, user_id, delay_seconds)
+
+        # A usable outcome — a valid confirm decision, or a cancelled turn
+        # falling back to keepsleeping — re-arms the sleep cycle AND the
+        # liveness stamp (hang protection) a failure streak had suspended. A
+        # keepsleeping-by-default re-arm from an INVALID turn must never
+        # reach here: a turn that failed to produce a decision is not a
+        # sleep commitment.
+        pool.repository.reset_heartbeat_failures(continuum.id, user_id)
     else:
+        # No valid decision: apply the same accounting as a turn that raised.
+        # _stamp_retry_at paces the dispatcher AND bumps heartbeat_failures
+        # inside its UPDATE (set_heartbeat_retry_at), so consecutive
+        # no-confirm turns feed _LIVENESS_STAMP_FAILURE_CAP: at the cap the
+        # pre-turn liveness stamp stays suspended, the sweep's inactivity
+        # clock runs out at the normal threshold, and segment timeout
+        # collapses the segment — the terminal condition that ends a
+        # stuck-model loop instead of re-arming it forever. No
+        # heartbeat_wake_at is stamped, so the sweep's wake guard cannot be
+        # rolled forward by failing turns.
+        _stamp_retry_at(pool, continuum, user_id, app_config.heartbeat.interval_seconds)
         delay_seconds = app_config.heartbeat.interval_seconds
-        sleep_source = "default"
-    wake_at = _stamp_wake_at(pool, continuum, user_id, delay_seconds)
-
-    # The turn succeeded: re-arm the liveness stamp (hang protection) that a
-    # failure streak may have suspended.
-    pool.repository.reset_heartbeat_failures(continuum.id, user_id)
+        wake_at = None
 
     # Post-tag the stimulus row with the decision. Downstream consumers filter
     # keepsleeping turns out of history/live-context/extraction/summaries and
@@ -403,7 +474,8 @@ def _execute_heartbeat_turn(
     return {
         "skipped": False,
         "decision": decision,
-        "sleep_source": sleep_source,
+        "confirm_valid": confirm_valid,
+        "turn_stopped": turn_stopped,
         "wake_in_seconds": delay_seconds,
         "wake_at": wake_at,
         "response_text": response_text,
@@ -528,6 +600,19 @@ def heartbeat_tick() -> None:
                 result = ctx.run(turn_with_context)
                 if result.get("skipped"):
                     continue
+                if not result.get("confirm_valid", True) and not result.get("turn_stopped", False):
+                    # Completed without a valid confirm record: the turn already
+                    # stamped the retry backoff and counted toward the failure
+                    # streak (see _execute_heartbeat_turn). The device stays
+                    # awake like any failed turn, and the timeout sweep stays
+                    # free to collapse the segment and end the streak.
+                    stay_awake = True
+                    logger.warning(
+                        "Heartbeat tick %s for user %s produced no valid confirm; "
+                        "counted as failed turn with retry backoff",
+                        tick_id, user_id,
+                    )
+                    continue
                 logger.info(
                     "Heartbeat tick %s for user %s decided %s",
                     tick_id, user_id, result["decision"],
@@ -561,15 +646,13 @@ def heartbeat_tick() -> None:
             finally:
                 renewal_stop.set()
                 _get_lock().release(user_id, lock_token)
-        except GenerationCancelled:
-            # Cancelled externally: someone is actively steering the user —
-            # the device stays awake.
-            stay_awake = True
-            logger.info("Heartbeat turn for user %s cancelled externally", user_id)
-            continue
         except Exception as e:
             # A failed turn leaves the obligation at ticker cadence (the
-            # except-path stamp may itself have failed) — stay awake.
+            # except-path stamp may itself have failed) — stay awake. Note:
+            # an externally cancelled turn does NOT land here —
+            # orchestrator.process_message converts cancellation into
+            # stopped-turn semantics (decision falls back to keepsleeping,
+            # no retry backoff), so only genuine failures take this branch.
             stay_awake = True
             logger.error(
                 "Heartbeat tick failed for user %s: %s", user_id, e, exc_info=True

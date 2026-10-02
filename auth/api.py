@@ -652,8 +652,19 @@ def logout(
             )
             response.status_code = 404
 
-        # Clear session cookie
-        response.delete_cookie(key="session", path="/", secure=True, httponly=True, samesite="lax")
+        # Clear session cookie. Attributes come from the same CookieSettings
+        # source as every set path (`get_cookie_settings`), so the deletion
+        # cannot drift from the set path: under single-mode plain HTTP a
+        # deletion carrying `Secure` is dropped by the browser (RFC 6265) and
+        # the stale revoked cookie would survive logout.
+        cookie_settings = auth_service.get_cookie_settings()
+        response.delete_cookie(
+            key="session",
+            path="/",
+            httponly=cookie_settings.httponly,
+            secure=cookie_settings.secure,
+            samesite=cookie_settings.samesite
+        )
         return api_response.to_dict()
 
     except AuthError as e:
@@ -865,8 +876,12 @@ async def webauthn_register_complete(
         )
         return api_response.to_dict()
     except AuthError as e:
-        api_response = create_auth_error_response(e, 400, request_id)
-        response.status_code = 400
+        # `internal_error` is a genuine server fault (5xx); every other code
+        # from this route (invalid_credential, invalid_challenge, ...) is a
+        # client-input problem and stays 400.
+        http_status = 500 if e.code == "internal_error" else 400
+        api_response = create_auth_error_response(e, http_status, request_id)
+        response.status_code = http_status
         return api_response.to_dict()
     except Exception as e:
         logger.error(f"[{request_id}] WebAuthn registration complete error: {e}", exc_info=True)
@@ -1020,7 +1035,13 @@ def webauthn_login_complete(
 
         return api_response.to_dict()
     except AuthError as e:
-        http_status = 429 if e.code == "rate_limit_exceeded" else 400
+        if e.code == "rate_limit_exceeded":
+            http_status = 429
+        elif e.code == "internal_error":
+            # Genuine server fault, not a client-input problem
+            http_status = 500
+        else:
+            http_status = 400
         if e.code in {"user_not_found", "unknown_credential", "invalid_challenge", "authentication_failed"}:
             api_response = create_auth_error_response(
                 AuthenticationError("Biometric authentication failed", "WEBAUTHN_AUTHENTICATION_FAILED"),

@@ -22,7 +22,9 @@ way to finish. The absence of tool calls does NOT signal completion.
 
 Your opening message lists the new memories from the segment, each with:
 
-- A memory ID (mem_XXXXXXXX) and its full text.
+- A memory ID (mem_XXXXXXXX) as a display heading, the full UUID on the
+  "Full UUID:" line beneath it — pass this exact full UUID to memory_tool
+  operations — and its full text.
 - Candidate hints: existing memories that lexical, embedding, entity, or
   extraction-time signals flagged as possibly related. Each hint names the
   candidate, the discovery signal, a 3-word "bond" if extraction produced one

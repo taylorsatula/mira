@@ -70,6 +70,32 @@ class MemoryToolConfig(BaseModel):
 registry.register("memory_tool", MemoryToolConfig)
 
 
+def _memory_id_form(memory_id: str) -> str:
+    """Classify a memory reference for identity resolution.
+
+    Returns "full" when the reference parses as a complete UUID (with or
+    without dashes, optionally mem_-prefixed) — the exact, unambiguous
+    identity. Returns "short" for an 8+ character hex prefix (the reversible
+    lookup form). Returns "invalid" for anything else (too short, non-hex,
+    empty). Short IDs are an irreversible prefix of the full UUID, so "full"
+    is the actionable identity: callers holding it must pass it through
+    (extract-by-identity rule), and a "short" reference resolves by prefix
+    only when unambiguous.
+    """
+    clean = parse_memory_id(memory_id) if memory_id else ""
+    if not clean:
+        return "invalid"
+    try:
+        UUID(clean)
+        return "full"
+    except ValueError:
+        try:
+            int(clean, 16)
+            return "short" if len(clean) >= 8 else "invalid"
+        except ValueError:
+            return "invalid"
+
+
 class MemoryTool(Tool):
     """
     Memory management tool for search, creation, linking, and annotation.
@@ -87,6 +113,24 @@ class MemoryTool(Tool):
     # Operations without ordering dependencies — safe for concurrent execution.
     # create_memory only queues to Valkey, touch applies an independent boost.
     _parallel_safe_operations = frozenset({"search", "touch", "create_memory"})
+
+    # Per-operation mandatory parameters, validated in run() BEFORE dispatch.
+    # The JSON schema requires only 'operation' (conditional per-operation
+    # requirements are not portable across providers), so without this gate a
+    # missing operation-specific argument surfaces as a raw TypeError from
+    # Python argument binding — before this tool's ValueError-with-recovery-
+    # guidance channel can run. The gate owns PRESENCE (missing or explicit
+    # null); each _op method keeps owning well-formedness (emptiness, min
+    # length, allowed values).
+    _OPERATION_REQUIRED_FIELDS: Dict[str, tuple] = {
+        "search": ("query",),
+        "create_memory": ("content",),
+        "link_memories": ("source_memory_id", "target_memory_id", "link_type", "reasoning"),
+        "annotate_memory": ("memory_id", "annotation"),
+        "touch": ("memory_ids",),
+        "archive": ("memory_id",),
+        "merge_memories": ("memory_ids", "consolidated_text"),
+    }
 
     @classmethod
     def is_call_parallel_safe(cls, tool_input: Dict[str, Any]) -> bool:
@@ -159,11 +203,11 @@ class MemoryTool(Tool):
                 # Link memories parameters
                 "source_memory_id": {
                     "type": "string",
-                    "description": "mem_XXXXXXXX ID of the source memory in the link. The link reads as: source [link_type] target"
+                    "description": "Identity of the source memory in the link: full UUID or mem_XXXXXXXX short ID (a short ID works only when unambiguous). The link reads as: source [link_type] target"
                 },
                 "target_memory_id": {
                     "type": "string",
-                    "description": "mem_XXXXXXXX ID of the memory the relationship points to. Required for 'link_memories'"
+                    "description": "Identity of the memory the relationship points to: full UUID or mem_XXXXXXXX short ID (short works only when unambiguous). Required for 'link_memories'"
                 },
                 "link_type": {
                     "type": "string",
@@ -181,7 +225,7 @@ class MemoryTool(Tool):
                 # Annotate memory parameters
                 "memory_id": {
                     "type": "string",
-                    "description": "mem_XXXXXXXX ID of the memory to annotate. Required for 'annotate_memory'"
+                    "description": "Identity of the memory to act on: full UUID or mem_XXXXXXXX short ID (short works only when unambiguous). Required for 'annotate_memory' and 'archive'"
                 },
                 "annotation": {
                     "type": "string",
@@ -191,7 +235,7 @@ class MemoryTool(Tool):
                 "memory_ids": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of mem_XXXXXXXX IDs. Required for 'touch' (memories referenced in your response) and 'merge_memories' (memories to consolidate into one)"
+                    "description": "List of memory identities: full UUIDs or mem_XXXXXXXX short IDs (short works only when unambiguous). Required for 'touch' (memories referenced in your response) and 'merge_memories' (memories to consolidate into one)"
                 },
                 # Merge memories parameters (curator)
                 "consolidated_text": {
@@ -250,6 +294,18 @@ class MemoryTool(Tool):
         Raises:
             ValueError: If operation fails or parameters are invalid
         """
+        # Presence gate BEFORE dispatch: a missing operation-specific field
+        # must raise this tool's ValueError (recovery guidance channel), never
+        # a raw TypeError from the _op method's argument binding.
+        required = self._OPERATION_REQUIRED_FIELDS.get(operation)
+        if required:
+            missing = [field for field in required if kwargs.get(field) is None]
+            if missing:
+                raise ValueError(
+                    f"memory_tool operation '{operation}' is missing required "
+                    f"parameter(s): {', '.join(missing)}. Provide all of: "
+                    f"{', '.join(required)}, then retry the operation."
+                )
         try:
             if operation == "search":
                 return self._search(**kwargs)
@@ -575,8 +631,8 @@ class MemoryTool(Tool):
         Create a relationship link between two memories.
 
         Args:
-            source_memory_id: 8-char ID of source memory
-            target_memory_id: 8-char ID of target memory
+            source_memory_id: Full UUID or short ID of source memory
+            target_memory_id: Full UUID or short ID of target memory
             link_type: Relationship type (supports, conflicts, supersedes, refines, precedes, contextualizes)
             reasoning: Explanation for the link (min 5 chars)
             bond: Optional 3-word relationship descriptor carried from extraction
@@ -596,9 +652,9 @@ class MemoryTool(Tool):
         reasoning = reasoning.strip()
         bond = bond.strip() if bond else ""
 
-        # Resolve short IDs to full UUIDs
-        source = self._find_memory_by_short_id(source_memory_id)
-        target = self._find_memory_by_short_id(target_memory_id)
+        # Resolve IDs (full UUID or short) to full UUIDs
+        source = self._resolve_memory(source_memory_id)
+        target = self._resolve_memory(target_memory_id)
 
         if not source:
             raise ValueError(f"Source memory '{source_memory_id}' not found")
@@ -641,7 +697,7 @@ class MemoryTool(Tool):
         Add an annotation to an existing memory.
 
         Args:
-            memory_id: 8-char ID of memory to annotate
+            memory_id: Full UUID or short ID of memory to annotate
             annotation: Note to add (min 3 chars)
 
         Returns:
@@ -652,8 +708,8 @@ class MemoryTool(Tool):
             raise ValueError("Annotation must be at least 3 characters")
         annotation = annotation.strip()
 
-        # Resolve short ID
-        memory = self._find_memory_by_short_id(memory_id)
+        # Resolve the ID (full UUID or short)
+        memory = self._resolve_memory(memory_id)
         if not memory:
             raise ValueError(f"Memory '{memory_id}' not found")
 
@@ -694,12 +750,12 @@ class MemoryTool(Tool):
         or stale memories. Archives the memory and prunes its dead links.
 
         Args:
-            memory_id: 8-char ID of the memory to archive
+            memory_id: Full UUID or mem_XXXXXXXX short ID of the memory to archive
 
         Returns:
             Archive confirmation
         """
-        memory = self._find_memory_by_short_id(memory_id)
+        memory = self._resolve_memory(memory_id)
         if not memory:
             raise ValueError(f"Memory '{memory_id}' not found (or already archived)")
 
@@ -731,7 +787,7 @@ class MemoryTool(Tool):
         tended).
 
         Args:
-            memory_ids: 8-char IDs of 2+ memories to merge (must be distinct, non-archived)
+            memory_ids: Full UUIDs or short IDs of 2+ memories to merge (must be distinct, non-archived)
             consolidated_text: Unified text capturing what was preserved (min 10 chars)
             merge_note: Optional note on what the merge preserved/elided (provenance)
 
@@ -747,12 +803,12 @@ class MemoryTool(Tool):
         consolidated_text = consolidated_text.strip()
         merge_note = merge_note.strip() if merge_note else None
 
-        # Resolve short IDs to full UUIDs (excludes archived memories)
+        # Resolve IDs (full UUID or short) to full UUIDs (excludes archived memories)
         resolved: List[UUID] = []
-        for short_id in memory_ids:
-            memory = self._find_memory_by_short_id(short_id)
+        for memory_ref in memory_ids:
+            memory = self._resolve_memory(memory_ref)
             if not memory:
-                raise ValueError(f"Memory '{short_id}' not found (or already archived)")
+                raise ValueError(f"Memory '{memory_ref}' not found (or already archived)")
             resolved.append(memory.id)
 
         if len(set(resolved)) < 2:
@@ -783,17 +839,32 @@ class MemoryTool(Tool):
             "message": f"Merged {len(resolved)} memories into {format_memory_id(str(new_id))}"
         }
 
-    def _find_memory_by_short_id(self, short_id: str):
-        """
-        Find a memory by the first 8 characters of its UUID.
+    def _resolve_memory(self, memory_id: str):
+        """Resolve a memory reference to a Memory row (full UUID or short id).
+
+        Accepts either identity form:
+        - Full UUID (dashed or dash-less, optionally mem_-prefixed): exact
+          match against memories.id — the unambiguous identity, preferred.
+        - Short id (mem_XXXXXXXX or raw 8+ hex): UUID-prefix match with a
+          LIMIT 2 collision check; an ambiguous prefix raises instead of
+          guessing (short IDs are an irreversible prefix — the caller holding
+          the full UUID must pass it instead).
 
         Args:
-            short_id: Either "mem_XXXXXXXX" or raw "XXXXXXXX"
+            memory_id: Full UUID or mem_XXXXXXXX short ID
 
         Returns:
             Memory model or None if not found
         """
-        clean_id = parse_memory_id(short_id)
+        if _memory_id_form(memory_id) == "full":
+            with self._memory_db.session_manager.get_session(self.user_id) as session:
+                row = session.execute_single(
+                    "SELECT * FROM memories WHERE id = %(id)s AND is_archived = FALSE",
+                    {'id': UUID(parse_memory_id(memory_id))},
+                )
+                return Memory(**row) if row else None
+
+        clean_id = parse_memory_id(memory_id)
         if not clean_id or len(clean_id) < 8:
             return None
 
@@ -809,7 +880,7 @@ class MemoryTool(Tool):
 
             if len(result) > 1:
                 raise ValueError(
-                    f"Ambiguous short ID '{short_id}' — matches multiple memories; use the full UUID"
+                    f"Ambiguous short ID '{memory_id}' — matches multiple memories; use the full UUID"
                 )
             if result:
                 return Memory(**result[0])
@@ -823,12 +894,12 @@ class MemoryTool(Tool):
         """
         Record that surfaced memories were referenced in the response.
 
-        Resolves short IDs to full UUIDs and applies mention_count boost
-        immediately. Called as a post-response tool call instead of inline
-        XML tags, which have low LLM compliance.
+        Resolves memory references (full UUID or short ID) to full UUIDs and
+        applies mention_count boost immediately. Called as a post-response
+        tool call instead of inline XML tags, which have low LLM compliance.
 
         Args:
-            memory_ids: List of mem_XXXXXXXX short IDs that were referenced
+            memory_ids: List of full UUIDs or mem_XXXXXXXX short IDs that were referenced
 
         Returns:
             Touch confirmation with resolved UUIDs and any failed IDs
@@ -842,12 +913,12 @@ class MemoryTool(Tool):
         resolved_uuids: List[str] = []
         failed_ids: List[str] = []
 
-        for short_id in memory_ids:
-            memory = self._find_memory_by_short_id(short_id)
+        for memory_ref in memory_ids:
+            memory = self._resolve_memory(memory_ref)
             if memory:
                 resolved_uuids.append(str(memory.id))
             else:
-                failed_ids.append(short_id)
+                failed_ids.append(memory_ref)
 
         if failed_ids:
             self.logger.warning(f"Touch: could not resolve IDs: {failed_ids}")

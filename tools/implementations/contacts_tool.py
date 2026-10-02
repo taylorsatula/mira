@@ -41,6 +41,20 @@ class ContactsToolConfig(BaseModel):
 registry.register("contacts_tool", ContactsToolConfig)
 
 
+class ContactNotFoundError(ValueError):
+    """Raised when an identifier-addressed contacts operation finds no match.
+
+    A ValueError subclass so the documented tool contract ("Raises:
+    ValueError") holds for every caller that catches ValueError, while the
+    actions handler can distinguish not-found from other validation failures
+    and map it to the 404 missing-id envelope. Not-found is a raise, never a
+    returned `success: False` flag — a returned flag lets callers report
+    success on absent resources. Ambiguous matches and partial-match
+    confirmations are NOT not-found: they remain returned soft-path dicts the
+    handler surfaces truthfully.
+    """
+
+
 # -------------------- MAIN TOOL CLASS --------------------
 
 class ContactsTool(Tool):
@@ -349,6 +363,9 @@ class ContactsTool(Tool):
 
         Returns:
             Dict containing the contact information
+
+        Raises:
+            ContactNotFoundError (a ValueError): if no contact matches
         """
         if not identifier or not identifier.strip():
             self.logger.error("Missing contact identifier in get_contact operation")
@@ -357,11 +374,9 @@ class ContactsTool(Tool):
         resolved = self._find_by_identifier(identifier)
         if not resolved:
             self.logger.error(f"Contact '{identifier}' not found in get_contact operation")
-            return {
-                "success": False,
-                "message": f"No contact matches '{identifier}'. Try a fuller name or a UUID.",
-                "ambiguous": False
-            }
+            raise ContactNotFoundError(
+                f"No contact matches '{identifier}'. Try a fuller name or a UUID."
+            )
 
         if resolved.get('ambiguous'):
             return {
@@ -402,12 +417,16 @@ class ContactsTool(Tool):
     def _delete_contact(self, identifier: str) -> Dict[str, Any]:
         """
         Delete a contact by UUID or name.
-        
+
         Args:
             identifier: Contact UUID or name to delete
-            
+
         Returns:
-            Dict containing the operation result
+            Dict containing the operation result (or a soft-path dict for
+            ambiguous matches / partial-match confirmations)
+
+        Raises:
+            ContactNotFoundError (a ValueError): if no contact matches
         """
         if not identifier:
             self.logger.error("Missing contact identifier in delete_contact operation")
@@ -417,7 +436,7 @@ class ContactsTool(Tool):
 
         if not resolved:
             self.logger.error(f"Contact '{identifier}' not found in delete_contact operation")
-            raise ValueError(f"Contact '{identifier}' not found")
+            raise ContactNotFoundError(f"Contact '{identifier}' not found")
 
         if resolved.get('ambiguous'):
             return {
@@ -444,7 +463,7 @@ class ContactsTool(Tool):
             {'id': contact['id']}
         )
         if rows_deleted == 0:
-            raise ValueError(f"Contact not found or already deleted: {contact['id']}")
+            raise ContactNotFoundError(f"Contact not found or already deleted: {contact['id']}")
 
         return {
             "success": True,
@@ -472,7 +491,12 @@ class ContactsTool(Tool):
             pager_address: New pager address
 
         Returns:
-            Dict containing the operation result
+            Dict containing the operation result (or a soft-path dict for
+            ambiguous matches / partial-match confirmations)
+
+        Raises:
+            ContactNotFoundError (a ValueError): if no contact matches
+            ValueError: if no update fields are provided or the new name is a duplicate
         """
         if not identifier:
             self.logger.error("Missing contact identifier in update_contact operation")
@@ -481,7 +505,7 @@ class ContactsTool(Tool):
         resolved = self._find_by_identifier(identifier)
         if not resolved:
             self.logger.error(f"Contact '{identifier}' not found in update_contact operation")
-            raise ValueError(f"Contact '{identifier}' not found")
+            raise ContactNotFoundError(f"Contact '{identifier}' not found")
 
         if resolved.get('ambiguous'):
             return {
@@ -548,7 +572,7 @@ class ContactsTool(Tool):
             {'id': contact['id']}
         )
         if rows_updated == 0:
-            raise ValueError(f"Contact not found: {contact['id']}")
+            raise ContactNotFoundError(f"Contact not found: {contact['id']}")
         
         # Get updated contact
         updated_contacts = self.db.select(

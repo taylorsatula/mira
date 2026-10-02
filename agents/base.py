@@ -207,11 +207,7 @@ class SidebarAgent(ABC):
 
     @abstractmethod
     def get_agent_prompt(self, work_item: 'WorkItem') -> str:
-        """Return the agent-specific system prompt / rubric.
-
-        Receives the work_item so implementations can use per-rule prompts
-        from work_item.context['agent_prompt'] when available.
-        """
+        """Return the agent-specific system prompt / rubric."""
         ...
 
     @abstractmethod
@@ -494,6 +490,13 @@ class SidebarAgent(ABC):
         if self.inherit_base_prompt:
             parts.append(load_agent_prompt("base_system.txt"))
         parts.append(agent_prompt)
+        # A matched user trigger rule's prompt (attached by
+        # rule_filter.apply_trigger_rules as context['rule_prompt']) is
+        # appended here — the single consumption point, so every agent
+        # honors rule prompts without per-agent wiring.
+        rule_prompt = work_item.context.get("rule_prompt")
+        if rule_prompt:
+            parts.append(rule_prompt)
         status = self._iteration_status(iteration)
         if status:
             parts.append(status)

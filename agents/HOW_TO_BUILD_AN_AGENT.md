@@ -372,6 +372,8 @@ class MyTrigger:
 - **Physical-resource dedup**: when the entity is a file or other physical object, prefer an identity key that changes when the object genuinely changes — e.g. `{user_id}_{filename}_{mtime}` re-triages a re-dropped replacement but never the same file. Strongest form: make the agent's own action remove the entity from discovery (archiving a file out of the watched folder means future polls never see it again); the dedup record is then a backstop, not the mechanism.
 - **Pre-fetch cost shape**: when the trigger pre-extracts content into `raw_content` (see Step 3, limit 2), it pays that cost for every discovered item on every poll — including items the dispatcher will dedup-skip. Keep extraction CPU-cheap and bounded (never LLM); if extraction is expensive, discover bare first and let the agent fetch, accepting the restricted-schema tradeoff.
 
+- **Filterable fields**: declare `FILTERABLE_FIELDS = ("field_name",)` on the trigger class — the regex-matchable scalar keys of your WorkItem context (for `memory_floor` that is `("mode",)`; `memories` is a list and not matchable). The trigger-rules API validates rule `trigger_id`/`field` against the registry (`agents/triggers/registry.py`), and rules are applied at dispatch by `rule_filter.py:apply_trigger_rules(user_id, trigger_id, items)` — call it as the last step of `check_for_new_items` so user rules filter your items (opt-in: no rules → everything passes; a matching rule's `prompt` arrives as `context['rule_prompt']` and `SidebarAgent._build_system_prompt` appends it to the system prompt — no per-agent wiring needed). No scalar context keys → declare an empty tuple; never invent field names.
+
 Register in **two** places:
 
 ```python
@@ -379,17 +381,18 @@ Register in **two** places:
 from agents.triggers.my_trigger import MyTrigger
 __all__ = ["MemoryFloorTrigger", "MyTrigger"]
 
-# 2. utils/sidebar_jobs.py:register_sidebar_jobs -- register on the dispatcher
-from agents.triggers import MyTrigger
-dispatcher.register_trigger(MyTrigger())
+# 2. agents/triggers/registry.py -- add the class to TRIGGER_CLASSES
+TRIGGER_CLASSES: list[type] = [MemoryFloorTrigger, MyTrigger]
 ```
 
-`register_sidebar_jobs` is the only place a trigger may be registered; the APScheduler job it creates calls `dispatcher.poll()` every `poll_interval_minutes`. Registering anywhere else is dead code.
+`TRIGGER_CLASSES` is the single trigger registry: `utils/sidebar_jobs.py:register_sidebar_jobs` instantiates and registers every class in it on the dispatcher, and `cns/api/trigger_rules.py` derives its valid trigger/field set from the same list at request time — adding the class makes it dispatchable AND rule-addressable in one edit. The APScheduler job `register_sidebar_jobs` creates calls `dispatcher.poll()` every `poll_interval_minutes`. Registering a trigger anywhere else is dead code.
 
 **Opt-in triggers use the double gate** (both halves, as `memory_floor_trigger.py` and every opt-in agent since have done):
 
 ```python
-# 1. registration-time: never even construct when disabled (utils/sidebar_jobs.py)
+# 1. registration-time: never even construct when disabled -- guard the
+#    instantiation site (the registration loop over TRIGGER_CLASSES in
+#    utils/sidebar_jobs.py, or wherever your class is constructed)
 if config.my_agent.enabled:
     dispatcher.register_trigger(MyTrigger())
 
@@ -677,7 +680,7 @@ The base class `run()` loop (do not override):
 
 **Discovery path (pick one)**
 - [ ] Trigger in `agents/triggers/` -- cheap deterministic discovery, no LLM calls, stable `item_id`, no trigger-side dedup
-- [ ] Trigger exported from `agents/triggers/__init__.py` **and** registered in `utils/sidebar_jobs.py:register_sidebar_jobs`
+- [ ] Trigger exported from `agents/triggers/__init__.py` **and** listed in `agents/triggers/registry.py:TRIGGER_CLASSES` (with `FILTERABLE_FIELDS` declared)
 - [ ] Or: direct-invocation tool spawning under `copy_context()` with `MyAgent(tool_repo=...)` + `agent.run(work_item, event_bus)`
 - [ ] Or: service-hook spawn — a lifecycle event hands your agent a WorkItem directly (segment-collapse handler, integration-curator pattern). No trigger, no dispatch tool; the hook owns thread + context and must publish failure itself on crash
 - [ ] Config in `config/config.py` + `config_manager.py`, and `agent_timeout_overrides` entry if the agent needs more than 120s

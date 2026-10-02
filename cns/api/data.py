@@ -56,6 +56,17 @@ def _decode_history_cursor(cursor: object) -> tuple[datetime, UUID] | None:
     return created_at, message_id
 
 
+def _compose_display_name(first_name: str | None, last_name: str | None) -> str | None:
+    """Join the non-empty name parts into a display name; None when both are unset.
+
+    A missing part is omitted, never rendered: a NULL last_name (the local
+    single-mode account stores one, ``LOCAL_SESSION_LAST_NAME``) must not
+    interpolate Python ``None`` into a user-facing string like "Friend None".
+    """
+    parts = [part.strip() for part in (first_name, last_name) if part]
+    return " ".join(parts) or None
+
+
 class DataType(str, Enum):
     """Supported data types."""
     HISTORY = "history"
@@ -236,10 +247,8 @@ class DataEndpoint(PropagatingHandler):
         if not user:
             raise NotFoundError("user", str(user_id))
 
-        # Build full name if available
-        name = None
-        if user.get('first_name') or user.get('last_name'):
-            name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+        # Compose the display name from the non-empty parts only
+        name = _compose_display_name(user.get('first_name'), user.get('last_name'))
 
         return {
             "profile": {

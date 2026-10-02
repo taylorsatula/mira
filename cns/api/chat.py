@@ -130,9 +130,21 @@ class ChatEndpoint(PropagatingHandler):
                 continuum_pool = get_continuum_pool()
                 continuum = continuum_pool.get_or_create()
 
-                # Add rejection as assistant message so frontend renders it natively
-                continuum.add_assistant_message(rejection_msg, {"type": "size_limit_rejection"})
+                # Add the rejection as an assistant message.
+                # add_assistant_message is cache-only (same contract the
+                # orchestrator relies on): the row is durable only if staged
+                # into the UnitOfWork before commit — the same staging idiom as
+                # orchestrator.process_message's unit_of_work.add_messages().
+                # The user's oversized message is NOT staged: it was rejected,
+                # not accepted (same convention as the empty-message and
+                # bad-image rejections — a rejected user message persists
+                # nothing), and storing the 20k+ text would feed it right
+                # back into the history/summarization the limit protects.
+                rejection, _ = continuum.add_assistant_message(
+                    rejection_msg, {"type": "size_limit_rejection"}
+                )
                 unit_of_work = continuum_pool.begin_work(continuum)
+                unit_of_work.add_messages(rejection)
                 unit_of_work.commit()
 
                 return create_success_response(

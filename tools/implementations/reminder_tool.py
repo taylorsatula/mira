@@ -34,6 +34,18 @@ class ReminderToolConfig(BaseModel):
 registry.register("reminder_tool", ReminderToolConfig)
 
 
+class ReminderNotFoundError(ValueError):
+    """Raised when an id-addressed reminder operation finds no matching row.
+
+    A ValueError subclass so the documented tool contract ("Raises: ValueError
+    ... not found") holds for every caller that catches ValueError, while the
+    actions handler can distinguish not-found from other validation failures
+    and map it to the 404 missing-id envelope. Not-found is a raise, never a
+    returned `success: False` flag — a returned flag lets callers report
+    success on absent resources.
+    """
+
+
 class ReminderTool(Tool):
     """
     SQLite-based reminder tool with complete user isolation and contacts integration.
@@ -85,9 +97,9 @@ class ReminderTool(Tool):
                     "category": {
                         "type": "string",
                         "enum": ["user", "internal"],
-                        "description": "'user' = user-requested (default). 'internal' = proactive follow-up reminders YOU create when you notice something with a future resolution point: a pending result, something ordered, a decision deferred, a question you'd naturally circle back to — like a friend who just remembers to ask \"how'd it go?\" Set date to when your future self should notice. Write notes with enough context to act on cold. Bias toward creation; a false positive costs nothing, a missed observation is gone forever."
+                        "description": "'user' = user-requested (default). 'internal' = proactive follow-up reminders YOU create when you notice something with a future resolution point: a pending result, something ordered, a decision deferred, a question you'd naturally circle back to — like a friend who just remembers to ask \"how'd it go?\" Set date to when your future self should notice. Write additional notes with enough context to act on cold. Bias toward creation; a false positive costs nothing, a missed observation is gone forever."
                     },
-                    "notes": {
+                    "additional_notes": {
                         "type": "string",
                         "description": "Extra context to store with the reminder. For 'internal' category reminders, include enough detail to act without conversation history. Optional"
                     },
@@ -279,7 +291,7 @@ class ReminderTool(Tool):
 
         1. add_reminder: Create a new reminder
            - Required: title, date
-           - Optional: description, contact_name, notes
+           - Optional: description, contact_name, additional_notes
            - Returns: Dict with created reminder
 
         2. get_reminders: Retrieve reminders
@@ -296,7 +308,7 @@ class ReminderTool(Tool):
 
         4. update_reminder: Update an existing reminder
            - Required: reminder_id
-           - Optional: Any fields to update (title, description, date, contact_name)
+           - Optional: Any fields to update (title, date, description, contact_name, additional_notes)
            - Returns: Dict with updated reminder
 
         5. delete_reminder: Delete a reminder
@@ -345,7 +357,7 @@ class ReminderTool(Tool):
         date: str,
         description: Optional[str] = None,
         contact_name: Optional[str] = None,
-        notes: Optional[str] = None,
+        additional_notes: Optional[str] = None,
         category: str = "user",
     ) -> Dict[str, Any]:
         """
@@ -357,7 +369,7 @@ class ReminderTool(Tool):
                 "tomorrow" or "in 3 weeks")
             description: Detailed description of the reminder
             contact_name: Name of the contact to link with this reminder
-            notes: Any additional information to store with the reminder
+            additional_notes: Any additional information to store with the reminder
             category: Category of reminder ('user' or 'internal', default 'user')
             
         Returns:
@@ -433,7 +445,7 @@ class ReminderTool(Tool):
             "completed": 0,
             "completed_at": None,
             "contact_uuid": contact_uuid,
-            "encrypted__additional_notes": notes,
+            "encrypted__additional_notes": additional_notes,
             "category": category
         }
 
@@ -660,7 +672,8 @@ class ReminderTool(Tool):
             Dict containing the updated reminder
 
         Raises:
-            ValueError: If reminder_id is invalid or not found
+            ReminderNotFoundError (a ValueError): if the reminder does not exist
+            ValueError: if persistence verification fails
         """
 
         # Find the reminder
@@ -668,11 +681,7 @@ class ReminderTool(Tool):
 
         if not reminders:
             self.logger.error(f"Reminder with ID '{reminder_id}' not found")
-            return {
-                "success": False,
-                "error": "reminder_not_found",
-                "message": f"Reminder '{reminder_id}' not found. Valid reminder IDs start with 'rem_' followed by 8 characters (e.g., 'rem_a1b2c3d4'). You can list all reminders to see valid IDs."
-            }
+            raise ReminderNotFoundError(self._get_reminder_not_found_error(reminder_id))
         # Update reminder. Stamp completed_at only when completing a
         # not-yet-completed row: re-completing must not overwrite the original
         # completion timestamp.
@@ -729,7 +738,7 @@ class ReminderTool(Tool):
         date: Optional[str] = None,
         description: Optional[str] = None,
         contact_name: Optional[str] = None,
-        notes: Optional[str] = None,
+        additional_notes: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Update an existing reminder.
@@ -740,13 +749,14 @@ class ReminderTool(Tool):
             date: New date (optional)
             description: New description (optional)
             contact_name: New contact name to link (optional)
-            notes: New additional notes (optional)
+            additional_notes: New additional notes (optional)
             
         Returns:
             Dict containing the updated reminder
-            
+
         Raises:
-            ValueError: If reminder_id is invalid or not found
+            ReminderNotFoundError (a ValueError): if the reminder does not exist
+            ValueError: if a date fails to parse or persistence fails
         """
 
         # Find the reminder
@@ -754,11 +764,7 @@ class ReminderTool(Tool):
 
         if not reminders:
             self.logger.error(f"Reminder with ID '{reminder_id}' not found")
-            return {
-                "success": False,
-                "error": "reminder_not_found",
-                "message": f"Reminder '{reminder_id}' not found. Valid reminder IDs start with 'rem_' followed by 8 characters (e.g., 'rem_a1b2c3d4'). You can list all reminders to see valid IDs."
-            }
+            raise ReminderNotFoundError(self._get_reminder_not_found_error(reminder_id))
 
         # Build update data
         update_data = {}
@@ -797,9 +803,9 @@ class ReminderTool(Tool):
                 update_data['contact_uuid'] = None
                 changes.append("contact_uuid (cleared)")
 
-        if notes is not None:
-            update_data['encrypted__additional_notes'] = notes
-            changes.append("notes")
+        if additional_notes is not None:
+            update_data['encrypted__additional_notes'] = additional_notes
+            changes.append("additional_notes")
         
         # Always bump updated_at to reflect modification
         update_data['updated_at'] = format_utc_iso(utc_now())
@@ -841,9 +847,9 @@ class ReminderTool(Tool):
             
         Returns:
             Dict containing deletion confirmation
-            
+
         Raises:
-            ValueError: If reminder_id is invalid or not found
+            ReminderNotFoundError (a ValueError): if the reminder does not exist
         """
 
         # Find the reminder first to get its title for confirmation
@@ -851,11 +857,7 @@ class ReminderTool(Tool):
 
         if not reminders:
             self.logger.error(f"Reminder with ID '{reminder_id}' not found")
-            return {
-                "success": False,
-                "error": "reminder_not_found",
-                "message": f"Reminder '{reminder_id}' not found. Valid reminder IDs start with 'rem_' followed by 8 characters (e.g., 'rem_a1b2c3d4'). You can list all reminders to see valid IDs."
-            }
+            raise ReminderNotFoundError(self._get_reminder_not_found_error(reminder_id))
 
         reminder = reminders[0]
 
@@ -980,6 +982,9 @@ class ReminderTool(Tool):
 
         Returns:
             Dict with succeeded/not_found/failed lists and summary message
+
+        Raises:
+            ValueError: if batch_action or reminder_ids is invalid
         """
         if batch_action not in ("complete", "delete"):
             raise ValueError(f"batch_action must be 'complete' or 'delete', got '{batch_action}'")
@@ -992,13 +997,12 @@ class ReminderTool(Tool):
         for rid in reminder_ids:
             try:
                 if batch_action == "complete":
-                    result = self._mark_completed(rid, resolution_note=resolution_note)
+                    self._mark_completed(rid, resolution_note=resolution_note)
                 else:
-                    result = self._delete_reminder(rid)
-                if result.get("success") is False:
-                    results["not_found"].append(rid)
-                else:
-                    results["succeeded"].append(rid)
+                    self._delete_reminder(rid)
+                results["succeeded"].append(rid)
+            except ReminderNotFoundError:
+                results["not_found"].append(rid)
             except Exception as e:
                 results["failed"].append({"id": rid, "error": str(e)})
 

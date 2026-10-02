@@ -20,7 +20,7 @@ def register_sidebar_jobs(scheduler_service, tool_repo, event_bus) -> None:
         return
 
     from agents.sidebar import SidebarDispatcher
-    from agents.triggers import MemoryFloorTrigger
+    from agents.triggers.registry import TRIGGER_CLASSES
 
     dispatcher = SidebarDispatcher(
         tool_repo=tool_repo,
@@ -29,7 +29,12 @@ def register_sidebar_jobs(scheduler_service, tool_repo, event_bus) -> None:
     )
 
     # Register sidebar triggers (pure discovery — the dispatcher owns dedup).
-    dispatcher.register_trigger(MemoryFloorTrigger())
+    # TRIGGER_CLASSES is the single trigger registry: the trigger-rules API
+    # derives its valid trigger/field set from the same list
+    # (agents/triggers/registry.py), so what dispatches is exactly what is
+    # rule-addressable.
+    for trigger_class in TRIGGER_CLASSES:
+        dispatcher.register_trigger(trigger_class())
 
     scheduler_service.register_job(
         job_id="sidebar_dispatcher_poll",

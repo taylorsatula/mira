@@ -15,6 +15,7 @@ Handles SessionTimeoutEvent by:
 """
 from __future__ import annotations
 
+import html
 import json
 import logging
 import threading
@@ -147,6 +148,138 @@ def _parse_pending_temporal_field(
             exc,
         )
         return None
+
+
+# Pending-drain entity pass. The queue payload (PendingManualMemory) carries no
+# entities, so drain-stored memories get the same LLM entity extraction
+# extraction-stored memories get — one batch-route call per drain, keyed by
+# pending_id. These constants are the wire contract between the prompt and the
+# parser; the format example spliced into the system prompt is generated from
+# them so the example and the parser cannot drift (generated, not transcribed,
+# format examples).
+PENDING_ENTITY_PENDING_ID_KEY = "pending_id"
+PENDING_ENTITY_ENTITIES_KEY = "entities"
+_PENDING_ENTITY_FORMAT_EXAMPLE = json.dumps(
+    [
+        {
+            PENDING_ENTITY_PENDING_ID_KEY: "<the pending_id exactly as given in the input>",
+            PENDING_ENTITY_ENTITIES_KEY: [{"name": "Carlos", "type": "PERSON"}],
+        },
+        {
+            PENDING_ENTITY_PENDING_ID_KEY: "<another pending_id from the input>",
+            PENDING_ENTITY_ENTITIES_KEY: [],
+        },
+    ]
+)
+
+
+def _segment_provenance_from_queue_key(queue_key: str) -> Optional[UUID]:
+    """Segment a pending-memory queue key attributes its items to.
+
+    Queue keys are ``pending_memories:{user_id}:{segment_id}``; the suffix is
+    the segment the memory was queued in, so it is the truthful
+    ``source_segment_id`` — including for rescue-swept queues of older
+    segments (their items were spoken in THOSE segments, not the one
+    collapsing now). The ``presegment`` queue predates any segment, so its
+    items carry no provenance. An unparseable suffix degrades to None with a
+    warning rather than failing the item: provenance is enrichment, the
+    memory is the deliverable.
+    """
+    suffix = queue_key.rsplit(":", 1)[-1]
+    if suffix == "presegment":
+        return None
+    try:
+        return UUID(suffix)
+    except ValueError:
+        logger.warning(
+            "Pending-memory queue key %s has no parseable segment id; "
+            "storing its items without source_segment_id",
+            queue_key,
+        )
+        return None
+
+
+def _parse_pending_entity_response(
+    response_text: str,
+    known_pending_ids: set[str],
+) -> dict[str, list[dict[str, str]]]:
+    """Parse the batch entity-extraction response into a pending_id → entities map.
+
+    Entries are keyed by the pending_id emitted alongside them (identity, not
+    position); entries whose pending_id is unknown to this drain are dropped
+    with a warning. Raises on unparseable output — callers run this inside
+    their tolerate-and-log guard, where the memories are already durable.
+    """
+    from json_repair import repair_json
+    from lt_memory.processing.memory_processor import sanitize_entity_list
+
+    text = (response_text or "").strip()
+    if not text:
+        raise ValueError("Empty entity-extraction response")
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = json.loads(repair_json(text))
+
+    if not isinstance(parsed, list):
+        raise ValueError(
+            f"Entity-extraction response is {type(parsed).__name__}, expected a JSON array"
+        )
+
+    result: dict[str, list[dict[str, str]]] = {}
+    for item in parsed:
+        if not isinstance(item, dict):
+            logger.warning("Dropping non-dict entity response entry: %.80s", item)
+            continue
+        pending_id = item.get(PENDING_ENTITY_PENDING_ID_KEY)
+        if not isinstance(pending_id, str) or pending_id not in known_pending_ids:
+            logger.warning(
+                "Dropping entity response entry with unknown or missing pending_id: %.80s",
+                item,
+            )
+            continue
+        result[pending_id] = sanitize_entity_list(
+            item.get(PENDING_ENTITY_ENTITIES_KEY)
+        )
+    return result
+
+
+def _extract_pending_entities(
+    pending_items: list,
+) -> dict[str, list[dict[str, str]]]:
+    """Extract entity tags for a batch of pending manual memories (batch route).
+
+    The pending queue payload carries no entities (PendingManualMemory has no
+    entities field), so the drain gives its stored rows the same entity
+    extraction extraction-stored memories get: one ``model_config="batch"``
+    call for the whole drain batch, memory text html-escaped into XML tags at
+    the interpolation point (mirroring the extraction prompt's treatment of
+    conversation text). Raises on any failure — callers run this inside their
+    tolerate-and-log guard: the memories are the deliverable, entity tags are
+    enrichment, and a failure here must never lose a memory.
+    """
+    from clients.llm_provider import get_llm_provider
+    from config.prompts import load_prompt
+
+    known = {item.pending_id for item in pending_items}
+    lines = []
+    for item in pending_items:
+        escaped = html.escape(item.text, quote=False)
+        lines.append(f'<memory pending_id="{item.pending_id}">{escaped}</memory>')
+    user_prompt = load_prompt("pending_memory_entities_user.txt").format(
+        memories="\n".join(lines)
+    )
+    system_prompt = load_prompt("pending_memory_entities_system.txt").replace(
+        "{OUTPUT_FORMAT_EXAMPLE}", _PENDING_ENTITY_FORMAT_EXAMPLE
+    )
+    llm = get_llm_provider()
+    response = llm.generate_response(
+        messages=[{"role": "user", "content": user_prompt}],
+        system_prompt=system_prompt,
+        model_config="batch",
+    )
+    response_text = llm.extract_text_content(response)
+    return _parse_pending_entity_response(response_text, known)
 
 
 class SegmentCollapseHandler:
@@ -397,7 +530,7 @@ class SegmentCollapseHandler:
             UPDATE messages
             SET metadata = metadata || jsonb_build_object(
                 'status', 'collapsing',
-                'collapse_attempts', %s,
+                'collapse_attempts', %s::int,
                 'collapse_claimed_at', %s::text
             )
             WHERE id = %s
@@ -989,7 +1122,14 @@ class SegmentCollapseHandler:
         - a permanently-failing item is dead-lettered after
           PENDING_ITEM_MAX_ATTEMPTS content-caused failures so it cannot wedge
           the queue forever; its dead-letter marker carries a full copy of the
-          item, so the loss stays repairable by hand.
+          item, so the loss stays repairable by hand;
+        - each stored row carries the source segment named by its queue key
+          (source_segment_id — the collapsed segment's own queue and each
+          rescue-swept older queue keep their truthful provenance; the
+          presegment queue has none) and the entity tags from one batch-route
+          entity pass — the same entity extraction + linking treatment
+          extraction-stored memories get, so the two store paths converge on
+          one entity-linking contract.
 
         In addition to the collapsed segment's own queue and the presegment
         queue, this sweeps older `pending_memories:{user_id}:*` keys stranded
@@ -1011,6 +1151,7 @@ class SegmentCollapseHandler:
         from pydantic import ValidationError
         from lt_memory.models import PendingManualMemory, ExtractedMemory, MemoryLink
         from lt_memory.db_access import LTMemoryDB
+        from lt_memory.processing.execution_strategy import persist_llm_entities
         from clients.embeddings_provider import get_embeddings_provider
         from utils.database_session_manager import get_shared_session_manager
 
@@ -1098,6 +1239,24 @@ class SegmentCollapseHandler:
         # them after the loop (preserving their user-specified attributes).
         stored_manual = []  # list[tuple[str, str]] of (full_uuid_str, text)
 
+        # Entity tags for the whole batch, before the store loop: the queue
+        # payload carries no entities, so drain-stored memories get the same
+        # LLM entity extraction extraction-stored memories get. Tolerated:
+        # the memories are the deliverable — an entity-pass failure stores
+        # them without tags, and entity-name recall will not surface them.
+        try:
+            entities_by_pending_id = _extract_pending_entities(
+                [mem for _, _, mem in work]
+            )
+        except Exception:
+            logger.warning(
+                "Entity extraction failed for %d pending manual memories of "
+                "segment %s; storing them without entity tags — entity-name "
+                "recall will not surface these memories",
+                len(work), segment_id, exc_info=True,
+            )
+            entities_by_pending_id = {}
+
         # Phase 2 — store each pending item. One item's failure never touches
         # the others: the failing item stays in its queue with a bounded retry
         # counter that only content-caused failures consume, the surviving
@@ -1144,20 +1303,35 @@ class SegmentCollapseHandler:
                         mem.expires_at, "expires_at", mem.pending_id, memory_tz
                     )
 
-                # Create ExtractedMemory
                 extracted = ExtractedMemory(
                     text=mem.text,
                     importance_score=mem.importance_score,
                     happens_at=parsed_happens_at,
-                    expires_at=parsed_expires_at
+                    expires_at=parsed_expires_at,
+                    entities=entities_by_pending_id.get(mem.pending_id, []),
+                    source_segment_id=_segment_provenance_from_queue_key(queue_key),
                 )
 
                 # Store memory
                 created_ids = db.store_memories([extracted], embeddings=[embedding])
                 memory_id = created_ids[0]
 
-                # Manual memories skip entity extraction (no LLM extraction context).
-                # Entities get linked when segment extraction processes the segment.
+                # Entity linking — the same shared treatment
+                # (persist_llm_entities) extraction-stored memories get, so
+                # the two store paths cannot diverge on linking. Tolerated:
+                # the memory is durable; a linking failure leaves this row
+                # untagged without failing the drain or retrying the item.
+                if extracted.entities:
+                    try:
+                        persist_llm_entities(user_id, [extracted], [memory_id], db)
+                    except Exception:
+                        logger.warning(
+                            "Entity linking failed for manual memory %s "
+                            "(pending_id %s); the memory is stored without "
+                            "entity tags — entity-name recall will not "
+                            "surface it",
+                            memory_id, mem.pending_id, exc_info=True,
+                        )
 
                 # Create supersedes links if provided
                 for short_id in mem.supersedes_memory_ids:
@@ -1337,8 +1511,9 @@ class SegmentCollapseHandler:
         """Build candidate hints for manual memories and spawn the curator.
 
         Manual memories carry user-specified attributes (score, happens_at,
-        expires_at, supersedes) and skip entity extraction, so candidate hints
-        come from discovery axes only (no extraction-time bonds).
+        expires_at, supersedes) and no extraction-time bonds — their entity
+        tags come from the drain's own batch entity pass, not from here — so
+        candidate hints come from discovery axes only.
         """
         candidate_hints: dict[str, list[dict]] = {}
         linking = self.lt_memory_factory.linking

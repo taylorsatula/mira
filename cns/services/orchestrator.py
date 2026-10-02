@@ -1165,134 +1165,157 @@ class ContinuumOrchestrator:
             text_parts = [item['text'] for item in user_message if item.get('type') == 'text']
             text_for_context = ' '.join(text_parts) if text_parts else 'Image uploaded'
 
-        # Memory surfacing, or the configured direct-response fast path.
-        previous_memories = self._get_previous_memories()
-        mem = self._surface_memories(continuum, text_for_context, previous_memories)
-
-        # Publish merged memories to ProactiveMemoryTrinket
-        from cns.core.events import UpdateTrinketEvent
-        self.event_bus.publish(UpdateTrinketEvent.create(
-            continuum_id=str(continuum.id),
-            target_trinket="ProactiveMemoryTrinket",
-            context={"memories": mem.surfaced_memories}
-        ))
-
-        # Chat runs on the fixed `primary` route. 2.0 removed the per-user
-        # conversation tier, so there is no preference to resolve here.
-        from utils.user_context import get_model_config
-
-        llm_kwargs: LLMKwargs = {"model_config": "primary"}
-        primary_config = get_model_config("primary")
-        show_thinking_stream = not (
-            primary_config.dialect_name != "anthropic"
-            and not config.api.show_openai_compat_thinking
+        # Cancellation is intent-based: a halt the user sent or a disconnect
+        # the user caused must end this turn as a stopped turn (partial
+        # assistant response retained, staged user message committed, no
+        # TurnCompletedEvent) no matter which phase it interrupts. Every
+        # phase that can observe the cancel signal — memory surfacing (its
+        # subcortical LLM call) and the stream/tool loop below — sits inside
+        # one GenerationCancelled handler, so cancellation converts to
+        # stopped-turn semantics here instead of escaping to the transport
+        # as a turn_error. `mem` starts as the empty surfacing result — the
+        # same shape the subcortical fast path returns — so post-loop
+        # persistence stays well-defined when cancellation lands before
+        # surfacing completes.
+        mem = MemorySurfacingResult(
+            surfaced_memories=[],
+            pinned_ids=set(),
+            subcortical_result=None,
         )
-
-        # Ephemeral effort override (Valkey, 1h TTL) — takes precedence over
-        # the subcortical assessment, which is skipped when one is present.
-        try:
-            from clients.valkey_client import get_valkey_client
-            from utils.user_context import get_current_user_id
-
-            valkey = get_valkey_client()
-            override_value = valkey.get(f"effort_override:{get_current_user_id()}")
-            if override_value is not None:
-                effort_str = (
-                    override_value.decode()
-                    if isinstance(override_value, bytes)
-                    else override_value
-                )
-                llm_kwargs["effort"] = effort_str
-                logger.info(f"Effort override active: {effort_str}")
-        except Exception:
-            # The override is optional — a Valkey outage must not stop the turn.
-            pass
-
-        # Extended thinking: enabled only when subcortical layer provides complexity assessment
-        if mem.subcortical_result is not None and "effort" not in llm_kwargs:
-            effort_level = mem.subcortical_result.get_effort_level()
-            llm_kwargs['effort'] = effort_level
-            logger.info(f"Thinking: complexity={mem.subcortical_result.complexity} effort={effort_level}")
-
-        def compose_messages() -> list[dict[str, object]]:
-            return self._compose_llm_messages(continuum, system_prompt, str(active_turn_id))
-
-        complete_messages = compose_messages()
-        messages_for_llm = complete_messages
-
-        # Use last turn's actual provider-reported input tokens for compaction check.
-        # Segment collapse invalidation via _invalidate_on_segment_collapse event handler.
-        continuum_id_str = str(continuum.id)
-        last_input = self._last_turn_usage.get(continuum_id_str)
-        self._maybe_prefetch_context_compaction(
-            continuum_id=continuum_id_str,
-            input_tokens=last_input,
-        )
-
-        # Stream LLM response with overflow remediation
         acc = TurnAccumulator()
         continuum_id = str(continuum.id)
-        overflow_attempt = 0
-        deep_fallback_active = False
         stopped = False
         stop_reason: str | None = None
+        try:
+            # Memory surfacing, or the configured direct-response fast path.
+            previous_memories = self._get_previous_memories()
+            mem = self._surface_memories(continuum, text_for_context, previous_memories)
 
-        def compose_messages_for_tool_loop() -> list[dict[str, object]]:
-            base_messages = compose_messages()
-            if deep_fallback_active:
-                return self._apply_deep_context_overflow_fallback(base_messages)
-            return base_messages
+            # Publish merged memories to ProactiveMemoryTrinket
+            from cns.core.events import UpdateTrinketEvent
+            self.event_bus.publish(UpdateTrinketEvent.create(
+                continuum_id=str(continuum.id),
+                target_trinket="ProactiveMemoryTrinket",
+                context={"memories": mem.surfaced_memories}
+            ))
 
-        while True:
+            # Chat runs on the fixed `primary` route. 2.0 removed the per-user
+            # conversation tier, so there is no preference to resolve here.
+            from utils.user_context import get_model_config
+
+            llm_kwargs: LLMKwargs = {"model_config": "primary"}
+            primary_config = get_model_config("primary")
+            show_thinking_stream = not (
+                primary_config.dialect_name != "anthropic"
+                and not config.api.show_openai_compat_thinking
+            )
+
+            # Ephemeral effort override (Valkey, 1h TTL) — takes precedence over
+            # the subcortical assessment, which is skipped when one is present.
             try:
-                self._consume_stream(
-                    self._stream_model_tool_loop(
-                        base_messages=messages_for_llm,
-                        compose_messages=compose_messages_for_tool_loop,
-                        llm_kwargs=llm_kwargs,
-                    ),
-                    acc, continuum_id, stream, stream_callback, show_thinking_stream,
-                )
-                break  # Success
+                from clients.valkey_client import get_valkey_client
+                from utils.user_context import get_current_user_id
 
-            except GenerationCancelled:
-                stopped = True
-                stop_reason = get_cancel_reason()
-                acc.finish_partial_step()
-                metadata["stopped"] = True
-                metadata["stop_reason"] = stop_reason
-                break
+                valkey = get_valkey_client()
+                override_value = valkey.get(f"effort_override:{get_current_user_id()}")
+                if override_value is not None:
+                    effort_str = (
+                        override_value.decode()
+                        if isinstance(override_value, bytes)
+                        else override_value
+                    )
+                    llm_kwargs["effort"] = effort_str
+                    logger.info(f"Effort override active: {effort_str}")
+            except Exception:
+                # The override is optional — a Valkey outage must not stop the turn.
+                pass
 
-            except ContextOverflowError as e:
-                overflow_attempt += 1
-                logger.warning(
-                    "Context overflow from API: %s (attempt %d)",
-                    e,
-                    overflow_attempt,
-                )
-                if overflow_attempt == 1:
-                    deep_fallback_active = True
+            # Extended thinking: enabled only when subcortical layer provides complexity assessment
+            if mem.subcortical_result is not None and "effort" not in llm_kwargs:
+                effort_level = mem.subcortical_result.get_effort_level()
+                llm_kwargs['effort'] = effort_level
+                logger.info(f"Thinking: complexity={mem.subcortical_result.complexity} effort={effort_level}")
+
+            def compose_messages() -> list[dict[str, object]]:
+                return self._compose_llm_messages(continuum, system_prompt, str(active_turn_id))
+
+            complete_messages = compose_messages()
+            messages_for_llm = complete_messages
+
+            # Use last turn's actual provider-reported input tokens for compaction check.
+            # Segment collapse invalidation via _invalidate_on_segment_collapse event handler.
+            continuum_id_str = str(continuum.id)
+            last_input = self._last_turn_usage.get(continuum_id_str)
+            self._maybe_prefetch_context_compaction(
+                continuum_id=continuum_id_str,
+                input_tokens=last_input,
+            )
+
+            # Stream LLM response with overflow remediation
+            overflow_attempt = 0
+            deep_fallback_active = False
+
+            def compose_messages_for_tool_loop() -> list[dict[str, object]]:
+                base_messages = compose_messages()
+                if deep_fallback_active:
+                    return self._apply_deep_context_overflow_fallback(base_messages)
+                return base_messages
+
+            while True:
+                try:
+                    self._consume_stream(
+                        self._stream_model_tool_loop(
+                            base_messages=messages_for_llm,
+                            compose_messages=compose_messages_for_tool_loop,
+                            llm_kwargs=llm_kwargs,
+                        ),
+                        acc, continuum_id, stream, stream_callback, show_thinking_stream,
+                    )
+                    break  # Success
+
+                except ContextOverflowError as e:
+                    overflow_attempt += 1
+                    logger.warning(
+                        "Context overflow from API: %s (attempt %d)",
+                        e,
+                        overflow_attempt,
+                    )
+                    if overflow_attempt == 1:
+                        deep_fallback_active = True
+                        if stream and stream_callback:
+                            stream_callback({"type": "context_reset"})
+                        messages_for_llm = self._apply_deep_context_overflow_fallback(messages_for_llm)
+                        acc.reset()
+                        continue
+
                     if stream and stream_callback:
                         stream_callback({"type": "context_reset"})
-                    messages_for_llm = self._apply_deep_context_overflow_fallback(messages_for_llm)
                     acc.reset()
-                    continue
-
-                if stream and stream_callback:
-                    stream_callback({"type": "context_reset"})
-                acc.reset()
-                fallback = "collapse the segment, please. incremental compaction failed"
-                fallback_entry_id = acc.append_text(fallback)
-                acc.finish_text_step()
-                metadata["model_error"] = True
-                metadata["model_error_reason"] = "incremental_compaction_failed"
-                if stream and stream_callback:
-                    stream_callback({
-                        "type": "text",
-                        "entry_id": str(fallback_entry_id),
-                        "content": fallback,
-                    })
-                break
+                    fallback = "collapse the segment, please. incremental compaction failed"
+                    fallback_entry_id = acc.append_text(fallback)
+                    acc.finish_text_step()
+                    metadata["model_error"] = True
+                    metadata["model_error_reason"] = "incremental_compaction_failed"
+                    if stream and stream_callback:
+                        stream_callback({
+                            "type": "text",
+                            "entry_id": str(fallback_entry_id),
+                            "content": fallback,
+                        })
+                    break
+        except GenerationCancelled:
+            stopped = True
+            stop_reason = get_cancel_reason()
+            acc.finish_partial_step()
+            metadata["stopped"] = True
+            metadata["stop_reason"] = stop_reason
+            logger.warning(
+                "Turn stopped by %s: turn_id=%s continuum_id=%s "
+                "segment_id=%s - turn cancelled before completion; partial "
+                "assistant response retained; staged user message committed; "
+                "no TurnCompletedEvent published",
+                stop_reason, active_turn_id, continuum_id, segment_id,
+            )
 
         # Parse tags from the final response (preserve emotion tag for frontend
         # extraction), then normalise every provider step the same way so the

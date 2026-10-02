@@ -3,8 +3,13 @@ Trigger Rules API -- CRUD for per-user sidebar trigger filter rules.
 
 Settings-tier configuration (not conversational). Each rule specifies
 which trigger it belongs to (trigger_id), where to look (scope), what
-field to match (field), and a regex pattern. The trigger reads its own
-rules by filtering on trigger_id.
+field to match (field), and a regex pattern. At dispatch time each
+trigger applies its own rules via agents/triggers/rule_filter.py.
+
+Valid trigger_ids and their valid field names are DERIVED at request time
+from the runtime trigger registry (agents/triggers/registry.py -- the same
+TRIGGER_CLASSES list the dispatcher registers from). There is no
+hand-maintained table: what dispatches is exactly what is rule-addressable.
 
 Endpoints:
   GET    /triggers/rules              — list all rules (optional ?trigger_id= filter)
@@ -19,6 +24,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, Field
 
+from agents.triggers.registry import registered_trigger_specs
 from auth.api import get_current_user
 from auth.types import SessionData, APITokenContext
 from cns.api.base import (
@@ -36,22 +42,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Known trigger types and their valid fields
-_TRIGGER_FIELDS: dict[str, set[str]] = {
-    "imap_email": {"from", "subject", "body"},
-}
-
 
 # ------------------------------------------------------------------
 # Request models
 # ------------------------------------------------------------------
 
 class CreateRuleRequest(BaseModel):
-    trigger_id: str = Field(description="Trigger this rule belongs to (e.g. 'imap_email')")
-    scope: str = Field(default="INBOX", description="Where to look (e.g. IMAP folder name)")
-    field: str = Field(description="Which part to match: 'from', 'subject', or 'body'")
+    trigger_id: str = Field(description="Trigger this rule belongs to — a registered sidebar trigger (e.g. 'memory_floor'); the valid set is derived from the trigger registry at request time")
+    scope: str = Field(default="", description="Trigger-specific scope label; semantics are owned by the trigger (no registered trigger has a scoped surface today, so it is stored metadata only)")
+    field: str = Field(description="Work-item context field to match — valid fields derive from the trigger's context shape (for 'memory_floor': 'mode')")
     pattern: str = Field(description="Regex pattern (matched case-insensitively)")
-    prompt: str | None = Field(default=None, description="Agent system prompt for items matching this rule")
+    prompt: str | None = Field(default=None, description="Agent system prompt for items matching this rule (attached as the work item's context['rule_prompt'])")
 
 
 class UpdateRuleRequest(BaseModel):
@@ -67,9 +68,14 @@ class UpdateRuleRequest(BaseModel):
 # ------------------------------------------------------------------
 
 def _validate_trigger_field(trigger_id: str, field: str) -> None:
-    valid_fields = _TRIGGER_FIELDS.get(trigger_id)
+    """Validate against the runtime trigger registry, derived per call."""
+    specs = {
+        spec.trigger_id: spec.filterable_fields
+        for spec in registered_trigger_specs()
+    }
+    valid_fields = specs.get(trigger_id)
     if valid_fields is None:
-        known = ", ".join(sorted(_TRIGGER_FIELDS.keys()))
+        known = ", ".join(sorted(specs))
         raise ValidationError(
             f"Unknown trigger_id '{trigger_id}'",
             {"known_triggers": known},

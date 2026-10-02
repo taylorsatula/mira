@@ -265,25 +265,6 @@ class ExtractedMemory(BaseModel):
             return value.replace(tzinfo=timezone.utc)
         return value
 
-    @field_validator('entities')
-    @classmethod
-    def validate_entities(cls, v: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        """Validate entities list structure."""
-        if not isinstance(v, list):
-            return []
-
-        valid_entities = []
-        for entity in v:
-            if not isinstance(entity, dict):
-                continue
-            if 'name' not in entity or 'type' not in entity:
-                continue
-            if not isinstance(entity['name'], str) or not isinstance(entity['type'], str):
-                continue
-            valid_entities.append(entity)
-
-        return valid_entities
-
     @field_validator('importance_score')
     @classmethod
     def validate_score_range(cls, v: float) -> float:

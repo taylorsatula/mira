@@ -7,6 +7,7 @@ and configurable through these endpoints.
 """
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, Depends, Response
@@ -21,7 +22,7 @@ from cns.api.base import (
     create_error_response,
     generate_request_id,
 )
-from tools.registry import registry
+from tools.registry import UnknownToolConfigFields, registry
 from tools.repo import ESSENTIAL_TOOLS
 from utils.timezone_utils import format_utc_iso, utc_now
 from utils.user_credentials import UserCredentialService
@@ -31,7 +32,6 @@ from utils.tool_config_store import (
     prepare_tool_config_for_validation,
     redact_tool_config,
     save_tool_config_update,
-    save_user_tool_config,
     strip_secret_fields,
 )
 
@@ -54,11 +54,6 @@ def _get_configurable_tools() -> dict[str, type]:
 def _get_user_tool_config(tool_name: str) -> dict[str, Any] | None:
     """Get user's saved config for a tool, or None if not set."""
     return load_user_tool_config(tool_name, hydrate_secrets=False)
-
-
-def _save_user_tool_config(tool_name: str, config: dict[str, Any]) -> None:
-    """Save user's config for a tool."""
-    save_user_tool_config(tool_name, config)
 
 
 def _delete_user_tool_config(tool_name: str) -> bool:
@@ -248,9 +243,19 @@ def update_tool_config(
             request_body.config,
         )
 
-        # Validate config by instantiating the Pydantic model
+        # Validate config through the registry's strictness seam: unknown
+        # fields are rejected (a typo'd field name must not silently no-op
+        # while the request looks accepted).
         try:
-            validated_config = config_class(**prepared.config)
+            validated_config = registry.validate_config_data(tool_name, prepared.config)
+        except UnknownToolConfigFields as e:
+            raise ValidationError(
+                f"Invalid configuration for {tool_name}",
+                details={
+                    "validation_errors": e.validation_entries(),
+                    "valid_fields": e.valid_fields,
+                }
+            )
         except PydanticValidationError as e:
             # Convert Pydantic validation errors to our format
             errors = []
@@ -328,8 +333,11 @@ def validate_tool_config(
     """
     Validate tool configuration without saving.
 
-    Tests the config (e.g., connection test for email) and returns
-    any discovered data (e.g., available folders for email).
+    Always schema-validates the config (unknown fields are rejected, same as
+    PUT). Additionally runs the tool's own validate_config (live connection
+    test, discovery) when the tool overrides it — the response's
+    live_validation field and message state whether a live check ran, so a
+    schema-only validation is never read as a passed connection test.
     """
     request_id = generate_request_id()
 
@@ -344,9 +352,18 @@ def validate_tool_config(
             request_body.config,
         )
 
-        # Validate config by instantiating the Pydantic model
+        # Validate config through the registry's strictness seam (same
+        # unknown-field rejection as PUT).
         try:
-            validated_config = config_class(**prepared.config)
+            validated_config = registry.validate_config_data(tool_name, prepared.config)
+        except UnknownToolConfigFields as e:
+            raise ValidationError(
+                f"Invalid configuration for {tool_name}",
+                details={
+                    "validation_errors": e.validation_entries(),
+                    "valid_fields": e.valid_fields,
+                }
+            )
         except PydanticValidationError as e:
             errors = []
             for err in e.errors():
@@ -364,16 +381,25 @@ def validate_tool_config(
         config_dict = validated_config.model_dump()
 
         # Call tool-specific validation if the tool implements it
-        discovered_data = _call_tool_validation(tool_name, config_dict)
+        validation_result = _call_tool_validation(tool_name, config_dict)
         redacted_config = redact_tool_config(tool_name, config_dict)
+
+        if validation_result.live_validation:
+            message = f"Configuration for {tool_name} validated successfully"
+        else:
+            message = (
+                f"{tool_name} defines no tool-specific validation; "
+                "configuration was schema-checked only, no live check was performed"
+            )
 
         api_response = create_success_response(
             data={
                 "tool_name": tool_name,
                 "valid": True,
                 "config": redacted_config,
-                "discovered": discovered_data,
-                "message": f"Configuration for {tool_name} validated successfully"
+                "discovered": validation_result.discovered,
+                "live_validation": validation_result.live_validation,
+                "message": message
             },
             meta={
                 "request_id": request_id,
@@ -397,12 +423,27 @@ def validate_tool_config(
         return api_response.to_dict()
 
 
-def _call_tool_validation(tool_name: str, config: dict[str, Any]) -> dict[str, Any]:
-    """
-    Call the tool's validate_config method if it exists.
+@dataclass(frozen=True)
+class ToolValidationResult:
+    """Outcome of the tool-specific validation step.
 
-    Tools can implement custom validation (connection tests, auto-discovery)
-    by overriding the validate_config classmethod.
+    live_validation is True only when the tool's own validate_config override
+    actually ran; discovered carries whatever it returned.
+    """
+
+    discovered: dict[str, Any]
+    live_validation: bool
+
+
+def _call_tool_validation(tool_name: str, config: dict[str, Any]) -> ToolValidationResult:
+    """
+    Call the tool's validate_config override if it defines one.
+
+    The Tool base class provides a no-op validate_config, so mere presence on
+    the class is not evidence a live check exists — the override check
+    compares against the base implementation. A tool with no override (or an
+    unloadable module) yields live_validation=False, and the endpoint says so
+    instead of reporting a validation that never ran.
     """
     import importlib
     import inspect
@@ -417,7 +458,7 @@ def _call_tool_validation(tool_name: str, config: dict[str, Any]) -> dict[str, A
         # "no such tool" for bad names. Log at this seam too so a genuinely
         # broken module stays visible instead of silently indistinguishable.
         logger.warning(f"Tool module tools.implementations.{tool_name} failed to import: {e}")
-        return {}
+        return ToolValidationResult(discovered={}, live_validation=False)
 
     # Find the Tool subclass matching this tool_name
     tool_class: type[Tool] | None = None
@@ -432,16 +473,21 @@ def _call_tool_validation(tool_name: str, config: dict[str, Any]) -> dict[str, A
             break
 
     if not tool_class:
-        return {}
+        return ToolValidationResult(discovered={}, live_validation=False)
 
-    # Check if tool has custom validation
-    if hasattr(tool_class, 'validate_config'):
-        try:
-            return tool_class.validate_config(config)
-        except ValueError as e:
-            raise ValidationError(str(e))
+    # The base class's no-op default is not a live check; only an override is.
+    # classmethod attribute access binds per class, so compare the underlying
+    # functions, not the bound methods.
+    if tool_class.validate_config.__func__ is Tool.validate_config.__func__:
+        return ToolValidationResult(discovered={}, live_validation=False)
 
-    return {}
+    try:
+        return ToolValidationResult(
+            discovered=tool_class.validate_config(config),
+            live_validation=True,
+        )
+    except ValueError as e:
+        raise ValidationError(str(e))
 
 
 @router.delete("/actions/tools/{tool_name}")

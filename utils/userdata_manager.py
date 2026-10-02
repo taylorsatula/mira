@@ -76,7 +76,7 @@ _DOMAINDOC_DDL = {
         operation TEXT NOT NULL,
         encrypted__diff_data TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        UNIQUE(domaindoc_id, version_num)
+        UNIQUE(domaindoc_id, section_id, version_num)
     )
     """,
 }
@@ -452,6 +452,45 @@ class UserDataManager:
             self.connection.commit()
             logger.info("Migrated domaindoc_sections: added encrypted__summary column")
 
+        self._migrate_domaindoc_versions_unique(cursor)
+
+    def _migrate_domaindoc_versions_unique(self, cursor: sqlite3.Cursor) -> None:
+        """Rebuild domaindoc_versions with per-section uniqueness.
+
+        Version numbering is per section (cns/api/actions.py:_record_version
+        numbers versions with MAX(version_num) filtered by section_id), so the
+        uniqueness constraint is (domaindoc_id, section_id, version_num); the
+        original (domaindoc_id, version_num) constraint rejected the second
+        section's version 1. SQLite cannot ALTER a table constraint, so the
+        table is rebuilt once when the old constraint is detected, copying
+        existing rows verbatim — no row is renumbered or rewritten.
+        """
+        cursor.execute("PRAGMA index_list(domaindoc_versions)")
+        for index_row in cursor.fetchall():
+            index_name = index_row[1]
+            is_unique = bool(index_row[2])
+            if not is_unique or '"' in index_name:
+                continue
+            cursor.execute(f'PRAGMA index_info("{index_name}")')
+            columns = tuple(row[2] for row in cursor.fetchall())
+            if columns != ("domaindoc_id", "version_num"):
+                continue
+            cursor.execute("ALTER TABLE domaindoc_versions RENAME TO domaindoc_versions_old")
+            cursor.execute(_DOMAINDOC_DDL["domaindoc_versions"])
+            cursor.execute(
+                "INSERT INTO domaindoc_versions "
+                "(id, domaindoc_id, section_id, version_num, operation, encrypted__diff_data, created_at) "
+                "SELECT id, domaindoc_id, section_id, version_num, operation, "
+                "encrypted__diff_data, created_at FROM domaindoc_versions_old ORDER BY id"
+            )
+            cursor.execute("DROP TABLE domaindoc_versions_old")
+            self.connection.commit()
+            logger.info(
+                "Migrated domaindoc_versions: uniqueness is now "
+                "(domaindoc_id, section_id, version_num) — per-section version numbering"
+            )
+            return
+
     def _init_contacts_schema(self):
         """Initialize ContactsTool database schema."""
         cursor = self.connection.cursor()
@@ -492,10 +531,12 @@ class UserDataManager:
     def _init_trigger_rules_schema(self):
         """Initialize trigger_rules table for per-user sidebar trigger filters.
 
-        Each row is a filter rule scoped to a specific trigger type. The trigger
-        reads its own rules by filtering on trigger_id. Field names and scope
-        semantics are trigger-specific (e.g. IMAP: scope=folder, field=from/subject/body;
-        a future Slack trigger: scope=channel, field=author/text).
+        Each row is a filter rule scoped to a specific trigger type. Field
+        names are validated by the API against the trigger registry
+        (agents/triggers/registry.py); rows are applied at dispatch time by
+        agents/triggers/rule_filter.py, which reads them by trigger_id. The
+        scope column is trigger-specific stored metadata — no registered
+        trigger has a scoped surface today, so nothing matches on it.
         """
         cursor = self.connection.cursor()
 
