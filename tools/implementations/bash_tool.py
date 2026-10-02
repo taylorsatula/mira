@@ -108,6 +108,10 @@ def _refuse(rule: str, reason: str, offending: str) -> NoReturn:
 _SYSTEM_DIRS = (
     "etc", "usr", "bin", "sbin", "lib", "lib64", "libx32", "boot", "dev",
     "proc", "sys", "var", "opt", "root", "srv", "run",
+    # macOS top-level system directories: the same guardrail must protect
+    # the platform's own FHS, or `rm -rf /System` sails through on the half
+    # of the target matrix that does not use the Linux layout.
+    "System", "Library", "Applications", "private", "Volumes", "cores",
 )
 _SYSTEM_DIR_ALT = "|".join(_SYSTEM_DIRS)
 _SYSTEM_DIR_NAMES = frozenset(_SYSTEM_DIRS)
@@ -334,7 +338,10 @@ _WRITE_REDIRECTS = frozenset({">", ">>", "&>", "&>>", "1>", "2>", ">", "<>"})
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _DURATION = re.compile(r"^\d+(?:\.\d+)?[smhd]?$")
 _INTEGER = re.compile(r"^[-+]?\d+$")
-_HOME_DIR = re.compile(r"^/home/[^/]+$")
+# User-home roots on both supported layouts: /home/<name> (Linux) and
+# /Users/<name> (macOS). The classifier must know both shapes — protecting
+# only the Linux one left cross-user home deletion unguarded on macOS.
+_HOME_DIR = re.compile(r"^(?:/home|/Users)/[^/]+$")
 _NESTING_CHARS = " \t\n;|&<>()$`"
 _EXPANSION_CHARS = "$`~"
 _GLOB_CHARS = "*?["
@@ -342,7 +349,12 @@ _MAX_NESTING = 6
 
 # Protected as themselves; their contents stay reachable, so `rm -rf /tmp/scratch`
 # is fine while `rm -rf /tmp` is not.
-_SELF_ONLY_DIRS = frozenset({"/tmp", "/mnt", "/media", "/snap", "/lost+found"})
+_SELF_ONLY_DIRS = frozenset({
+    "/tmp", "/mnt", "/media", "/snap", "/lost+found",
+    # Home containers: deleting the container itself is destructive, while its
+    # contents stay reachable so per-user homes classify via _HOME_DIR below.
+    "/home", "/Users",
+})
 
 _RULE_REASONS: Dict[str, str] = {
     "filesystem-root": "the command targets the filesystem root",
