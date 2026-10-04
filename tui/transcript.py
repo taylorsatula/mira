@@ -17,7 +17,7 @@ from tui.text import sanitize
 def banner(endpoint: str, base_url: str) -> Text:
     return Text(
         f"MIRA · {sanitize(endpoint)} ({sanitize(base_url)})"
-        " · Enter send · Alt+Enter newline · Ctrl+C stop/quit",
+        " · Enter send · Alt+Enter newline · Ctrl+C stop/quit · Ctrl+T thinking",
         style="dim",
     )
 
@@ -35,20 +35,20 @@ def mira_lines(lines: list[str]) -> Text:
     return Text("\n".join(sanitize(line) for line in lines))
 
 
+def thinking_lines(lines: list[str]) -> Text:
+    """MIRA's reasoning stream (the Ctrl+T view), dimmed and italicized."""
+    return Text("\n".join(sanitize(line) for line in lines), style="dim italic")
+
+
 def tool_line(name: str, ok: bool) -> Text:
     if ok:
         return Text(f"· used {sanitize(name)}", style="dim")
     return Text(f"· {sanitize(name)} failed", style="dim red")
 
 
-def reply_footer(seconds: float, tools: int, stopped: bool) -> Text:
-    whole = max(0, round(seconds))
-    if stopped:
-        return Text(f"· stopped after {whole}s", style="dim")
-    footer = f"· {whole}s"
-    if tools:
-        footer += f" · {tools} tool" + ("" if tools == 1 else "s")
-    return Text(footer, style="dim")
+def reply_footer(tools: int) -> Text:
+    """Dim tool-count line after a finished reply; omitted when no tools ran."""
+    return Text(f"· {tools} tool" + ("" if tools == 1 else "s"), style="dim")
 
 
 def notice(text: str) -> Text:

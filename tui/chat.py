@@ -47,7 +47,8 @@ from tui.client import (
     TurnStarted,
     TurnStopped,
 )
-from tui.screen import Interrupt, Intent, Live, Quit, Screen, Status, Submit
+from tui.history import replay_blocks
+from tui.screen import Interrupt, Intent, Live, Quit, Screen, Status, Submit, ToggleThinking
 from tui.text import ReplyStream, display_lines
 
 # --- Bounded-wait constants (the only unbounded await is the inbox read) -----
@@ -134,6 +135,7 @@ class _Turn:
     halt_requested: bool = False
     activity: Literal["replying", "thinking", "tool"] = "replying"
     tool_name: str = ""
+    thinking: ReplyStream = field(default_factory=ReplyStream)  # reasoning stream, shown when toggled on
 
 
 class ChatSession:
@@ -159,6 +161,7 @@ class ChatSession:
         self._turn: _Turn | None = None
         self._halt_on_start = False  # Ctrl+C before turn_started: halt on arrival
         self._deferred: list[str] = []  # proactive content held until the turn ends
+        self._show_thinking = False  # Ctrl+T view toggle; forward-looking, no replay of what streamed while off
         self._conn: ConnState = "connecting"  # AuthOk on the inbox flips it
         self._conn_since = time.monotonic()
 
@@ -175,6 +178,7 @@ class ChatSession:
         handler fails, after restoring the terminal."""
         # Screen is not running yet: this is a direct write above the bar-to-be.
         await self._emit(transcript.banner(self._label, self._base_url))
+        await self._load_history()
         self._screen_task = asyncio.create_task(self._screen.run())
         self._screen_task.add_done_callback(self._on_screen_done)
         self._start_pump()
@@ -188,6 +192,28 @@ class ChatSession:
         finally:
             await self._teardown()
             await self._print_remaining()
+
+    async def _load_history(self) -> None:
+        """Startup replay: the current segment's earlier messages into
+        scrollback, before the bar exists (direct writes; the pump is not
+        started yet, so wire frames arriving meanwhile wait in the socket).
+        Tool rows, sentinels and summaries are skipped. A fetch failure
+        degrades to an alert — the chat still works without history."""
+        await self._emit(transcript.notice("loading earlier messages from this session…"))
+        try:
+            rows = await self._client.fetch_history("session_only")
+        except ClientError as error:
+            await self._emit(
+                transcript.alert(
+                    f"could not load history: {error.message} [{error.code}] — continuing without it"
+                )
+            )
+            return
+        blocks = replay_blocks(rows)
+        if blocks:
+            await self._emit(*blocks)
+        else:
+            await self._emit(transcript.notice("no earlier messages in this session yet"))
 
     # --- derived state ---------------------------------------------------------
 
@@ -223,8 +249,18 @@ class ChatSession:
 
     def _live(self) -> Live:
         turn, flight = self._turn, self._in_flight
+        pending = ""
+        if turn is not None:
+            # While reasoning is the live activity and the view is on, the
+            # live region tail-follows the thinking stream, not the reply.
+            stream = (
+                turn.thinking
+                if self._show_thinking and turn.activity == "thinking"
+                else turn.stream
+            )
+            pending = stream.pending()
         return Live(
-            pending=turn.stream.pending() if turn else "",
+            pending=pending,
             sending=flight.text if flight else None,
             queued=tuple(self._outbox),
             status=self._status(),
@@ -247,6 +283,15 @@ class ChatSession:
                 return await self._on_interrupt()
             case Quit():
                 return True
+            case ToggleThinking():
+                self._show_thinking = not self._show_thinking
+                await self._emit(
+                    transcript.notice(
+                        "showing MIRA's thinking · Ctrl+T hides it"
+                        if self._show_thinking
+                        else "hiding MIRA's thinking"
+                    )
+                )
             case AuthOk():
                 await self._on_auth_ok()
             case AuthFailed():
@@ -263,7 +308,13 @@ class ChatSession:
                 turn = await self._current(item.turn_id, "thinking")
                 if turn is not None:
                     turn.activity = "thinking"
-                    self._refresh()
+                    lines = (
+                        turn.thinking.feed("", item.content) if self._show_thinking else []
+                    )
+                    if lines:
+                        await self._emit(transcript.thinking_lines(lines))
+                    else:
+                        self._refresh()
             case ToolUpdate():
                 await self._on_tool(item)
             case ModelError():
@@ -484,6 +535,9 @@ class ChatSession:
         blocks = [headline]
         turn = self._turn
         if turn is not None:
+            thinking = turn.thinking.finish()
+            if thinking:
+                blocks.append(transcript.thinking_lines(thinking))
             lines = turn.stream.finish()
             if lines:
                 blocks.append(transcript.mira_lines(lines))
@@ -545,6 +599,9 @@ class ChatSession:
         if turn is None:
             return
         blocks: list[Text] = []
+        thinking = turn.thinking.flush()  # a tool event ends the reasoning step too
+        if thinking:
+            blocks.append(transcript.thinking_lines(thinking))
         lines = turn.stream.flush()  # a tool event ends the provider step
         if lines:
             blocks.append(transcript.mira_lines(lines))
@@ -565,6 +622,9 @@ class ChatSession:
         blocks: list[Text] = []
         turn = self._turn
         if turn is not None and turn.turn_id == event.turn_id:
+            thinking = turn.thinking.flush()  # the notice must not land inside a paragraph
+            if thinking:
+                blocks.append(transcript.thinking_lines(thinking))
             lines = turn.stream.flush()  # the notice must not land inside a paragraph
             if lines:
                 blocks.append(transcript.mira_lines(lines))
@@ -577,6 +637,7 @@ class ChatSession:
             return
         shown = turn.stream.has_text
         turn.stream.discard()
+        turn.thinking.discard()
         text = (
             "the server discarded the text above and is restarting the reply"
             if shown
@@ -588,16 +649,20 @@ class ChatSession:
         turn = await self._current(event.turn_id, "turn_complete")
         if turn is None:
             return
+        thinking = turn.thinking.finish()
         lines = turn.stream.finish()
         shown = turn.stream.has_text
         if not shown:
             lines = display_lines(event.response)  # never when the stream displayed text
         blocks: list[Text] = []
+        if thinking:
+            blocks.append(transcript.thinking_lines(thinking))
         if lines:
             blocks.append(transcript.mira_lines(lines))
         elif not shown:
             blocks.append(transcript.notice("(empty reply)"))
-        blocks.append(transcript.reply_footer(event.processing_time_ms / 1000, len(turn.tools), False))
+        if turn.tools:
+            blocks.append(transcript.reply_footer(len(turn.tools)))
         await self._end_reply(blocks, turn.halt_requested)
 
     async def _on_turn_stopped(self, event: TurnStopped) -> None:
@@ -607,9 +672,6 @@ class ChatSession:
         blocks = self._tail_blocks(turn)
         if not turn.halt_requested:
             blocks.append(transcript.notice("the server stopped this reply"))
-        blocks.append(
-            transcript.reply_footer(time.monotonic() - turn.started, len(turn.tools), True)
-        )
         await self._end_reply(blocks, turn.halt_requested)
 
     async def _on_turn_error(self, event: TurnError) -> None:
@@ -622,8 +684,14 @@ class ChatSession:
 
     @staticmethod
     def _tail_blocks(turn: _Turn) -> list[Text]:
+        blocks: list[Text] = []
+        thinking = turn.thinking.finish()
+        if thinking:
+            blocks.append(transcript.thinking_lines(thinking))
         lines = turn.stream.finish()
-        return [transcript.mira_lines(lines)] if lines else []
+        if lines:
+            blocks.append(transcript.mira_lines(lines))
+        return blocks
 
     async def _end_reply(self, blocks: list[Text], user_halt: bool) -> None:
         """Common tail of every turn end: deferred proactives, then the queue —

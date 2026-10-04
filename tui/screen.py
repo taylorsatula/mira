@@ -14,8 +14,8 @@ counts rows or moves the cursor by hand; prompt_toolkit's renderer measures
 and erases the bar.
 
 Callers hand over Rich ``Text`` blocks; ``Intent`` objects (``Submit``,
-``Interrupt``, ``Quit``) are posted to the caller's inbox with
-``put_nowait``. Contract: ``tui/FRONTEND_PLAN.md`` "### ``tui/screen.py``".
+``Interrupt``, ``Quit``, ``ToggleThinking``) are posted to the caller's
+inbox with ``put_nowait``. Contract: ``tui/FRONTEND_PLAN.md`` "### ``tui/screen.py``".
 """
 
 from __future__ import annotations
@@ -107,7 +107,12 @@ class Quit:
     pass
 
 
-Intent = Submit | Interrupt | Quit
+@dataclass(frozen=True)
+class ToggleThinking:
+    pass
+
+
+Intent = Submit | Interrupt | Quit | ToggleThinking
 
 
 def _cap(ceiling: int, divisor: int, rows: int) -> int:
@@ -151,7 +156,9 @@ class Screen:
             markup=False,
             emoji=False,
             highlight=False,
-            soft_wrap=True,
+            # no soft_wrap: Rich word-wraps at the live terminal width (set
+            # per render) instead of letting the terminal hard-cut mid-word.
+            # Scrollback therefore does not reflow on a later resize.
         )
 
         self._input = TextArea(
@@ -342,6 +349,22 @@ class Screen:
         def _quit(event) -> None:
             self._post(Quit())
 
+        @kb.add("c-t")
+        def _toggle_thinking(event) -> None:
+            self._post(ToggleThinking())
+
+        # Up/Down jump the cursor to the start/end of the box text, replacing
+        # the built-in per-line movement (app-level bindings outrank the
+        # prompt_toolkit defaults; the control binds neither key).
+        @kb.add("up")
+        def _to_start(event) -> None:
+            event.current_buffer.cursor_position = 0
+
+        @kb.add("down")
+        def _to_end(event) -> None:
+            buf = event.current_buffer
+            buf.cursor_position = len(buf.text)
+
         return kb
 
     def _post(self, intent: Intent) -> None:
@@ -356,6 +379,7 @@ class Screen:
 
     def _render(self, blocks: tuple[Text, ...]) -> str:
         console = self._console
+        console.width = self._columns()  # word-wrap scrollback at the live width
         buf = console.file
         assert isinstance(buf, io.StringIO)
         buf.seek(0)
