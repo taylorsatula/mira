@@ -160,6 +160,13 @@ else
         venv/bin/python3 -m ensurepip
 fi
 
+# Use the current pip rather than the version the venv bootstrapped. A newer
+# pip is not required for the install, so a failure (no network) warns and
+# proceeds with the bundled version.
+run_with_status "Upgrading pip" \
+    venv/bin/python3 -m pip install --quiet --upgrade pip \
+    || print_warning "Could not upgrade pip; continuing with the bundled version"
+
 if [ "$CONFIG_EMBEDDING_PROVIDER" = "local" ]; then
     echo -ne "${DIM}${ARROW}${RESET} Checking PyTorch installation... "
     if check_exists package torch; then
@@ -243,6 +250,9 @@ else
     run_with_status "Initializing TUI pip" \
         /opt/mira/tui-venv/bin/python3 -m ensurepip
 fi
+run_with_status "Upgrading TUI pip" \
+    /opt/mira/tui-venv/bin/python3 -m pip install --quiet --upgrade pip \
+    || print_warning "Could not upgrade the TUI pip; continuing with the bundled version"
 run_with_status "Installing TUI client dependencies" \
     /opt/mira/tui-venv/bin/python3 -m pip install -q -r /opt/mira/app/tui/requirements.txt
 
