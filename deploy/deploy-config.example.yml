@@ -61,7 +61,9 @@ anthropic_key: ""
 # Fast subcortical inference (runs on every message). Default: the lunaroute
 # gateway; the chat_api_key value works here too.
 subcortical_endpoint: "https://gw.lunaroute.com/v1/chat/completions"
-subcortical_api_key: __SET_ME__
+# "" = reuse chat_api_key (the lunaroute gateway is full-service); set a key
+# only for a non-lunaroute subcortical endpoint.
+subcortical_api_key: ""
 subcortical_model: "glm-5.3-flash"
 
 # ---------------------------------------------------------------------------
@@ -84,7 +86,9 @@ embedding_provider: remote
 # model the endpoint serves, and its bearer token ("" if it takes none).
 embedding_endpoint: "https://gw.lunaroute.com/v1/embeddings"
 embedding_model: "emb-nomic-moe"
-embedding_api_key: __SET_ME__
+# "" = reuse chat_api_key on the lunaroute gateway; set a key for any other
+# remote endpoint that requires one.
+embedding_api_key: ""
 
 # ---------------------------------------------------------------------------
 # Injection screen (System One decision model)
@@ -100,7 +104,9 @@ injection_screen: yes
 systemone_provider: remote
 systemone_endpoint: "https://gw.lunaroute.com/v1/systemone"
 systemone_model: "djev"
-systemone_api_key: __SET_ME__
+# "" = reuse chat_api_key on the lunaroute gateway; a non-lunaroute remote
+# endpoint must supply its own key.
+systemone_api_key: ""
 
 # ---------------------------------------------------------------------------
 # Database

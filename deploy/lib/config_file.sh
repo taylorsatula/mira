@@ -10,8 +10,9 @@
 # macOS) with zero dependencies: pyyaml/yq are not guaranteed on a fresh
 # install host. Every key in YAML_KNOWN_KEYS is REQUIRED; an unfilled
 # `__SET_ME__` placeholder aborts before sudo is requested; an empty value
-# ("") means the same as the interview's Enter-to-skip (the deploy proceeds
-# with PLACEHOLDER_* values and the final banner explains the Vault fixup).
+# ("") means the same as the interview's Enter: a lunaroute-gateway tier reuses
+# the chat key, anything else proceeds with a PLACEHOLDER_* value (the final
+# banner explains the Vault fixup).
 
 YAML_SEEN_KEYS=""
 
@@ -133,7 +134,14 @@ parse_yaml_config() {
         [ -n "$YAML_systemone_endpoint" ] || yaml_fail "systemone_endpoint must not be empty when injection_screen is yes"
         [ -n "$YAML_systemone_model" ] || yaml_fail "systemone_model must not be empty when injection_screen is yes"
         if [ "$YAML_systemone_provider" = "remote" ]; then
-            [ -n "$YAML_systemone_api_key" ] || yaml_fail "systemone_api_key must not be empty when systemone_provider is remote"
+            # Lunaroute is full-service: an empty key means "reuse the chat
+            # key". Any other remote endpoint must supply its own.
+            if [ -z "$YAML_systemone_api_key" ]; then
+                case "$YAML_systemone_endpoint" in
+                    *gw.lunaroute.com*) : ;;
+                    *) yaml_fail "systemone_api_key must not be empty when systemone_provider is remote (or point the endpoint at lunaroute, which reuses the chat key)" ;;
+                esac
+            fi
         else
             [ -z "$YAML_systemone_api_key" ] || yaml_fail "systemone_api_key must be \"\" when systemone_provider is local (self-hosted endpoints take no token)"
         fi
@@ -200,12 +208,15 @@ apply_yaml_config() {
         fi
         CONFIG_SUBCORTICAL_ENDPOINT="$YAML_subcortical_endpoint"
         STATUS_SUBCORTICAL="${CHECKMARK} ${CONFIG_SUBCORTICAL_ENDPOINT}"
-        if [ -z "$YAML_subcortical_api_key" ]; then
-            CONFIG_SUBCORTICAL_API_KEY="PLACEHOLDER_SET_THIS_LATER"
-            STATUS_SUBCORTICAL_KEY="${WARNING} NOT SET - You must configure this before using MIRA"
-        else
+        if [ -n "$YAML_subcortical_api_key" ]; then
             CONFIG_SUBCORTICAL_API_KEY="$YAML_subcortical_api_key"
             STATUS_SUBCORTICAL_KEY="${CHECKMARK} Configured"
+        elif is_lunaroute_full_service "$CONFIG_SUBCORTICAL_ENDPOINT"; then
+            CONFIG_SUBCORTICAL_API_KEY="$CONFIG_CHAT_API_KEY"
+            STATUS_SUBCORTICAL_KEY="${CHECKMARK} Reusing your lunaroute key"
+        else
+            CONFIG_SUBCORTICAL_API_KEY="PLACEHOLDER_SET_THIS_LATER"
+            STATUS_SUBCORTICAL_KEY="${WARNING} NOT SET - You must configure this before using MIRA"
         fi
         CONFIG_SUBCORTICAL_MODEL="$YAML_subcortical_model"
     fi
@@ -221,6 +232,9 @@ apply_yaml_config() {
     CONFIG_EMBEDDING_MODEL="$YAML_embedding_model"
     CONFIG_EMBEDDING_API_KEY="$YAML_embedding_api_key"
     if [ "$CONFIG_EMBEDDING_PROVIDER" = "remote" ]; then
+        if [ -z "$CONFIG_EMBEDDING_API_KEY" ] && is_lunaroute_full_service "$CONFIG_EMBEDDING_ENDPOINT"; then
+            CONFIG_EMBEDDING_API_KEY="$CONFIG_CHAT_API_KEY"
+        fi
         STATUS_EMBEDDINGS="${CHECKMARK} Remote: ${CONFIG_EMBEDDING_MODEL} at ${CONFIG_EMBEDDING_ENDPOINT}"
     else
         STATUS_EMBEDDINGS="${CHECKMARK} Local model"
@@ -230,6 +244,10 @@ apply_yaml_config() {
     CONFIG_SYSTEMONE_ENDPOINT="$YAML_systemone_endpoint"
     CONFIG_SYSTEMONE_MODEL="$YAML_systemone_model"
     CONFIG_SYSTEMONE_API_KEY="$YAML_systemone_api_key"
+    if [ "$CONFIG_INJECTION_SCREEN" = "yes" ] && [ "$CONFIG_SYSTEMONE_PROVIDER" = "remote" ] \
+        && [ -z "$CONFIG_SYSTEMONE_API_KEY" ] && is_lunaroute_full_service "$CONFIG_SYSTEMONE_ENDPOINT"; then
+        CONFIG_SYSTEMONE_API_KEY="$CONFIG_CHAT_API_KEY"
+    fi
     if [ "$CONFIG_INJECTION_SCREEN" = "yes" ]; then
         STATUS_SYSTEMONE="${CHECKMARK} On: ${CONFIG_SYSTEMONE_PROVIDER} ${CONFIG_SYSTEMONE_MODEL} at ${CONFIG_SYSTEMONE_ENDPOINT}"
     else
