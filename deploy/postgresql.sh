@@ -132,8 +132,12 @@ echo -e "${CHECKMARK}"
 # is preserved, never dropped: the old database is renamed aside automatically
 # and a fresh empty mira_service is created, and finalize.sh reports the kept
 # database with a pointer to the migration guide. The rename is non-destructive,
-# so it needs no consent and runs unattended too.
+# so it needs no consent and runs unattended too. One stamp covers everything
+# this install preserves — the renamed database and every Vault entry copied
+# aside carry it — so the end-of-install note names one moment in time.
+MIRA_LEGACY_STAMP="$(date +%Y%m%d_%H%M%S)"
 MIRA_PREVIOUS_DB=""
+MIRA_VAULT_BACKUPS=()
 echo -ne "${DIM}${ARROW}${RESET} Verifying mira_service is empty... "
 if [ "$OS" = "linux" ]; then
     DB_TABLES="$(sudo -u postgres psql -d mira_service -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'" 2>/dev/null || true)"
@@ -149,7 +153,7 @@ else
     print_info "MIRA 2.0 installs into a fresh database. The existing one is renamed"
     print_info "aside automatically — never deleted — so its data stays available for"
     print_info "migration (see the note at the end of this install)."
-    MIRA_PREVIOUS_DB="mira_service_old_$(date +%Y%m%d_%H%M%S)"
+    MIRA_PREVIOUS_DB="mira_service_old_${MIRA_LEGACY_STAMP}"
     DETACH_SQL="SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'mira_service' AND pid <> pg_backend_pid();"
     RENAME_SQL="ALTER DATABASE mira_service RENAME TO \"$MIRA_PREVIOUS_DB\";"
     if [ "$OS" = "linux" ]; then
@@ -484,26 +488,45 @@ fi
 if [ "$CONFIG_INJECTION_SCREEN" = "yes" ] && [ "$CONFIG_SYSTEMONE_PROVIDER" = "remote" ]; then
     API_KEYS_ARGS+=("${SYSTEMONE_VAULT_KEY_NAME}=${CONFIG_SYSTEMONE_API_KEY}")
 fi
-vault_put_if_not_exists "${API_KEYS_ARGS[@]}"
+vault_put_with_backup "${API_KEYS_ARGS[@]}"
 
+# Preserved, never overwritten — see vault_put_if_not_exists: on a re-run that
+# leaves the password at the sentinel default, the ALTER USER block above is
+# skipped, so the roles still hold the previous custom password and this entry
+# must stay in step with them. A changed password was already written above,
+# together with its own legacy copy.
 vault_put_if_not_exists secret/mira/database \
     admin_url="postgresql://mira_admin:${DB_PASSWORD_URL_ENC}@localhost:5432/mira_service" \
     password="${CONFIG_DB_PASSWORD}" \
     username="mira_dbuser" \
     service_url="postgresql://mira_dbuser:${DB_PASSWORD_URL_ENC}@localhost:5432/mira_service"
 
-CONFIG_USERDATA_ENCRYPTION_KEY=$(openssl rand -base64 32)
-CONFIG_DIAGNOSTICS_TOKEN=$(openssl rand -base64 32)
+# userdata_encryption_key is the Fernet key every encrypted column in the
+# per-user SQLite store is sealed with (utils/userdata_manager.py). It is
+# carried forward unchanged on every re-install and generated only when no value
+# exists: rotating it leaves the stored ciphertext unreadable. Vault must be
+# reachable to read it — regenerating because Vault was down would brick
+# encrypted user data, so an unreachable Vault aborts here instead.
+if ! vault status > /dev/null 2>&1; then
+    print_error "Vault unreachable - cannot read the existing userdata encryption key"
+    exit 1
+fi
+CONFIG_USERDATA_ENCRYPTION_KEY="$(vault kv get -field=userdata_encryption_key secret/mira/services 2>/dev/null || true)"
+CONFIG_DIAGNOSTICS_TOKEN="$(vault kv get -field=diagnostics_token secret/mira/services 2>/dev/null || true)"
+if [ -z "$CONFIG_USERDATA_ENCRYPTION_KEY" ]; then
+    CONFIG_USERDATA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+fi
+if [ -z "$CONFIG_DIAGNOSTICS_TOKEN" ]; then
+    CONFIG_DIAGNOSTICS_TOKEN="$(openssl rand -base64 32)"
+fi
 
 # Optional SMTP relay for multi-user mode (MIRA_AUTH_MODE=multi). Vault is
 # the only runtime SMTP source: the mail sender reads these Vault fields
 # only and never reads MIRA_SMTP_* at runtime (auth/email_service.py).
 # Exporting MIRA_SMTP_* while running the deployer persists a relay for
-# the systemd service, which receives only VAULT_* Environment lines — but
-# the write below uses vault_put_if_not_exists, so it takes effect only at
-# first creation of secret/mira/services; after that, the live post-install
-# remedy is a direct `vault kv patch secret/mira/services smtp_host=...
-# smtp_from=...`. Nothing here is required in the default single-user
+# the systemd service, which receives only VAULT_* Environment lines — and the
+# write below applies them to secret/mira/services on every install, preserving
+# the previous values first. Nothing here is required in the default single-user
 # mode: no send happens, and no boot check demands it.
 # (tsvt) Same array discipline as the api_keys write above: SMTP values are
 # passed as single argv entries so $ / quotes / backticks in a relay password
@@ -518,18 +541,11 @@ if [ -n "${MIRA_SMTP_HOST:-}" ]; then
     [ -n "${MIRA_SMTP_STARTTLS:-}" ] && SMTP_ARGS+=(smtp_starttls="${MIRA_SMTP_STARTTLS}")
 fi
 
-vault_put_if_not_exists secret/mira/services \
+vault_put_with_backup secret/mira/services \
     app_url="http://localhost:1993" \
     valkey_url="valkey://localhost:6379" \
     userdata_encryption_key="${CONFIG_USERDATA_ENCRYPTION_KEY}" \
     diagnostics_token="${CONFIG_DIAGNOSTICS_TOKEN}" \
     "${SMTP_ARGS[@]}"
-
-if ! vault kv get -field=userdata_encryption_key secret/mira/services > /dev/null 2>&1; then
-    vault kv patch secret/mira/services userdata_encryption_key="${CONFIG_USERDATA_ENCRYPTION_KEY}" > /dev/null
-fi
-if ! vault kv get -field=diagnostics_token secret/mira/services > /dev/null 2>&1; then
-    vault kv patch secret/mira/services diagnostics_token="${CONFIG_DIAGNOSTICS_TOKEN}" > /dev/null
-fi
 
 print_success "All credentials configured in Vault"

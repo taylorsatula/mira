@@ -559,4 +559,16 @@ if [ -n "${MIRA_PREVIOUS_DB:-}" ]; then
     echo -e "${DIM}    /opt/mira/app/deploy/HOW_TO_MIGRATE_OLD_INSTALLS.txt${RESET}"
 fi
 
+# Vault entries copied aside: the app reads only the primary secret/mira/*
+# paths, so name the backups — the operator's previous credentials are
+# recoverable there verbatim.
+if [ "${#MIRA_VAULT_BACKUPS[@]}" -gt 0 ]; then
+    echo ""
+    echo -e "${BOLD}${YELLOW}Your previous Vault credentials were kept, not overwritten${RESET}"
+    for backup in "${MIRA_VAULT_BACKUPS[@]}"; do
+        print_info "  vault kv get ${backup}"
+    done
+    print_info "The running MIRA instance reads the primary secret/mira/* paths."
+fi
+
 echo ""
