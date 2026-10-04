@@ -549,4 +549,14 @@ if [ "${CONFIG_SUBCORTICAL_API_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ]; then
     print_info "Then restart MIRA to pick up the new key."
 fi
 
+# A renamed-aside database: this install runs against a fresh, empty
+# mira_service, so say where the old data went and how to bring it forward.
+if [ -n "${MIRA_PREVIOUS_DB:-}" ]; then
+    echo ""
+    echo -e "${BOLD}${YELLOW}Your previous database was kept as ${MIRA_PREVIOUS_DB}${RESET}"
+    print_info "This install runs against a new, empty mira_service — nothing was deleted."
+    print_info "To bring your data forward, follow:"
+    echo -e "${DIM}    /opt/mira/app/deploy/HOW_TO_MIGRATE_OLD_INSTALLS.txt${RESET}"
+fi
+
 echo ""

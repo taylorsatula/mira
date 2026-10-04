@@ -1,0 +1,127 @@
+HOW TO MIGRATE AN OLD MIRA INSTALL
+===================================
+
+For operators moving from an older MIRA (or pre-OSS fork) whose database
+shape no longer matches the current schema. You do NOT need to know what
+changed between versions. Your Pi agent does the archaeology.
+
+Prereqs on your machine:
+
+  1. A fresh MIRA installed and healthy (deploy/deploy.sh; check
+     /v0/api/health returns "healthy" first).
+  2. Your old data, in ONE of these forms:
+       - a pg_dump custom-format dump of the old mira_service DB, or
+       - a filesystem copy / tarball of the old install, or
+       - a still-running old instance you can reach.
+  3. Docker or local Postgres tooling the agent can use to open the old
+     data read-only. The agent never writes to your old copy.
+
+  If you installed 2.0 over an older install, the installer renamed the old
+  database aside instead of deleting it; the new name is printed at the end of
+  the install (for example mira_service_old_20261003_230000). Use that database
+  as the "live host" form below.
+
+Then paste the MIGRATION PROMPT below into Pi, filling the bracketed
+placeholders. Answer its questions when it asks; it is designed to stop
+and wait rather than guess.
+
+--------------------------------------------------------------------------
+MIGRATION PROMPT (fill in [BRACKETS], then paste to your Pi agent)
+--------------------------------------------------------------------------
+
+Migrate my user data from an old MIRA install into the new one at [URL or
+localhost:1993]. The old install's schema predates the current one, so a
+direct restore will not work. The old data is at [path — dump, directory
+copy, or live host]. Target user email on the new install: [email, or
+"single-user local" if the new install has no email transport].
+
+Method — investigate first, port second, verify third:
+
+0. Survey BOTH sides before touching anything.
+   - Open the old data read-only and list its tables and columns. A
+     pg_dump custom file can be listed with pg_restore --list; if the
+     dump's format version is newer than your local pg_restore, use a
+     docker image of that Postgres generation. Restoring it into a
+     throwaway database (scratch container/schema) is fine — never into
+     the new instance.
+   - Get the current schema from the new install's checkout
+     (deploy/mira_service_schema.sql) or from its live DB.
+   - Produce a table-by-table map: shared tables, renamed/dropped
+     columns, tables that exist only on one side. Confirm with me which
+     user(s) I want ported if the old DB has several.
+   - If any table in either DB fails to open, STOP and tell me.
+
+1. Plan the port, then show me the plan and WAIT for my OK.
+   - Preserve original row IDs (UUIDs) wherever the target columns exist.
+   - Respect FK order (users before continuums before messages, etc.).
+   - Old columns with no current analog get DROPPED, not forced in —
+     list them for me at the end instead.
+   - Current-only columns with defaults can take the default.
+   - If old rows violate a current constraint (CHECK, unique index),
+     show me the conflict; do not silently mutate data to fit.
+
+2. Embeddings: DO NOT copy vectors blindly.
+   - Compare the old vector dimensions and provider against the new
+     install's embedding_config. Different model = meaningless cosine
+     similarity. If they differ, port the text columns with NULL
+     embeddings and re-embed the ported rows using the new install's
+     own embeddings provider (production code path, not a hand-rolled
+     model). Tell me roughly how long the re-embed will take before
+     starting it.
+   - Full-text search vectors usually regenerate from triggers on
+     insert — verify rather than porting them.
+
+3. Load into the new install.
+   - Stage the mapped rows in a scratch schema, then INSERT ... SELECT
+     into the real tables as a superuser (RLS roles are not needed for
+     the load itself).
+   - One transaction per table, ON_ERROR_STOP on, and a row-count
+     check: ported counts must equal the old source counts exactly.
+     Any mismatch, roll back and tell me.
+
+4. Identity and auth.
+   - If the new install is single-user local, its login is bound to the
+     user@localhost fixture identity — tell me what merging the ported
+     user into that identity means (the original email leaves the row)
+     and WAIT for my choice before doing it.
+   - Never disable RLS, never open ports, never weaken the new
+     install's auth to make the port easier.
+
+5. Verify against the LIVE system, then report.
+   - RLS probe: with the user context set, every ported table is
+     visible; with no context, zero rows are.
+   - Vector probe: nearest-neighbor on a ported row returns a
+     semantically related ported row.
+   - End-to-end probe: authenticate the way a real client would (mint a
+     token through the app's own auth flow, not the DB) and run one
+     real chat turn asking MIRA what it remembers about me. It must
+     surface ported memories. If it answers as a stranger, the port
+     failed — investigate, do not accept it.
+   - Clean up every scratch database, container, and temp file holding
+     old data, including any file you wrote a secret to.
+
+6. Report at the end:
+   - Rows ported per table, and per-table old vs loaded counts.
+   - What you re-embedded and what you could not.
+   - Every old column and table with no analog, and anything else you
+     had to drop, in one list.
+   - Anything you verified vs. anything left UNVERIFIED.
+
+Security: never print, echo, or log API keys, tokens, or secrets from
+either install. Read credentials from where the install keeps them
+(Vault) and move them through files with 0600 perms, deleting after use.
+
+--------------------------------------------------------------------------
+NOTES FOR THE OPERATOR
+--------------------------------------------------------------------------
+
+- The prompt is deliberately underspecified. The agent is expected to
+  inspect your actual old schema rather than follow a fixed column map —
+  old installs vary, and a hardcoded mapping goes stale the moment either
+  schema moves.
+- Keep your old data around after the migration. The port drops
+  non-migratable fields (typically billing/LLM-metering-era columns);
+  the old dump is the only record of them.
+- If the agent asks you a question mid-migration, answer it precisely —
+  the STOP gates are there so it never guesses on identity, auth, or
+  destructive steps.

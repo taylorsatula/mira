@@ -127,6 +127,57 @@ elif [ "$OS" = "macos" ]; then
 fi
 echo -e "${CHECKMARK}"
 
+# Greenfield contract: the schema REFUSES a non-empty database, so a prior MIRA
+# install leaves mira_service populated and the apply fails. The operator's data
+# is preserved, never dropped: the old database is renamed aside and a fresh
+# empty mira_service is created, and finalize.sh reports the kept database with
+# a pointer to the migration guide. Detecting it here also replaces the cryptic
+# apply failure with a real message and an explicit choice.
+MIRA_PREVIOUS_DB=""
+echo -ne "${DIM}${ARROW}${RESET} Verifying mira_service is empty... "
+if [ "$OS" = "linux" ]; then
+    DB_TABLES="$(sudo -u postgres psql -d mira_service -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'" 2>/dev/null || true)"
+else
+    DB_TABLES="$(psql -d mira_service -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'" 2>/dev/null || true)"
+fi
+DB_TABLES="${DB_TABLES//[[:space:]]/}"
+if [ "$DB_TABLES" = "0" ]; then
+    echo -e "${CHECKMARK}"
+else
+    echo -e "${ERROR}"
+    print_warning "mira_service already holds ${DB_TABLES:-an unknown number of} table(s)."
+    print_info "MIRA 2.0 installs into a fresh database. The existing one is renamed"
+    print_info "aside — never deleted — so its data stays available for migration."
+    if [ ! -t 0 ]; then
+        print_error "Re-run from a terminal to be prompted, or rename it yourself:"
+        print_info "  psql -d postgres -c \"ALTER DATABASE mira_service RENAME TO mira_service_old;\""
+        print_info "  createdb -O mira_admin mira_service"
+        exit 1
+    fi
+    read -p "$(echo -e ${CYAN}Rename it aside and install fresh?${RESET}) (y/n): " OVERWRITE_DB_INPUT || OVERWRITE_DB_INPUT=""
+    if [[ ! "$OVERWRITE_DB_INPUT" =~ ^[Yy](es)?$ ]]; then
+        print_error "Aborted. Rename or drop mira_service yourself, then re-run."
+        exit 1
+    fi
+    MIRA_PREVIOUS_DB="mira_service_old_$(date +%Y%m%d_%H%M%S)"
+    DETACH_SQL="SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'mira_service' AND pid <> pg_backend_pid();"
+    RENAME_SQL="ALTER DATABASE mira_service RENAME TO \"$MIRA_PREVIOUS_DB\";"
+    if [ "$OS" = "linux" ]; then
+        sudo -u postgres psql -d postgres -v ON_ERROR_STOP=1 -c "$DETACH_SQL" > /dev/null 2>&1 || true
+        if ! sudo -u postgres psql -d postgres -v ON_ERROR_STOP=1 -c "$RENAME_SQL" > /dev/null 2>&1; then
+            echo -e "${ERROR}"; print_error "Could not rename mira_service"; exit 1
+        fi
+        sudo -u postgres createdb -O mira_admin mira_service || exit 1
+    else
+        psql -d postgres -v ON_ERROR_STOP=1 -c "$DETACH_SQL" > /dev/null 2>&1 || true
+        if ! psql -d postgres -v ON_ERROR_STOP=1 -c "$RENAME_SQL" > /dev/null 2>&1; then
+            echo -e "${ERROR}"; print_error "Could not rename mira_service"; exit 1
+        fi
+        createdb -O mira_admin mira_service || exit 1
+    fi
+    print_success "Kept the old database as ${MIRA_PREVIOUS_DB}; created a fresh mira_service"
+fi
+
 # Run the fresh-install schema as the database superuser so extension and
 # least-privilege grant setup can complete. The schema is a pure DDL contract:
 # it creates no roles, no database, and refuses to run against a non-empty
@@ -163,27 +214,27 @@ fi
 
 echo -ne "${DIM}${ARROW}${RESET} Running fresh database schema (tables, indexes, RLS)... "
 SCHEMA_FILE="/opt/mira/app/deploy/mira_service_schema.sql"
-if [ -f "$SCHEMA_FILE" ]; then
-    if [ "$OS" = "linux" ]; then
-        if sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 "${EMBEDDING_SCHEMA_ARGS[@]}" -f "$SCHEMA_FILE" > /dev/null 2>&1; then
-            echo -e "${CHECKMARK}"
-        else
-            echo -e "${ERROR}"
-            print_error "Failed to run schema file"
-            exit 1
-        fi
-    elif [ "$OS" = "macos" ]; then
-        if psql -d mira_service -v ON_ERROR_STOP=1 "${EMBEDDING_SCHEMA_ARGS[@]}" -f "$SCHEMA_FILE" > /dev/null 2>&1; then
-            echo -e "${CHECKMARK}"
-        else
-            echo -e "${ERROR}"
-            print_error "Failed to run schema file"
-            exit 1
-        fi
-    fi
-else
+if [ ! -f "$SCHEMA_FILE" ]; then
     echo -e "${ERROR}"
     print_error "Schema file not found: $SCHEMA_FILE"
+    exit 1
+fi
+# The apply emits hundreds of GRANT/COMMENT lines and is normally quiet, but a
+# failure must never be swallowed: the schema's own refusal message (for example
+# "requires an empty target database") is the entire diagnosis. Capture stdout
+# and stderr together and print the tail when it fails.
+if [ "$OS" = "linux" ]; then
+    SCHEMA_CMD=(sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 "${EMBEDDING_SCHEMA_ARGS[@]}" -f "$SCHEMA_FILE")
+else
+    SCHEMA_CMD=(psql -d mira_service -v ON_ERROR_STOP=1 "${EMBEDDING_SCHEMA_ARGS[@]}" -f "$SCHEMA_FILE")
+fi
+if SCHEMA_OUT="$("${SCHEMA_CMD[@]}" 2>&1)"; then
+    echo -e "${CHECKMARK}"
+else
+    echo -e "${ERROR}"
+    print_error "Failed to run schema file"
+    printf '%s\n' "$SCHEMA_OUT" | tail -25 | sed 's/^/    /'
+    print_info "The message above is psql's own reason; fix it and re-run."
     exit 1
 fi
 
