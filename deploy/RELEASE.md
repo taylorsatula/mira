@@ -1,14 +1,17 @@
 # Stable Release Procedure
 
 The installer is wired to the tagged tarball: `deploy/deploy.sh` defines the
-constant `RELEASE_TAG` (currently `v2026.06.25`) and exports it, and every
-fetch site pins to it — the README's curl entrypoint fetches
-`deploy/deploy.sh` from that tag, the bootstrap clone passes
-`--branch "$RELEASE_TAG"`, and `deploy/python.sh` downloads
-`refs/tags/${RELEASE_TAG}.tar.gz` instead of the main branch. `RELEASE_TAG`
-is the switch: cut a stable release by moving that one constant in
-`deploy/deploy.sh` and updating the tag in the README install command, then
-tagging the repo.
+constant `RELEASE_TAG` (currently `v2026.10.03-2.0`) and exports it, and
+`deploy/python.sh` downloads `refs/tags/${RELEASE_TAG}.tar.gz` instead of the
+main branch. `RELEASE_TAG` is the switch: cut a stable release by moving that
+one constant in `deploy/deploy.sh`, then tagging the repo.
+
+The stable entrypoint is the root `install.sh`. It resolves the newest
+published release from GitHub's `releases/latest` redirect, fetches that tag's
+`deploy/deploy.sh`, and hands off — so cutting a release is just moving
+`RELEASE_TAG`, tagging, and publishing. The README pipes `install.sh` from
+`main`; only cut releases point the installer at a real tag, and an unreleased
+`RELEASE_TAG` on `main` will 404 until its tag exists.
 
 The tarball carries its own `VERSION` file, which is what gets copied into
 `/opt/mira/app` — the installed code and the reported version always come
@@ -30,5 +33,5 @@ Replace `X.XX` with the release tag (this procedure was previously preserved
 as a comment block in `deploy/python.sh`; it moved here so the runbook lives
 with the rest of the deployment documentation). Note that GitHub's tag
 archive strips a leading `v` from the tag in the extracted directory name
-(`v2026.06.25` extracts to `mira-2026.06.25/`), which is why the wired
+(`v2026.10.03-2.0` extracts to `mira-2026.10.03-2.0/`), which is why the wired
 installer derives the path as `mira-${RELEASE_TAG#v}`.
