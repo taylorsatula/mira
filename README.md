@@ -123,6 +123,8 @@ curl -fsSL https://raw.githubusercontent.com/taylorsatula/mira/main/install.sh |
 ```
 That's it. The installer resolves the newest published release and runs that release's installer. Answer the configuration questions onscreen and provide the provider credentials or local-provider settings you want MIRA to use.
 
+The first questions choose where MIRA's model calls go. The recommended path is **LunaRoute** — unlimited API usage for a flat fee, one key for everything ([lunaroute.com](https://lunaroute.com)) — which prefills chat, memory, embeddings, and the injection screen and asks only for that key. Choose "no" and the installer falls through to the full granular provider interview; choose local (llama-server) for an air-gapped install.
+
 Options are passed through to the installer; to run non-interactively from a config file:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/taylorsatula/mira/main/install.sh | bash -s -- --config deploy-config.yml --loud

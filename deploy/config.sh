@@ -49,6 +49,7 @@ STATUS_TIMEZONE=""
 STATUS_PLAYWRIGHT=""
 STATUS_SYSTEMD=""
 STATUS_MIRA_SERVICE=""
+LUNAROUTE_MODE=""                    # yes when the LunaRoute shortcut prefilled the hosted stack
 
 # True when the endpoint is the lunaroute gateway and the chat tier holds a
 # usable key. Lunaroute is full-service: one key covers chat, subcortical,
@@ -397,6 +398,50 @@ if [[ "$USE_LOCAL_LLM_INPUT" =~ ^[Yy](es)?$ ]]; then
 else
     CONFIG_OFFLINE_MODE="no"
 
+    # Hosted provider: LunaRoute is a one-key full-service gateway, offered
+    # before the granular provider interview.
+    echo -e "${BOLD}${BLUE}Hosted Provider${RESET}"
+    echo -e "${DIM}   Use LunaRoute (recommended)?${RESET}"
+    echo -e "${DIM}   Unlimited API usage for a flat fee. One key covers chat, memory,${RESET}"
+    echo -e "${DIM}   embeddings, and the injection screen.${RESET}"
+    echo -e "${DIM}   https://lunaroute.com${RESET}"
+    read -p "$(echo -e ${CYAN}Use LunaRoute?${RESET}) (y/n, default=y): " USE_LUNAROUTE_INPUT
+    if [ -z "$USE_LUNAROUTE_INPUT" ] || [[ "$USE_LUNAROUTE_INPUT" =~ ^[Yy](es)?$ ]]; then
+        LUNAROUTE_MODE="yes"
+        CONFIG_CHAT_PROVIDER_TYPE="openai"
+        CONFIG_CHAT_ENDPOINT="https://gw.lunaroute.com/v1/chat/completions"
+        CONFIG_CHAT_MODEL="glm-5.3"
+        CONFIG_SUBCORTICAL_ENDPOINT="https://gw.lunaroute.com/v1/chat/completions"
+        CONFIG_SUBCORTICAL_MODEL="glm-5.3-flash"
+        CONFIG_EMBEDDING_PROVIDER="remote"
+        CONFIG_EMBEDDING_ENDPOINT="https://gw.lunaroute.com/v1/embeddings"
+        CONFIG_EMBEDDING_MODEL="emb-nomic-moe"
+        CONFIG_INJECTION_SCREEN="yes"
+        CONFIG_SYSTEMONE_PROVIDER="remote"
+        CONFIG_SYSTEMONE_ENDPOINT="https://gw.lunaroute.com/v1/systemone"
+        CONFIG_SYSTEMONE_MODEL="djev"
+        CONFIG_ANTHROPIC_KEY="PLACEHOLDER_NOT_CONFIGURED"
+        CONFIG_ANTHROPIC_BATCH_KEY="PLACEHOLDER_NOT_CONFIGURED"
+        echo ""
+        echo -e "${BOLD}${BLUE}   LunaRoute API Key${RESET}"
+        echo -e "${DIM}    Get one at https://lunaroute.com. The installer probes it against${RESET}"
+        echo -e "${DIM}    the gateway before committing, and the same key covers every tier.${RESET}"
+        while [ -z "$CONFIG_CHAT_API_KEY" ]; do
+            read -p "$(echo -e ${CYAN}Enter key${RESET}) (required): " CONFIG_CHAT_API_KEY || exit 1
+        done
+        CONFIG_SUBCORTICAL_API_KEY="$CONFIG_CHAT_API_KEY"
+        CONFIG_EMBEDDING_API_KEY="$CONFIG_CHAT_API_KEY"
+        CONFIG_SYSTEMONE_API_KEY="$CONFIG_CHAT_API_KEY"
+        STATUS_CHAT_PROVIDER="${CHECKMARK} LunaRoute (OpenAI-compatible)"
+        STATUS_CHAT_KEY="${CHECKMARK} Configured"
+        STATUS_SUBCORTICAL="${CHECKMARK} ${CONFIG_SUBCORTICAL_ENDPOINT}"
+        STATUS_SUBCORTICAL_KEY="${CHECKMARK} Reusing your LunaRoute key"
+        STATUS_EMBEDDINGS="${CHECKMARK} Remote: ${CONFIG_EMBEDDING_MODEL} at ${CONFIG_EMBEDDING_ENDPOINT}"
+        STATUS_SYSTEMONE="${CHECKMARK} On: remote ${CONFIG_SYSTEMONE_MODEL} at ${CONFIG_SYSTEMONE_ENDPOINT}"
+    fi
+
+    # Granular provider interview — skipped when LunaRoute filled everything.
+    if [ "$LUNAROUTE_MODE" != "yes" ]; then
     # Chat Provider
     echo -e "${BOLD}${BLUE}1. Chat Provider${RESET}"
     echo -e "${DIM}   Pick your main chat provider:${RESET}"
@@ -529,6 +574,7 @@ else
     # Subcortical Model
     read -p "$(echo -e ${CYAN}Model${RESET}) [default: glm-5.3-flash]: " SUBCORTICAL_MODEL_INPUT
     CONFIG_SUBCORTICAL_MODEL="${SUBCORTICAL_MODEL_INPUT:-glm-5.3-flash}"
+    fi   # end granular provider interview (skipped under LunaRoute)
 fi
 
 # Kagi Search API Key (optional — works with any provider)
@@ -542,6 +588,8 @@ else
     STATUS_KAGI="${CHECKMARK} Configured"
 fi
 
+# Embeddings — skipped when LunaRoute filled the remote endpoint and key.
+if [ "$LUNAROUTE_MODE" != "yes" ]; then
 # Embeddings (remote lunaroute by default; local model when air-gapped)
 echo -e "${BOLD}${BLUE}4. Embeddings${RESET}"
 echo -e "${DIM}   A remote OpenAI-compatible POST /v1/embeddings endpoint skips the local${RESET}"
@@ -579,7 +627,10 @@ else
     CONFIG_EMBEDDING_PROVIDER="local"
     STATUS_EMBEDDINGS="${CHECKMARK} Local model"
 fi
+fi   # end embeddings (skipped under LunaRoute)
 
+# Injection Screen — skipped when LunaRoute enabled the lunaroute screen.
+if [ "$LUNAROUTE_MODE" != "yes" ]; then
 # Injection Screen (System One decision model)
 echo -e "${BOLD}${BLUE}5. Injection Screen${RESET} ${DIM}(screens external content before it reaches MIRA)${RESET}"
 echo -e "${DIM}   Fetched pages, email, and files pass through a System One decision${RESET}"
@@ -625,6 +676,7 @@ else
     CONFIG_INJECTION_SCREEN="no"
     STATUS_SYSTEMONE="${DIM}Disabled${RESET}"
 fi
+fi   # end injection screen (skipped under LunaRoute)
 
 # Database Password (optional - defaults to changethisifdeployingpwd)
 echo -e "${BOLD}${BLUE}6. Database Password${RESET} ${DIM}(OPTIONAL - default: changethisifdeployingpwd)${RESET}"

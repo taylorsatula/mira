@@ -24,7 +24,9 @@
 # ---------------------------------------------------------------------------
 # offline_mode: yes = all five model routes point at llama-server instances
 # (llama.cpp's OpenAI-compatible server). no = hosted providers below.
-# This template ships the hosted (lunaroute) defaults throughout.
+# This template ships the hosted (lunaroute) defaults throughout — the same
+# result as the installer's "Use LunaRoute?" shortcut: one chat_api_key covers
+# chat, subcortical, embeddings, and the injection screen.
 offline_mode: no
 
 # Only used when offline_mode: yes —
