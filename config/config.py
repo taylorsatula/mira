@@ -91,6 +91,10 @@ class SystemConfig(BaseModel):
         default=True,
         description="Enable the semantic prompt-injection screen (screen_untrusted). Disabled mode wraps external content without judging it — never passes it raw. Overridable via MIRA_INJECTION_SCREEN_ENABLED (strict 0/1)",
     )
+    mcp_enabled: bool = Field(
+        default=False,
+        description="Enable the MCP endpoint at /v0/mcp exposing one tool (check_in: a complete chat turn via the same path as POST /v0/api/chat). Disabled constructs nothing — the route is not mounted and the mcp SDK is never imported. Overridable via MIRA_MCP_ENABLED (strict 0/1)",
+    )
 
     # Operational
     log_level: str = Field(default="WARNING", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")

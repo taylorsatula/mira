@@ -9,7 +9,7 @@ import asyncio
 import logging
 import os
 import sys
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 from utils.logging_config import setup_colored_root_logging, setup_anthropic_sdk_logging
@@ -275,6 +275,16 @@ async def lifespan(app: FastAPI):
         logger.info("Lattice federation disabled (enable via config.lattice.enabled=true)")
 
 
+    # MCP /v0/mcp (mounted in create_app only when config.system.mcp_enabled):
+    # mounted sub-apps receive no lifespan events, so the MCP session manager's
+    # task group is entered here — once per process — and closed at the very
+    # end of shutdown below.
+    mcp_stack = AsyncExitStack()
+    mcp_manager = getattr(app.state, "mcp_session_manager", None)
+    if mcp_manager is not None:
+        await mcp_stack.enter_async_context(mcp_manager.run())
+        logger.info("MCP /v0/mcp session manager running (check_in tool available)")
+
     logger.info("MIRA startup complete")
     
     
@@ -345,7 +355,9 @@ async def lifespan(app: FastAPI):
     
     from utils.database_session_manager import get_shared_session_manager
     get_shared_session_manager().cleanup()
-    
+
+    # MCP session manager task group closes last of all.
+    await mcp_stack.aclose()
     logger.info("MIRA shutdown complete")
 
 
@@ -507,6 +519,14 @@ def create_app() -> FastAPI:
     app.include_router(websocket_chat.router, prefix="/v0", tags=["websocket"])  # /v0/ws/chat
     if config.lattice.enabled:
         app.include_router(federation_api.router, prefix="/v0/api", tags=["federation"])
+
+    # MCP check-in endpoint (opt-in, config.system.mcp_enabled — default off).
+    # Lazy import: disabled mode constructs nothing MCP-related at boot — no
+    # SDK import, no app, no session manager. mount() parks the session
+    # manager on app.state for the lifespan block below.
+    if config.system.mcp_enabled:
+        from cns.api import mcp as mcp_api
+        mcp_api.mount(app)
 
     # No payments routes in mira-OSS; cost visibility lives in utils/cost_accumulator.py.
 

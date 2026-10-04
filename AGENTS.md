@@ -40,6 +40,7 @@ directory whose map is missing is a defect.
 | `docs/` | Operator documentation, plus two cited authorities: `AGENTS_MAP_SPEC.md` (map shape) and `REGISTER.md` (writing register for any text a model reads) |
 | `lt_memory/` | Long-term memory: storage, scoring, retrieval, linking, entity services |
 | `lt_memory/processing/` | Extraction pipeline and consolidation |
+| `mcp/` | Agent-facing check-in clients: the pi `talkto_mira` extension, its TUI-store twin contract, and the shared check-in mapping rows |
 | `scripts/` | Operational CLI entry points run against a deployed service |
 | `tests/` | Probe-artifact homes: disposable exhibit, shared real-infra fixtures, admission-gated batteries — not a suite |
 | `tests/fixtures/` | Reusable probe scaffolding: real-infrastructure setup/teardown, claim-free, no simulation |
@@ -83,7 +84,11 @@ unnecessary edit costs a line; a missed one misleads every session.
   startup/shutdown ordering (LT_Memory factory → CNS graph → sidebar/heartbeat
   jobs → announcement; `websocket_chat.close_all_connections()` awaited at
   shutdown; Valkey flush preserves `heartbeat:` and `pending_memories:`/`pending_memories_done:`/`pending_memories_attempts:` prefixes — the pending-memory queue is the durable record of user-confirmed memories and must survive restarts), and the pre-server
-  POST gate before bind. The per-directory contracts are owned by
+  POST gate before bind. Conditional mounts: the federation router when
+  `config.lattice.enabled`; the MCP sub-app at `/v0/mcp` when
+  `config.system.mcp_enabled` (lazy import in the flag branch — disabled mode
+  imports/constructs nothing MCP-related), whose session-manager task group is
+  entered in lifespan and closed last at shutdown. The per-directory contracts are owned by
   `cns/api/AGENTS.md`, `auth/AGENTS.md`, `cns/integration/AGENTS.md`,
   `agents/AGENTS.md`, `config/AGENTS.md`, `lt_memory/AGENTS.md`,
   `utils/AGENTS.md`.

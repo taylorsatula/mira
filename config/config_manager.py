@@ -42,6 +42,7 @@ SYSTEM_FEATURE_FLAG_ENVIRONMENT_FIELDS: dict[str, str] = {
     "MIRA_PEANUTGALLERY_ENABLED": "peanutgallery_enabled",
     "MIRA_PERSONA_ENABLED": "persona_enabled",
     "MIRA_INJECTION_SCREEN_ENABLED": "injection_screen_enabled",
+    "MIRA_MCP_ENABLED": "mcp_enabled",
 }
 
 # Registry of string-valued SystemConfig overrides: environment variable name -> field name.

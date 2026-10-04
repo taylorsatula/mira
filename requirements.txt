@@ -35,7 +35,7 @@ apscheduler      # Task scheduling - scheduler_service.py, lt_memory_jobs.py, si
 
 # == HTTP CLIENT & NETWORKING ==
 httpx[http2]>=0.25.2  # Modern HTTP client with HTTP/2 support - tools, LLM provider, embeddings, weather/web tools; >=0.25.2 because utils/http_client.py's IP-pinning transport needs httpcore 1.x's public NetworkBackend/SyncBackend/SOCKET_OPTION (first httpx pinning httpcore==1.*)
-mcp              # Model Context Protocol SDK - mcp_client.py for MCP server connections
+mcp>=2.2         # Model Context Protocol SDK — utils/mcp_client.py (client) and cns/api/mcp.py (server side). >=2.2 because the check-in endpoint targets the v2 MCPServer/streamable_http_app(stateless_http=True) interface; v2 kept every import mcp_client.py uses (verified: ClientSession, sse_client, stdio_client, mcp.types all present in 2.2.0)
 
 # == TOOL-SPECIFIC LIBRARIES ==
 google-genai     # Google Gemini GenAI SDK - imagegen_tool.py
