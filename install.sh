@@ -7,9 +7,9 @@
 #    curl -fsSL https://raw.githubusercontent.com/taylorsatula/mira/main/install.sh | bash
 #
 #  This is the stable front door to the deploy pipeline. It resolves the newest
-#  published release, fetches that release's deploy/deploy.sh, and hands off to
-#  it — all install logic lives in deploy/, so there is exactly one bootstrap
-#  path to maintain.
+#  published release, clones that tag, and hands off to its deploy/deploy.sh —
+#  all install logic lives in deploy/, so there is exactly one bootstrap path
+#  to maintain.
 #
 #  Pass installer options through (they go to deploy/deploy.sh):
 #    curl -fsSL .../install.sh | bash -s -- --config deploy-config.yml --loud
@@ -27,6 +27,7 @@ set -euo pipefail
 REPO="taylorsatula/mira"
 REPO_URL="https://github.com/${REPO}"
 RAW_URL="https://raw.githubusercontent.com/${REPO}"
+GIT_URL="https://github.com/${REPO}.git"
 
 # -----------------------------------------------------------------------------
 # Presentation
@@ -91,7 +92,7 @@ step_total=3
 [ -n "${BASH_VERSION:-}" ] || die "This installer must run under bash (pipe to 'bash', not 'sh')."
 
 printf '%s %s Checking prerequisites... ' "${ARROW}" "[${step_no}/${step_total}]"
-for cmd in curl sed; do
+for cmd in curl git sed; do
     command -v "$cmd" > /dev/null 2>&1 || { printf '%s\n' "${CROSS}"; die "Required command not found: ${cmd}"; }
 done
 printf '%s\n' "${CHECK}"
@@ -119,26 +120,31 @@ fi
 step_no=$((step_no + 1))
 
 # -----------------------------------------------------------------------------
-# Fetch that release's deploy.sh
+# Clone that release tag
 # -----------------------------------------------------------------------------
-printf '%s %s Fetching installer... ' "${ARROW}" "[${step_no}/${step_total}]"
+# Clone the tag rather than curl deploy.sh from raw.githubusercontent: raw
+# caches per-ref and serves a stale file for a while after a tag is moved, so a
+# just-republished release would hand the user the previous installer. A clone
+# is content-correct by definition and lands the deploy.sh that belongs to the
+# tag, so the release tree's own bootstrap does not re-clone.
+printf '%s %s Fetching release... ' "${ARROW}" "[${step_no}/${step_total}]"
 TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t mira-install)"
 cleanup() { rm -rf "${TMP_DIR}"; }
 trap cleanup EXIT
 
-DEPLOY_URL="${RAW_URL}/refs/tags/${TAG}/deploy/deploy.sh"
-if ! curl -fsSL "${DEPLOY_URL}" -o "${TMP_DIR}/deploy.sh" 2>/dev/null; then
+if ! git -c advice.detachedHead=false clone --quiet --depth 1 \
+        --branch "${TAG}" "${GIT_URL}" "${TMP_DIR}/src" 2>/dev/null; then
     printf '%s\n' "${CROSS}"
-    fail "Could not fetch ${DEPLOY_URL}"
+    fail "Could not clone release ${TAG} from ${GIT_URL}"
     info "The release may not have finished publishing, or the tag name is wrong."
     exit 1
 fi
-if [ ! -s "${TMP_DIR}/deploy.sh" ] || [ "$(head -c 2 "${TMP_DIR}/deploy.sh")" != "#!" ]; then
+DEPLOY="${TMP_DIR}/src/deploy/deploy.sh"
+if [ ! -f "${DEPLOY}" ]; then
     printf '%s\n' "${CROSS}"
-    die "The downloaded installer is not a shell script."
+    die "Release ${TAG} has no deploy/deploy.sh."
 fi
 printf '%s\n' "${CHECK}"
-chmod +x "${TMP_DIR}/deploy.sh"
 
 # -----------------------------------------------------------------------------
 # Hand off to deploy/deploy.sh
@@ -153,10 +159,10 @@ printf '\n'
 # exists; a genuinely headless install (--config) still runs with plain stdin.
 set +e
 if [ -r /dev/tty ]; then
-    bash "${TMP_DIR}/deploy.sh" "$@" < /dev/tty
+    bash "${DEPLOY}" "$@" < /dev/tty
     RC=$?
 else
-    bash "${TMP_DIR}/deploy.sh" "$@"
+    bash "${DEPLOY}" "$@"
     RC=$?
 fi
 set -e
