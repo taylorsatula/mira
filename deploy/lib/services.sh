@@ -27,25 +27,94 @@ port_probe_status() {
     return 2
 }
 
-# Re-establish sudo elevation if the credential timestamp was lost.
-# Homebrew clears the sudo ticket as part of its startup checks (observed
-# live on brew 7.0.7: `sudo -n true` fails immediately after any brew
-# command), so a deploy that interleaves brew and sudo — every macOS
-# install — must re-probe or die at its next sudo with "Password:" on a
-# session nobody is watching. With passwordless sudo (headless/CI) the
-# probe passes silently; on a terminal the user is prompted again; with
-# neither, fail loud with the two real options.
+# Capture sudo elevation ONCE, at install start, and make every later sudo call
+# silent. Homebrew clears the sudo credential timestamp on every touchpoint
+# (observed live on brew 7.0.7: `sudo -n true` fails immediately after any brew
+# command), so a deploy that interleaves brew and sudo — every macOS install —
+# re-prompts at its next sudo unless the password is held for re-priming.
+#
+# Mechanism: the password is read once and handed to sudo through a private
+# SUDO_ASKPASS helper (a 0700 temp dir, 0600 file, removed on exit — never an
+# env var, never re-read from the tty), and the `sudo()` shell function wraps
+# every later call with -A so a cleared ticket is re-primed with no prompt.
+# `sudo -k` first drops any cached ticket so the probe answers "is this account
+# NOPASSWD?" rather than "is a ticket still valid?". Idempotent: MIRA_SUDO_READY
+# short-circuits a second call.
+acquire_sudo() {
+    [ "${MIRA_SUDO_READY:-}" = "yes" ] && return 0
+
+    sudo -k 2>/dev/null || true
+    if sudo -n true 2>/dev/null; then
+        MIRA_SUDO_READY="yes"
+        return 0
+    fi
+
+    if [ ! -t 0 ]; then
+        print_error "sudo requires a password but this session has no terminal."
+        print_info "Run the installer from a terminal, or configure passwordless sudo"
+        print_info "for this account for unattended/CI installs."
+        exit 1
+    fi
+
+    echo ""
+    print_info "This installer needs sudo for system packages."
+    print_info "Enter your password once — the rest of the install runs unattended."
+    echo ""
+
+    local pass="" attempts=0 primed="no"
+    while [ "$attempts" -lt 3 ]; do
+        pass=""
+        read -r -s -p "$(echo -e ${CYAN}Password${RESET}) (sudo): " pass || { echo ""; break; }
+        echo ""
+        if printf '%s\n' "$pass" | sudo -S -v > /dev/null 2>&1; then
+            primed="yes"
+            break
+        fi
+        attempts=$((attempts + 1))
+        [ "$attempts" -lt 3 ] && print_warning "Incorrect password, try again."
+    done
+    if [ "$primed" != "yes" ]; then
+        print_error "sudo authentication failed."
+        exit 1
+    fi
+
+    MIRA_SUDO_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mira-sudo.XXXXXX")"
+    chmod 700 "$MIRA_SUDO_DIR"
+    printf '%s\n' "$pass" > "$MIRA_SUDO_DIR/pass"
+    chmod 600 "$MIRA_SUDO_DIR/pass"
+    printf '#!/bin/sh\ncat %s\n' "$MIRA_SUDO_DIR/pass" > "$MIRA_SUDO_DIR/askpass"
+    chmod 700 "$MIRA_SUDO_DIR/askpass"
+    export SUDO_ASKPASS="$MIRA_SUDO_DIR/askpass"
+    pass=""
+
+    # -A routes a cleared ticket through askpass; -n calls keep their "never
+    # prompt" meaning (sudo does not consult askpass under -n).
+    sudo() { command sudo -A "$@"; }
+    export -f sudo
+
+    trap 'rm -rf "${MIRA_SUDO_DIR:-}"' EXIT
+    MIRA_SUDO_READY="yes"
+}
+
+# Re-establish the sudo credential timestamp after a Homebrew touchpoint
+# cleared it. Silent when acquire_sudo captured the password (the -A wrapper
+# re-primes through askpass); falls back to a terminal prompt when it did not.
 ensure_sudo() {
-    if ! sudo -n true 2>/dev/null; then
-        if [ -t 0 ]; then
-            print_warning "Re-authenticating sudo (Homebrew clears the credential timestamp)..."
-            sudo -v
-        else
-            print_error "sudo credentials were lost (Homebrew clears the ticket) and this session has no terminal."
-            print_info "Re-run from a terminal, or configure passwordless sudo for unattended installs."
-            exit 1
+    if sudo -n true 2>/dev/null; then
+        return 0
+    fi
+    if sudo -v > /dev/null 2>&1; then
+        return 0
+    fi
+    if [ -t 0 ]; then
+        print_warning "Re-authenticating sudo (Homebrew clears the credential timestamp)..."
+        if sudo -v; then
+            return 0
         fi
     fi
+    print_error "sudo credentials were lost (Homebrew clears the ticket) and could not be re-established."
+    print_info "Re-run from a terminal, or configure passwordless sudo for unattended installs."
+    exit 1
 }
 
 # (Re)load a per-user LaunchAgent idempotently — the one sanctioned launchd

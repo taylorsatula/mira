@@ -50,34 +50,19 @@ echo -e "${CHECKMARK}"
 
 print_header "Beginning Installation"
 
-print_info "This script requires sudo privileges for system package installation."
-print_info "Please enter your password - the installation will then run unattended."
-echo ""
-# Headless installs (nohup/CI) have no tty. `sudo -v` is a timestamp
-# operation that demands a terminal even when NOPASSWD satisfies
-# elevation (sudo 1.9.x, timestamp_type=tty): it aborts headless runs
-# with "a terminal is required to authenticate". Probe elevation with
-# a real command instead; prompt for a password only when a terminal exists.
-# Without a tty and without passwordless sudo there is no supported
-# elevation path — say so with the two real options instead of dying on
-# sudo's own error text. (macOS sudo ignores SUDO_ASKPASS unless every
-# call carries -A, so an askpass env var is NOT a third option here.)
-if ! sudo -n true 2>/dev/null; then
-    if [ -t 0 ]; then
-        sudo -v
-    else
-        echo ""
-        print_error "sudo requires a password but this session has no terminal."
-        print_info "Run the installer from a terminal, or configure passwordless sudo"
-        print_info "for this account for unattended/CI installs."
-        exit 1
-    fi
-fi
+# Elevation is captured once at install start (acquire_sudo, lib/services.sh):
+# the password is held for silent re-priming, so the Homebrew phase cannot make
+# sudo prompt again. This call is a no-op when deploy.sh already acquired it;
+# it self-acquires when preflight.sh is run standalone.
+acquire_sudo
 
-# Keep sudo alive (Linux only)
-if [ "$OS" = "linux" ]; then
-    while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
-fi
+# Keep the ticket fresh on every platform (Linux-only before, part of why macOS
+# re-prompted after brew). A cleared ticket is re-primed silently.
+while true; do
+    sudo -n true 2>/dev/null || sudo -v > /dev/null 2>&1 || true
+    sleep 60
+    kill -0 "$$" || exit
+done 2>/dev/null &
 
 echo ""
 print_success "All configuration collected"

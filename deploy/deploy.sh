@@ -95,6 +95,13 @@ source "${SCRIPT_DIR}/lib/embedding_config.sh"
 source "${SCRIPT_DIR}/lib/systemone_config.sh"
 
 # ============================================================================
+# Elevation
+# ============================================================================
+# Capture sudo once, up front, so the interview's occupied-port stops and every
+# later Homebrew-interleaved sudo call run without a second prompt.
+acquire_sudo
+
+# ============================================================================
 # Phase 1: Configuration Gathering
 # ============================================================================
 # config.sh handles:
