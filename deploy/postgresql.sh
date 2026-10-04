@@ -436,8 +436,9 @@ fi
 if [ "$CONFIG_EMBEDDING_PROVIDER" = "remote" ] && [ -n "$CONFIG_EMBEDDING_API_KEY" ]; then
     API_KEYS_ARGS+=("${EMBEDDING_VAULT_KEY_NAME}=${CONFIG_EMBEDDING_API_KEY}")
 fi
-# Injection screen (M16): a remote System One gateway needs its explicit key
-# in Vault — no chat-key fallback. Local (unkeyed) and disabled installs seed
+# Injection screen (M16): a remote System One gateway keys in Vault. On the
+# lunaroute gateway that key is the reused chat key; any other remote endpoint
+# carries its own explicit key. Local (unkeyed) and disabled installs seed
 # nothing.
 if [ "$CONFIG_INJECTION_SCREEN" = "yes" ] && [ "$CONFIG_SYSTEMONE_PROVIDER" = "remote" ]; then
     API_KEYS_ARGS+=("${SYSTEMONE_VAULT_KEY_NAME}=${CONFIG_SYSTEMONE_API_KEY}")
