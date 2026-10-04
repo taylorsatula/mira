@@ -306,6 +306,17 @@ class SidebarDispatcherConfig(BaseModel):
         default={"forage": 600, "memorycurator": 480, "whilethecatsaway": 14400},
         description="Per-agent wall-clock timeout overrides keyed by agent class name lowercased with the 'Agent' suffix stripped (e.g. ForageAgent -> 'forage')"
     )
+    blocking_agent_timeout_seconds: int = Field(
+        default=120, ge=1,
+        description=(
+            "Wall-clock bound for blocking-mode agent runs (SidebarAgent.run_blocking): "
+            "a blocking run executes inline on the caller's thread inside a turn that is "
+            "itself deadline-bounded — a heartbeat turn's cancel event stops the turn "
+            "only at the next tool boundary, so this, not agent_timeout_overrides, is "
+            "what bounds how long a blocking call can stretch that turn. Must stay at or "
+            "below heartbeat.turn_deadline_seconds for heartbeat use"
+        )
+    )
 
 
 class DevicePowerBindingConfig(BaseModel):

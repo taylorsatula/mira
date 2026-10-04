@@ -22,6 +22,10 @@ class ForageAgent(SidebarAgent):
     available_tools = ["continuum_tool", "memory_tool", "web_tool"]
     inherit_base_prompt = False
     max_iterations = 20
+    # Runnable inline inside a bounded turn via forage_tool's blocking param —
+    # bounded by sidebar_dispatcher.blocking_agent_timeout_seconds, not the
+    # 600s background override, so a blocking call fits a heartbeat turn.
+    blocking_supported = True
     # Overwatch observer on `fast`: keeps the per-iteration one-shot off
     # the local primary slot (single KV cache shared with the main chat).
     overwatch_model_config_name = "fast"

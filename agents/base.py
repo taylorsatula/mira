@@ -169,6 +169,13 @@ class SidebarAgent(ABC):
             agent_key, dispatcher_config.agent_timeout_seconds
         )
         self.iteration_timeout_seconds = dispatcher_config.agent_iteration_timeout_seconds
+        self.blocking_timeout_seconds = dispatcher_config.blocking_agent_timeout_seconds
+        # Blocking-mode state: _blocking is only ever true for the duration
+        # of one run_blocking() call; _completion_record is written by _exit
+        # so run_blocking can hand the terminal status + summary back to the
+        # caller (background runs leave it unread).
+        self._blocking = False
+        self._completion_record: dict[str, Any] | None = None
 
     # Optional -- subclasses override as needed
     inherit_base_prompt: bool = True
@@ -185,6 +192,16 @@ class SidebarAgent(ABC):
     # Used to restrict tool capabilities for sidebar agents (e.g.
     # email_tool → reply_to_email only).
     tool_schema_overrides: dict[str, dict[str, Any]] = {}
+
+    # Blocking mode -- opt-in synchronous execution via run_blocking().
+    # A blocking run executes the full loop on the caller's thread with a
+    # tight wall-clock bound (blocking_agent_timeout_seconds), suppresses
+    # every trinket publication (completion event and overwatch -- the
+    # result travels entirely through run_blocking()'s return value), and
+    # still writes the sidebar_activity record, so the dedup/retry contract
+    # with the dispatcher is unchanged. Off by default; subclasses that can
+    # run inside a bounded turn set it to True.
+    blocking_supported: bool = False
 
     # Sentry gate -- opt-in cheap pre-filter before the main loop.
     # Set sentry_model_config_name to activate. The gate exists to discard
@@ -255,6 +272,11 @@ class SidebarAgent(ABC):
     ) -> None:
         """Spawn background thread for non-blocking overwatch LLM call."""
         if not self.overwatch_model_config_name:
+            return
+        if self._blocking:
+            # Blocking runs publish no trinket events at all — an in_progress
+            # overwatch entry with no terminal event following would strand
+            # the trinket state machine in a non-terminal state.
             return
 
         import contextvars
@@ -469,8 +491,12 @@ class SidebarAgent(ABC):
         """Called after agent completes (success or failure).
 
         Default publishes to AsyncActivityTrinket. Override _get_completion_trinket()
-        and _build_completion_context() for custom trinkets.
+        and _build_completion_context() for custom trinkets. Blocking runs
+        (run_blocking) publish nothing — the result is the caller's return
+        value — so the guard here is the single suppression point.
         """
+        if self._blocking:
+            return
         from cns.core.events import UpdateTrinketEvent
         event_bus.publish(UpdateTrinketEvent.create(
             continuum_id='sidebar',
@@ -548,8 +574,16 @@ class SidebarAgent(ABC):
         self,
         work_item: 'WorkItem',
         event_bus: 'EventBus',
+        *,
+        timeout_seconds: int | None = None,
     ) -> None:
-        """Execute the agent loop. Implementations should not override this."""
+        """Execute the agent loop. Implementations should not override this.
+
+        timeout_seconds overrides the instance's background wall-clock bound
+        for this run only — run_blocking() passes blocking_timeout_seconds so
+        a blocking call is bounded tightly even when the class's background
+        override (agent_timeout_overrides) is minutes long.
+        """
         self._work_item = work_item
         self._event_bus = event_bus
         start_time = utc_now()
@@ -588,7 +622,11 @@ class SidebarAgent(ABC):
                 iteration_start = utc_now()
 
                 elapsed = (iteration_start - start_time).total_seconds()
-                if elapsed > self.timeout_seconds:
+                wall_limit = (
+                    timeout_seconds if timeout_seconds is not None
+                    else self.timeout_seconds
+                )
+                if elapsed > wall_limit:
                     self._exit('timeout', f'Agent timed out after {elapsed:.0f}s')
                     return
 
@@ -613,6 +651,50 @@ class SidebarAgent(ABC):
         finally:
             self._finalize_trace()
 
+    def run_blocking(
+        self,
+        work_item: 'WorkItem',
+        event_bus: 'EventBus',
+    ) -> dict[str, Any]:
+        """Run the agent loop synchronously on the caller's thread.
+
+        Returns the completion record {'status', 'summary'} — 'success'
+        carries the agent's briefing in 'summary'; every other terminal
+        status ('timeout', 'failed', 'rejected', 'skipped') carries the
+        failure explanation there instead. Raises only when the class opts
+        out (blocking_supported false) or the base run/exit contract is
+        broken; a failing agent run is a returned record, not a raise.
+
+        Differences from run(): wall-clock bound is
+        blocking_timeout_seconds (tight, turn-scale) instead of the class's
+        background override; no trinket events are published at all
+        (on_completion and overwatch both check _blocking) — the result
+        travels entirely through this return value. The sidebar_activity
+        record still lands via _exit, so dispatcher dedup/retry is unchanged.
+        The caller's thread provides the user contextvar; no context copy
+        is made, no thread is spawned.
+        """
+        if not self.blocking_supported:
+            raise ValueError(
+                f"{type(self).__name__} does not support blocking execution"
+            )
+        self._blocking = True
+        try:
+            self.run(
+                work_item, event_bus,
+                timeout_seconds=self.blocking_timeout_seconds,
+            )
+        finally:
+            self._blocking = False
+        if self._completion_record is None:
+            # run() routes every termination through _exit, which always
+            # writes the record; None here means the base contract broke —
+            # fail loud rather than hand back an invented result.
+            raise RuntimeError(
+                f"{self.agent_id}: blocking run ended without a completion record"
+            )
+        return self._completion_record
+
     def _exit(
         self,
         status: str,
@@ -625,6 +707,10 @@ class SidebarAgent(ABC):
         assert self._work_item is not None
         assert self._event_bus is not None
         self._trace['status'] = status
+        # Terminal record for run_blocking(): status + summary as the caller
+        # receives them. Written unconditionally; background runs simply
+        # never have it read back.
+        self._completion_record = {'status': status, 'summary': summary}
         _write_activity_record(
             self._work_item, self.agent_id, summary,
             run_count=self._work_item.context.get('run_count', 1),
