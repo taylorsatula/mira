@@ -50,6 +50,20 @@ STATUS_PLAYWRIGHT=""
 STATUS_SYSTEMD=""
 STATUS_MIRA_SERVICE=""
 
+# True when the endpoint is the lunaroute gateway and the chat tier holds a
+# usable key. Lunaroute is full-service: one key covers chat, subcortical,
+# embeddings, and System One, so no other tier needs its own key prompt.
+is_lunaroute_full_service() {
+    case "$1" in
+        *gw.lunaroute.com*) : ;;
+        *) return 1 ;;
+    esac
+    [ "$CONFIG_CHAT_PROVIDER_TYPE" = "openai" ] || return 1
+    [ -n "${CONFIG_CHAT_API_KEY:-}" ] || return 1
+    [ "$CONFIG_CHAT_API_KEY" != "PLACEHOLDER_SET_THIS_LATER" ] || return 1
+    return 0
+}
+
 # Detect this host's IANA timezone — the default for CONFIG_TIMEZONE when the
 # operator leaves it empty. Mirrors utils/timezone_utils.py get_default_timezone()
 # so the install default and the app-side fallback agree.
@@ -480,32 +494,37 @@ else
     CONFIG_SUBCORTICAL_ENDPOINT="${SUBCORTICAL_ENDPOINT_INPUT:-https://gw.lunaroute.com/v1/chat/completions}"
     STATUS_SUBCORTICAL="${CHECKMARK} ${CONFIG_SUBCORTICAL_ENDPOINT}"
 
-    # Subcortical API Key
-    echo -e "${BOLD}${BLUE}   Subcortical API Key${RESET}"
-    while true; do
-        read -p "$(echo -e ${CYAN}Enter key${RESET}) (or Enter to skip): " SUBCORTICAL_KEY_INPUT
-        if [ -z "$SUBCORTICAL_KEY_INPUT" ]; then
-            CONFIG_SUBCORTICAL_API_KEY="PLACEHOLDER_SET_THIS_LATER"
-            STATUS_SUBCORTICAL_KEY="${WARNING} NOT SET - You must configure this before using MIRA"
-            break
-        fi
-        # Validate gsk_ prefix if Groq endpoint detected
-        if [[ "$CONFIG_SUBCORTICAL_ENDPOINT" == *"groq.com"* ]] && [[ ! $SUBCORTICAL_KEY_INPUT =~ ^gsk_ ]]; then
-            print_warning "This doesn't look like a valid Groq API key (should start with 'gsk_')"
-            read -p "$(echo -e ${YELLOW}Continue anyway?${RESET}) (y=yes, t=try again): " CONFIRM
-            if [[ "$CONFIRM" =~ ^[Yy](es)?$ ]]; then
-                CONFIG_SUBCORTICAL_API_KEY="$SUBCORTICAL_KEY_INPUT"
-                STATUS_SUBCORTICAL_KEY="${CHECKMARK} Configured (unvalidated)"
+    # Subcortical API Key — lunaroute is full-service: one key covers every tier.
+    if is_lunaroute_full_service "$CONFIG_SUBCORTICAL_ENDPOINT"; then
+        CONFIG_SUBCORTICAL_API_KEY="$CONFIG_CHAT_API_KEY"
+        STATUS_SUBCORTICAL_KEY="${CHECKMARK} Reusing your lunaroute key"
+    else
+        echo -e "${BOLD}${BLUE}   Subcortical API Key${RESET}"
+        while true; do
+            read -p "$(echo -e ${CYAN}Enter key${RESET}) (or Enter to skip): " SUBCORTICAL_KEY_INPUT
+            if [ -z "$SUBCORTICAL_KEY_INPUT" ]; then
+                CONFIG_SUBCORTICAL_API_KEY="PLACEHOLDER_SET_THIS_LATER"
+                STATUS_SUBCORTICAL_KEY="${WARNING} NOT SET - You must configure this before using MIRA"
                 break
-            elif [[ "$CONFIRM" =~ ^[Tt](ry)?$ ]]; then
-                continue
             fi
-        else
-            CONFIG_SUBCORTICAL_API_KEY="$SUBCORTICAL_KEY_INPUT"
-            STATUS_SUBCORTICAL_KEY="${CHECKMARK} Configured"
-            break
-        fi
-    done
+            # Validate gsk_ prefix if Groq endpoint detected
+            if [[ "$CONFIG_SUBCORTICAL_ENDPOINT" == *"groq.com"* ]] && [[ ! $SUBCORTICAL_KEY_INPUT =~ ^gsk_ ]]; then
+                print_warning "This doesn't look like a valid Groq API key (should start with 'gsk_')"
+                read -p "$(echo -e ${YELLOW}Continue anyway?${RESET}) (y=yes, t=try again): " CONFIRM
+                if [[ "$CONFIRM" =~ ^[Yy](es)?$ ]]; then
+                    CONFIG_SUBCORTICAL_API_KEY="$SUBCORTICAL_KEY_INPUT"
+                    STATUS_SUBCORTICAL_KEY="${CHECKMARK} Configured (unvalidated)"
+                    break
+                elif [[ "$CONFIRM" =~ ^[Tt](ry)?$ ]]; then
+                    continue
+                fi
+            else
+                CONFIG_SUBCORTICAL_API_KEY="$SUBCORTICAL_KEY_INPUT"
+                STATUS_SUBCORTICAL_KEY="${CHECKMARK} Configured"
+                break
+            fi
+        done
+    fi
 
     # Subcortical Model
     read -p "$(echo -e ${CYAN}Model${RESET}) [default: glm-5.3-flash]: " SUBCORTICAL_MODEL_INPUT
@@ -548,12 +567,10 @@ if [[ "$REMOTE_EMBEDDINGS_INPUT" =~ ^[Yy](es)?$ ]]; then
         read -p "$(echo -e ${CYAN}Model${RESET}) [default: emb-nomic-moe]: " EMBEDDING_MODEL_INPUT
         CONFIG_EMBEDDING_MODEL="${EMBEDDING_MODEL_INPUT:-emb-nomic-moe}"
     done
-    # The lunaroute chat key doubles as the embeddings key; offer it so the
-    # default install needs no second paste. Never fall back to a chat
-    # placeholder that stands for a key the operator has not set.
-    if [ "$CONFIG_CHAT_PROVIDER_TYPE" = "openai" ] && [ -n "${CONFIG_CHAT_API_KEY:-}" ] && [ "$CONFIG_CHAT_API_KEY" != "PLACEHOLDER_SET_THIS_LATER" ]; then
-        read -p "$(echo -e ${CYAN}API key${RESET}) (Enter uses your chat key): " EMBEDDING_API_KEY_INPUT
-        CONFIG_EMBEDDING_API_KEY="${EMBEDDING_API_KEY_INPUT:-$CONFIG_CHAT_API_KEY}"
+    # Lunaroute is full-service: the chat key already covers embeddings, so no
+    # second prompt. Any other endpoint supplies its own key.
+    if is_lunaroute_full_service "$CONFIG_EMBEDDING_ENDPOINT"; then
+        CONFIG_EMBEDDING_API_KEY="$CONFIG_CHAT_API_KEY"
     else
         read -p "$(echo -e ${CYAN}API key${RESET}) (or Enter for an endpoint that takes none): " CONFIG_EMBEDDING_API_KEY
     fi
@@ -590,11 +607,16 @@ if [[ "$INJECTION_SCREEN_INPUT" =~ ^[Yy](es)?$ ]]; then
         CONFIG_SYSTEMONE_MODEL="${SYSTEMONE_MODEL_INPUT:-djev}"
     done
     if [ "$CONFIG_SYSTEMONE_PROVIDER" = "remote" ]; then
-        echo -e "${DIM}    The lunaroute chat key works here too. The installer probes the endpoint${RESET}"
-        echo -e "${DIM}    before committing and stores the key in Vault as systemone_key.${RESET}"
-        while [ -z "$CONFIG_SYSTEMONE_API_KEY" ]; do
-            read -p "$(echo -e ${CYAN}API key${RESET}): " CONFIG_SYSTEMONE_API_KEY
-        done
+        # Lunaroute is full-service: the chat key covers System One too.
+        if is_lunaroute_full_service "$CONFIG_SYSTEMONE_ENDPOINT"; then
+            CONFIG_SYSTEMONE_API_KEY="$CONFIG_CHAT_API_KEY"
+        else
+            echo -e "${DIM}    The installer probes the endpoint before committing and stores${RESET}"
+            echo -e "${DIM}    the key in Vault as systemone_key.${RESET}"
+            while [ -z "$CONFIG_SYSTEMONE_API_KEY" ]; do
+                read -p "$(echo -e ${CYAN}API key${RESET}): " CONFIG_SYSTEMONE_API_KEY
+            done
+        fi
         STATUS_SYSTEMONE="${CHECKMARK} On: remote ${CONFIG_SYSTEMONE_MODEL} at ${CONFIG_SYSTEMONE_ENDPOINT}"
     else
         STATUS_SYSTEMONE="${CHECKMARK} On: local ${CONFIG_SYSTEMONE_MODEL} at ${CONFIG_SYSTEMONE_ENDPOINT}"
