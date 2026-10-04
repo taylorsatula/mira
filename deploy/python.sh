@@ -64,15 +64,31 @@ MIRA_GROUP="$(id -gn)"
 run_with_status "Creating /opt/mira/app directory" \
     sudo mkdir -p /opt/mira/app
 
+# The code tree is a git repository (self-edit rollback, utils/self_edit.py):
+# every install is a commit, MIRA's own edits are uncommitted changes until a
+# trial boot passes, and failed edits are stashes. Uncommitted changes present
+# now are edits MIRA made that never went through a restart — stash them (kept,
+# never deleted) before the new payload replaces the tree.
+if [ -d /opt/mira/app/.git ] && [ -n "$(git -C /opt/mira/app status --porcelain --untracked-files=all 2>/dev/null)" ]; then
+    run_with_status "Stashing uncommitted code changes before reinstall" \
+        git -C /opt/mira/app stash push --include-untracked --quiet \
+            -m "uncommitted changes before reinstall $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+fi
+# A trial-boot marker left by an interrupted self-edit restart would make the
+# launcher record the freshly installed tree as that edit's success; the edit
+# itself is in the stash above.
+run_quiet rm -f /opt/mira/state/booting
+
 # Clear any previous install's code before the new payload lands: a
 # retired module left behind by an overlay is imported at boot and parks
 # the POST gate. Host-local state the install payload never contains
 # (venv, .env, data, logs — the same set both install paths exclude) is
 # preserved; data/ holds per-user storage (utils/userdata_manager.py
-# base_dir) and venv/ is reused by Step 4.
+# base_dir) and venv/ is reused by Step 4. .git is preserved too: it holds
+# the install history and every stashed self-edit.
 run_with_status "Clearing previous install (code only)" \
     sudo find /opt/mira/app -mindepth 1 -maxdepth 1 \
-        ! -name venv ! -name .env ! -name data ! -name logs \
+        ! -name venv ! -name .env ! -name data ! -name logs ! -name .git \
         -exec rm -rf {} +
 
 if [ "${LOCAL_SOURCE:-false}" = "true" ]; then
@@ -122,6 +138,43 @@ fi
 
 run_with_status "Setting ownership to $MIRA_USER:$MIRA_GROUP" \
     sudo chown -R $MIRA_USER:$MIRA_GROUP /opt/mira
+
+# Record this install as a commit (self-edit rollback; contract in
+# utils/self_edit.py). Runs as the service user, who owns the tree.
+#
+# .git/info/exclude — not .gitignore — names everything git must never track
+# or stash: it lives outside the editable tree, so a code edit cannot widen
+# what a stash sweeps up, and bash_tool reads its literal entries as the
+# top-level names it refuses to delete (utils/self_edit.py:protected_tree_names).
+# Every runtime write under the tree must land under one of these names, or
+# each boot would look like an untested edit.
+if [ ! -d /opt/mira/app/.git ]; then
+    run_with_status "Initializing code history" \
+        git -C /opt/mira/app init --quiet
+fi
+run_quiet git -C /opt/mira/app config user.name "MIRA"
+run_quiet git -C /opt/mira/app config user.email "mira@localhost"
+mkdir -p /opt/mira/app/.git/info
+cat > /opt/mira/app/.git/info/exclude <<'EXCLUDE'
+# Written by deploy/python.sh. Never tracked, never stashed, never deletable
+# through bash_tool. Edit deploy/python.sh, not this file.
+data/
+venv/
+.env
+logs/
+scratch/
+__pycache__/
+*.pyc
+.DS_Store
+EXCLUDE
+INSTALL_COMMIT_MSG="install ${RELEASE_TAG}"
+if [ "${LOCAL_SOURCE:-false}" = "true" ]; then
+    INSTALL_COMMIT_MSG="${INSTALL_COMMIT_MSG} (local tree)"
+fi
+run_with_status "Staging install in code history" \
+    git -C /opt/mira/app add -A
+run_with_status "Recording install in code history" \
+    git -C /opt/mira/app commit --quiet --allow-empty -m "$INSTALL_COMMIT_MSG"
 
 print_success "MIRA installed to /opt/mira/app"
 

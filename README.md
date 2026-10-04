@@ -161,7 +161,7 @@ MIRA_SYSTEMONE_MODEL=djev
 ```
 
 The bare-metal installer writes these to `/opt/mira/systemone.env`, which the
-systemd unit (`EnvironmentFile=`), the `run.sh` launcher, and the container's
+systemd unit (`EnvironmentFile=`), the `/opt/mira/bin/mira-launch` launcher, and the container's
 start script all read. Secrets never travel by env — the bearer token lives
 only in Vault (`secret/mira/api_keys` `systemone_key`).
 

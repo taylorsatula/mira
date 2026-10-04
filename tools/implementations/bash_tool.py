@@ -42,6 +42,7 @@ from pydantic import BaseModel, Field
 
 from tools.repo import Tool
 from tools.registry import registry
+from utils import self_edit
 from utils.timezone_utils import utc_now
 
 
@@ -333,6 +334,20 @@ _FIND_NARROWING = frozenset({
 })
 _MATCH_ALL_REGEXES = frozenset({".", ".*", ".+", "^", "$", "^.*$", "^.*", ".*$", "[^]", "^^"})
 
+# Pattern rules whose match is anchored on an absolute path. A match whose
+# path lies in the editable part of MIRA's code tree (see
+# _classify_app_tree_path) is an ordinary self-edit, not a system write; the
+# argument layer still classifies the same command precisely.
+_APP_TREE_PATH_RULES = frozenset({"system-path-delete", "overwrite-system-config"})
+_PATH_TOKEN = re.compile(r"""/[^\s'"`;|&()<>]*""")
+
+
+def _pattern_match_path(command: str, match: "re.Match[str]") -> str:
+    """The full absolute path a path-anchored pattern match points at."""
+    found = _PATH_TOKEN.search(command, match.start())
+    return found.group(0) if found else ""
+
+
 _OPERATORS = frozenset({";", ";;", "&", "&&", "|", "||", "|&", "(", ")", "{", "}", "\n"})
 _WRITE_REDIRECTS = frozenset({">", ">>", "&>", "&>>", "1>", "2>", ">", "<>"})
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -367,6 +382,20 @@ _RULE_REASONS: Dict[str, str] = {
     "user-home-delete": "the command targets a user's home directory",
     "vcs-history-delete": (
         "the command targets the project's git history, which cannot be recreated"
+    ),
+    "app-root-delete": (
+        "the command targets MIRA's code tree as a whole; edit or delete the "
+        "files inside it instead"
+    ),
+    "app-untracked-delete": (
+        "the command targets a part of MIRA's code tree that git does not track "
+        "(user data, the virtualenv, credentials, logs, or the git history "
+        "itself), so no rollback can restore it"
+    ),
+    "self-edit-stash": (
+        "stashes in MIRA's code tree hold failed self-edits; restore or discard "
+        "them with selfedit_tool (restore_stash / discard_stash), never with raw "
+        "git stash drop/pop/clear"
     ),
     "unverifiable-expansion": (
         "the path contains a shell expansion ($, `, or ~) that this guardrail "
@@ -422,6 +451,9 @@ def _classify_path(path: str, root: str, ancestors: FrozenSet[str]) -> Optional[
         return "filesystem-root"
     if resolved in ancestors:
         return "project-root-delete"
+    app_rule = _classify_app_tree_path(resolved)
+    if app_rule is not None:
+        return app_rule or None
     head = resolved[1:].partition("/")[0]
     if head in _SYSTEM_DIR_NAMES:
         return "system-path-delete"
@@ -433,6 +465,56 @@ def _classify_path(path: str, root: str, ancestors: FrozenSet[str]) -> Optional[
     if resolved == git_dir or resolved.startswith(git_dir + "/"):
         return "vcs-history-delete"
     return None
+
+
+def _load_app_tree() -> Optional[Tuple[str, FrozenSet[str]]]:
+    """
+    MIRA's code tree and its untracked top-level names, when self-edit rollback is active.
+
+    Read once at import, outside the validator: the validator stays a pure
+    decision function over this inert tuple (tests/protected/bash_guardrail_probe.py
+    enforces that). Self-edit activation is fixed for the process lifetime — the
+    supervisor sets MIRA_SELF_EDIT_STATE_DIR before Python starts — and an
+    active tree missing its .git/info/exclude raises here, failing tool
+    discovery loudly instead of guarding with an empty protection set.
+    """
+    if not self_edit.is_active():
+        return None
+    return str(self_edit.APP_ROOT), self_edit.protected_tree_names()
+
+
+# (app root, untracked top-level names) or None when self-edit is inactive.
+_APP_TREE: Optional[Tuple[str, FrozenSet[str]]] = _load_app_tree()
+
+
+def _classify_app_tree_path(resolved: str) -> Optional[str]:
+    """
+    Classify a path against MIRA's own code tree when self-edit rollback is active.
+
+    Returns None when the path is outside the tree (or self-edit is inactive),
+    "" when it is an editable file or directory inside the tree, or the rule
+    name it violates. The tree's tracked contents are editable because every
+    change there is either committed after a passing trial boot or stashed by
+    the launcher (utils/self_edit.py); what git does not track — the names in
+    .git/info/exclude, .git included — has no rollback and stays protected,
+    as does the tree root itself. Without an active rollback the tree gets no
+    exemption: under /opt it stays a system path.
+    """
+    if _APP_TREE is None:
+        return None
+    app_root, protected = _APP_TREE
+    if resolved == app_root:
+        return "app-root-delete"
+    if not resolved.startswith(app_root + "/"):
+        return None
+    if resolved[len(app_root) + 1:].partition("/")[0] in protected:
+        return "app-untracked-delete"
+    return ""
+
+
+def _in_editable_app_tree(path: str) -> bool:
+    """True when an absolute path is an editable location inside MIRA's code tree."""
+    return _classify_app_tree_path(_normalize_absolute(path)) == ""
 
 
 def _at_or_under(path: str, root: str) -> bool:
@@ -934,6 +1016,8 @@ def _analyze_segment(
         return cwd
 
     _check_prohibited_verb(verb)
+    if verb == "git":
+        _check_git_stash(rest, cwd)
     if verb == "init":
         _check_runlevel(rest)
     _check_service_control(verb, rest)
@@ -947,6 +1031,29 @@ def _analyze_segment(
         _check_path_verbs(verb, rest, cwd, root, ancestors)
     _check_redirect_targets(tokens, cwd, root, ancestors)
     return cwd
+
+
+def _check_git_stash(args: List[str], cwd: str) -> None:
+    """Refuse discarding a stash in MIRA's code tree: those stashes are failed self-edits."""
+    repo = cwd
+    index = 0
+    while index < len(args) and args[index].startswith("-"):
+        if args[index] == "-C" and index + 1 < len(args):
+            repo = _resolve_operand(args[index + 1], repo)
+            index += 2
+            continue
+        index += 1
+    if index + 1 >= len(args) or args[index] != "stash":
+        return
+    if args[index + 1] not in ("drop", "pop", "clear") or _APP_TREE is None:
+        return
+    app_root = _APP_TREE[0]
+    if repo == app_root or repo.startswith(app_root + "/"):
+        _refuse(
+            "self-edit-stash",
+            _RULE_REASONS["self-edit-stash"],
+            "git " + " ".join(args[: index + 2]),
+        )
 
 
 def _tokenize(command: str) -> List[str]:
@@ -1011,8 +1118,11 @@ def _validate_command(command: str, root: str, cwd: Optional[str] = None) -> Non
             command is never sent to the host.
     """
     for name, pattern, reason in _DESTRUCTIVE_PATTERNS:
-        match = pattern.search(command)
-        if match:
+        for match in pattern.finditer(command):
+            if name in _APP_TREE_PATH_RULES and _in_editable_app_tree(
+                _pattern_match_path(command, match)
+            ):
+                continue
             _refuse(name, reason, match.group(0))
 
     normalized_root = _normalize_absolute(root)
@@ -1022,6 +1132,16 @@ def _validate_command(command: str, root: str, cwd: Optional[str] = None) -> Non
         normalized_root,
         _protected_ancestors(normalized_root),
     )
+
+
+# Model-facing note on self-edit, present only where rollback is active so an
+# install without it never advertises editing MIRA's own code.
+_SELF_EDIT_NOTE = (
+    f" Files in MIRA's own code tree ({_APP_TREE[0]}) may be edited, created, and "
+    "deleted; the parts git does not track (data, venv, .env, logs, .git) stay "
+    "refused. An edit there takes effect only after selfedit_tool's request_restart."
+    if _APP_TREE is not None else ""
+)
 
 
 class BashTool(Tool):
@@ -1061,7 +1181,7 @@ class BashTool(Tool):
                         "human. Paths that depend on shell expansion ($VAR, ~, backticks) are "
                         "refused for destructive verbs — pass explicit literal paths. Not "
                         "sandboxed: it can read the whole machine's filesystem, but "
-                        "system-destructive operations are refused."
+                        "system-destructive operations are refused." + _SELF_EDIT_NOTE
                     ),
                 },
                 "cwd": {

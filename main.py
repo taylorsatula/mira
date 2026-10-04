@@ -285,6 +285,12 @@ async def lifespan(app: FastAPI):
         await mcp_stack.enter_async_context(mcp_manager.run())
         logger.info("MCP /v0/mcp session manager running (check_in tool available)")
 
+    # Self-edit trial boot (utils/self_edit.py): the edited tree just completed
+    # startup, so it becomes the new last-good commit. No-op on every
+    # non-trial start.
+    from utils.self_edit import commit_trial_if_booting
+    commit_trial_if_booting()
+
     logger.info("MIRA startup complete")
     
     
@@ -639,6 +645,14 @@ def main():
     except Exception as e:
         logger.error(f"Failed to start: {e}")
         sys.exit(1)
+
+    # A graceful SIGTERM returns serve() normally (exit 0), which neither
+    # systemd's Restart=on-failure nor launchd's KeepAlive treats as a reason
+    # to restart. A self-edit restart must exit non-zero to come back up.
+    from utils.self_edit import RESTART_EXIT_CODE, restart_requested
+    if restart_requested():
+        logger.warning("Exiting with %d so the supervisor restarts MIRA", RESTART_EXIT_CODE)
+        sys.exit(RESTART_EXIT_CODE)
 
 
 if __name__ == "__main__":

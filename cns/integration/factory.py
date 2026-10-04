@@ -58,6 +58,7 @@ class CNSIntegrationFactory:
         self._subcortical_layer: SubcorticalLayer | None = None
         self._peanutgallery_service: PeanutGalleryService | None = None
         self._inbox_poller: object | None = None
+        self._self_edit_handler: object | None = None
         self._valkey_cache: ValkeyMessageCache | None = None
         self._memory_relevance_service: MemoryRelevanceService | None = None
         self._live_context_compaction_service: LiveContextCompactionService | None = None
@@ -125,6 +126,9 @@ class CNSIntegrationFactory:
 
         # Initialize inbox poller for email awareness during active segments
         self._initialize_inbox_poller(event_bus)
+
+        # Self-edit restart trigger and outcome delivery (active installs only)
+        self._initialize_self_edit_handler(event_bus)
 
         # Create orchestrator with all dependencies
         orchestrator = ContinuumOrchestrator(
@@ -203,6 +207,7 @@ class CNSIntegrationFactory:
             from working_memory.trinkets.memory_curator_trinket import MemoryCuratorTrinket
             from working_memory.trinkets.skills_catalog_trinket import SkillsCatalogTrinket
             from working_memory.trinkets.active_skills_trinket import ActiveSkillsTrinket
+            from working_memory.trinkets.self_edit_trinket import SelfEditTrinket
 
             # Registration order is deliberate; keep manual — no trinket
             # auto-registration. Trinkets self-register with working memory.
@@ -229,6 +234,7 @@ class CNSIntegrationFactory:
             MemoryCuratorTrinket(event_bus, self._working_memory)
             SkillsCatalogTrinket(event_bus, self._working_memory)
             ActiveSkillsTrinket(event_bus, self._working_memory)
+            SelfEditTrinket(event_bus, self._working_memory)
             # Boot collection of the global skills catalog — the one moment
             # it is read from disk; everything after serves this snapshot
             # (utils/skill_files.py:load_global_catalog for the contract).
@@ -489,6 +495,25 @@ class CNSIntegrationFactory:
         self._inbox_poller = InboxPollerService(event_bus)
 
         logger.info("Inbox poller service initialized")
+
+
+    def _initialize_self_edit_handler(self, event_bus: EventBus) -> None:
+        """Subscribe the self-edit restart trigger and outcome clearing.
+
+        Only where self-edit rollback is active (utils/self_edit.py): elsewhere
+        selfedit_tool refuses every operation, so there is nothing to react to.
+        """
+        from utils import self_edit
+
+        reason = self_edit.inactive_reason()
+        if reason is not None:
+            logger.info("Self-edit rollback inactive: %s", reason)
+            return
+
+        from cns.services.self_edit_handler import SelfEditHandler
+
+        self._self_edit_handler = SelfEditHandler(event_bus)
+        logger.info("Self-edit handler subscribed (restart trigger, outcome delivery)")
 
 
 def create_cns_orchestrator(config_instance: object = None) -> ContinuumOrchestrator:

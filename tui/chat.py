@@ -11,7 +11,12 @@ at ``turn_started`` (the server accepted it); every path that cannot deliver it
 returns it, with its queued siblings, to the input box. Nothing is dropped.
 
 ``Live`` is derived on read by ``_live()`` from the state below, never kept in
-step by hand. Private inbox items (``ConnectFailed``, ``RetrySend``, ``ScreenExited``) let background tasks report to the same single consumer.
+step by hand. Private inbox items (``ConnectFailed``, ``RetrySend``, ``AutoReconnectDue``, ``ScreenExited``) let background tasks report to the same single consumer.
+
+A lost connection reconnects automatically with bounded backoff (a self-edit
+restart, or any server restart, comes back on its own); after reconnecting,
+MIRA's messages written while the socket was down are fetched from history and
+shown, so a message pushed during the gap is not lost.
 
 Contract: ``tui/FRONTEND_PLAN.md`` "### ``tui/chat.py``" and its event table.
 """
@@ -21,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -81,11 +87,24 @@ TURN_BUSY_MAX_WAIT_SECONDS = 600.0
 # unanswered (cns/api/websocket_chat.py process_turn setup failures).
 _UNATTRIBUTED_SEND_CODES = frozenset({"INVALID_MESSAGE", "TURN_SETUP_FAILED"})
 
+# A lost connection retries on its own: quickly at first (a restart takes a few
+# seconds to tens of seconds — supervisor delay plus the boot gate), then at a
+# steady poll, until MAX_WAIT has passed since the loss. Enter retries at once.
+AUTO_RECONNECT_DELAYS = (2.0, 4.0, 8.0)
+AUTO_RECONNECT_POLL_SECONDS = 15.0
+AUTO_RECONNECT_MAX_WAIT_SECONDS = 600.0
+
 _LOST_BEFORE_CONFIRM = (
     "connection lost before MIRA confirmed this message — check history before resending"
 )
 
 ConnState = Literal["connected", "connecting", "disconnected"]
+
+
+def _parse_utc(timestamp: str) -> datetime:
+    """A history row's ISO timestamp as an aware UTC datetime (naive means UTC)."""
+    parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 # --- Private inbox items -------------------------------------------------------
@@ -106,13 +125,29 @@ class RetrySend:
 
 
 @dataclass
+class _AutoReconnect:
+    """One automatic reconnect run, from a lost connection until it succeeds or gives up."""
+
+    since: float  # monotonic time the connection was lost
+    lost_at: datetime  # UTC wall time of the loss; history rows after it were missed
+    attempts: int = 0
+
+
+@dataclass
+class AutoReconnectDue:
+    """An automatic reconnect timer fired for this run."""
+
+    run: _AutoReconnect
+
+
+@dataclass
 class ScreenExited:
     """The screen task ended without close(): fail loud, never run bar-less."""
 
     error: BaseException
 
 
-Item = ClientEvent | Intent | ConnectFailed | RetrySend | ScreenExited
+Item = ClientEvent | Intent | ConnectFailed | RetrySend | AutoReconnectDue | ScreenExited
 
 
 @dataclass
@@ -164,6 +199,7 @@ class ChatSession:
         self._show_thinking = False  # Ctrl+T view toggle; forward-looking, no replay of what streamed while off
         self._conn: ConnState = "connecting"  # AuthOk on the inbox flips it
         self._conn_since = time.monotonic()
+        self._auto_reconnect: _AutoReconnect | None = None  # set while reconnecting on its own
 
         self._pump_task: asyncio.Task[None] | None = None
         self._connect_task: asyncio.Task[None] | None = None
@@ -223,6 +259,12 @@ class ChatSession:
     def _status(self) -> Status:
         turn, flight = self._turn, self._in_flight
         if self._conn == "disconnected":
+            if self._auto_reconnect is not None:
+                return Status(
+                    "connection lost — reconnecting automatically · Enter to retry now",
+                    "busy",
+                    self._auto_reconnect.since,
+                )
             return Status("disconnected — press Enter to reconnect", "alert")
         if self._conn == "connecting":
             return Status("connecting…", "busy", self._conn_since)
@@ -321,6 +363,8 @@ class ChatSession:
                 await self._on_model_error(item)
             case RetrySend():
                 await self._on_retry_send(item)
+            case AutoReconnectDue():
+                await self._on_auto_reconnect_due(item)
             case ContextReset():
                 await self._on_context_reset(item)
             case TurnComplete():
@@ -505,6 +549,7 @@ class ChatSession:
         await self._client.close()
         await self._join_pump()
         self._conn = "disconnected"
+        self._auto_reconnect = None
         restored = self._restore_unsent()
         notice = "connect cancelled — press Enter to reconnect"
         if restored:
@@ -515,6 +560,9 @@ class ChatSession:
         if self._conn != "connecting":
             return  # a connect the user already cancelled
         self._conn = "connected"
+        run, self._auto_reconnect = self._auto_reconnect, None
+        if run is not None:
+            await self._emit(transcript.notice("reconnected"), *await self._missed_blocks(run.lost_at))
         if self._outbox and not self._busy():
             await self._send_next()
         else:
@@ -526,6 +574,21 @@ class ChatSession:
         self._connect_task = None
         self._conn = "disconnected"
         self._restore_unsent()
+        run = self._auto_reconnect
+        if run is not None and error.code != "AUTH_FAILED":
+            if time.monotonic() - run.since < AUTO_RECONNECT_MAX_WAIT_SECONDS:
+                self._schedule_auto_reconnect(run)
+                self._refresh()
+                return
+            self._auto_reconnect = None
+            await self._emit(
+                transcript.alert(
+                    f"could not reconnect for {int(AUTO_RECONNECT_MAX_WAIT_SECONDS)}s: "
+                    f"{error.message} [{error.code}] — press Enter to retry"
+                )
+            )
+            return
+        self._auto_reconnect = None
         blocks = [transcript.alert(f"could not connect: {error.message} [{error.code}]")]
         if error.code == "AUTH_FAILED":
             blocks.append(transcript.notice("re-mint the API token: python3 -m tui --login"))
@@ -555,7 +618,46 @@ class ChatSession:
         self._turn = None
         self._conn = "disconnected"
         blocks.extend(self._take_deferred())
+        if not self._quitting and self._auto_reconnect is None:
+            self._auto_reconnect = _AutoReconnect(
+                since=time.monotonic(), lost_at=datetime.now(timezone.utc)
+            )
+            self._schedule_auto_reconnect(self._auto_reconnect)
         await self._emit(*blocks)
+
+    def _schedule_auto_reconnect(self, run: _AutoReconnect) -> None:
+        n = run.attempts
+        delay = AUTO_RECONNECT_DELAYS[n] if n < len(AUTO_RECONNECT_DELAYS) else AUTO_RECONNECT_POLL_SECONDS
+        run.attempts += 1
+        self._spawn(self._auto_reconnect_after(run, delay))
+
+    async def _auto_reconnect_after(self, run: _AutoReconnect, delay: float) -> None:
+        await asyncio.sleep(delay)
+        await self._post_private(AutoReconnectDue(run))
+
+    async def _on_auto_reconnect_due(self, item: AutoReconnectDue) -> None:
+        if item.run is not self._auto_reconnect or self._conn != "disconnected":
+            return  # reconnected, cancelled, or superseded while the timer ran
+        await self._reconnect()
+
+    async def _missed_blocks(self, lost_at: datetime) -> list[Text]:
+        """MIRA's messages written after the connection was lost (a proactive
+        push sent while the socket was down never arrived). A fetch failure
+        degrades to an alert — the chat itself is connected and works."""
+        try:
+            rows = await self._client.fetch_history("session_only")
+        except ClientError as error:
+            return [
+                transcript.alert(
+                    f"could not check for messages sent while disconnected: "
+                    f"{error.message} [{error.code}]"
+                )
+            ]
+        missed = [
+            row for row in rows
+            if row.role == "assistant" and _parse_utc(row.timestamp) > lost_at
+        ]
+        return replay_blocks(missed)
 
     # --- turn lifecycle --------------------------------------------------------
 

@@ -37,6 +37,21 @@ chmod 600 "$SYSTEMONE_ENV_FILE"
 chown "$MIRA_USER:$MIRA_GROUP" "$SYSTEMONE_ENV_FILE" 2>/dev/null || chown "$MIRA_USER" "$SYSTEMONE_ENV_FILE"
 echo -e "${CHECKMARK}"
 
+# The launcher every start path runs (systemd unit, launchd agent, manual
+# start), installed outside the code tree from the installed copy of
+# deploy/mira-launch.sh. Root-owned so the service user — and so MIRA — cannot
+# rewrite its own recovery path. /opt/mira/state is the self-edit state
+# directory (utils/self_edit.py); the supervisor configs below pass it as
+# MIRA_SELF_EDIT_STATE_DIR, which is what turns self-edit rollback on.
+MIRA_LAUNCHER="/opt/mira/bin/mira-launch"
+MIRA_SELF_EDIT_STATE_DIR="/opt/mira/state"
+run_with_status "Installing MIRA launcher to $MIRA_LAUNCHER" \
+    sudo install -d -m 755 /opt/mira/bin
+run_quiet sudo install -m 755 /opt/mira/app/deploy/mira-launch.sh "$MIRA_LAUNCHER"
+run_quiet sudo chown root "$MIRA_LAUNCHER"
+run_with_status "Creating self-edit state directory $MIRA_SELF_EDIT_STATE_DIR" \
+    sudo install -d -m 700 -o "$MIRA_USER" "$MIRA_SELF_EDIT_STATE_DIR"
+
 # Systemd service installation (Linux only, if user opted in)
 if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ] && [ "$OS" = "linux" ]; then
     print_header "Step 15: Systemd Service Configuration"
@@ -83,7 +98,8 @@ Environment="VAULT_ADDR=http://127.0.0.1:8200"
 Environment="VAULT_ROLE_ID=$VAULT_ROLE_ID"
 Environment="VAULT_SECRET_ID=$VAULT_SECRET_ID"
 Environment="MIRA_LOG_DIR=/opt/mira/logs"
-ExecStart=/opt/mira/app/venv/bin/python3 /opt/mira/app/main.py
+Environment="MIRA_SELF_EDIT_STATE_DIR=${MIRA_SELF_EDIT_STATE_DIR}"
+ExecStart=${MIRA_LAUNCHER}
 Restart=on-failure
 RestartSec=10
 TimeoutStartSec=60
@@ -142,53 +158,17 @@ elif [ "${CONFIG_INSTALL_SYSTEMD}" = "no" ]; then
     print_info "Skipping systemd service installation (user opted out)"
 fi
 
-# Write a launcher that exports Vault env vars before starting MIRA.
-# On Linux with systemd these vars are baked into the unit; macOS has no
-# equivalent, and a Linux user who declined (or failed) systemd gets no unit
-# at all — so both need the launcher. The server itself reads Vault at
-# startup (POST gate, preload_secrets) and fails fast without these env vars.
+# Manual start path: macOS has no systemd, and a Linux user who declined (or
+# failed) systemd gets no unit at all. Both start MIRA through the same
+# launcher the supervisors run (installed above). A manual start carries no
+# MIRA_SELF_EDIT_STATE_DIR, so self-edit rollback stays off there — nothing
+# would restart MIRA after a failed trial boot.
 if [ "$OS" = "macos" ] || { [ "$OS" = "linux" ] && [ "${CONFIG_INSTALL_SYSTEMD}" != "yes" ]; }; then
-    print_header "Step 15b: MIRA Launcher Script"
-
-    RUN_SH="/opt/mira/app/run.sh"
-    echo -ne "${DIM}${ARROW}${RESET} Writing $RUN_SH... "
-    # The PATH prefix covers launchd's minimal environment (brew tools, and
-    # anything bash_tool shells out to); the bounded seal-status wait covers
-    # launchd's lack of agent ordering — the POST gate treats a sealed or
-    # unreachable Vault as infrastructure failure, so the launcher waits for
-    # Vault to be up AND unsealed before starting the server.
-    cat > "$RUN_SH" <<'LAUNCHER'
-#!/bin/bash
-# MIRA launcher — exports Vault env vars and starts the server.
-set -e
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-cd "$(dirname "$0")"
-export VAULT_ADDR=http://127.0.0.1:8200
-for i in $(seq 1 120); do
-    S=$(curl -sf http://127.0.0.1:8200/v1/sys/seal-status 2>/dev/null || true)
-    case "$S" in *'"sealed":false'*) break;; esac
-    sleep 1
-done
-export VAULT_ROLE_ID=$(cat /opt/vault/role-id.txt)
-export VAULT_SECRET_ID=$(cat /opt/vault/secret-id.txt)
-export MIRA_LOG_DIR=/opt/mira/logs
-# set -a: sourced assignments must be EXPORTED to reach the server process —
-# a plain `.` sets shell variables only, so python never saw
-# MIRA_INJECTION_SCREEN_ENABLED=0 and the boot gate parked (observed live on
-# macOS; systemd's EnvironmentFile= exports natively, run.sh must too).
-if [ -f /opt/mira/systemone.env ]; then
-    set -a
-    . /opt/mira/systemone.env
-    set +a
-fi
-exec venv/bin/python3 main.py "$@"
-LAUNCHER
-    chmod +x "$RUN_SH"
-    echo -e "${CHECKMARK}"
-    print_info "Start MIRA with: $RUN_SH"
+    print_header "Step 15b: MIRA Launcher"
+    print_info "Start MIRA with: $MIRA_LAUNCHER"
 fi
 
-# macOS supervision: a per-user LaunchAgent runs run.sh at login and restarts
+# macOS supervision: a per-user LaunchAgent runs the launcher at login and restarts
 # it after a failed exit — the platform equivalent of mira.service
 # (Restart=on-failure). Written even when start_mira_now is no: agents in
 # ~/Library/LaunchAgents load at the next login.
@@ -205,8 +185,13 @@ if [ "$OS" = "macos" ]; then
     <string>com.mira.app</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/opt/mira/app/run.sh</string>
+        <string>${MIRA_LAUNCHER}</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MIRA_SELF_EDIT_STATE_DIR</key>
+        <string>${MIRA_SELF_EDIT_STATE_DIR}</string>
+    </dict>
     <key>WorkingDirectory</key>
     <string>/opt/mira/app</string>
     <key>RunAtLoad</key>
@@ -495,7 +480,7 @@ else
     if [ "$OS" = "linux" ]; then
         # No systemd unit exists (user opted out or install failed), so the
         # Step 15b launcher written above is the start path.
-        echo -e "  ${CYAN}→${RESET} Start MIRA: ${BOLD}/opt/mira/app/run.sh${RESET}"
+        echo -e "  ${CYAN}→${RESET} Start MIRA: ${BOLD}${MIRA_LAUNCHER}${RESET}"
         echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/chat${RESET}"
         echo -e "  ${CYAN}→${RESET} After a reboot, unseal Vault first: ${BOLD}/opt/vault/unseal.sh${RESET}"
     else
@@ -527,7 +512,7 @@ if [ "$OS" = "macos" ]; then
     print_info "Supervision is via per-user LaunchAgents (start at login, restart on failure):"
     print_info "  com.mira.vault        — Vault server"
     print_info "  com.mira.vault.unseal — auto-unseal at login (bounded wait)"
-    print_info "  com.mira.app          — MIRA via /opt/mira/app/run.sh"
+    print_info "  com.mira.app          — MIRA via /opt/mira/bin/mira-launch"
     print_info "Inspect one: launchctl print gui/$(id -u)/<label>"
     print_info "Stop one:    launchctl bootout gui/$(id -u)/<label>"
     print_info "PostgreSQL and Valkey are managed by brew services"

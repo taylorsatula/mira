@@ -110,7 +110,16 @@ class CheckSpec:
 
 
 def _post_gate_failure_action() -> str:
-    """Parse the configured final gate action. Strict: anything else raises."""
+    """Parse the configured final gate action. Strict: anything else raises.
+
+    A self-edit trial boot (utils/self_edit.py) always exits: parking would
+    leave the edited tree running nothing, while an exit hands control back to
+    the launcher, which stashes the change and starts the last good code.
+    """
+    from utils.self_edit import trial_in_progress
+
+    if trial_in_progress():
+        return "exit"
     value = os.environ.get(POST_GATE_FAILURE_ACTION_ENV, "park")
     if value not in POST_GATE_FAILURE_ACTIONS:
         raise ValueError(
@@ -128,18 +137,26 @@ def run_pre_server_post_gate(deadline_seconds: int = PRE_SERVER_POST_DEADLINE_SE
     gate never returns: it parks (default) or exits per
     MIRA_POST_GATE_FAILURE_ACTION, because returning/exiting to a
     restart-on-exit supervisor re-runs the billed provider probes (see
-    PRE_SERVER_GATE_ATTEMPTS).
+    PRE_SERVER_GATE_ATTEMPTS). A self-edit trial boot runs one round and
+    always exits (see _post_gate_failure_action).
 
     Raises:
         PostFailure: a single round failed required checks (caught by the
             bounded loop; it only escapes if a future caller opts into
             single-round semantics).
     """
-    for attempt in range(1, PRE_SERVER_GATE_ATTEMPTS + 1):
+    from utils.self_edit import trial_in_progress
+
+    # A self-edit trial gets one round: retries exist for infrastructure blips,
+    # a code defect fails identically every round, and each round runs billed
+    # provider probes. A blip that fails the trial costs one stash, which the
+    # user can restore.
+    attempts = 1 if trial_in_progress() else PRE_SERVER_GATE_ATTEMPTS
+    for attempt in range(1, attempts + 1):
         try:
             return _run_pre_server_post_round(deadline_seconds)
         except PostFailure:
-            if attempt == PRE_SERVER_GATE_ATTEMPTS:
+            if attempt == attempts:
                 action = _post_gate_failure_action()
                 logger.critical(
                     "Pre-server POST failed %d consecutive times; %s the process "
@@ -156,7 +173,7 @@ def run_pre_server_post_gate(deadline_seconds: int = PRE_SERVER_POST_DEADLINE_SE
             logger.error(
                 "Pre-server POST attempt %d/%d failed; retrying in %ds",
                 attempt,
-                PRE_SERVER_GATE_ATTEMPTS,
+                attempts,
                 PRE_SERVER_GATE_RETRY_SECONDS,
             )
             time.sleep(PRE_SERVER_GATE_RETRY_SECONDS)

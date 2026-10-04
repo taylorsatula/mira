@@ -52,6 +52,7 @@ SECTION_LAYOUT: Dict[str, List[str]] = {
     ],
     PLACEMENT_NOTIFICATION: [
         'datetime_section',
+        'self_edit_status',
         'async_activity',
         'active_reminders',
         'inbox_status',
