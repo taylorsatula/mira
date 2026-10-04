@@ -58,7 +58,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ ! -f "${SCRIPT_DIR}/lib/output.sh" ]; then
     echo "Cloning MIRA repository (release ${RELEASE_TAG})..."
     CLONE_DIR="/tmp/mira-install-$$"
-    git clone --depth 1 --branch "$RELEASE_TAG" https://github.com/taylorsatula/mira-OSS.git "$CLONE_DIR"
+    # --quiet + advice.detachedHead=false: a tagged shallow clone lands on a
+    # detached HEAD by design, and git's multi-line detached-HEAD advice plus
+    # the clone progress dump read as a failure to a first-time installer.
+    if ! git -c advice.detachedHead=false clone --quiet --depth 1 \
+            --branch "$RELEASE_TAG" \
+            https://github.com/taylorsatula/mira-OSS.git "$CLONE_DIR"; then
+        echo "Could not clone release ${RELEASE_TAG} — check your network, then re-run." >&2
+        exit 1
+    fi
     exec "$CLONE_DIR/deploy/deploy.sh" "$@"
 fi
 
