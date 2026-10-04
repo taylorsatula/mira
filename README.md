@@ -119,9 +119,14 @@ This project would not be possible without the hard work and dedication of peopl
 
 ## Install MIRA local machine
 ```bash
-curl -fsSL https://raw.githubusercontent.com/taylorsatula/mira-OSS/refs/tags/v2026.06.25/deploy/deploy.sh -o deploy.sh && chmod +x deploy.sh && ./deploy.sh
+curl -fsSL https://raw.githubusercontent.com/taylorsatula/mira/main/install.sh | bash
 ```
-That's it. Answer the configuration questions onscreen and provide the provider credentials or local-provider settings you want MIRA to use.
+That's it. The installer resolves the newest published release and runs that release's installer. Answer the configuration questions onscreen and provide the provider credentials or local-provider settings you want MIRA to use.
+
+Options are passed through to the installer; to run non-interactively from a config file:
+```bash
+curl -fsSL https://raw.githubusercontent.com/taylorsatula/mira/main/install.sh | bash -s -- --config deploy-config.yml --loud
+```
 
 The script handles:
 1. Platform detection (macOS/Linux)

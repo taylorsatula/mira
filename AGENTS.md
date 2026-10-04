@@ -96,6 +96,11 @@ unnecessary edit costs a line; a missed one misleads every session.
   `Dockerfile.base` is owned by `deploy/AGENTS.md`.
 - `VERSION` — release identity string, read by `cns/api/update.py:get_latest_version`
   and reported by `/health` (`cns/api/AGENTS.md`).
+- `install.sh` — stable installer entrypoint. Resolves the newest published
+  release from GitHub's `releases/latest` redirect, fetches that tag's
+  `deploy/deploy.sh`, and hands off with stdin reattached to `/dev/tty` so
+  `curl … | bash` stays interactive; forwards installer flags (`--config`,
+  `--loud`, `--local`). Release mechanics owned by `deploy/AGENTS.md`.
 - `README.md`, `license.txt`, `NEARFUTURE_FEATURES.md` — static repo documents;
   no runtime consumers.
 - `UPGRADE_PATH.md` — unimplemented design guide; its design-only status, the
