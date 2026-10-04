@@ -12,7 +12,7 @@ from typing import Any
 from cns.core.message import ContentBlock
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from auth.api import get_current_user
 from auth.types import SessionData, APITokenContext
@@ -65,6 +65,10 @@ _HTTP_TURN_LOCK_TTL_SECONDS = (
 # Distributed per-user request lock (coordinates across workers)
 _user_request_lock = UserRequestLock(ttl=_HTTP_TURN_LOCK_TTL_SECONDS)
 
+# The lock-contention rejection message. cns/api/mcp.py imports this constant
+# to key its busy-mapping row — change it here and nowhere else.
+_BUSY_REJECTION_MESSAGE = "Another chat request is already in progress for this user"
+
 
 class ChatRequest(BaseModel):
     """Chat request payload."""
@@ -75,6 +79,17 @@ class ChatRequest(BaseModel):
     document_type: str | None = Field(None, description="MIME type for document (e.g., application/pdf)")
     include_thinking: bool = Field(False, description="Include thinking trace in response")
     show_cost: bool = Field(False, description="Include per-request token usage and USD cost in the response under `data.cost`")
+
+    @model_validator(mode="after")
+    def validate_attachment_exclusion(self) -> "ChatRequest":
+        """One message carries an image or a document, never both — the same
+        contract MessageFrame enforces on the WS transport
+        (websocket_chat.py:MessageFrame.validate_attachment_pairs); keep the
+        wording identical in both. Before this validator, the HTTP endpoint
+        silently dropped the document when both arrived."""
+        if self.image is not None and self.document is not None:
+            raise ValueError("one message may contain an image or a document, not both")
+        return self
 
 
 class ChatEndpoint(PropagatingHandler):
@@ -110,8 +125,10 @@ class ChatEndpoint(PropagatingHandler):
         # rejection persists a message, so it must be ordered like a real turn.
         lock_token = _user_request_lock.acquire(user_id)
         if lock_token is None:
-            # Use a validation error to preserve consistent error envelope
-            raise ValidationError("Another chat request is already in progress for this user")
+            # Use a validation error to preserve consistent error envelope.
+            # The message is the anchor cns/api/mcp.py keys its busy-mapping
+            # row on (imported constant — no transcription).
+            raise ValidationError(_BUSY_REJECTION_MESSAGE)
 
         # Background renewal: one renewal every TTL/3 — safely inside the
         # TTL — so a turn of any legal length cannot outlive its own lock
