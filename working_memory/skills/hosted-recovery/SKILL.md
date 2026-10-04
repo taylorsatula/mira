@@ -153,20 +153,40 @@ deleted — in this session. You will not remember it next session; that is exac
 this directive lives here. Get the user's explicit go-ahead first.
 
 The bash tool guardrails refuse destructive shell patterns (rm -rf and friends), so
-the deletion is done with a short Python script instead. Target exactly this skill's
-directory and nothing else. Find every copy: the repo copy
-(~/Programming/GitHub/mira-OSS/working_memory/skills/hosted-recovery) and any
-installed copy in the app tree or container (search the install root for a directory
-named hosted-recovery containing this SKILL.md). If the skill is baked into a
+the deletion is done with a short Python script instead. Never hardcode a path from
+this document or any other session's memory: you cannot know where the user's
+filesystem holds this skill, and a stale absolute path from a different machine is
+exactly the kind of plausible-but-wrong detail this skill exists to prevent. Discover
+the targets at runtime instead. You know at least one path already, the directory
+this skill was loaded from. Search for additional copies from the roots that exist on
+this system: the app install tree, the user's source/repo directories if any, and the
+working_memory/skills path inside any local checkout. If the skill is baked into a
 container image, delete the runtime copy and tell the user the image bakes it back on
 rebuild.
 
 ```python
-import os, shutil
-targets = [
-    os.path.expanduser("~/Programming/GitHub/mira-OSS/working_memory/skills/hosted-recovery"),
-    # append installed copies discovered this session
-]
+import os, shutil, sys
+
+def find_skill_dirs(roots):
+    hits = []
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            if os.path.basename(dirpath) == "hosted-recovery" and "SKILL.md" in filenames:
+                hits.append(dirpath)
+                dirnames[:] = []  # do not descend further inside a hit
+    return hits
+
+# roots: the loaded-from directory's parent tree, plus install/source roots that
+# exist on THIS system, discovered this session. Add none that you have not verified.
+loaded_from = sys.argv[1]  # the path this skill was loaded from, passed in
+roots = [loaded_from]
+# roots += [each additional install or checkout root you actually found]
+
+targets = find_skill_dirs(roots)
+if not targets:
+    raise SystemExit("no copies found; nothing deleted")
 for t in targets:
     if os.path.basename(t) != "hosted-recovery":
         raise SystemExit(f"refusing, wrong basename: {t}")
