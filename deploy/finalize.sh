@@ -131,6 +131,12 @@ EOF
             STATUS_MIRA_SERVICE="${DIM}Not started${RESET}"
         fi
     fi
+elif [ "$OS" = "macos" ]; then
+    # systemd does not exist on macOS, so CONFIG_INSTALL_SYSTEMD is "no" by
+    # construction here — reporting that as "user opted out" was false: the
+    # operator opted in to launchd, which IS the macOS supervisor (Step 15b2).
+    print_header "Step 15: Service Supervision"
+    print_info "Supervision is the LaunchAgent installed in the next step"
 elif [ "${CONFIG_INSTALL_SYSTEMD}" = "no" ]; then
     print_header "Step 15: Systemd Service Configuration"
     print_info "Skipping systemd service installation (user opted out)"

@@ -783,5 +783,11 @@ echo -e "  Injection Scr:   ${STATUS_SYSTEMONE}"
 echo -e "  DB Password:     ${STATUS_DB_PASSWORD}"
 echo -e "  Timezone:        ${STATUS_TIMEZONE}"
 echo -e "  Playwright:      ${STATUS_PLAYWRIGHT}"
-echo -e "  Systemd Service: ${STATUS_SYSTEMD}"
+# The label names the supervisor that actually exists: systemd is Linux-only,
+# so macOS gets the honest word for the same thing (the LaunchAgent).
+if [ "$OS" = "macos" ]; then
+    echo -e "  Supervision:     ${STATUS_SYSTEMD}"
+else
+    echo -e "  Systemd Service: ${STATUS_SYSTEMD}"
+fi
 echo ""
