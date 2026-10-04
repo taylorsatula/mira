@@ -64,6 +64,7 @@ from utils.image_compression import CompressedImage, compress_image
 from utils.text_sanitizer import sanitize_message_content
 from utils.timezone_utils import utc_now
 from utils.user_context import (
+    CancelReason,
     clear_user_context,
     set_cancel_event,
     set_cancel_reason,
@@ -280,7 +281,7 @@ class TurnStoppedFrame(ProtocolModel):
     type: Literal["turn_stopped"]
     turn_id: UUID
     segment_id: UUID
-    reason: Literal["halt", "disconnect"]
+    reason: CancelReason
 
 
 class TurnErrorFrame(ProtocolModel):
@@ -856,10 +857,26 @@ class WebSocketChatHandler:
                     # linger, then abort the turn through the same cancellation
                     # path a user halt takes: check_cancelled() at the next
                     # stream/tool boundary raises GenerationCancelled and the
-                    # turn ends as turn_stopped(halt).
+                    # turn ends as turn_stopped(stall). "stall", not "halt":
+                    # the user asked for nothing — the server failed to turn
+                    # its event loop, and every streaming turn in the process
+                    # trips this same expiry. The reason must say so, and the
+                    # error below is the alarm: a wedged loop otherwise
+                    # self-heals at 30s and reads in the logs as users
+                    # changing their minds.
                     future.cancel()
-                    set_cancel_reason("halt")
+                    set_cancel_reason("stall")
                     cancel_event.set()
+                    logger.error(
+                        "Event loop failed to run a frame send within %.1fs "
+                        "(turn %s): the loop is blocked by synchronous work "
+                        "somewhere in this process — halting the turn with "
+                        "reason 'stall'. Every concurrently-streaming turn "
+                        "trips the same probe; hunt the blocking call, do not "
+                        "read this as a user halt",
+                        STREAM_SEND_TIMEOUT_SECONDS,
+                        turn_id,
+                    )
                     return
                 except concurrent.futures.CancelledError:
                     # Cancellation reached the loop-side future while this

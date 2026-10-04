@@ -7,6 +7,7 @@ from datetime import datetime
 from dataclasses import replace
 from typing import Any, Optional
 from fastapi import APIRouter, Request, Response, HTTPException, Depends
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -224,15 +225,20 @@ async def get_current_user(
         # For header-based auth, do NOT extend activity/TTL (good for API tokens)
         extend_activity = token_source != "header"
 
+        # All validation below is synchronous Valkey/Postgres I/O — every
+        # call crosses to the threadpool so the shared event loop (which also
+        # schedules WebSocket frame sends) never blocks on auth traffic.
         if _requires_cookie_csrf(request, token_source):
-            _validate_cookie_csrf(request, token, auth_service)
+            await run_in_threadpool(_validate_cookie_csrf, request, token, auth_service)
 
         # Try session validation first
-        session_data: SessionData | APITokenContext | None = auth_service.validate_session(token, extend_activity)
+        session_data: SessionData | APITokenContext | None = await run_in_threadpool(
+            auth_service.validate_session, token, extend_activity
+        )
 
         # If session validation fails and token came from header, try API token
         if not session_data and token_source == "header":
-            api_token_data = auth_service.validate_api_token(token)
+            api_token_data = await run_in_threadpool(auth_service.validate_api_token, token)
             if api_token_data:
                 # Build typed context from API token
                 session_data = APITokenContext(
@@ -312,9 +318,10 @@ async def create_api_token(
     """Create a long-lived API token. Returns the token once - copy it immediately."""
     request_id = generate_request_id()
     try:
-        token = auth_service.create_api_token(
+        token = await run_in_threadpool(
+            auth_service.create_api_token,
             request.name,
-            request.expires_in_days
+            request.expires_in_days,
         )
         api_response: SuccessResponse | ErrorResponse = create_auth_success_response(
             data={
@@ -346,7 +353,7 @@ async def list_api_tokens(
     """List API tokens (metadata only)."""
     request_id = generate_request_id()
     try:
-        items = auth_service.list_api_tokens()
+        items = await run_in_threadpool(auth_service.list_api_tokens)
         # Validate shape via Pydantic model for consistency
         validated: list[APITokenListItem] = [APITokenListItem(**i) for i in items]
         api_response: SuccessResponse | ErrorResponse = create_auth_success_response(
@@ -375,7 +382,7 @@ async def revoke_api_token(
     """Revoke an API token by its ID."""
     request_id = generate_request_id()
     try:
-        success = auth_service.revoke_api_token(token_id)
+        success = await run_in_threadpool(auth_service.revoke_api_token, token_id)
         if success:
             api_response: SuccessResponse | ErrorResponse = create_auth_success_response(
                 data={"message": "Token revoked"},
@@ -693,7 +700,7 @@ async def logout_all_devices(
     """Logout all devices for a user."""
     request_id = generate_request_id()
     try:
-        revoked_count = auth_service.logout_all_devices()
+        revoked_count = await run_in_threadpool(auth_service.logout_all_devices)
 
         api_response: SuccessResponse | ErrorResponse = create_auth_success_response(
             data={
@@ -723,7 +730,9 @@ async def logout_other_devices(
         session_token = request.cookies.get("session")
         if not session_token:
             raise AuthError("SESSION_REQUIRED", "Cookie session authentication required")
-        revoked_count = auth_service.logout_other_devices(session_token)
+        revoked_count = await run_in_threadpool(
+            auth_service.logout_other_devices, session_token
+        )
         return create_auth_success_response(
             data={
                 "message": f"Logged out from {revoked_count} other devices",
@@ -773,7 +782,9 @@ async def get_csrf_token(
             raise AuthError("UNAUTHORIZED", "Authentication required")
 
         # User is already validated by get_current_user; generate CSRF for this session
-        csrf_token = auth_service.generate_csrf_token(session_token)
+        csrf_token = await run_in_threadpool(
+            auth_service.generate_csrf_token, session_token
+        )
         api_response: SuccessResponse | ErrorResponse = create_auth_success_response(
             data={"csrf_token": csrf_token},
             request_id=request_id
@@ -833,8 +844,9 @@ async def webauthn_register_begin(
     """Begin WebAuthn registration for authenticated user."""
     request_id = generate_request_id()
     try:
-        options = webauthn_service.generate_registration_options(
-            current_user.email
+        options = await run_in_threadpool(
+            webauthn_service.generate_registration_options,
+            current_user.email,
         )
 
         api_response: SuccessResponse | ErrorResponse = create_auth_success_response(
@@ -863,8 +875,9 @@ async def webauthn_register_complete(
     """Complete WebAuthn registration."""
     request_id = generate_request_id()
     try:
-        result = webauthn_service.verify_registration(
-            request.credential
+        result = await run_in_threadpool(
+            webauthn_service.verify_registration,
+            request.credential,
         )
 
         api_response: SuccessResponse | ErrorResponse = create_auth_success_response(
@@ -1069,8 +1082,9 @@ async def webauthn_remove_credential(
     """Remove a WebAuthn credential."""
     request_id = generate_request_id()
     try:
-        success = webauthn_service.remove_credential(
-            credential_id
+        success = await run_in_threadpool(
+            webauthn_service.remove_credential,
+            credential_id,
         )
 
         if success:
@@ -1106,7 +1120,7 @@ async def webauthn_list_credentials(
     """List user's WebAuthn credentials."""
     request_id = generate_request_id()
     try:
-        credentials = webauthn_service.list_credentials()
+        credentials = await run_in_threadpool(webauthn_service.list_credentials)
 
         api_response: SuccessResponse | ErrorResponse = create_auth_success_response(
             data={"credentials": credentials},

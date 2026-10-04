@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Literal, TypedDict
 from uuid import UUID, uuid4
 from utils.timezone_utils import utc_now
+from utils.user_context import CancelReason
 
 from clients.llm.types import CacheTTL
 
@@ -166,7 +167,7 @@ class MessageMetadata(TypedDict, total=False):
     model_error_reason: str
     turn_id: str
     partial_response: bool
-    stop_reason: Literal["halt", "disconnect"]
+    stop_reason: CancelReason
     provider_stop_reason: str
     # Embedding fields
     embedding_value: list[float]

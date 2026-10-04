@@ -31,6 +31,7 @@ from contextvars import ContextVar
 from typing import Optional
 
 import httpx
+from fastapi.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from auth.service import get_auth_service
@@ -233,9 +234,12 @@ class _AuthGate:
 
         token = header.split(" ", 1)[1].strip()
         auth_service = get_auth_service()
+        # Validation is synchronous Valkey/Postgres I/O — cross to the
+        # threadpool so this per-request wrapper never blocks the event loop
+        # that schedules WebSocket frame sends.
         if (
-            auth_service.validate_session(token, extend_activity=False) is None
-            and auth_service.validate_api_token(token) is None
+            await run_in_threadpool(auth_service.validate_session, token, False) is None
+            and await run_in_threadpool(auth_service.validate_api_token, token) is None
         ):
             logger.warning("MCP /v0/mcp rejected a request with an invalid or expired token")
             await _send_unauthorized(send, "Invalid or expired token.")

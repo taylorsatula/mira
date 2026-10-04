@@ -671,7 +671,13 @@ class ChatSession:
             return
         blocks = self._tail_blocks(turn)
         if not turn.halt_requested:
-            blocks.append(transcript.notice("the server stopped this reply"))
+            if event.reason == "stall":
+                blocks.append(transcript.alert(
+                    "MIRA's server stalled (its event loop stopped turning) "
+                    "and dropped this reply"
+                ))
+            else:
+                blocks.append(transcript.notice("the server stopped this reply"))
         await self._end_reply(blocks, turn.halt_requested)
 
     async def _on_turn_error(self, event: TurnError) -> None:

@@ -213,12 +213,15 @@ class TurnCompleteFrame(ProtocolModel):
 
 
 class TurnStoppedFrame(ProtocolModel):
-    """Terminal frame for a halted/disconnected turn."""
+    """Terminal frame for a halted/disconnected/stalled turn.
+
+    ``stall``: the server's event loop failed to deliver a frame within its
+    bridge timeout — the server stopped itself, not the user. """
 
     type: Literal["turn_stopped"]
     turn_id: UUID
     segment_id: UUID
-    reason: Literal["halt", "disconnect"]
+    reason: Literal["halt", "disconnect", "stall"]
 
 
 class TurnErrorFrame(ProtocolModel):

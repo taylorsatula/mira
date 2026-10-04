@@ -49,21 +49,29 @@ def get_cancel_event() -> Optional[threading.Event]:
     return _cancel_event.get(None)
 
 
-def set_cancel_reason(reason: Literal["halt", "disconnect"]) -> None:
-    """Attach the Halt reason to the shared cancellation signal."""
-    if reason not in {"halt", "disconnect"}:
-        raise ValueError("Cancellation reason must be halt or disconnect")
+CancelReason = Literal["halt", "disconnect", "stall"]
+
+
+def set_cancel_reason(reason: CancelReason) -> None:
+    """Attach the stop reason to the shared cancellation signal.
+
+    ``halt`` — the user asked to stop; ``disconnect`` — the client socket
+    went away; ``stall`` — the server's own event loop failed to run a
+    frame send within ``STREAM_SEND_TIMEOUT_SECONDS`` (websocket_chat.py).
+    """
+    if reason not in {"halt", "disconnect", "stall"}:
+        raise ValueError("Cancellation reason must be halt, disconnect, or stall")
     event = _cancel_event.get(None)
     if event is None:
         raise RuntimeError("Cannot set a cancellation reason without an active signal")
     event.mira_stop_reason = reason
 
 
-def get_cancel_reason() -> Literal["halt", "disconnect"]:
+def get_cancel_reason() -> CancelReason:
     """Return the active signal's exact persistence reason."""
     event = _cancel_event.get(None)
     reason = getattr(event, "mira_stop_reason", "halt") if event is not None else "halt"
-    if reason not in {"halt", "disconnect"}:
+    if reason not in {"halt", "disconnect", "stall"}:
         raise RuntimeError(f"Invalid cancellation reason on active signal: {reason}")
     return reason
 
