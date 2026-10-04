@@ -129,10 +129,10 @@ echo -e "${CHECKMARK}"
 
 # Greenfield contract: the schema REFUSES a non-empty database, so a prior MIRA
 # install leaves mira_service populated and the apply fails. The operator's data
-# is preserved, never dropped: the old database is renamed aside and a fresh
-# empty mira_service is created, and finalize.sh reports the kept database with
-# a pointer to the migration guide. Detecting it here also replaces the cryptic
-# apply failure with a real message and an explicit choice.
+# is preserved, never dropped: the old database is renamed aside automatically
+# and a fresh empty mira_service is created, and finalize.sh reports the kept
+# database with a pointer to the migration guide. The rename is non-destructive,
+# so it needs no consent and runs unattended too.
 MIRA_PREVIOUS_DB=""
 echo -ne "${DIM}${ARROW}${RESET} Verifying mira_service is empty... "
 if [ "$OS" = "linux" ]; then
@@ -144,21 +144,11 @@ DB_TABLES="${DB_TABLES//[[:space:]]/}"
 if [ "$DB_TABLES" = "0" ]; then
     echo -e "${CHECKMARK}"
 else
-    echo -e "${ERROR}"
+    echo -e "${WARNING}"
     print_warning "mira_service already holds ${DB_TABLES:-an unknown number of} table(s)."
     print_info "MIRA 2.0 installs into a fresh database. The existing one is renamed"
-    print_info "aside — never deleted — so its data stays available for migration."
-    if [ ! -t 0 ]; then
-        print_error "Re-run from a terminal to be prompted, or rename it yourself:"
-        print_info "  psql -d postgres -c \"ALTER DATABASE mira_service RENAME TO mira_service_old;\""
-        print_info "  createdb -O mira_admin mira_service"
-        exit 1
-    fi
-    read -p "$(echo -e ${CYAN}Rename it aside and install fresh?${RESET}) (y/n): " OVERWRITE_DB_INPUT || OVERWRITE_DB_INPUT=""
-    if [[ ! "$OVERWRITE_DB_INPUT" =~ ^[Yy](es)?$ ]]; then
-        print_error "Aborted. Rename or drop mira_service yourself, then re-run."
-        exit 1
-    fi
+    print_info "aside automatically — never deleted — so its data stays available for"
+    print_info "migration (see the note at the end of this install)."
     MIRA_PREVIOUS_DB="mira_service_old_$(date +%Y%m%d_%H%M%S)"
     DETACH_SQL="SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'mira_service' AND pid <> pg_backend_pid();"
     RENAME_SQL="ALTER DATABASE mira_service RENAME TO \"$MIRA_PREVIOUS_DB\";"
