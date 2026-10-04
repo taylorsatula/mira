@@ -261,15 +261,17 @@ stop_service() {
             if ! check_exists service_systemctl "$service_name"; then
                 return 0  # Already stopped
             fi
-            run_with_status "Stopping $service_name" \
-                sudo systemctl stop "$service_name"
+            # Quiet: the only caller (config.sh's occupied-port block) prints its
+            # own "Stopping <label>... ✓" line, so a status line here would land
+            # that checkmark on the next line. run_quiet still shows output under
+            # --loud.
+            run_quiet sudo systemctl stop "$service_name"
             ;;
         brew)
             if ! check_exists service_brew "$service_name"; then
                 return 0  # Already stopped
             fi
-            run_with_status "Stopping $service_name" \
-                brew services stop "$service_name"
+            run_quiet brew services stop "$service_name"
             ;;
         pid_file)
             local pid_file="$extra"
