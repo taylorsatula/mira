@@ -523,20 +523,40 @@ else
     STATUS_KAGI="${CHECKMARK} Configured"
 fi
 
-# Embeddings (local model by default)
-echo -e "${BOLD}${BLUE}4. Embeddings${RESET} ${DIM}(default: local model, downloaded during install)${RESET}"
-echo -e "${DIM}   A remote OpenAI-compatible POST /v1/embeddings endpoint skips the local PyTorch model.${RESET}"
-echo -e "${DIM}   The installer probes it for its vector length. The choice is permanent for this install.${RESET}"
-read -p "$(echo -e ${CYAN}Use a remote embedding endpoint?${RESET}) (y/n, default=n): " REMOTE_EMBEDDINGS_INPUT
+# Embeddings (remote lunaroute by default; local model when air-gapped)
+echo -e "${BOLD}${BLUE}4. Embeddings${RESET}"
+echo -e "${DIM}   A remote OpenAI-compatible POST /v1/embeddings endpoint skips the local${RESET}"
+echo -e "${DIM}   PyTorch model. The default is the lunaroute gateway serving emb-nomic-moe${RESET}"
+echo -e "${DIM}   (the same key as the chat tier works). The installer probes it for its${RESET}"
+echo -e "${DIM}   vector length. The choice is permanent for this install: stored memories${RESET}"
+echo -e "${DIM}   are only comparable with the model that made them.${RESET}"
+if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
+    REMOTE_EMBEDDINGS_DEFAULT="n"
+    echo -e "${DIM}   Offline default: no (local model, downloaded during install).${RESET}"
+else
+    REMOTE_EMBEDDINGS_DEFAULT="y"
+fi
+read -p "$(echo -e ${CYAN}Use a remote embedding endpoint?${RESET}) (y/n, default=${REMOTE_EMBEDDINGS_DEFAULT}): " REMOTE_EMBEDDINGS_INPUT
+REMOTE_EMBEDDINGS_INPUT="${REMOTE_EMBEDDINGS_INPUT:-$REMOTE_EMBEDDINGS_DEFAULT}"
 if [[ "$REMOTE_EMBEDDINGS_INPUT" =~ ^[Yy](es)?$ ]]; then
     CONFIG_EMBEDDING_PROVIDER="remote"
     while [ -z "$CONFIG_EMBEDDING_ENDPOINT" ]; do
-        read -p "$(echo -e ${CYAN}Endpoint URL${RESET}) (full URL ending in /v1/embeddings): " CONFIG_EMBEDDING_ENDPOINT
+        read -p "$(echo -e ${CYAN}Endpoint URL${RESET}) [default: https://gw.lunaroute.com/v1/embeddings]: " EMBEDDING_ENDPOINT_INPUT
+        CONFIG_EMBEDDING_ENDPOINT="${EMBEDDING_ENDPOINT_INPUT:-https://gw.lunaroute.com/v1/embeddings}"
     done
     while [ -z "$CONFIG_EMBEDDING_MODEL" ]; do
-        read -p "$(echo -e ${CYAN}Model${RESET}): " CONFIG_EMBEDDING_MODEL
+        read -p "$(echo -e ${CYAN}Model${RESET}) [default: emb-nomic-moe]: " EMBEDDING_MODEL_INPUT
+        CONFIG_EMBEDDING_MODEL="${EMBEDDING_MODEL_INPUT:-emb-nomic-moe}"
     done
-    read -p "$(echo -e ${CYAN}API key${RESET}) (or Enter for an endpoint that takes none): " CONFIG_EMBEDDING_API_KEY
+    # The lunaroute chat key doubles as the embeddings key; offer it so the
+    # default install needs no second paste. Never fall back to a chat
+    # placeholder that stands for a key the operator has not set.
+    if [ "$CONFIG_CHAT_PROVIDER_TYPE" = "openai" ] && [ -n "${CONFIG_CHAT_API_KEY:-}" ] && [ "$CONFIG_CHAT_API_KEY" != "PLACEHOLDER_SET_THIS_LATER" ]; then
+        read -p "$(echo -e ${CYAN}API key${RESET}) (Enter uses your chat key): " EMBEDDING_API_KEY_INPUT
+        CONFIG_EMBEDDING_API_KEY="${EMBEDDING_API_KEY_INPUT:-$CONFIG_CHAT_API_KEY}"
+    else
+        read -p "$(echo -e ${CYAN}API key${RESET}) (or Enter for an endpoint that takes none): " CONFIG_EMBEDDING_API_KEY
+    fi
     STATUS_EMBEDDINGS="${CHECKMARK} Remote: ${CONFIG_EMBEDDING_MODEL} at ${CONFIG_EMBEDDING_ENDPOINT}"
 else
     CONFIG_EMBEDDING_PROVIDER="local"

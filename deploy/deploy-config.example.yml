@@ -73,17 +73,18 @@ kagi_api_key: ""
 # ---------------------------------------------------------------------------
 # Embeddings
 # ---------------------------------------------------------------------------
-# local  = MongoDB/mdbr-leaf-ir-asym, downloaded with PyTorch during install.
-# remote = any OpenAI-compatible POST /v1/embeddings endpoint; the installer
+# remote = the lunaroute gateway by default (the same key as the chat tier);
 #          skips PyTorch and probes the endpoint for its vector length, which
-#          sizes the database's vector columns. Permanent for this install:
-#          stored memories are only comparable with the model that made them.
-embedding_provider: local
+#          sizes the database's vector columns.
+# local  = MongoDB/mdbr-leaf-ir-asym, downloaded with PyTorch (offline mode).
+# Permanent for this install: stored memories are only comparable with the
+# model that made them.
+embedding_provider: remote
 # Remote only (leave "" for local): full URL ending in /v1/embeddings, the
-# model name the endpoint serves, and its bearer token ("" if it takes none).
-embedding_endpoint: ""
-embedding_model: ""
-embedding_api_key: ""
+# model the endpoint serves, and its bearer token ("" if it takes none).
+embedding_endpoint: "https://gw.lunaroute.com/v1/embeddings"
+embedding_model: "emb-nomic-moe"
+embedding_api_key: __SET_ME__
 
 # ---------------------------------------------------------------------------
 # Injection screen (System One decision model)

@@ -49,8 +49,9 @@ venv/bin/pip install --upgrade pip
 venv/bin/pip install -r requirements.txt
 ```
 
-For the local embedding model (the default), install PyTorch's CPU wheel and
-sentence-transformers. Skip this for a remote embedding endpoint:
+For the local embedding model (used under `offline_mode: yes`; hosted
+installs default to the lunaroute remote endpoint), install PyTorch's CPU
+wheel and sentence-transformers. Skip this for a remote embedding endpoint:
 
 ```bash
 venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
