@@ -152,20 +152,28 @@ confirmed the recovery is complete, this skill has done its job and should be
 deleted — in this session. You will not remember it next session; that is exactly why
 this directive lives here. Get the user's explicit go-ahead first.
 
-The bash tool guardrails refuse destructive shell patterns (rm -rf and friends), so
-the deletion is done with a short Python script instead. Never hardcode a path from
-this document or any other session's memory: you cannot know where the user's
-filesystem holds this skill, and a stale absolute path from a different machine is
-exactly the kind of plausible-but-wrong detail this skill exists to prevent. Discover
-the targets at runtime instead. You know at least one path already, the directory
-this skill was loaded from. Search for additional copies from the roots that exist on
-this system: the app install tree, the user's source/repo directories if any, and the
-working_memory/skills path inside any local checkout. If the skill is baked into a
-container image, delete the runtime copy and tell the user the image bakes it back on
-rebuild.
+Never hardcode a path from this document or any other session's memory: you cannot
+know where the user's filesystem holds this skill, and a stale absolute path from a
+different machine is exactly the kind of plausible-but-wrong detail this skill exists
+to prevent. Discover the targets at runtime instead. You know at least one path
+already, the directory this skill was loaded from. Search for additional copies from
+the roots that exist on this system: the app install tree, the user's source/repo
+directories if any, and the working_memory/skills path inside any local checkout.
+
+The script below only finds and checks targets; it deletes nothing. Delete each
+target it prints with bash (`rm -rf <the printed path>`, literal path), so the
+guardrail judges every deletion. Inside your own code tree that works only with
+self-edit rollback on (`selfedit_tool` listed in `invokeother_tool`'s catalog): there
+the deletion is an uncommitted code edit, applied and committed at the next restart,
+and the skill stays in your catalog until then (the global catalog is a boot-time
+snapshot). Ask the user whether to restart now (`selfedit_tool` `request_restart`) or
+let the change ride to the next restart. With rollback off (Docker image, MIRA started
+by hand), bash refuses deletions in the deployed tree: give the user the printed
+paths to delete themselves, and tell a Docker user the image bakes the skill back on
+rebuild. Never route around a refusal with a script.
 
 ```python
-import os, shutil, sys
+import os, sys
 
 def find_skill_dirs(roots):
     hits = []
@@ -186,14 +194,13 @@ roots = [loaded_from]
 
 targets = find_skill_dirs(roots)
 if not targets:
-    raise SystemExit("no copies found; nothing deleted")
+    raise SystemExit("no copies found")
 for t in targets:
     if os.path.basename(t) != "hosted-recovery":
         raise SystemExit(f"refusing, wrong basename: {t}")
     if not os.path.isfile(os.path.join(t, "SKILL.md")):
         raise SystemExit(f"refusing, not a skill dir: {t}")
-    shutil.rmtree(t)
-    print(f"deleted {t}")
+    print(t)  # delete with bash: rm -rf <this path>
 ```
 
 The script refuses anything whose basename isn't hosted-recovery and anything that
