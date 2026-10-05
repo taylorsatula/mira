@@ -85,9 +85,10 @@ unnecessary edit costs a line; a missed one misleads every session.
   jobs → announcement; `websocket_chat.close_all_connections()` awaited at
   shutdown; Valkey flush preserves `heartbeat:` and `pending_memories:`/`pending_memories_done:`/`pending_memories_attempts:` prefixes — the pending-memory queue is the durable record of user-confirmed memories and must survive restarts), and the pre-server
   POST gate before bind. Self-edit rollback touches it twice (contract owned by
-  `utils/AGENTS.md`, `self_edit.py`): `commit_trial_if_booting()` runs at startup
-  complete, the last lifespan step, so a trial is committed only after the whole
-  startup chain passed; and after `serve()` returns, a requested restart exits
+  `utils/AGENTS.md`, `self_edit.py`): `commit_trial_if_booting()` then
+  `deliver_result()` run at startup complete, the last lifespan step, so a trial
+  is committed only after the whole startup chain passed and its outcome reaches
+  the activity feed; and after `serve()` returns, a requested restart exits
   with `RESTART_EXIT_CODE` (75), because a graceful SIGTERM exits 0 and neither
   systemd's `Restart=on-failure` nor launchd's KeepAlive restarts on 0. Conditional mounts: the federation router when
   `config.lattice.enabled`; the MCP sub-app at `/v0/mcp` when

@@ -3,9 +3,10 @@ Self-edit rollback: the Python half of the launcher's trial-boot contract.
 
 MIRA can edit its own code tree with bash_tool. The tree is a git repository
 (deploy/python.sh initializes it and commits every install), so "last good" is
-simply HEAD and an untested edit is simply an uncommitted change. Three actors
-share a small state directory outside the tree (``MIRA_SELF_EDIT_STATE_DIR``,
-set only by the supervisor configs deploy/finalize.sh writes):
+simply HEAD and an untested edit is simply an uncommitted change. The launcher
+and this module share a small state directory outside the tree
+(``MIRA_SELF_EDIT_STATE_DIR``, set only by the supervisor configs
+deploy/finalize.sh writes):
 
 - ``deploy/mira-launch.sh`` (before Python starts): an edited tree with no
   ``booting`` marker gets the marker and a trial boot; an edited tree whose
@@ -13,12 +14,13 @@ set only by the supervisor configs deploy/finalize.sh writes):
   the launcher stashes the change (never deletes it), writes ``result`` as
   failed with the tail of the boot log, and starts on the clean tree.
 - ``main.py`` lifespan, at startup complete: ``commit_trial_if_booting()``
-  commits the tree that just proved it boots, writes ``result`` as applied,
-  and removes the marker.
-- The running app: ``selfedit_tool`` records who asked for the restart, the
-  restart handler exits the process with ``RESTART_EXIT_CODE`` once the turn is
-  committed, and the trinket / heartbeat digest / turn-completion handler
-  deliver and then clear ``result``.
+  commits the tree that just proved it boots and writes ``result`` as applied;
+  ``deliver_result()`` then turns ``result`` into an activity-feed item for the
+  user who asked — the HUD (AsyncActivityTrinket), the heartbeat digest, and
+  sidebaragents_tool's dismiss/resolve already serve that feed — and makes the
+  user's heartbeat due now so the outcome is announced unprompted.
+- ``selfedit_tool`` request_restart: records the requester and
+  ``schedule_restart_after_turn()`` exits the process once the turn is over.
 
 ``result`` format (written by both the launcher and this module): the first
 line is ``<status> <ref>`` where status is ``applied`` (ref = commit hash) or
@@ -29,12 +31,14 @@ launch) or no ``.git`` in the tree, every entry point here is a no-op or
 refusal — nothing commits, the POST gate keeps its configured failure action,
 and the tool refuses with the reason.
 """
+import contextvars
 import logging
 import os
 import re
 import signal
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -56,11 +60,23 @@ RESTART_EXIT_CODE = 75
 # Every git call is bounded; a hung git must never wedge startup or a tool call.
 GIT_TIMEOUT_SECONDS = 60
 
+# Upper bound on waiting for the requesting turn to release its lock before
+# restarting. A turn holding it longer is wedged; the restart proceeds.
+_TURN_WAIT_SECONDS = 600
+_TURN_POLL_SECONDS = 0.5
+
+# Activity-feed item for the outcome. The feed renders the escalation reason in
+# the HUD on every turn until the item is resolved, so the boot-log tail is cut
+# to its end — where a traceback names the failure.
+_ACTIVITY_INTERFACE = "self_edit"
+_ACTIVITY_AGENT = "mira-launch"
+_REASON_CHARS = 2000
+
 _BOOTING = "booting"
 _RESULT = "result"
 _REQUESTED_BY = "requested_by"
-_OFFERED = "offered"
 
+_restart_scheduled = threading.Event()
 _restart_requested = threading.Event()
 
 # Terminal color codes the console log handler emits into the boot log.
@@ -198,14 +214,51 @@ def commit_trial_if_booting() -> None:
 # -- restart ----------------------------------------------------------------
 
 
-def record_restart_request(user_id: str) -> None:
-    """Remember who asked, so the outcome is delivered to that user."""
+def schedule_restart_after_turn(user_id: str) -> None:
+    """Restart once the requesting user's turn is over; record who asked.
+
+    The tool call runs inside the turn, which holds the user's request lock
+    until its terminal frame is queued (shutdown drains queued frames), so a
+    background thread waits — bounded — to acquire that lock, holds it so no
+    new turn starts in the shutdown window (the startup Valkey flush clears
+    it), and then restarts. Every path ends in the restart: the user was told
+    MIRA is restarting, and a lock that cannot be waited on only costs the tail
+    of the reply. Repeat requests in one process are no-ops.
+    """
     directory = _require_state_dir()
     (directory / _REQUESTED_BY).write_text(user_id, encoding="utf-8")
+    if _restart_scheduled.is_set():
+        return
+    _restart_scheduled.set()
+    context = contextvars.copy_context()
+    threading.Thread(
+        target=context.run, args=(_restart_when_turn_ends, user_id),
+        name="self-edit-restart", daemon=True,
+    ).start()
 
 
-def request_process_restart() -> None:
-    """Mark the restart and SIGTERM this process; main() exits with RESTART_EXIT_CODE."""
+def _restart_when_turn_ends(user_id: str) -> None:
+    from utils.distributed_lock import UserRequestLock
+
+    try:
+        lock = UserRequestLock(ttl=_TURN_WAIT_SECONDS)
+        deadline = time.monotonic() + _TURN_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            if lock.acquire(user_id) is not None:
+                break
+            time.sleep(_TURN_POLL_SECONDS)
+        else:
+            logger.error(
+                "Self-edit restart: user %s's turn still held its lock after %ds; "
+                "restarting anyway — an in-flight turn, if any, is cut off",
+                user_id, _TURN_WAIT_SECONDS,
+            )
+    except Exception:
+        logger.error(
+            "Self-edit restart: waiting on user %s's turn lock failed; restarting "
+            "without waiting — the end of the reply may not reach the client",
+            user_id, exc_info=True,
+        )
     _restart_requested.set()
     logger.warning("Self-edit restart: sending SIGTERM to pid %d", os.getpid())
     os.kill(os.getpid(), signal.SIGTERM)
@@ -219,17 +272,14 @@ def restart_requested() -> bool:
 
 
 def _write_result(status: str, ref: str, detail: str) -> None:
-    """Record a new outcome; the newest outcome replaces any undelivered one."""
     directory = _require_state_dir()
-    path = directory / _RESULT
     tmp = directory / f".{_RESULT}.tmp"
     tmp.write_text(f"{status} {ref}\n{detail}", encoding="utf-8")
-    tmp.replace(path)
-    (directory / _OFFERED).unlink(missing_ok=True)
+    tmp.replace(directory / _RESULT)
 
 
 def read_result() -> SelfEditResult | None:
-    """The pending outcome, or None when there is nothing to report.
+    """The undelivered outcome, or None when there is nothing to report.
 
     Raises ValueError on a malformed first line: the launcher and this module
     are the only writers, so a bad tag is a defect to surface, not a no-op.
@@ -257,35 +307,82 @@ def read_result() -> SelfEditResult | None:
     )
 
 
-def result_for_user(user_id: str) -> SelfEditResult | None:
-    """The pending outcome if it belongs to this user.
+def deliver_result() -> None:
+    """At startup: hand the outcome to the user who asked, through the activity feed.
 
-    An outcome with no recorded requester (a restart nobody requested through
-    selfedit_tool) is shown to every user — on a single-account install, the one.
+    Writes one ``sidebar_activity`` item (applied → ``handled``; failed →
+    ``escalated`` with the boot-log tail as the reason) and stamps the user's
+    heartbeat wake to now, so the next dispatcher pass wakes MIRA to announce
+    it. An outcome with no recorded requester (a restart that did not come
+    through selfedit_tool) goes to every user with an active segment — on a
+    single-account install, the one. The ``result`` file is removed only after
+    every item is written; a failure leaves it for the next startup to retry and
+    never fails startup, because the code it reports on is already running.
     """
-    result = read_result()
-    if result is None:
-        return None
-    if result["requested_by"] is not None and result["requested_by"] != user_id:
-        return None
-    return result
+    try:
+        result = read_result()
+        if result is None or not is_active():
+            return
+        from agents.base import ensure_activity_schema, upsert_activity_record
+        from cns.infrastructure.continuum_repository import get_continuum_repository
+        from utils.user_context import clear_user_context, set_current_user_id
+        from utils.userdata_manager import get_user_data_manager
 
+        repository = get_continuum_repository()
+        active = {
+            str(segment["user_id"]): str(segment["continuum_id"])
+            for segment in repository.find_all_active_segments_admin()
+        }
+        recipients = [result["requested_by"]] if result["requested_by"] else list(active)
 
-def heartbeat_delivery_pending(user_id: str) -> bool:
-    """True when this user's outcome has not yet been offered to a heartbeat wake."""
-    directory = state_dir()
-    if directory is None or result_for_user(user_id) is None:
-        return False
-    return not (directory / _OFFERED).exists()
+        if result["status"] == "applied":
+            status, reason = "handled", None
+            summary = (
+                f"Your code change was applied: MIRA restarted on it and started "
+                f"(commit {result['ref']}). Starting is not working — check the "
+                f"change does what was asked, tell the user, then resolve this item "
+                f"(thread_id {result['ref']})."
+            )
+        else:
+            status, reason = "escalated", result["detail"][-_REASON_CHARS:] or None
+            summary = (
+                f"Your code change FAILED: MIRA could not start on it. The change is "
+                f"stashed as {result['ref']} and MIRA is running the previous code. "
+                f"Tell the user what failed and whether to fix and retry or drop it, "
+                f"then resolve this item (thread_id {result['ref']})."
+            )
 
+        for user_id in recipients:
+            set_current_user_id(user_id)
+            try:
+                db = get_user_data_manager(user_id)
+                ensure_activity_schema(db)
+                upsert_activity_record(
+                    db,
+                    interface_name=_ACTIVITY_INTERFACE,
+                    thread_id=result["ref"],
+                    agent_id=_ACTIVITY_AGENT,
+                    summary=summary,
+                    status=status,
+                    escalation_reason=reason,
+                )
+                if user_id in active:
+                    repository.set_heartbeat_wake_at(
+                        active[user_id], user_id, format_utc_iso(utc_now())
+                    )
+            finally:
+                clear_user_context()
 
-def mark_offered_to_heartbeat() -> None:
-    directory = _require_state_dir()
-    (directory / _OFFERED).touch()
-
-
-def clear_result() -> None:
-    """Delivered: remove the outcome and its delivery bookkeeping."""
-    directory = _require_state_dir()
-    for name in (_RESULT, _REQUESTED_BY, _OFFERED):
-        (directory / name).unlink(missing_ok=True)
+        directory = _require_state_dir()
+        for name in (_RESULT, _REQUESTED_BY):
+            (directory / name).unlink(missing_ok=True)
+        logger.warning(
+            "Self-edit outcome %s %s delivered to %d user(s)",
+            result["status"], result["ref"], len(recipients),
+        )
+    except Exception:
+        logger.error(
+            "Self-edit outcome could not be delivered; the user is not told whether "
+            "their code change applied until a later startup retries "
+            "(the result file stays in %s)", state_dir(), exc_info=True,
+        )

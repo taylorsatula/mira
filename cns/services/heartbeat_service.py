@@ -526,17 +526,9 @@ def heartbeat_tick() -> None:
     wake_by_user: dict[str, str] = {}
     stay_awake = False
 
-    from utils import self_edit
-
     for segment in segments:
         user_id = str(segment["user_id"])
         try:
-            # A self-edit restart outcome not yet offered to a wake makes the
-            # user due now: the user asked for the change and is waiting, so
-            # neither a stored sleep stamp nor the pregate holds it back. The
-            # outcome's digest contributor marks it offered, so this applies
-            # to one wake only.
-            self_edit_due = self_edit.heartbeat_delivery_pending(user_id)
             # MIRA asked to sleep until heartbeat_wake_at (stamped by the last
             # confirm), or a failed turn backed off until heartbeat_retry_at:
             # no ticks until the earliest of them. A future stamp on EITHER
@@ -559,7 +551,7 @@ def heartbeat_tick() -> None:
                     earliest_future is None or stamp_dt < earliest_future[0]
                 ):
                     earliest_future = (stamp_dt, stamp_str)
-            if earliest_future is not None and not self_edit_due:
+            if earliest_future is not None:
                 # Site-specific rationale (assessed by the human): this
                 # branch aggregates the sleep schedule without the user-lock
                 # check below, and that was assessed as not a real-world
@@ -594,7 +586,7 @@ def heartbeat_tick() -> None:
 
             try:
                 mode = app_config.heartbeat.wake_mode
-                if mode == "pregated" and not self_edit_due and not _pregate_check(user_id):
+                if mode == "pregated" and not _pregate_check(user_id):
                     # Due now but nothing new: the next pass re-checks at ticker
                     # cadence, so the obligation is ticker-bounded — stay awake.
                     stay_awake = True

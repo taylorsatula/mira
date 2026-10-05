@@ -169,44 +169,5 @@ class HeartbeatDecisionsContributor:
         return lines
 
 
-class SelfEditOutcomeContributor:
-    """The outcome of a self-edit restart, offered to exactly one wake.
-
-    MIRA restarted itself to apply a code change (utils/self_edit.py); the user
-    is waiting to hear whether it worked. The heartbeat dispatcher treats a
-    pending outcome as due now (heartbeat_service.heartbeat_tick), and this
-    contributor puts it in that wake's digest once — marking it offered — so a
-    breakout announces it without every later wake re-announcing it. The HUD
-    section (working_memory/trinkets/self_edit_trinket.py) keeps it visible
-    until the user's next turn either way.
-    """
-
-    def name(self) -> str:
-        return "self_edit_outcome"
-
-    def contribute(self, user_id: str) -> list[str]:
-        from utils import self_edit
-
-        if not self_edit.heartbeat_delivery_pending(user_id):
-            return []
-        result = self_edit.result_for_user(user_id)
-        if result is None:
-            return []
-        self_edit.mark_offered_to_heartbeat()
-        outcome = (
-            "it APPLIED: MIRA started on the changed code"
-            if result["status"] == "applied"
-            else "it FAILED: MIRA could not start on it, so the change was stashed "
-            "and MIRA is running the previous code"
-        )
-        return [
-            "Self-edit restart outcome (details in your HUD self_edit_status section):",
-            f"- MIRA restarted to apply a change to its own code, and {outcome}. "
-            "The user asked for this change and is waiting to hear the result: "
-            "break out and tell them.",
-        ]
-
-
-register_background_digest_contributor(SelfEditOutcomeContributor())
 register_background_digest_contributor(SidebarActivityContributor())
 register_background_digest_contributor(HeartbeatDecisionsContributor())

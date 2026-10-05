@@ -208,25 +208,17 @@ class SidebarTool(Tool):
         escalation_reason = params.get("escalation_reason")
         run_count = params.get("run_count", 1)
 
-        self.db.execute(
-            "INSERT INTO sidebar_activity "
-            "(interface_name, thread_id, agent_id, summary, status, "
-            "escalation_reason, run_count, updated_at) "
-            "VALUES (:interface_name, :thread_id, :agent_id, :summary, "
-            ":status, :escalation_reason, :run_count, datetime('now')) "
-            "ON CONFLICT(interface_name, thread_id) DO UPDATE SET "
-            "agent_id = excluded.agent_id, summary = excluded.summary, "
-            "status = excluded.status, escalation_reason = excluded.escalation_reason, "
-            "run_count = excluded.run_count, updated_at = datetime('now')",
-            {
-                'interface_name': interface_name,
-                'thread_id': thread_id,
-                'agent_id': agent_id,
-                'summary': summary,
-                'status': status,
-                'escalation_reason': escalation_reason,
-                'run_count': run_count,
-            },
+        from agents.base import upsert_activity_record
+
+        upsert_activity_record(
+            self.db,
+            interface_name=interface_name,
+            thread_id=thread_id,
+            agent_id=agent_id,
+            summary=summary,
+            status=status,
+            escalation_reason=escalation_reason,
+            run_count=run_count,
         )
 
         return {

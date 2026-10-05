@@ -75,6 +75,44 @@ def ensure_activity_schema(db) -> None:
     db.execute(SCRATCHPAD_INDEX_DDL)
 
 
+def upsert_activity_record(
+    db,
+    *,
+    interface_name: str,
+    thread_id: str,
+    agent_id: str,
+    summary: str,
+    status: str,
+    escalation_reason: str | None = None,
+    run_count: int = 1,
+) -> None:
+    """Write one activity-feed item, replacing the same (interface_name, thread_id).
+
+    Every column is overwritten on conflict, escalation_reason included. Callers:
+    sidebar_tool.complete_task and utils/self_edit.deliver_result.
+    """
+    db.execute(
+        "INSERT INTO sidebar_activity "
+        "(interface_name, thread_id, agent_id, summary, status, "
+        "escalation_reason, run_count, updated_at) "
+        "VALUES (:interface_name, :thread_id, :agent_id, :summary, "
+        ":status, :escalation_reason, :run_count, datetime('now')) "
+        "ON CONFLICT(interface_name, thread_id) DO UPDATE SET "
+        "agent_id = excluded.agent_id, summary = excluded.summary, "
+        "status = excluded.status, escalation_reason = excluded.escalation_reason, "
+        "run_count = excluded.run_count, updated_at = datetime('now')",
+        {
+            'interface_name': interface_name,
+            'thread_id': thread_id,
+            'agent_id': agent_id,
+            'summary': summary,
+            'status': status,
+            'escalation_reason': escalation_reason,
+            'run_count': run_count,
+        },
+    )
+
+
 # -----------------------------------------------------------------------
 # Structured types for trace data
 # -----------------------------------------------------------------------

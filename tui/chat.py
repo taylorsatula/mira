@@ -13,10 +13,9 @@ returns it, with its queued siblings, to the input box. Nothing is dropped.
 ``Live`` is derived on read by ``_live()`` from the state below, never kept in
 step by hand. Private inbox items (``ConnectFailed``, ``RetrySend``, ``AutoReconnectDue``, ``ScreenExited``) let background tasks report to the same single consumer.
 
-A lost connection reconnects automatically with bounded backoff (a self-edit
-restart, or any server restart, comes back on its own); after reconnecting,
-MIRA's messages written while the socket was down are fetched from history and
-shown, so a message pushed during the gap is not lost.
+A lost connection reconnects automatically with bounded backoff, so a server
+restart (a self-edit restart included) comes back without the user pressing
+Enter and a message MIRA pushes after the restart reaches the open session.
 
 Contract: ``tui/FRONTEND_PLAN.md`` "### ``tui/chat.py``" and its event table.
 """
@@ -26,7 +25,6 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -87,9 +85,9 @@ TURN_BUSY_MAX_WAIT_SECONDS = 600.0
 # unanswered (cns/api/websocket_chat.py process_turn setup failures).
 _UNATTRIBUTED_SEND_CODES = frozenset({"INVALID_MESSAGE", "TURN_SETUP_FAILED"})
 
-# A lost connection retries on its own: quickly at first (a restart takes a few
-# seconds to tens of seconds — supervisor delay plus the boot gate), then at a
-# steady poll, until MAX_WAIT has passed since the loss. Enter retries at once.
+# A lost connection retries on its own: quickly at first, then at a steady poll
+# that covers a restart's supervisor delay plus the boot gate, until MAX_WAIT has
+# passed since the loss. Enter retries at once.
 AUTO_RECONNECT_DELAYS = (2.0, 4.0, 8.0)
 AUTO_RECONNECT_POLL_SECONDS = 15.0
 AUTO_RECONNECT_MAX_WAIT_SECONDS = 600.0
@@ -99,12 +97,6 @@ _LOST_BEFORE_CONFIRM = (
 )
 
 ConnState = Literal["connected", "connecting", "disconnected"]
-
-
-def _parse_utc(timestamp: str) -> datetime:
-    """A history row's ISO timestamp as an aware UTC datetime (naive means UTC)."""
-    parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 # --- Private inbox items -------------------------------------------------------
@@ -129,7 +121,6 @@ class _AutoReconnect:
     """One automatic reconnect run, from a lost connection until it succeeds or gives up."""
 
     since: float  # monotonic time the connection was lost
-    lost_at: datetime  # UTC wall time of the loss; history rows after it were missed
     attempts: int = 0
 
 
@@ -560,9 +551,9 @@ class ChatSession:
         if self._conn != "connecting":
             return  # a connect the user already cancelled
         self._conn = "connected"
-        run, self._auto_reconnect = self._auto_reconnect, None
-        if run is not None:
-            await self._emit(transcript.notice("reconnected"), *await self._missed_blocks(run.lost_at))
+        if self._auto_reconnect is not None:
+            self._auto_reconnect = None
+            await self._emit(transcript.notice("reconnected"))
         if self._outbox and not self._busy():
             await self._send_next()
         else:
@@ -619,9 +610,7 @@ class ChatSession:
         self._conn = "disconnected"
         blocks.extend(self._take_deferred())
         if not self._quitting and self._auto_reconnect is None:
-            self._auto_reconnect = _AutoReconnect(
-                since=time.monotonic(), lost_at=datetime.now(timezone.utc)
-            )
+            self._auto_reconnect = _AutoReconnect(since=time.monotonic())
             self._schedule_auto_reconnect(self._auto_reconnect)
         await self._emit(*blocks)
 
@@ -639,25 +628,6 @@ class ChatSession:
         if item.run is not self._auto_reconnect or self._conn != "disconnected":
             return  # reconnected, cancelled, or superseded while the timer ran
         await self._reconnect()
-
-    async def _missed_blocks(self, lost_at: datetime) -> list[Text]:
-        """MIRA's messages written after the connection was lost (a proactive
-        push sent while the socket was down never arrived). A fetch failure
-        degrades to an alert — the chat itself is connected and works."""
-        try:
-            rows = await self._client.fetch_history("session_only")
-        except ClientError as error:
-            return [
-                transcript.alert(
-                    f"could not check for messages sent while disconnected: "
-                    f"{error.message} [{error.code}]"
-                )
-            ]
-        missed = [
-            row for row in rows
-            if row.role == "assistant" and _parse_utc(row.timestamp) > lost_at
-        ]
-        return replay_blocks(missed)
 
     # --- turn lifecycle --------------------------------------------------------
 

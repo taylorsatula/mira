@@ -285,11 +285,12 @@ async def lifespan(app: FastAPI):
         await mcp_stack.enter_async_context(mcp_manager.run())
         logger.info("MCP /v0/mcp session manager running (check_in tool available)")
 
-    # Self-edit trial boot (utils/self_edit.py): the edited tree just completed
-    # startup, so it becomes the new last-good commit. No-op on every
-    # non-trial start.
-    from utils.self_edit import commit_trial_if_booting
+    # Self-edit (utils/self_edit.py): a trial tree that just completed startup
+    # becomes the new last-good commit, then any pending outcome goes to the
+    # activity feed. Both are no-ops on an ordinary start.
+    from utils.self_edit import commit_trial_if_booting, deliver_result
     commit_trial_if_booting()
+    deliver_result()
 
     logger.info("MIRA startup complete")
     

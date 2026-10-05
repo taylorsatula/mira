@@ -392,11 +392,6 @@ _RULE_REASONS: Dict[str, str] = {
         "(user data, the virtualenv, credentials, logs, or the git history "
         "itself), so no rollback can restore it"
     ),
-    "self-edit-stash": (
-        "stashes in MIRA's code tree hold failed self-edits; restore or discard "
-        "them with selfedit_tool (restore_stash / discard_stash), never with raw "
-        "git stash drop/pop/clear"
-    ),
     "unverifiable-expansion": (
         "the path contains a shell expansion ($, `, or ~) that this guardrail "
         "cannot resolve before the host shell does, so it cannot prove the target "
@@ -1016,8 +1011,6 @@ def _analyze_segment(
         return cwd
 
     _check_prohibited_verb(verb)
-    if verb == "git":
-        _check_git_stash(rest, cwd)
     if verb == "init":
         _check_runlevel(rest)
     _check_service_control(verb, rest)
@@ -1031,29 +1024,6 @@ def _analyze_segment(
         _check_path_verbs(verb, rest, cwd, root, ancestors)
     _check_redirect_targets(tokens, cwd, root, ancestors)
     return cwd
-
-
-def _check_git_stash(args: List[str], cwd: str) -> None:
-    """Refuse discarding a stash in MIRA's code tree: those stashes are failed self-edits."""
-    repo = cwd
-    index = 0
-    while index < len(args) and args[index].startswith("-"):
-        if args[index] == "-C" and index + 1 < len(args):
-            repo = _resolve_operand(args[index + 1], repo)
-            index += 2
-            continue
-        index += 1
-    if index + 1 >= len(args) or args[index] != "stash":
-        return
-    if args[index + 1] not in ("drop", "pop", "clear") or _APP_TREE is None:
-        return
-    app_root = _APP_TREE[0]
-    if repo == app_root or repo.startswith(app_root + "/"):
-        _refuse(
-            "self-edit-stash",
-            _RULE_REASONS["self-edit-stash"],
-            "git " + " ".join(args[: index + 2]),
-        )
 
 
 def _tokenize(command: str) -> List[str]:
