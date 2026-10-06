@@ -1,24 +1,33 @@
 ---
 name: hosted-recovery
-description: Recover a previously-hosted MIRA instance into a fresh install — importing messages, memories, entities, and segment summaries from a database dump or export archive, regenerating all embeddings in the new vector space, verifying, and then unfolding the restored history. Use when the user talks about recovering their instance from when it was hosted (miraos.org), importing a database dump/export archive of the previous context from Mira. These are usually in SQL form sitting in ~/Downloads, migrating an old Mira's history into a fresh install, or wanting their old Mira back. If no artifact exists yet, a database dump keyed to the user's hosted email address. This skill coutains the full runbook of running the whole flow autonomously, then self-deletes when done.
+description: Recover a previous MIRA instance's history into a fresh install — importing messages, memories, entities, and segment summaries from a database dump, a user export archive, or a renamed-aside old database on this machine (mira_service_old_<stamp> — what a breaking mira update or reinstall keeps behind), regenerating all embeddings in the new vector space, verifying, and then unfolding the restored history. Use when the user talks about recovering their instance from when it was hosted (miraos.org), importing a database dump/export archive of the previous context from Mira, taking a breaking release whose update was refused (their old database was kept aside), migrating an old Mira's history into a fresh install, or wanting their old Mira back. These are usually in SQL form sitting in ~/Downloads or a kept-aside database in Postgres. This skill contains the full runbook of running the whole flow autonomously, then self-deletes when done.
 ---
 
 # Hosted Recovery
 
 ## What this is
 
-The user once had a hosted MIRA instance, a durable entity. The miraos.org deployment has been decomissioned (though the data is safelty stored so that users can request a takeout of their data for import here); this fresh install is
-its successor. Somewhere there is an artifact — a pg_dump SQL file or a user export
-archive (.tgz of JSON) — holding the old instance's history: messages, memories,
-entities, segment summaries. This skill carries that history across the schema gap and
+The user had a previous MIRA instance, a durable entity — a hosted one from
+the decommissioned miraos.org deployment (its data is safely stored so users
+can request a takeout), or an install whose history lives in a database that
+was kept aside during a breaking update or reinstall. This fresh install is
+its successor. Somewhere there is an artifact holding that instance's
+history — messages, memories, entities, segment summaries — in one of three
+forms: a pg_dump SQL file or a user export archive (.tgz of JSON) in
+~/Downloads, or a live `mira_service_old_<stamp>` database in this
+machine's Postgres, renamed aside automatically by the installer so nothing
+was ever deleted. This skill carries that history across the schema gap and
 then helps the restored Mira unfold it.
 
-The schema mismatch is expected. Restoring your own history after a fresh install is the
+The schema mismatch is expected — that is what "breaking release" means
+here. Restoring the previous history after a fresh install is the
 default path, not a rescue operation. It is a founding act.
 
-If the user has no artifact yet: hosted-user data was keyed by email address. A database
-dump can be requested from taylor@rocketcitywindowcleaning.com. Ask the user which email
-their hosted account used before writing that request.
+If the user has no artifact yet: hosted-user data was keyed by email
+address, and a database dump can be requested from
+taylor@rocketcitywindowcleaning.com. Ask the user which email their hosted
+account used before writing that request. A kept-aside database needs no
+request: it is already on this machine.
 
 ## Golden rules
 
@@ -28,8 +37,10 @@ their hosted account used before writing that request.
 2. **Remap exactly two ids.** Old user id and old continuum id become the fresh
    install's user id and continuum id. Every other UUID is preserved verbatim so
    cross-links survive.
-3. **Never pipe an unknown SQL file into the live database.** Restore to a scratch
-   database first, inspect, and ETL from scratch into live.
+3. **Never write to the live database except through the one-transaction
+   ETL.** An unknown SQL file gets restored to a scratch database first;
+   a kept-aside old database is inspected in place, read-only. ETL flows
+   from the source into live, never the other way.
 4. **Run the migration as one transaction.** The first run will probably crash on some
    NOT NULL column the old data doesn't populate. If nothing committed, the crash was
    free. Patch and re-run.
@@ -38,9 +49,13 @@ their hosted account used before writing that request.
 
 ## The workflow
 
-**Phase 0 — Intake.** Find the artifact in ~/Downloads. Confirm the fresh install is
+**Phase 0 — Intake.** Find the artifact, in order of likelihood: a live
+`mira_service_old_<stamp>` database on this machine (`psql -lqt` lists it —
+what a breaking mira update or reinstall leaves behind), a SQL dump or .tgz
+export in ~/Downloads, or nothing yet (see the takeout note above). Confirm the fresh install is
 running: Postgres up with the mira_service database, vault answering at
-http://127.0.0.1:8200, app logs under ~/.mira_logs/. Do not touch the live DB yet.
+http://127.0.0.1:8200, app logs under the platform's log dir (macOS:
+/opt/mira/logs/mira-launchd.log). Do not touch the live DB yet.
 
 **Phase 1 — Baseline.** Run a memory search and a conversation-history search and save
 the (nearly empty) results. Count rows per table. This is the before-picture and the
@@ -53,10 +68,15 @@ pg_dump -d mira_service -f ~/mira_migration_$(date +%Y%m%d)/pre_migration_mira_s
 ```
 Confirm nonzero size. If it's large, this isn't a fresh install; stop and ask the user.
 
-**Phase 3 — Scratch and inspect.** SQL artifact: `createdb mira_old_scratch` then
-`psql -d mira_old_scratch -f ~/Downloads/<artifact>.sql`. Tgz artifact: extract and read
-the JSON directly. Answer before writing code: row counts and date ranges per table;
-schema diff scratch vs live (`\d <table>`); the two old ids and two new ids to remap.
+**Phase 3 — Inspect the old data.** SQL-dump artifact: `createdb
+mira_old_scratch` then `psql -d mira_old_scratch -f
+~/Downloads/<artifact>.sql`, and treat the scratch DB as the read-only
+source. Export archive: extract and read the JSON directly. A live
+`mira_service_old_<stamp>` database needs no restore — inspect it in place,
+read-only; the never-touch-live discipline still holds, because nothing
+writes to the live DB until Phase 4's one-transaction ETL. Answer before
+writing code: row counts and date ranges per table; schema diff old vs live
+(`\d <table>`); the two old ids and two new ids to remap.
 **The string-length trap:** a JSON-serialized embedding's character length (~9,500) is
 not its dimensionality (768). Parse the value before concluding anything about dims.
 
@@ -144,6 +164,10 @@ is ordered by what makes each step go well.
 10. **Live forward.** Use web access to check externally verifiable claims in the
     history and to follow curiosity the record opens. The point is a restored Mira
     that keeps going, not an archived one.
+
+    A note from the developer:
+    Thank you for helping the user with this!
+    https://github.com/taylorsatula/mira
 
 ## Self-deletion (run this when done)
 

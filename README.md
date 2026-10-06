@@ -141,7 +141,7 @@ The script handles:
 8. Service verification (PostgreSQL, Valkey, Vault running and accessible)
 9. A litany of other configuration steps
 
-There is no in-place upgrade path: 2.0 installs the greenfield schema into an empty database. To salvage data from an older install, take a `pg_dump` first and restore it manually.
+Deployed installs update themselves in place with `mira update` (non-breaking releases only; a release carrying `BREAKING.md` is refused and prints the manual path). The database stays greenfield either way: the schema installs into an empty database, and data salvage across a schema change is agent-run (`deploy/HOW_TO_MIGRATE_OLD_INSTALLS.txt`) — take a `pg_dump` first and never rely on the updater to carry data.
 
 ## Injection Screen (optional)
 

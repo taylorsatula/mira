@@ -1,6 +1,10 @@
 """Entry point for ``python3 -m tui`` — the MIRA terminal chat client.
 
 CLI:
+- ``update``            subcommand: update the deployed install in place
+  (resolve the newest published release, refuse breaking releases, rebuild
+  venvs, swap code, restart; exit 0/1). Runs before the chat client and
+  needs no endpoint store. Machine half: ``deploy/update.sh``.
 - ``--config PATH``   override the endpoint-store path (default
   ``~/.config/mira-tui/config.json``); needed for live verification runs.
 - ``--login``         pre-run bootstrap: mint an API token against a MIRA
@@ -53,9 +57,20 @@ def _print_config_debug(store: EndpointStore) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    args_list = list(sys.argv[1:] if argv is None else argv)
+
+    # `mira update` — the only subcommand; dispatched before argparse so the
+    # flag surface of the chat client stays untouched. It runs standalone:
+    # no endpoint store is loaded, no chat client starts.
+    if args_list and args_list[0] == "update":
+        from tui.update import run_update
+
+        return run_update()
+
     parser = argparse.ArgumentParser(
         prog="tui",
-        description="MIRA terminal chat client (streaming WebSocket chat with a bottom-pinned input bar over native scrollback).",
+        description="MIRA terminal chat client (streaming WebSocket chat with a bottom-pinned input bar over native scrollback). "
+        "Subcommand: `mira update` updates a deployed install in place.",
     )
     parser.add_argument(
         "--config",
@@ -95,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print the resolved store path and per-endpoint config (never api_key), then exit.",
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(args_list)
 
     store = EndpointStore(args.config)
     try:

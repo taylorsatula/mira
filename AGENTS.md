@@ -81,7 +81,7 @@ unnecessary edit costs a line; a missed one misleads every session.
 
 - `main.py` — application entry point and wiring hub: router mounts, the
   middleware stack, the global `APIError` → HTTP-status mapping, lifespan
-  startup/shutdown ordering (LT_Memory factory → CNS graph → sidebar/heartbeat
+  startup/shutdown ordering (LT_Memory factory → CNS graph → sidebar/heartbeat/release-check
   jobs → announcement; `websocket_chat.close_all_connections()` awaited at
   shutdown; Valkey flush preserves `heartbeat:` and `pending_memories:`/`pending_memories_done:`/`pending_memories_attempts:` prefixes — the pending-memory queue is the durable record of user-confirmed memories and must survive restarts), and the pre-server
   POST gate before bind. Conditional mounts: the federation router when
@@ -94,8 +94,9 @@ unnecessary edit costs a line; a missed one misleads every session.
   `utils/AGENTS.md`.
 - `requirements.txt` — dependency pins; the optional block's visibility to
   `Dockerfile.base` is owned by `deploy/AGENTS.md`.
-- `VERSION` — release identity string, read by `cns/api/update.py:get_latest_version`
-  and reported by `/health` (`cns/api/AGENTS.md`).
+- `VERSION` — release identity string, read by `utils/release_identity.py:get_current_version`
+  and reported by `/health` and `/v0/api/update_status` (`cns/api/AGENTS.md`,
+  `utils/AGENTS.md`).
 - `install.sh` — stable installer entrypoint. Resolves the newest published
   release from GitHub's `releases/latest` redirect, fetches that tag's
   `deploy/deploy.sh`, and hands off with stdin reattached to `/dev/tty` so

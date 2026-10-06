@@ -20,12 +20,17 @@
 # Quick start (downloads and runs):
 #   git clone --depth 1 --branch v2026.10.05 https://github.com/taylorsatula/mira-OSS.git /tmp/mira-install && /tmp/mira-install/deploy/deploy.sh
 #
+# In-place update: `mira update` (deployed installs, v2026.10.05+ floor)
+# updates non-breaking releases in place — resolve, gate, rebuild venvs, swap
+# code, restart (deploy/update.sh owns the mechanics). Breaking releases
+# carry BREAKING.md at the repo root; `mira update` refuses them and prints
+# the manual path (reinstall + agent-run history import). The database stays
+# greenfield either way: schema changes are never migrated by the updater —
+# data salvage across a schema change is agent-run
+# (deploy/HOW_TO_MIGRATE_OLD_INSTALLS.txt).
+#
 # Options:
 #   --loud     Show verbose output during installation
-#
-# There is no in-place upgrade path: 2.0 installs the greenfield schema from
-# deploy/mira_service_schema.sql into an empty database. A user salvaging data
-# from an older install needs only pg_dump and manual work.
 #
 # The deployment is broken into modular scripts:
 #   lib/output.sh     - Visual output functions (colors, spinners)

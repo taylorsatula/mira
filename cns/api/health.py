@@ -11,11 +11,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
 
 from .base import BaseHandler, ErrorResponse, SuccessResponse, create_success_response
-from .update import get_latest_version
 from clients.postgres_client import PostgresClient
 from utils.timezone_utils import utc_now, format_utc_iso
 from utils.thread_monitor import ThreadMonitor
 from utils.scheduled_task_monitor import ScheduledTaskMonitor
+from utils.release_identity import get_current_version
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class HealthEndpoint(BaseHandler):
         components["system"] = {
             "status": "healthy",
             "uptime_seconds": int(time.time() - _PROCESS_START),
-            "version": get_latest_version()
+            "version": get_current_version()
         }
 
         total_time = round((time.time() - start_time) * 1000, 1)

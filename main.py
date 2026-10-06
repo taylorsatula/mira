@@ -220,10 +220,23 @@ async def lifespan(app: FastAPI):
         from cns.services.heartbeat_service import register_heartbeat_job
         register_heartbeat_job(scheduler_service)
 
+        # Register the daily release check (GitHub releases/latest -> VERSION)
+        from utils.update_check import register_update_check_job
+        register_update_check_job(scheduler_service)
+
         scheduler_service.start()
     except Exception as e:
         logger.critical(f"Failed to initialize scheduled task system: {e}")
         raise RuntimeError(f"scheduled_task_system initialization failed - cannot start MIRA: {e}") from e
+
+    # First release check of this process. Not registered as the job's first
+    # fire: an IntervalTrigger's initial run is one full interval out, so a
+    # restarted instance would offer no verdict for 24h. Off the boot path on
+    # the default executor — check_for_update() is a bounded network call
+    # (FETCH_TIMEOUT_SECONDS) that never raises, and gating the bind on GitHub's
+    # latency would be a boot availability risk for an advisory feature.
+    from utils.update_check import check_for_update
+    asyncio.get_running_loop().run_in_executor(None, check_for_update)
 
     # Collapse any segments stale during downtime through the existing event pipeline.
     # check_timeouts() publishes SegmentTimeoutEvent for stale segments, which the

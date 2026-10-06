@@ -39,6 +39,7 @@ AUTH_WAIT_TIMEOUT = 12.0  # server closes with AUTH_TIMEOUT at 10 s; cover it
 SEND_TIMEOUT = 10.0
 CLOSE_TIMEOUT = 5.0
 HTTP_PAGE_TIMEOUT = 30.0
+UPDATE_STATUS_TIMEOUT = 10.0  # advisory poll; a slow answer must not linger
 # Server tool frames carry the full, untruncated tool result; the websockets
 # default (1 MiB) would close the socket with 1009 on one large result mid-turn.
 MAX_FRAME_BYTES = 64 * 1024 * 1024
@@ -421,6 +422,35 @@ class MiraClient:
         if summary_sentinel is not None:
             return [summary_sentinel] + rows
         return rows
+
+    async def fetch_available_update(self) -> str | None:
+        """Newest release name when the server has a verdict that one exists.
+
+        One REST read of `/v0/api/update_status`, the server's cached daily
+        release check. Returns None for every non-answer — no verdict yet, a
+        server too old to have the route (404), a transport failure, or a
+        malformed body — because the notice is advisory and must never surface
+        as a chat error. Only an explicit `update_available` with a version
+        string is reported, so a notice is never shown on a guess.
+        """
+        url = self._config.base_url.rstrip("/") + "/v0/api/update_status"
+        try:
+            async with httpx.AsyncClient(timeout=UPDATE_STATUS_TIMEOUT) as http:
+                response = await http.get(
+                    url, headers={"Authorization": f"Bearer {self._config.api_key}"}
+                )
+        except httpx.HTTPError:
+            return None
+        if response.status_code // 100 != 2:
+            return None
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        latest = payload.get("latest_version")
+        if payload.get("update_available") is not True or not isinstance(latest, str):
+            return None
+        return latest
 
     async def close(self) -> None:
         """Close the socket cleanly; run() then returns without Disconnected."""

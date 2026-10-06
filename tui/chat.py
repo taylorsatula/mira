@@ -92,6 +92,10 @@ AUTO_RECONNECT_DELAYS = (2.0, 4.0, 8.0)
 AUTO_RECONNECT_POLL_SECONDS = 15.0
 AUTO_RECONNECT_MAX_WAIT_SECONDS = 600.0
 
+# Release notice: one read at startup, then daily. The server runs its own
+# check on the same cadence and caches the verdict, so this only asks.
+UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
+
 _LOST_BEFORE_CONFIRM = (
     "connection lost before MIRA confirmed this message — check history before resending"
 )
@@ -132,13 +136,20 @@ class AutoReconnectDue:
 
 
 @dataclass
+class UpdateChecked:
+    """A release check came back; ``latest`` is None when there is nothing to show."""
+
+    latest: str | None
+
+
+@dataclass
 class ScreenExited:
     """The screen task ended without close(): fail loud, never run bar-less."""
 
     error: BaseException
 
 
-Item = ClientEvent | Intent | ConnectFailed | RetrySend | AutoReconnectDue | ScreenExited
+Item = ClientEvent | Intent | ConnectFailed | RetrySend | AutoReconnectDue | UpdateChecked | ScreenExited
 
 
 @dataclass
@@ -191,6 +202,7 @@ class ChatSession:
         self._conn: ConnState = "connecting"  # AuthOk on the inbox flips it
         self._conn_since = time.monotonic()
         self._auto_reconnect: _AutoReconnect | None = None  # set while reconnecting on its own
+        self._available_update: str | None = None  # newest release the server knows of, if any
 
         self._pump_task: asyncio.Task[None] | None = None
         self._connect_task: asyncio.Task[None] | None = None
@@ -209,6 +221,7 @@ class ChatSession:
         self._screen_task = asyncio.create_task(self._screen.run())
         self._screen_task.add_done_callback(self._on_screen_done)
         self._start_pump()
+        self._spawn(self._update_loop())
         try:
             while True:
                 # Intentionally unbounded: the idle wait of the whole app. It is
@@ -241,6 +254,19 @@ class ChatSession:
             await self._emit(*blocks)
         else:
             await self._emit(transcript.notice("no earlier messages in this session yet"))
+
+    async def _update_loop(self) -> None:
+        """Advisory release check: one read at startup, then daily.
+
+        A background task reporting through the single consumer like every
+        other producer — the status row is derived on read, never written from
+        here. An unanswerable check (server too old for the route, transport
+        failure, no verdict yet) yields None and simply leaves no notice.
+        """
+        while True:
+            latest = await self._client.fetch_available_update()
+            await self._post_private(UpdateChecked(latest))
+            await asyncio.sleep(UPDATE_CHECK_INTERVAL_SECONDS)
 
     # --- derived state ---------------------------------------------------------
 
@@ -278,6 +304,16 @@ class ChatSession:
                     flight.first_bounce,
                 )
             return Status("sending…", "busy", flight.since)
+        if self._available_update is not None:
+            # Last on purpose: connection state and an active turn own the row
+            # while present, and the notice reappears when the row frees up.
+            # `mira update` is the safe action: non-breaking releases update the
+            # install in place (data, Vault, and config untouched); breaking
+            # releases refuse and print the manual path.
+            return Status(
+                f"MIRA {self._available_update} is available — run `mira update`",
+                "alert",
+            )
         return Status("ready")
 
     def _live(self) -> Live:
@@ -356,6 +392,8 @@ class ChatSession:
                 await self._on_retry_send(item)
             case AutoReconnectDue():
                 await self._on_auto_reconnect_due(item)
+            case UpdateChecked(latest=latest):
+                await self._on_update_checked(latest)
             case ContextReset():
                 await self._on_context_reset(item)
             case TurnComplete():
@@ -628,6 +666,14 @@ class ChatSession:
         if item.run is not self._auto_reconnect or self._conn != "disconnected":
             return  # reconnected, cancelled, or superseded while the timer ran
         await self._reconnect()
+
+    async def _on_update_checked(self, latest: str | None) -> None:
+        """Record one release-check result. Only a change repaints: the poll
+        re-runs daily and the row already says what it said."""
+        if latest == self._available_update:
+            return
+        self._available_update = latest
+        self._refresh()
 
     # --- turn lifecycle --------------------------------------------------------
 

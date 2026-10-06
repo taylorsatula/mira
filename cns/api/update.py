@@ -10,10 +10,14 @@ import urllib.request
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
+from auth.api import get_current_user
+from auth.types import APITokenContext, SessionData
 from utils.timezone_utils import utc_now, format_utc_iso
+from utils.release_identity import get_current_version, version_sort_key
+from utils.update_check import UpdateStatus, get_update_status
 
 REMOTE_UPDATE_URL = "https://miraos.org/check_update"
 
@@ -41,12 +45,6 @@ class UpdateCheckResponse(BaseModel):
     checked_at: str = Field(..., description="ISO-8601 timestamp of check")
 
 
-def get_latest_version() -> str:
-    """Read latest version from VERSION file."""
-    version_file = Path(__file__).parent.parent.parent / "VERSION"
-    return version_file.read_text().strip()
-
-
 def get_client_ip(request: Request) -> str:
     """Return the socket peer address. X-Forwarded-For is ignored: client-controlled
     and no proxy is deployed."""
@@ -60,31 +58,6 @@ def _sanitize_log_field(value: str) -> str:
     return stripped.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
 
 
-def _version_sort_key(raw: str) -> tuple[int, ...] | None:
-    """
-    Comparable sort key for MIRA's release identity scheme.
-
-    Releases are named ``YYYY.MM.DD`` with an optional ``-N.N`` revision suffix
-    (``2026.10.05``, ``2026.10.03-2.0``). The ``-N.N`` suffix is not PEP 440, so
-    ``packaging.version.parse`` rejected every such string and the comparison
-    silently fell through to "no update" — including for installs that report
-    the suffix while the newer release does not. Each numeric component becomes
-    an int, so padded and unpadded forms compare equal (``10.03`` == ``10.3``)
-    and a leading ``v`` (release tags carry one) is ignored. A trailing revision
-    makes a version sort above the same date without one.
-
-    Returns None when the input is not a MIRA release name, so the caller
-    declines to compare rather than mis-ordering.
-    """
-    s = raw.strip()
-    if s[:1] in ("v", "V"):
-        s = s[1:]
-    parts = s.replace("-", ".").split(".")
-    if any(not (p.isascii() and p.isdigit()) for p in parts):
-        return None
-    return tuple(int(p) for p in parts)
-
-
 @router.get("/check_update", response_model=UpdateCheckResponse)
 def check_update_endpoint(request: Request, version: str = "") -> UpdateCheckResponse:
     """
@@ -93,7 +66,7 @@ def check_update_endpoint(request: Request, version: str = "") -> UpdateCheckRes
     Public endpoint - no authentication required.
     Logs: timestamp, client IP, version being checked.
     """
-    latest = get_latest_version()
+    latest = get_current_version()
     client_ip = get_client_ip(request)
 
     # Scrubbed, not rejected — forgeries stay visible on one line, no free 4xx oracle.
@@ -108,8 +81,8 @@ def check_update_endpoint(request: Request, version: str = "") -> UpdateCheckRes
             checked_at=format_utc_iso(utc_now())
         )
 
-    installed_key = _version_sort_key(version)
-    latest_key = _version_sort_key(latest)
+    installed_key = version_sort_key(version)
+    latest_key = version_sort_key(latest)
 
     if installed_key is None or latest_key is None:
         logger.warning(
@@ -133,7 +106,7 @@ def check_update_endpoint(request: Request, version: str = "") -> UpdateCheckRes
 @router.get("/check_remote_update", response_model=UpdateCheckResponse)
 def check_remote_update(request: Request) -> UpdateCheckResponse:
     """Check miraos.org for a newer version. Proxies server-side to avoid browser CORS."""
-    current = get_latest_version()
+    current = get_current_version()
     client_ip = get_client_ip(request)
     update_logger.info(f"ip={client_ip}\tversion={current}\tcheck=remote")
 
@@ -156,3 +129,22 @@ def check_remote_update(request: Request) -> UpdateCheckResponse:
         current_version=current,
         checked_at=format_utc_iso(utc_now())
     )
+
+
+@router.get("/update_status", response_model=UpdateStatus)
+def update_status_endpoint(
+    current_user: SessionData | APITokenContext = Depends(get_current_user),
+) -> UpdateStatus:
+    """
+    The cached verdict of the daily release check (`utils/update_check.py`).
+
+    Unlike the public `/check_update` (which compares a caller-supplied version
+    against this instance's own), this reports what the *server* learned by
+    asking GitHub — the fact the TUI renders as an update notice. The TUI polls
+    it at startup and every 24 h.
+
+    Anonymous callers are rejected: the endpoint is mounted under the
+    authenticated `/v0/api` surface, and the notice is a per-install fact a
+    session or API token is already required to read anything else with.
+    """
+    return get_update_status()

@@ -17,6 +17,36 @@ The tarball carries its own `VERSION` file, which is what gets copied into
 `/opt/mira/app` — the installed code and the reported version always come
 from the same tagged tree.
 
+## Breaking releases and `mira update`
+
+Deployed installs update themselves with `mira update`: the TUI subcommand
+(`tui/update.py`) resolves the newest published release, fetches its tarball,
+and hands the machine work to that release's own `deploy/update.sh` (rebuild
+venvs, stop service, swap code with the state-preserve set, restart,
+health-poll on the new `VERSION`).
+
+A release is **breaking** when its tree carries `BREAKING.md` at the repo
+root. Presence of the file is the entire contract — `mira update` refuses the
+release, prints the file verbatim, and points at the manual path; absence
+means the release is safe to install in place. `deploy/update.sh` re-checks
+the marker, so a direct invocation cannot bypass the gate.
+
+Cutting a breaking release therefore means:
+
+1. Make the change (typically a `mira_service_schema.sql` change — the
+   database stays greenfield, so any schema change is breaking by definition;
+   also anything else that makes an in-place swap unsafe).
+2. Add `BREAKING.md` at the repo root in the same commit. Its content is
+   operator-facing prose, printed verbatim by `mira update`: what broke, why
+   in-place update is refused, and the manual path (reinstall via
+   `install.sh` — the old database is renamed aside automatically and Vault
+   credentials are preserved — then ask MIRA to bring its history forward
+   itself with its bash tool; `deploy/HOW_TO_MIGRATE_OLD_INSTALLS.txt` and
+   the `hosted-recovery` skill carry that runbook).
+3. Remove `BREAKING.md` in the first subsequent release that is safe again —
+   the marker describes a release's relationship to what precedes it, so it
+   must not linger into non-breaking releases.
+
 The manual procedure below is kept for reference (e.g. recovering an
 install by hand):
 
