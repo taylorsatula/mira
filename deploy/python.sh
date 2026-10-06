@@ -64,15 +64,29 @@ MIRA_GROUP="$(id -gn)"
 run_with_status "Creating /opt/mira/app directory" \
     sudo mkdir -p /opt/mira/app
 
+# The code tree is a git repository: every install is one commit, so what MIRA
+# changes in its own tree is reviewable and revertible by the operator (`git
+# diff`, `git stash`, one command to undo). bash_tool reads this repository to
+# decide what inside the tree is editable
+# (tools/implementations/bash_tool.py:_load_app_tree). Uncommitted changes
+# present now are edits MIRA made that never went through a restart — stash
+# them (kept, never deleted) before the new payload replaces the tree.
+if [ -d /opt/mira/app/.git ] && [ -n "$(git -C /opt/mira/app status --porcelain --untracked-files=all 2>/dev/null)" ]; then
+    run_with_status "Stashing uncommitted code changes before reinstall" \
+        git -C /opt/mira/app stash push --include-untracked --quiet \
+            -m "uncommitted changes before reinstall $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+fi
+
 # Clear any previous install's code before the new payload lands: a
 # retired module left behind by an overlay is imported at boot and parks
 # the POST gate. Host-local state the install payload never contains
 # (venv, .env, data, logs — the same set both install paths exclude) is
 # preserved; data/ holds per-user storage (utils/userdata_manager.py
-# base_dir) and venv/ is reused by Step 4.
+# base_dir) and venv/ is reused by Step 4. .git is preserved too: it holds
+# the install history and every stashed edit.
 run_with_status "Clearing previous install (code only)" \
     sudo find /opt/mira/app -mindepth 1 -maxdepth 1 \
-        ! -name venv ! -name .env ! -name data ! -name logs \
+        ! -name venv ! -name .env ! -name data ! -name logs ! -name .git \
         -exec rm -rf {} +
 
 if [ "${LOCAL_SOURCE:-false}" = "true" ]; then
@@ -122,6 +136,48 @@ fi
 
 run_with_status "Setting ownership to $MIRA_USER:$MIRA_GROUP" \
     sudo chown -R $MIRA_USER:$MIRA_GROUP /opt/mira
+
+# Record this install as a commit. Runs as the service user, who owns the tree.
+#
+# .git/info/exclude — not .gitignore — names everything git must never track or
+# stash: it lives outside the editable tree, so a code edit cannot widen what a
+# stash sweeps up, and bash_tool reads its literal entries as the top-level
+# names it refuses to delete (nothing can restore them). Every runtime write
+# under the tree must land under one of these names, or the tree reads as dirty
+# and a stash sweeps that write up with real edits. State-carrying names are
+# slash-anchored — top level only — so git's ignore depth matches bash_tool's
+# top-level protection; an unanchored pattern would also hide a nested
+# same-named directory from git while leaving it deletable. Regenerable junk
+# stays unanchored (ignored at any depth, harmless to delete).
+if [ ! -d /opt/mira/app/.git ]; then
+    run_with_status "Initializing code history" \
+        git -C /opt/mira/app init --quiet
+fi
+run_quiet git -C /opt/mira/app config user.name "MIRA"
+run_quiet git -C /opt/mira/app config user.email "mira@localhost"
+mkdir -p /opt/mira/app/.git/info
+cat > /opt/mira/app/.git/info/exclude <<'EXCLUDE'
+# Written by deploy/python.sh. Never tracked, never stashed, never deletable
+# through bash_tool. Edit deploy/python.sh, not this file. Slash-anchored
+# entries are protected at the TOP LEVEL only, matching bash_tool; unanchored
+# entries are ignored at any depth.
+/data/
+/venv/
+/.env
+/logs/
+/scratch/
+__pycache__/
+*.pyc
+.DS_Store
+EXCLUDE
+INSTALL_COMMIT_MSG="install ${RELEASE_TAG}"
+if [ "${LOCAL_SOURCE:-false}" = "true" ]; then
+    INSTALL_COMMIT_MSG="${INSTALL_COMMIT_MSG} (local tree)"
+fi
+run_with_status "Staging install in code history" \
+    git -C /opt/mira/app add -A
+run_with_status "Recording install in code history" \
+    git -C /opt/mira/app commit --quiet --allow-empty -m "$INSTALL_COMMIT_MSG"
 
 print_success "MIRA installed to /opt/mira/app"
 

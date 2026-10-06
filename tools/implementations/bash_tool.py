@@ -333,6 +333,14 @@ _FIND_NARROWING = frozenset({
 })
 _MATCH_ALL_REGEXES = frozenset({".", ".*", ".+", "^", "$", "^.*$", "^.*", ".*$", "[^]", "^^"})
 
+# Pattern rules that anchor on an absolute path. For these, the match text
+# consumes only the system directory ("rm -rf /opt/"), and the path the match
+# points at is whatever continues at the match's anchored slash — see
+# _match_in_editable_app_tree, which exempts matches pointing inside MIRA's
+# own code tree; the argument layer still classifies every operand of the
+# same command precisely.
+_APP_TREE_PATH_RULES = frozenset({"system-path-delete", "overwrite-system-config"})
+
 _OPERATORS = frozenset({";", ";;", "&", "&&", "|", "||", "|&", "(", ")", "{", "}", "\n"})
 _WRITE_REDIRECTS = frozenset({">", ">>", "&>", "&>>", "1>", "2>", ">", "<>"})
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -367,6 +375,15 @@ _RULE_REASONS: Dict[str, str] = {
     "user-home-delete": "the command targets a user's home directory",
     "vcs-history-delete": (
         "the command targets the project's git history, which cannot be recreated"
+    ),
+    "app-root-delete": (
+        "the command targets MIRA's code tree as a whole; edit or delete the "
+        "files inside it instead"
+    ),
+    "app-untracked-delete": (
+        "the command targets a part of MIRA's code tree that git does not track "
+        "(user data, the virtualenv, credentials, logs, or the git history "
+        "itself), so nothing can restore it"
     ),
     "unverifiable-expansion": (
         "the path contains a shell expansion ($, `, or ~) that this guardrail "
@@ -422,6 +439,9 @@ def _classify_path(path: str, root: str, ancestors: FrozenSet[str]) -> Optional[
         return "filesystem-root"
     if resolved in ancestors:
         return "project-root-delete"
+    app_rule = _classify_app_tree_path(resolved)
+    if app_rule is not None:
+        return app_rule or None
     head = resolved[1:].partition("/")[0]
     if head in _SYSTEM_DIR_NAMES:
         return "system-path-delete"
@@ -433,6 +453,90 @@ def _classify_path(path: str, root: str, ancestors: FrozenSet[str]) -> Optional[
     if resolved == git_dir or resolved.startswith(git_dir + "/"):
         return "vcs-history-delete"
     return None
+
+
+# MIRA's own code tree: the root this package was loaded from. An install
+# records the tree as a git repository (deploy/python.sh: one commit per
+# install), and that history is the undo for anything MIRA changes in it —
+# `git diff` shows the change, `git stash` sets it aside, one command reverts
+# it. A tree with that undo is ordinary editable material, not a system path.
+_APP_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_app_tree() -> Optional[Tuple[str, FrozenSet[str]]]:
+    """
+    (code tree root, top-level names git does not track), or None when the tree
+    is not a git repository.
+
+    Read once at import, outside the validator: the validator stays a pure
+    decision function over this inert tuple
+    (tests/protected/bash_guardrail_probe.py enforces that). The untracked names
+    come from the installed `.git/info/exclude` — the generating source, never a
+    transcribed list, so a code edit cannot widen what is deletable. Its
+    state-carrying entries are slash-anchored (deploy/python.sh), so git ignores
+    them at top level only, matching this top-level reading; an unanchored entry
+    would also hide a nested same-named directory from git while leaving it
+    deletable here. No exclude file means no git and no undo, so the tree gets
+    no exemption and stays a system path.
+    """
+    exclude = _APP_ROOT / ".git" / "info" / "exclude"
+    if not exclude.is_file():
+        return None
+    names = {".git"}
+    for raw in exclude.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or any(ch in line for ch in "*?[!"):
+            continue
+        names.add(line.strip("/").split("/")[0])
+    return str(_APP_ROOT), frozenset(names)
+
+
+# Inert from import onwards: (app root, untracked top-level names) or None.
+_APP_TREE: Optional[Tuple[str, FrozenSet[str]]] = _load_app_tree()
+
+
+def _classify_app_tree_path(resolved: str) -> Optional[str]:
+    """
+    Classify a path against MIRA's own code tree.
+
+    Returns None when the path is outside the tree (or the tree is not a git
+    repository), "" when it is an editable file or directory inside the tree, or
+    the rule name it violates. Tracked contents are editable because git is the
+    undo for them. What git does not track — the names in `.git/info/exclude`,
+    `.git` included — has no undo and stays protected, as does the tree root
+    itself. Without a git tree there is no exemption at all: under `/opt` it
+    stays a system path.
+    """
+    if _APP_TREE is None:
+        return None
+    app_root, protected = _APP_TREE
+    if resolved == app_root:
+        return "app-root-delete"
+    if not resolved.startswith(app_root + "/"):
+        return None
+    if resolved[len(app_root) + 1:].partition("/")[0] in protected:
+        return "app-untracked-delete"
+    return ""
+
+
+def _match_in_editable_app_tree(match: "re.Match[str]") -> bool:
+    """True when the path a path-anchored pattern match points at lies inside
+    MIRA's own code tree.
+
+    Both patterns in _APP_TREE_PATH_RULES begin their path at the first slash of
+    the match text ("rm -rf /opt/", "> /opt/"): the pattern consumes only the
+    system directory, never the full path, so the path this match points at is
+    whatever continues at that offset in the command. An anchored prefix test
+    there is exact — it cannot exempt the tree root (refused as app-root-delete)
+    nor a longer path merely sharing the root as a prefix — and needs no path
+    extraction: no token regex, no normalization, no re-classification. The
+    argument layer still resolves every operand of the same command (relative
+    paths, quotes, globs), so the pattern layer only needs this coarse signal.
+    """
+    if _APP_TREE is None:
+        return False
+    anchor = match.start() + match.group(0).index("/")
+    return match.string.startswith(_APP_TREE[0] + "/", anchor)
 
 
 def _at_or_under(path: str, root: str) -> bool:
@@ -1011,8 +1115,9 @@ def _validate_command(command: str, root: str, cwd: Optional[str] = None) -> Non
             command is never sent to the host.
     """
     for name, pattern, reason in _DESTRUCTIVE_PATTERNS:
-        match = pattern.search(command)
-        if match:
+        for match in pattern.finditer(command):
+            if name in _APP_TREE_PATH_RULES and _match_in_editable_app_tree(match):
+                continue
             _refuse(name, reason, match.group(0))
 
     normalized_root = _normalize_absolute(root)
@@ -1022,6 +1127,18 @@ def _validate_command(command: str, root: str, cwd: Optional[str] = None) -> Non
         normalized_root,
         _protected_ancestors(normalized_root),
     )
+
+
+# Model-facing note on editing MIRA's own code, present only where the tree is a
+# git repository: an install without that undo never advertises self-editing.
+_SELF_EDIT_NOTE = (
+    f" Files in MIRA's own code tree ({_APP_TREE[0]}) may be edited, created, and "
+    "deleted; the parts git does not track (data, venv, .env, logs, .git) stay "
+    "refused, and so does the tree as a whole. An edit changes nothing until MIRA "
+    "is restarted, and restarting is the operator's step — ask for it. `git diff` "
+    "shows the change and `git stash` sets it aside."
+    if _APP_TREE is not None else ""
+)
 
 
 class BashTool(Tool):
@@ -1061,7 +1178,7 @@ class BashTool(Tool):
                         "human. Paths that depend on shell expansion ($VAR, ~, backticks) are "
                         "refused for destructive verbs — pass explicit literal paths. Not "
                         "sandboxed: it can read the whole machine's filesystem, but "
-                        "system-destructive operations are refused."
+                        "system-destructive operations are refused." + _SELF_EDIT_NOTE
                     ),
                 },
                 "cwd": {

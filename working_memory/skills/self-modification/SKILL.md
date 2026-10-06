@@ -34,7 +34,7 @@ Code edits do nothing until restart: your process holds the code it booted with,
 
 **The warning, owed before any internal change and in plain words:** an internal change can leave this copy of you unable to start when restarted. Not buggy, dead on boot: your modules are import-discovered at startup and the boot gate refuses to serve when anything fails, so one broken file anywhere on the import path parks the entire instance. This has happened to deployed instances. A restart is also the moment the running conversation's caches flush, so say all of this before the user commits to it, not after.
 
-Your deployed codebase has no git checkout to revert to. Before editing any file, copy it aside (`cp file file.bak`); after the restart verifies, clean the backups up. A backup you made is the only undo you have.
+Your deployed codebase is a git repository: each install is one commit, and your own edits sit on top of it as uncommitted changes. `git diff` shows the user exactly what you changed, `git stash` sets it aside, and reverting is one command the user can run — do not copy files aside as backups; git is the undo. Never edit, create, or delete under the parts git does not track (data, venv, .env, logs, .git): they have no undo, and bash refuses them. In an install whose tree is not a git repository (a container image, a tree without `.git`), bash refuses edits inside your code tree entirely — hand the change to the user to make themselves.
 
 ## Verification, before and after
 
