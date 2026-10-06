@@ -18,7 +18,7 @@
 # with the same ownership and downstream steps as the GitHub path.
 #
 # Quick start (downloads and runs):
-#   git clone --depth 1 --branch v2026.10.03-2.0 https://github.com/taylorsatula/mira-OSS.git /tmp/mira-install && /tmp/mira-install/deploy/deploy.sh
+#   git clone --depth 1 --branch v2026.10.05 https://github.com/taylorsatula/mira-OSS.git /tmp/mira-install && /tmp/mira-install/deploy/deploy.sh
 #
 # Options:
 #   --loud     Show verbose output during installation
@@ -45,7 +45,7 @@ set -e
 # sites are pinned to this tag: the bootstrap clone below and python.sh's
 # installer tarball. Cut a release by moving this constant, then tagging and
 # publishing per deploy/RELEASE.md.
-RELEASE_TAG="v2026.10.03-2.0"
+RELEASE_TAG="v2026.10.05"
 export RELEASE_TAG
 
 # Get the directory where this script lives

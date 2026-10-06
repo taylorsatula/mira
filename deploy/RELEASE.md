@@ -1,7 +1,7 @@
 # Stable Release Procedure
 
 The installer is wired to the tagged tarball: `deploy/deploy.sh` defines the
-constant `RELEASE_TAG` (currently `v2026.10.03-2.0`) and exports it, and
+constant `RELEASE_TAG` (currently `v2026.10.05`) and exports it, and
 `deploy/python.sh` downloads `refs/tags/${RELEASE_TAG}.tar.gz` instead of the
 main branch. `RELEASE_TAG` is the switch: cut a stable release by moving that
 one constant in `deploy/deploy.sh`, then tagging the repo.
@@ -33,5 +33,5 @@ Replace `X.XX` with the release tag (this procedure was previously preserved
 as a comment block in `deploy/python.sh`; it moved here so the runbook lives
 with the rest of the deployment documentation). Note that GitHub's tag
 archive strips a leading `v` from the tag in the extracted directory name
-(`v2026.10.03-2.0` extracts to `mira-2026.10.03-2.0/`), which is why the wired
+(`v2026.10.05` extracts to `mira-2026.10.05/`), which is why the wired
 installer derives the path as `mira-${RELEASE_TAG#v}`.

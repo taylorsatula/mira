@@ -15,7 +15,7 @@
 #    curl -fsSL .../install.sh | bash -s -- --config deploy-config.yml --loud
 #
 #  Pin a specific release:
-#    curl -fsSL .../install.sh | MIRA_RELEASE_TAG=v2026.10.03-2.0 bash
+#    curl -fsSL .../install.sh | MIRA_RELEASE_TAG=v2026.10.05 bash
 #
 #  Environment:
 #    MIRA_RELEASE_TAG   install a specific tag instead of the newest release
@@ -112,7 +112,7 @@ else
         printf '%s\n' "${CROSS}"
         fail "Could not resolve the newest release from ${REPO_URL}/releases"
         info "Set MIRA_RELEASE_TAG to install a specific tag, e.g."
-        info "  curl -fsSL ${RAW_URL}/main/install.sh | MIRA_RELEASE_TAG=v2026.10.03-2.0 bash"
+        info "  curl -fsSL ${RAW_URL}/main/install.sh | MIRA_RELEASE_TAG=v2026.10.05 bash"
         exit 1
     fi
     printf '%s %s\n' "${CHECK}" "${GREEN}${TAG}${RESET}"

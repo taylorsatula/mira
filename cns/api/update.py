@@ -11,7 +11,6 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from fastapi import APIRouter, Request
-from packaging import version as pkg_version
 from pydantic import BaseModel, Field
 
 from utils.timezone_utils import utc_now, format_utc_iso
@@ -61,6 +60,31 @@ def _sanitize_log_field(value: str) -> str:
     return stripped.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
 
 
+def _version_sort_key(raw: str) -> tuple[int, ...] | None:
+    """
+    Comparable sort key for MIRA's release identity scheme.
+
+    Releases are named ``YYYY.MM.DD`` with an optional ``-N.N`` revision suffix
+    (``2026.10.05``, ``2026.10.03-2.0``). The ``-N.N`` suffix is not PEP 440, so
+    ``packaging.version.parse`` rejected every such string and the comparison
+    silently fell through to "no update" — including for installs that report
+    the suffix while the newer release does not. Each numeric component becomes
+    an int, so padded and unpadded forms compare equal (``10.03`` == ``10.3``)
+    and a leading ``v`` (release tags carry one) is ignored. A trailing revision
+    makes a version sort above the same date without one.
+
+    Returns None when the input is not a MIRA release name, so the caller
+    declines to compare rather than mis-ordering.
+    """
+    s = raw.strip()
+    if s[:1] in ("v", "V"):
+        s = s[1:]
+    parts = s.replace("-", ".").split(".")
+    if any(not (p.isascii() and p.isdigit()) for p in parts):
+        return None
+    return tuple(int(p) for p in parts)
+
+
 @router.get("/check_update", response_model=UpdateCheckResponse)
 def check_update_endpoint(request: Request, version: str = "") -> UpdateCheckResponse:
     """
@@ -84,21 +108,24 @@ def check_update_endpoint(request: Request, version: str = "") -> UpdateCheckRes
             checked_at=format_utc_iso(utc_now())
         )
 
-    try:
-        installed = pkg_version.parse(version)
-        latest_parsed = pkg_version.parse(latest)
+    installed_key = _version_sort_key(version)
+    latest_key = _version_sort_key(latest)
 
-        if latest_parsed > installed:
-            return UpdateCheckResponse(
-                update_available=True,
-                latest_version=latest,
-                checked_at=format_utc_iso(utc_now())
-            )
-    except pkg_version.InvalidVersion as e:
-        logger.warning(f"Invalid version format in update check: {safe_version} - {e}")
+    if installed_key is None or latest_key is None:
+        logger.warning(
+            f"Unparseable version in update check: installed={safe_version!r} "
+            f"latest={latest!r} — declining to compare"
+        )
+    elif latest_key > installed_key:
+        return UpdateCheckResponse(
+            update_available=True,
+            latest_version=latest,
+            checked_at=format_utc_iso(utc_now())
+        )
 
     return UpdateCheckResponse(
         update_available=False,
+        latest_version=latest,
         checked_at=format_utc_iso(utc_now())
     )
 
