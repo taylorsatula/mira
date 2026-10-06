@@ -186,11 +186,17 @@ class SegmentTimeoutService:
                 if current_time < guard_until:
                     return False
 
-        # Query for last message in segment (avoids persisting end_time on every turn)
+        # Query for last message in segment, keyed on the segment's own
+        # identity. Messages of OTHER segments — including a successor
+        # segment's heartbeat ticks — are not this segment's activity and
+        # must not feed its timeout decision (a stranded mid-collapse
+        # sentinel whose recovery re-match computed end_time from a
+        # successor's fresh messages never looked timed out, so the stale
+        # claim was never re-claimed).
         end_time = self._get_last_message_time(
             segment['continuum_id'],
             segment['user_id'],
-            segment['created_at']  # Segment start = sentinel creation time
+            segment['metadata'].get('segment_id')
         )
 
         if not end_time:
@@ -240,15 +246,20 @@ class SegmentTimeoutService:
         self,
         continuum_id: str,
         user_id: str,
-        segment_start_time: datetime
+        segment_id: str
     ) -> Optional[datetime]:
         """
-        Query for timestamp of last message in segment.
+        Query for timestamp of last message in segment, keyed on segment identity.
+
+        Every turn message (assistant, tool result, user) carries the segment's
+        id in metadata — membership is keyed on identity, not on a position in
+        the continuum, so a successor segment's messages (including its
+        heartbeat ticks) can never masquerade as this segment's activity.
 
         Args:
             continuum_id: Continuum UUID
             user_id: User UUID
-            segment_start_time: When segment started (sentinel creation)
+            segment_id: Segment UUID whose activity is being measured
 
         Returns:
             Timestamp of last message, or None if no messages in segment
@@ -261,14 +272,14 @@ class SegmentTimeoutService:
                 SELECT created_at FROM messages
                 WHERE continuum_id = %s
                     AND user_id = %s
-                    AND created_at > %s
+                    AND metadata->>'segment_id' = %s
                     AND (metadata->>'is_segment_boundary' IS NULL
                          OR metadata->>'is_segment_boundary' = 'false')
                     AND (metadata->>'system_notification' IS NULL
                          OR metadata->>'system_notification' = 'false')
                 ORDER BY created_at DESC
                 LIMIT 1
-            """, (continuum_id, user_id, segment_start_time))
+            """, (continuum_id, user_id, segment_id))
 
             # Database returns datetime objects directly (no normalization to strings)
             if row and row.get('created_at'):
@@ -286,11 +297,12 @@ class SegmentTimeoutService:
         metadata = segment['metadata']
         segment_id = metadata.get('segment_id')
 
-        # Query for last message time (same as timeout check)
+        # Query for last message time, keyed on segment identity exactly as
+        # the timeout check does — the two computations must agree.
         end_time = self._get_last_message_time(
             segment['continuum_id'],
             segment['user_id'],
-            segment['created_at']
+            segment_id
         )
 
         if not end_time:
