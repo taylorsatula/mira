@@ -394,6 +394,12 @@ CREATE INDEX idx_messages_active_segments ON messages(continuum_id, created_at)
       AND metadata->>'status' IN ('active', 'paused');
 CREATE INDEX idx_messages_segment_metadata ON messages USING gin(metadata)
     WHERE metadata->>'is_segment_boundary' = 'true';
+-- Keepsleeping heartbeat-turn identification for the NOT EXISTS turn exclusion
+-- (history, live context, previous-session context): one index probe instead of
+-- a per-row scan. Predicate mirrors the exclusion exactly so the planner can use it.
+CREATE INDEX idx_messages_keepsleeping_turn_id ON messages((metadata->>'turn_id'))
+    WHERE metadata->>'heartbeat' = 'true'
+      AND COALESCE(metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout';
 CREATE INDEX idx_messages_segment_embedding ON messages
     USING hnsw (segment_embedding vector_cosine_ops)
     WHERE metadata->>'is_segment_boundary' = 'true'

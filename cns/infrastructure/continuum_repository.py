@@ -719,13 +719,19 @@ class ContinuumRepository:
                 "AND COALESCE(metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'"
                 ")"
             )
+            # Keepsleeping-turn exclusion, de-correlated on purpose: turn_id is a
+            # per-turn UUID, so equality alone identifies the same turn and the
+            # old `other.continuum_id = messages.continuum_id` predicate was pure
+            # correlation — it forced a re-scan of `messages` per candidate row
+            # (hundreds of loops × ~10 ms seq scan ≈ 6 s per history page on a
+            # ~16k-row table). NOT EXISTS probes the partial index
+            # idx_messages_keepsleeping_turn_id instead.
             where_conditions.append(
-                "(metadata->>'turn_id' IS NULL OR metadata->>'turn_id' NOT IN ("
-                "SELECT other.metadata->>'turn_id' FROM messages other "
-                "WHERE other.continuum_id = messages.continuum_id "
+                "(metadata->>'turn_id' IS NULL OR NOT EXISTS ("
+                "SELECT 1 FROM messages other "
+                "WHERE other.metadata->>'turn_id' = messages.metadata->>'turn_id' "
                 "AND other.metadata->>'heartbeat' = 'true' "
-                "AND COALESCE(other.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout' "
-                "AND other.metadata->>'turn_id' IS NOT NULL))"
+                "AND COALESCE(other.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'))"
             )
         
         if start_date:
@@ -1329,13 +1335,15 @@ class ContinuumRepository:
                 )
                 AND (
                     metadata->>'turn_id' IS NULL
-                    OR metadata->>'turn_id' NOT IN (
-                        SELECT other.metadata->>'turn_id'
-                        FROM messages other
-                        WHERE other.continuum_id = messages.continuum_id
+                    OR NOT EXISTS (
+                        -- turn_id is a per-turn UUID: equality alone identifies the
+                        -- turn, and avoiding the continuum_id correlation keeps this
+                        -- an index probe (idx_messages_keepsleeping_turn_id) instead
+                        -- of a per-row re-scan of messages.
+                        SELECT 1 FROM messages other
+                        WHERE other.metadata->>'turn_id' = messages.metadata->>'turn_id'
                             AND other.metadata->>'heartbeat' = 'true'
                             AND COALESCE(other.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
-                            AND other.metadata->>'turn_id' IS NOT NULL
                     )
                 )
             ORDER BY created_at ASC
@@ -1434,13 +1442,15 @@ class ContinuumRepository:
                 )
                 AND (
                     m.metadata->>'turn_id' IS NULL
-                    OR m.metadata->>'turn_id' NOT IN (
-                        SELECT other.metadata->>'turn_id'
-                        FROM messages other
-                        WHERE other.continuum_id = m.continuum_id
+                    OR NOT EXISTS (
+                        -- turn_id is a per-turn UUID: equality alone identifies the
+                        -- turn, and avoiding the continuum_id correlation keeps this
+                        -- an index probe (idx_messages_keepsleeping_turn_id) instead
+                        -- of a per-row re-scan of messages.
+                        SELECT 1 FROM messages other
+                        WHERE other.metadata->>'turn_id' = m.metadata->>'turn_id'
                             AND other.metadata->>'heartbeat' = 'true'
                             AND COALESCE(other.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
-                            AND other.metadata->>'turn_id' IS NOT NULL
                     )
                 )
             ORDER BY m.created_at DESC
