@@ -1,7 +1,7 @@
 # Stable Release Procedure
 
 The installer is wired to the tagged tarball: `deploy/deploy.sh` defines the
-constant `RELEASE_TAG` (currently `v2026.10.05`) and exports it, and
+constant `RELEASE_TAG` (currently `v2026.10.06-2.0`) and exports it, and
 `deploy/python.sh` downloads `refs/tags/${RELEASE_TAG}.tar.gz` instead of the
 main branch. `RELEASE_TAG` is the switch: cut a stable release by moving that
 one constant in `deploy/deploy.sh`, then tagging the repo.

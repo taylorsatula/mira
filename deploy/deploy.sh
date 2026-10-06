@@ -18,9 +18,10 @@
 # with the same ownership and downstream steps as the GitHub path.
 #
 # Quick start (downloads and runs):
-#   git clone --depth 1 --branch v2026.10.05 https://github.com/taylorsatula/mira-OSS.git /tmp/mira-install && /tmp/mira-install/deploy/deploy.sh
+#   git clone --depth 1 --branch v2026.10.06-2.0 https://github.com/taylorsatula/mira.git /tmp/mira-install && /tmp/mira-install/deploy/deploy.sh
 #
-# In-place update: `mira update` (deployed installs, v2026.10.05+ floor)
+# In-place update: `mira update` (deployed installs, v2026.10.06-2.0+ floor:
+# the first release carrying this command)
 # updates non-breaking releases in place — resolve, gate, rebuild venvs, swap
 # code, restart (deploy/update.sh owns the mechanics). Breaking releases
 # carry BREAKING.md at the repo root; `mira update` refuses them and prints
@@ -50,7 +51,7 @@ set -e
 # sites are pinned to this tag: the bootstrap clone below and python.sh's
 # installer tarball. Cut a release by moving this constant, then tagging and
 # publishing per deploy/RELEASE.md.
-RELEASE_TAG="v2026.10.05"
+RELEASE_TAG="v2026.10.06-2.0"
 export RELEASE_TAG
 
 # Get the directory where this script lives
