@@ -279,7 +279,11 @@ sudo tee "$MIRA_BIN" >/dev/null <<'MIRA_CLI'
 # instance from any directory: `mira` (first run: mira --login --base-url
 # http://localhost:1993 --chat).
 export PYTHONPATH="/opt/mira/app${PYTHONPATH:+:$PYTHONPATH}"
-exec /opt/mira/tui-venv/bin/python3 -m tui "$@"
+# -P: `python3 -m` prepends the CURRENT DIRECTORY to sys.path ahead of
+# PYTHONPATH, so `mira` run from inside a mira checkout silently resolved
+# tui/ and utils/ (and read the checkout's VERSION) instead of the installed
+# tree. -P suppresses that prepend; the install tree wins regardless of cwd.
+exec /opt/mira/tui-venv/bin/python3 -P -m tui "$@"
 MIRA_CLI
 sudo chmod 755 "$MIRA_BIN"
 echo -e "${CHECKMARK}"
