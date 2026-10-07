@@ -201,6 +201,7 @@ class ChatSession:
         self._halt_on_start = False  # Ctrl+C before turn_started: halt on arrival
         self._deferred: list[str] = []  # proactive content held until the turn ends
         self._show_thinking = False  # Ctrl+T view toggle; forward-looking, no replay of what streamed while off
+        self._flow = transcript.Flow()  # spacing between scrollback blocks across emits
         self._conn: ConnState = "connecting"  # AuthOk on the inbox flips it
         self._conn_since = time.monotonic()
         self._auto_reconnect: _AutoReconnect | None = None  # set while reconnecting on its own
@@ -340,7 +341,8 @@ class ChatSession:
         )
 
     async def _emit(self, *blocks: RenderableType) -> None:
-        await asyncio.wait_for(self._screen.emit(*blocks, live=self._live()), EMIT_TIMEOUT)
+        placed = self._flow.place(blocks)
+        await asyncio.wait_for(self._screen.emit(*placed, live=self._live()), EMIT_TIMEOUT)
 
     @staticmethod
     def _in_box(turn: _Turn, *bodies: Text) -> list[RenderableType]:
@@ -725,10 +727,18 @@ class ChatSession:
         turn = await self._current(event.turn_id, "assistant_delta")
         if turn is None:
             return
+        bodies: list[Text] = []
+        if turn.activity == "thinking":
+            # The reply starts: reasoning's unfinished last line belongs above it.
+            thinking = turn.thinking.flush()
+            if thinking:
+                bodies.append(transcript.thinking_lines(thinking))
         turn.activity = "replying"
         lines = turn.stream.feed(event.entry_id, event.content)
         if lines:
-            await self._emit(*self._in_box(turn, transcript.mira_lines(lines)))
+            bodies.append(transcript.mira_lines(lines))
+        if bodies:
+            await self._emit(*self._in_box(turn, *bodies))
         else:
             self._refresh()
 
@@ -757,7 +767,7 @@ class ChatSession:
             self._refresh()
 
     async def _on_model_error(self, event: ModelError) -> None:
-        notice = transcript.notice(f"model error: {event.message} — MIRA is retrying")
+        notice = transcript.notice(f"model error: {event.message} — retrying")
         turn = self._turn
         if turn is None or turn.turn_id != event.turn_id:
             await self._emit(notice)
@@ -814,7 +824,7 @@ class ChatSession:
             bodies.append(transcript.notice("stopped"))
         elif event.reason == "stall":
             bodies.append(transcript.alert(
-                "MIRA's server stalled (its event loop stopped turning) "
+                "the server stalled (its event loop stopped turning) "
                 "and dropped this reply"
             ))
         else:
@@ -826,7 +836,7 @@ class ChatSession:
         if turn is None:
             return
         bodies = self._tail_bodies(turn)
-        bodies.append(transcript.alert(f"MIRA hit an error: {event.message} [{event.code}]"))
+        bodies.append(transcript.alert(f"error: {event.message} [{event.code}]"))
         await self._end_reply(turn, bodies)
 
     @staticmethod

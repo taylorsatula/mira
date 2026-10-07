@@ -279,8 +279,11 @@ class Screen:
             console = self._live_console
             console.width = self._columns()
             with console.capture() as capture:
-                console.print(pending, end="")
-            return [*to_formatted_text(ANSI(capture.get())), ("[SetCursorPosition]", "")]
+                console.print(pending)
+            # The renderable ends its last row with a newline; dropping it
+            # keeps the cursor (and the status row) right under the text.
+            rows = capture.get().removesuffix("\n")
+            return [*to_formatted_text(ANSI(rows)), ("[SetCursorPosition]", "")]
 
         def outbox_fragments() -> StyleAndTextTuples:
             live = self._live
