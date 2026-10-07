@@ -14,8 +14,8 @@
   `tests/tmp/`, whose autodelete-on-sight policy is owned by
   `tests/tmp/AGENTS.md`. A session that finds this folder and reaches for the
   `tests/tmp/` reflex is wrong: check for this map before deleting anything.
-- This folder is the sole authorized exception to the root `AGENTS.md` NO MOCKS
-  prohibition on test files. The exception is narrow and does not relax any
+- This folder is the sole authorized exception to the NO MOCKS prohibition on
+  test files (doctrine owned by `tests/AGENTS.md`). The exception is narrow and does not relax any
   other part of that doctrine — a file admitted here still may not contain mock
   objects, stubs, fakes, or simulated infrastructure. It must call real
   production code. What is waived is the "disposable, never permanent"
@@ -36,15 +36,15 @@
   `bash_guardrail_probe.py`.
 - A battery here must be runnable offline and must not require Vault, Postgres,
   Valkey, embeddings, or any live service. If a check needs live infrastructure
-  it is a POST path-probe under `utils/power_on_self_test.py` (ownership: root
-  `AGENTS.md`), not a file in this folder. "Offline" means no connection is
+  it is a POST path-probe under `utils/power_on_self_test.py` (ownership:
+  `utils/AGENTS.md`), not a file in this folder. "Offline" means no connection is
   opened, not that the import graph is small: importing any module under
   `tools/` pulls in `clients/__init__.py`, which eagerly imports the Vault,
   Postgres, Valkey, SQLite and embeddings clients and constructs the config
   singleton. Those clients keep their connections lazy, and this folder's
   batteries depend on that staying true — a client gaining an eager import-time
   connection breaks every battery here.
-- One recorded exception to the offline rule, by the user's direction (2026-09-26): `injection_defense_probe.py`'s live half calls the configured System One endpoint. Its audit barrier admits name resolution of that host and connections to the addresses it resolved to, nothing else; the bearer token comes from `SYSTEMONE_API_KEY` for as long as the user keeps that temporary arrangement. Every other rule here still binds it.
+- One recorded exception to the offline rule, by the user's direction (2026-09-26): `injection_defense_probe.py`'s live half calls the configured System One endpoint. Its audit barrier admits name resolution of that host, connections to the addresses it resolved to, and socket construction itself (only `getaddrinfo`/`connect` are restricted to the permitted targets); the bearer token comes from `SYSTEMONE_API_KEY` for as long as the user keeps that temporary arrangement. Every other rule here still binds it.
 - Importing project code writes `.pyc` caches via a temp file plus `os.rename`,
   which the required audit barrier refuses. A battery that installs the
   filesystem-mutation half of the barrier must set

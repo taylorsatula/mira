@@ -6,7 +6,7 @@
 - Mocks are never used, without exception: no mock objects, no stubs, no fakes, no simulated infrastructure. Verification is live or it doesn't count.
 - Any test file added to this folder will be **autodeleted instantly** on sight. This folder is not a test suite, is not run by anything, and will never contain more than the exhibit below.
 - The folder exists only to display one exemplary disposable probe, so a session can see the shape: live infrastructure, real credentials plumbing, no mocks, executed once, then kept as an example rather than as a check.
-- Verification in MIRA is live (see the NO MOCKS section of the root `AGENTS.md`). A one-off probe that earns permanence leaves this folder for one of two homes: a production path-probe registered alongside the POST gate when it needs live infrastructure, or `tests/protected/` when it runs offline and the user has authorized it. Never a file here — admission to `tests/protected/` is owned by `tests/protected/AGENTS.md`.
+- Verification in MIRA is live (see the verification doctrine owned by `tests/AGENTS.md`). A one-off probe that earns permanence leaves this folder for one of two homes: a production path-probe registered alongside the POST gate when it needs live infrastructure, or `tests/protected/` when it runs offline and the user has authorized it. Never a file here — admission to `tests/protected/` is owned by `tests/protected/AGENTS.md`.
 
 ## Files
 

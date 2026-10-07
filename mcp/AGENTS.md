@@ -3,7 +3,7 @@
 ## Rules
 
 - Twin contract with `tui/endpoints.py`: `talkto_mira.ts` reads the TUI endpoint store (`~/.config/mira-tui/config.json`, `active` endpoint's `base_url` + `api_key`). Any store-format change updates `endpoints.py` and `talkto_mira.ts` in the same commit — a format drift surfaces only when the extension throws at call time.
-- `talkto_mira.ts` is the pi-native face of the same behavioral contract the server-side endpoint serves: one tool, one complete chat turn over `POST /v0/api/chat`, no turn logic client-side. The server-side twin of every mapping row lives in `cns/api/mcp.py:_check_in` — change a mapping row in both places in the same commit, and keep the busy-anchor ("already in progress", from `cns/api/chat.py`'s ValidationError message) identical in both.
+- `talkto_mira.ts` is the pi-native face of the same behavioral contract the server-side endpoint serves: one tool, one complete chat turn over `POST /v0/api/chat`, no turn logic client-side. The server-side twin of every mapping row lives in `cns/api/mcp.py:_check_in` — change a mapping row in both places in the same commit, and keep the busy-anchor ("already in progress", from `cns/api/chat.py`'s ValidationError message) identical in both. The tool's model-facing `DESCRIPTION` is byte-identical to `cns/api/mcp.py:_CHECK_IN_DESCRIPTION` — edit both in one commit.
 - The extension needs no `mcp_enabled` flag (it talks the always-on REST surface); the `/v0/mcp` endpoint is for non-pi MCP clients. Supersession is deliberate: for pi, `talkto_mira` replaces the MCP path.
 
 ## Files

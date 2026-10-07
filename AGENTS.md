@@ -2,11 +2,13 @@
 
 **Complex problems require simple and clear solutions.**
 
-MIRA is a FastAPI application with event-driven architecture coordinating three core systems: CNS (conversation management via immutable Continuum aggregate), Working Memory (trinket-based system prompt composition), and LT_Memory (memory extraction/linking/refinement). Subsystems coordinate by event-bus publication, not direct calls — the whole system hangs off a small set of events owned by `cns/core/events.py`. MIRA also models its own relationship with the user as a designed surface: a user model that describes the user, a Persona that prescribes to MIRA, a portrait injected into the system prompt, and metacognitive observers. PostgreSQL RLS with contextvars provides automatic user isolation - all user-scoped queries, tool access, and repository operations enforce `user_id` filtering at the database level.
+MIRA is a self-hosted personal AI assistant — persistent long-term memory, a user model and Persona that grow from conversation history, a terminal chat client. One operator's account per install by default (`auth/mode.py`, `MIRA_AUTH_MODE`); the server is a FastAPI app on Hypercorn with a streaming WebSocket chat protocol, plain HTTP chat, and opt-in federation and MCP mounts (`main.py`).
 
-MIRA models a user as a domain entity (the `users` row with its profile, preferences, and timezone) — end-user identity is a per-installation configuration value (the account the operator provisions), not a property of this repo.
+**The spine — place every file against this flow.** A chat turn enters at `cns/api/` (HTTP or WS; auth installs the `user_id` contextvar; one turn per user via a Valkey lock) → the orchestrator composes the system prompt through an event-bus round-trip with `working_memory/` trinkets, surfaces memories from `lt_memory/`, and runs the LLM behind a DB-configured route name (`clients/llm/`) plus the tool loop (`tools/`) → `UnitOfWork.commit()` persists Postgres first, then the Valkey cache → events publish post-commit; subscribers react synchronously (`cns/core/events.py` taxonomy, `cns/integration/event_bus.py`): memory extraction on segment collapse, user-model/Persona/portrait pipelines, trinket refresh. Concurrently with turns: APScheduler jobs (segment-collapse sweep, memory scoring, entity merge, heartbeat wake cycle, auth cleanup) and autonomous sidebar agents (`agents/`).
 
-## 🗺️ Nested AGENTS.md Maps — Shape & Maintenance
+**Stack.** PostgreSQL + pgvector with RLS — user isolation is a database property enforced from the contextvar; never hand-filter queries (`clients/postgres_client.py`). Valkey (cache, sessions, queues, locks). Vault holds every credential; env vars and fallbacks are prohibited (`clients/vault_client.py`; per-user secrets via `utils/user_credentials.py`). Per-user encrypted SQLite for tool data (`encrypted__` column prefix). Embeddings and LLM inference resolve from DB config rows — local llama.cpp or any cloud provider, selected by route name, never hardcoded.
+
+## Nested AGENTS.md Maps — Shape & Maintenance
 
 Every directory with ≥2 source files, or any invariant not documented in its
 parent directory's map, has an `AGENTS.md` orientation map. Smaller
@@ -37,19 +39,20 @@ directory whose map is missing is a defect.
 | `deploy/` | Host-metal and Docker deployment tooling |
 | `deploy/docker/scripts/` | Container bootstrap and supervision scripts |
 | `deploy/lib/` | Shared bash helper libraries, Vault state machine |
+| `deploy/vm/` | VM spin-up, dev-build deploy, and sarcophagus restore toolkit: modes, transports, sarcophagus contract, reference-host recipes |
 | `docs/` | Operator documentation, plus two cited authorities: `AGENTS_MAP_SPEC.md` (map shape) and `REGISTER.md` (writing register for any text a model reads) |
 | `lt_memory/` | Long-term memory: storage, scoring, retrieval, linking, entity services |
 | `lt_memory/processing/` | Extraction pipeline and consolidation |
 | `mcp/` | Agent-facing check-in clients: the pi `talkto_mira` extension, its TUI-store twin contract, and the shared check-in mapping rows |
 | `scripts/` | Operational CLI entry points run against a deployed service |
-| `tests/` | Probe-artifact homes: disposable exhibit, shared real-infra fixtures, admission-gated batteries — not a suite |
+| `tests/` | The verification doctrine (NO MOCKS, probe-surface membership, the realtime verification loop) plus the probe-artifact homes: disposable exhibit, shared real-infra fixtures, admission-gated batteries — not a suite |
 | `tests/fixtures/` | Reusable probe scaffolding: real-infrastructure setup/teardown, claim-free, no simulation |
 | `tests/protected/` | Admission-gated permanent verification batteries; the exact-phrase authorization rule and the no-mock, no-drift, cannot-execute requirements |
 | `tests/tmp/` | Display exhibit for the disposable-probe pattern: autodeleted-on-sight test policy, one exemplary probe |
 | `tools/` | Tool framework: base class, repository, config registry |
 | `tools/implementations/` | All concrete LLM-callable tools |
 | `tui/` | Streaming WebSocket terminal chat client: twin of the WS frame protocol (client side), single-writer screen and single-consumer `ChatSession` invariants, message-in-one-place rule, display sanitizing, endpoint store, headless token bootstrap |
-| `utils/` | Cross-cutting infrastructure: identity, scheduling, storage, security, observability |
+| `utils/` | Cross-cutting infrastructure: identity, scheduling, storage, security, observability, power-on self-test |
 | `working_memory/` | Event-driven system-prompt composition via trinkets |
 | `working_memory/trinkets/` | Trinket implementations: one `variable_name` slot each |
 
@@ -83,15 +86,14 @@ unnecessary edit costs a line; a missed one misleads every session.
   middleware stack, the global `APIError` → HTTP-status mapping, lifespan
   startup/shutdown ordering (LT_Memory factory → CNS graph → sidebar/heartbeat/release-check
   jobs → announcement; `websocket_chat.close_all_connections()` awaited at
-  shutdown; Valkey flush preserves `heartbeat:` and `pending_memories:`/`pending_memories_done:`/`pending_memories_attempts:` prefixes — the pending-memory queue is the durable record of user-confirmed memories and must survive restarts), and the pre-server
-  POST gate before bind. Conditional mounts: the federation router when
-  `config.lattice.enabled`; the MCP sub-app at `/v0/mcp` when
-  `config.system.mcp_enabled` (lazy import in the flag branch — disabled mode
-  imports/constructs nothing MCP-related), whose session-manager task group is
-  entered in lifespan and closed last at shutdown. The per-directory contracts are owned by
-  `cns/api/AGENTS.md`, `auth/AGENTS.md`, `cns/integration/AGENTS.md`,
-  `agents/AGENTS.md`, `config/AGENTS.md`, `lt_memory/AGENTS.md`,
-  `utils/AGENTS.md`.
+  shutdown; Valkey flush preserves the `heartbeat:` and
+  `pending_memories:`/`pending_memories_done:`/`pending_memories_attempts:`
+  prefixes — the durable record of user-confirmed memories), the pre-server
+  POST gate before bind, and the conditional mounts: the federation router when
+  `config.lattice.enabled`, the MCP sub-app when `config.system.mcp_enabled`.
+  Per-directory contracts are owned by `cns/api/AGENTS.md`, `auth/AGENTS.md`,
+  `cns/integration/AGENTS.md`, `agents/AGENTS.md`, `config/AGENTS.md`,
+  `lt_memory/AGENTS.md`, `utils/AGENTS.md`.
 - `requirements.txt` — dependency pins; the optional block's visibility to
   `Dockerfile.base` is owned by `deploy/AGENTS.md`.
 - `VERSION` — release identity string, read by `utils/release_identity.py:get_current_version`
@@ -108,43 +110,13 @@ unnecessary edit costs a line; a missed one misleads every session.
   no-upgrade-path doctrine, and the dead `--migrate` references are owned by
   `deploy/AGENTS.md` and `docs/AGENTS.md`.
 
-## 🚨 Critical Principles (Non-Negotiable)
+## Critical Principles (Non-Negotiable)
 
-# 🛑 NO MOCKS. NO PARALLEL SUITES. VERIFICATION IS LIVE OR IT DOESN'T COUNT.
+# NO MOCKS — verification doctrine lives in `tests/AGENTS.md`
 
-Prohibited: test files, pytest fixtures, mock objects, stubs, fakes, offline test databases, and any check that runs against simulated infrastructure. A passing mock-based check provides no information about this system.
+Before writing, running, or reviewing any test or probe — in fact before any verification decision at all — **read `tests/AGENTS.md` first**. It contains the binding rules for tests in this repository (the NO MOCKS doctrine, probe-surface membership, the realtime verification loop with its tier definitions, and the requirement to load the `writing-probes` skill before probing). Skipping it will produce checks that provide no information about this system and are prohibited on sight.
 
-Every line in this tree is agent-written; no human has traced any path. Type-clean, pyflakes-clean code that has never executed is the standard failure product of this workflow and has shipped here before. Verification is therefore mechanical and live, never assumed. A test is what a probe becomes when its answer must never change again — not a starting artifact.
-
-Required verification, in the POST tradition:
-- **Boot gate** — probes Vault, Postgres, and model routes against live infrastructure before the server binds.
-- **Path-probes** — invoke critical runtime paths against the live system exactly as production would.
-
-**Probe-surface membership (standing rule):** any path whose failure would report incorrect data to users, lose data, or degrade silently — reads, writes, searches, auth flows, failure paths. If a required probe cannot run against live infrastructure, fix the code until it can; do not simulate.
-
-Quality guarantee: boot-survival plus path-probe coverage. A clean boot verifies the wiring; a passed path-probe verifies the handler. Code covered by neither is unverified — flag it in review. A bug found in unprobed code is fixed together with the probe that covers it. Path-probes are production code: normal review discipline, the same credentials plumbing, production-identical failure behavior.
-
-### Load the `writing-probes` skill before you probe
-
-This section owns the doctrine; the skill owns the craft. Load `writing-probes`, every time, before:
-- writing, running, or reviewing a probe;
-- reproducing a defect live, or answering "does this actually work?";
-- deciding whether a check earns permanence — `CheckSpec` path-probe, `tests/protected/`, or discard;
-- diagnosing a probe that failed — code bug or probe bug?
-
-It carries the anatomy and the static scaffold, the shape catalog, the fake rule, the EXECUTED/UNVERIFIED contract, the probe-bug taxonomy, and how to shape code so it is probe-able.
-
-### ⚡ Realtime verification loop (proportionate by behavioral surface)
-
-Models are pretrained to verify by writing tests. When that reflex fires during a change, write a path-probe instead — same verification goal, production-code artifact.
-
-Select the tier by behavioral surface touched, not by change size:
-
-- **Tier 0 — no behavioral surface.** Comments, docstrings, formatting, import regrouping, verified-mechanical renames, documentation. `py_compile` + pyflakes on touched files. No further verification required.
-- **Tier 1 — behavioral edits within surface already covered by boot or probes.** Execute the changed path once against live infrastructure; re-read the diff against the invariants (every failure path reports the failure truthfully, nothing silently degraded, no assertion of behavior not executed); end the change report with **EXECUTED** (what ran) or **UNVERIFIED** (why not, and which probe would cover it).
-- **Tier 2 — new behavioral surface or elevated stakes.** New feature, endpoint, or path; schema or data-migration change; failure-behavior, security, or auth change; new dependency. Tier 1 plus: persistence round-trip against dev infrastructure (write, read back, verify, clean up — RLS and constraints included); register the path-probe where membership hits; a second agent re-derives the diff (skip it only when one-shot execution covers the change, and say so).
-
-The verification homes are indexed in the map registry above; their admission, cleanup, and realism policies are owned by `tests/tmp/AGENTS.md`, `tests/fixtures/AGENTS.md`, and `tests/protected/AGENTS.md`, and the skill's promote-or-discard moment owns the choice among them.
+Probe-ability is a design constraint from the first line of new code, not a verification-time discovery. The no-mocks regime only functions because production code is written probe-able: a new behavioral path must be exercisable by a live probe — callable through its real entry point, against real infrastructure, with an observable outcome and failure paths that report the failure truthfully. Before finishing new behavioral surface, confirm a probe can reach it; if it cannot, reshape the code (real callable seams, propagated errors, no swallowed results), never the probe — the doctrine's rule is "fix the code until it can" (`tests/AGENTS.md`). The `writing-probes` skill carries the probe-able-code craft. Code that reaches verification unprobe-able fails the regime only after the expensive work is done — that ordering is the failure this directive exists to prevent.
 
 ### Technical Integrity
 - **No Shortcuts**: never substitute a cheaper check for the required one — no mock-based verification, no skipped probe, no "improvements" during extraction, no deferred path-probe. Shortcuts ship as silent breakage.
@@ -190,8 +162,8 @@ These convert recurring failure modes into mandatory patterns. The banned forms 
 - **Bounded Waits at Every Boundary**: any call crossing the asyncio↔thread or queue boundary carries a bound — `future.result(timeout=…)`, a queue put with an overflow policy (timeout, drop, or fail — never a bare unbounded `Queue.put`), `asyncio.wait_for` around every await that can stall. A possibly-unbounded blocking call placed between cancellation checks makes cancellation unreachable, which is a defect by itself.
 - **Guard Clauses Live in the Mutation**: for check-then-act on shared state, the precondition belongs in the write itself — `UPDATE/DELETE … WHERE <guard>`, compare-and-set, `GETDEL` — never in a preceding read. Destructive and status-changing writes re-verify their precondition inside the statement; a scan whose transaction commits before its action loop protects nothing.
 - **One Sanctioned Path per Hazard**: every recurring hazard has one mandatory mechanism — use it, never hand-roll a parallel one; raw forms behind a sanctioned wrapper are defects. The sanctioned mechanisms are enumerated in Codebase Patterns below (`load_prompt()`, timezone utils, the contextvar/RLS flow, Vault/`UserCredentialService`, event-bus coordination).
-- **External Content Crosses One Boundary**: anything sourced outside the system (fetched pages, email bodies, third-party API responses, user-supplied file content) passes through injection screening and untrusted-content wrapping before entering ANY model context — tool results, trinket content, agent work items, system prompts. The semantic screen is config-disableable (`SystemConfig.injection_screen_enabled`, `MIRA_INJECTION_SCREEN_ENABLED=0`): disabled mode still wraps — never raw — and short-circuits before any client is built; enabled mode fails closed (`InjectionScreenUnavailable` carrying a remediation envelope) on any non-rejection failure. Text interpolated into XML-like prompt structures is escaped at the interpolation point. A tool that returns external text "for the model to read" unwrapped violates this rule regardless of what any doc claims.
-- **Configure Structured Data — Never String-Patch It**: installers and provisioning set values via variables and parameterized statements. Never `sed`/grep-patch structured data (SQL, JSON, YAML) by matching literal strings from a previous revision — a non-matching literal is a silent no-op; a matching one is a fuse for the next edit. Where a literal must exist, generate it from the source that defines it. Installation is code: it gets a smoke run before release, same as any handler.
+- **External Content Crosses One Boundary**: anything sourced outside the system (fetched pages, email bodies, third-party API responses, user-supplied file content) passes through injection screening and untrusted-content wrapping before entering ANY model context — tool results, trinket content, agent work items, system prompts. Text interpolated into XML-like prompt structures is escaped at the interpolation point. A tool that returns external text "for the model to read" unwrapped violates this rule regardless of what any doc claims. The screen's two tiers, its config-disable and fail-closed contract, are owned by `utils/AGENTS.md` (`utils/untrusted_content.py`) and `config/AGENTS.md` (`injection_screen_enabled`).
+- **Configure Structured Data — Never String-Patch It**: set values via variables and parameterized statements; never `sed`/grep-patch structured data (SQL, JSON, YAML) by matching literal strings from a previous revision — a non-matching literal is a silent no-op; a matching one is a fuse for the next edit. Where a literal must exist, generate it from the source that defines it. Installer-side application and the release smoke-run requirement are owned by `deploy/AGENTS.md`.
 - **Generated, Not Transcribed, Format Examples**: when a prompt instructs a model what to emit, the examples and format tokens are produced by the same code that parses the format (shared constants/formatters). Hand-written format examples drift from the parser — the model follows the example, the code follows the spec, and the mismatch is silent.
 - **Extract by Identity, Not Position or Shape**: data recovered from a probabilistic source (LLM output) or a lossy store is keyed by an identifier emitted alongside it — never "the last one", never "the first match". Persist explicit type tags; never infer structure from content shape (prefix/suffix sniffing). Storage round-trips must be lossless both ways.
 - **Derived State Self-Heals or Computes On Read**: counters and denormalizations incrementally maintained across multiple write paths will drift — one path forgets, another double-counts. Either recompute on read, or schedule a recompute job so drift decays on its own. "Every write path updates every derivation" is a checklist, not a mechanism.
@@ -199,13 +171,13 @@ These convert recurring failure modes into mandatory patterns. The banned forms 
 - **Retry Counters Never Gate Data on Infrastructure Failure**: attempt counters that trigger destructive or data-losing fallbacks (tombstones, abandons) count only failures the data caused; infrastructure/LLM outages are excluded. Three provider blips must not consume a data-bearing budget.
 - **Every Claimed Defense Has a Witness**: any sentence in this tree claiming something is "wrapped", "enforced", "atomic", or "verified" corresponds to a live path-probe. If writing the probe is impractical, delete the claim. Prose that promises an unwitnessed mechanism is where bugs hide longest.
 
-## 🏗️ Architecture & Design
+## Architecture & Design
 
 ### User Context Management
 - **Administrative tasks outside HTTP context** (scheduled jobs, batch operations, cross-user commands): explicitly `set_current_user_id(user_id)` per user, or `AdminSession` to bypass RLS entirely when querying across all users. Request-scoped context flow is covered under Cross-Cutting Patterns.
 
 ### Tool Architecture
-Use `tools/AGENTS.md` and `tools/implementations/AGENTS.md` as entry points; `tools/HOW_TO_BUILD_A_TOOL.md` is the step-by-step walkthrough (symbol anchors, four-piece registration, `run()` and return-envelope contracts, verification tiers). The sibling walkthroughs are `agents/HOW_TO_BUILD_AN_AGENT.md` and `working_memory/trinkets/HOW_TO_BUILD_A_TRINKET.md` — all three are kept aligned with the code they describe, so a contract change in a base class updates its guide in the same commit. Design for single responsibility (extraction tools extract, persistence tools store). Business logic lives in system prompts/working memory, not tools. Tool data goes in user-specific storage via `self.user_data_path` / `self.db`. Include recovery guidance in error responses. Verification is live probes (see NO MOCKS); a tool touching a critical path ships with its path-probe.
+Entry points: `tools/AGENTS.md`, `tools/implementations/AGENTS.md`, and the `tools/HOW_TO_BUILD_A_TOOL.md` walkthrough (siblings: `agents/HOW_TO_BUILD_AN_AGENT.md`, `working_memory/trinkets/HOW_TO_BUILD_A_TRINKET.md` — all kept aligned with the code they describe; a base-class contract change updates its guide in the same commit). Broad rules: single responsibility per tool; business logic lives in system prompts/working memory, not tools; user data via `self.user_data_path` / `self.db`; recovery guidance in error responses; verification is live probes (see the NO MOCKS pointer) — a tool touching a critical path ships with its path-probe.
 
 ### LLM Caller Interface Design
 All model-facing prose — system prompts, tool parameter descriptions, agent directives, trinket content — is an interface contract where imprecise language causes behavioral failures downstream. Every word constrains behavior: "literal string" not "text", "exact substring" not "pattern"; the reader is a language model that infers defaults from word choices. Ground descriptions in implementation behavior, not intent; drop jargon the caller lacks context for; state co-dependencies inline; if current wording would cause misuse, fix it.
@@ -220,7 +192,7 @@ When calling code misuses an interface, fix the caller — never adapt the inter
 - **Investigations Need Evidence**: answer with specific files, functions, and observed behavior; separate verified facts from inferences; when inconclusive, say what was checked and why it does not prove the point.
 - **Mechanical Renames Stay Mechanical**: map old names to new, update definitions and references, verify no old symbol remains. No behavior changes mixed in unless the caller asked for both.
 
-## 🧭 Codebase Patterns
+## Codebase Patterns
 
 ### User ID Resolution
 All user-scoped code resolves `user_id` via contextvar from `utils/user_context.py` (module contract owned by `utils/AGENTS.md`). Set once at the API boundary; flows automatically through the request. Never pass `user_id` through event dicts, parameters, or instance fields instead of the contextvar. Explicit `user_id` parameters are acceptable when sourced from the contextvar (e.g. `ManifestQueryService.get_segments(user_id)`). Outside HTTP context, call `set_current_user_id(user_id)` explicitly.
@@ -232,46 +204,32 @@ Patterns that apply in every directory. Directory maps may restate these with lo
 - **RLS fails closed**: a query without user context returns zero rows, no error — "empty" is ambiguous. Only admin sessions (`BYPASSRLS`) may omit user context. (`clients/postgres_client.py` canary, `auth/database.py`)
 - **Model-supplied timestamps are the user's local wall time**, never UTC: parse with `parse_time_string(value, tz_name=...)` + `ensure_utc`; exact wall times are DST-strict via `normalize_exact_local_wall_time()`. (`utils/timezone_utils.py`)
 - **LLM calls route by name**: `model_config='<route>'` on the five fixed routes; never hardcode models, endpoints, or API keys. (`clients/llm/`)
+- **LLM stalls propagate**: all live transports run through `clients.llm.lifecycle.LLMLifecycle`; no fallback route — stalls (`ProviderStallError`) and provider failures propagate. Policy owned by `clients/llm/AGENTS.md` and `utils/AGENTS.md` (reachability probes); add-a-dialect blast radius by `clients/llm/dialects/AGENTS.md`.
 - **Credentials**: system-level from Vault only; per-user via `UserCredentialService`. Missing credentials raise with setup guidance — no env-var or default fallbacks. (`clients/vault_client.py`, `utils/user_credentials.py`)
 - **User SQLite encryption**: the `encrypted__` column prefix drives transparent Fernet encryption; declare the columns in DDL and never double-decrypt. (`utils/userdata_manager.py`)
 - **Preview-before-save** for user-instructed revisions: candidate held in Valkey under an opaque `preview_id` with TTL, consumed delete-after-read — the client never round-trips stored text. (`cns/services/persona_service.py` et al.)
 - **Memory short IDs** (`mem_XXXXXXXX`) are irreversible prefixes of full UUIDs: short form for LLM-facing surfaces, full form for persistence and stamps. (`utils/tag_parser.py`)
-- **Use-day intervals** (`*_use_days`) are modular activity-day gates, not calendar cadences. (`utils/scheduled_tasks.py`)
+- **Use-day intervals** (`*_use_days`) are modular activity-day gates, not calendar cadences — jobs fire on user activity days, not calendar time (log in Monday, skip Tuesday, return Wednesday → the counter ticks Monday and Wednesday only); mechanics owned by `utils/AGENTS.md`, interval semantics by `config/AGENTS.md` — read both before adding or changing a use-day-gated job. (`utils/scheduled_tasks.py`)
 - **Per-user tool config**: `config.<tool>_tool` merges the user's override fresh on every access over the global default; secret fields round-trip via the redaction sentinel. (`config/config_manager.py`, `utils/tool_config_store.py`)
 - **Prompt templates load via `load_prompt()`** — never `open()` a prompt file directly. (`config/prompts/loader.py`)
 - **Event handlers are synchronous**, registered by event class `__name__`; async work inside a handler spawns a thread with copied context. (`cns/integration/event_bus.py`)
 - **The LLM is an untrusted component**: escape, allowlist, and validate at every LLM boundary — tool arguments JSON-Schema-validated, credentials injected server-side (the model names a credential it never sees), thinking signatures round-tripped untampered. The external-content ingestion boundary itself is owned by Preventive Mechanism Rules above. (`clients/llm/`, `utils/untrusted_content.py`)
 - **Inter-component coordination goes through the event bus**, not direct service calls: event taxonomy owned by `cns/core/events.py`, bus owned by `cns/integration/event_bus.py`. New features subscribe and publish.
 - **Trinket state is per-user**, keyed by the contextvar — trinket instances are process-global singletons shared across users; never store user state on instance attributes. (`working_memory/trinkets/base.py`)
+- **Power-on self-test** (`utils/power_on_self_test.py`) exercises real infrastructure — never mocks — before the server binds; gate mechanics owned by `utils/AGENTS.md`, CLI by `scripts/AGENTS.md`.
 
-### Activity Days & Use-Day Scheduling
-Jobs fire on user activity days, not calendar time (log in Monday, skip Tuesday, return Wednesday → the counter ticks Monday and Wednesday only). Mechanics are owned by `utils/AGENTS.md`; `*_use_days` interval semantics by `config/AGENTS.md` — read both before adding or changing a use-day-gated job.
-
-### Provider Stall Detection
-All live LLM transports run through `clients.llm.lifecycle.LLMLifecycle`; there is no fallback route — stalls (`ProviderStallError`) and provider failures propagate. Full policy owned by `clients/llm/AGENTS.md` and `utils/AGENTS.md`; dialects and the add-a-dialect blast radius by `clients/llm/dialects/AGENTS.md`.
-
-### Power-On Self-Test
-POST checks live in `utils/power_on_self_test.py`. The pre-server gate runs in a subprocess before Hypercorn binds, is bounded (attempts then parks rather than exits — a restart-on-exit supervisor would loop real, billed LLM probes; `MIRA_POST_GATE_FAILURE_ACTION=exit` opts out), and the post-server probe/CLI are owned by `utils/AGENTS.md` and `scripts/AGENTS.md`. POST checks exercise real infrastructure, never mocks. The `injection_screen` check (required) witnesses screen liveness at bind time: disabled constructs nothing; enabled runs one real tier-1 assess and asserts all six signals — an enabled-but-broken screen parks the gate.
-
-## ⚡ Performance & Tool Usage
+## Performance & Tool Usage
 - **Synchronous Over Async**: prefer synchronous unless there is genuine I/O concurrency. Async overhead hurts without actual concurrency; sync is easier to debug and reason about.
 - **Model Dispatch**: route selection is `model_configs`-route-based (`primary`/`fast`/`batch`/`assessment`/`other`) — owned by `clients/llm/AGENTS.md`. Match the route to the task: high-frequency mechanical judgments on `fast`; tasks requiring semantic understanding stay on `primary`. Never route by vendor model name.
 
-## 📝 Implementation Guidelines
-
-### Implementation Approach
+## Implementation Guidelines
 When modifying files, write as if the new code was always the plan. Never reference removals. Understand surrounding architecture first.
 
-### Plan Mode
-🚨 **Never enter plan mode autonomously** — wait for explicit user activation (`/plan`); autonomous entry is disruptive UX.
-
-Ordinary implementation plans stay concise. ADRs only for durable architecture decisions needing rationale, alternatives, and consequences recorded.
-
-## 🔄 Continuous Improvement
+## Continuous Improvement
 - Convert specific feedback into general principles. Consider multiple approaches before implementing.
 - Fix issues at the root — there is no test suite to fall back on, so correctness comes from fail-fast behavior and direct verification.
 
-## 📚 Reference Material
+## Reference Material
 
 ### Commands
 - **Database**: On a deployed instance, `psql -U postgres -h localhost -d mira_service` (postgres superuser, `mira_service` the primary DB). A development checkout may have no `mira_service` database: for a schema-backed scratch DB call `tests/fixtures/scratch_db.py:scratch_database(user=<local superuser>, host="localhost")`, which applies the shipped schema and drops the DB on exit.
@@ -308,81 +266,12 @@ Recurring mistakes kept as incident records — the examples are historical, the
 | UUID mismatches at boundaries | `TypeError: Object of type UUID is not JSON serializable` | Native types internally; convert only at serialization boundaries; early conversion breaks comparisons |
 | Incomplete path replacement | Replacing `_generate_non_streaming()` but missing the buried `_write_firehose()` call | Trace ALL side effects — logging, metrics, state, events; verify by booting |
 
-## 🖥️ Dev-instance deployment — libvirt host
+## Dev-instance deployment
 
-**The toolkit ships IN THIS REPO at `deploy/vm/`** — read `deploy/vm/README.md`
-first. Three modes, all exercised 2026-09-16/17 end-to-end: local libvirt (on the
-host), `--host <user>@<libvirt-host>` (orchestrated from a workstation, no local libvirt
-needed), and `--ip <vm-ip> --vm-user mira_service --vm-pass …` (plain ssh
-onto an existing VM — validated on an aarch64 workstation VM: dev build deployed in 182 s, v3 sarcophagus
-restored, 9/9 facts PASS, chat-continuity confirmed from restored memories).
-`extract.sh` snapshots a live instance into a sealed sarcophagus the same way —
-validated against that aarch64 VM too (cross-arch, cross-user remap: units `User=`,
-credentials, and ownership follow `--vm-user`).
-
-**Reference host recipe** (run on the host, or from a workstation via `--host`;
-`$SNAPSHOTS` = the host's snapshot-toolkit directory, `$LIBVIRT_HOST` = `user@host`):
-
-```bash
-ssh "$LIBVIRT_HOST" \
-  "$SNAPSHOTS/bin/oneshot.sh" \
-  "$SNAPSHOTS/mlfactory_v4_mira"   # or another sarcophagus
-```
-
-That spawns a fresh VM from the host's default-state frozen base template, deploys a
-dev build from the host's worktree snapshot of this repo (see the refresh recipe below), injects
-the sarcophagus (Postgres, user data incl. domaindocs, Vault with real keys, units),
-and verifies health + row counts against the sarcophagus's SNAPSHOT-FACTS.txt.
-`--fresh` rebuilds a running VM (old disk preserved); omit it to reuse a running one.
-Deploy-only on a fresh VM (no instance state): `oneshot.sh` mandates a sarcophagus by
-design, so run its phases 1–4 without inject — the validated driver is
-`bin/deploy-only.sh` on the reference host (2026-09-18: template spawn + dev deploy,
-healthy in 152 s). Give the config real `chat_api_key`/`subcortical_api_key` and the
-deploy seeds them into Vault (`deploy/postgresql.sh` Step 14), so the instance comes
-up healthy with live model routes and no inject. To redeploy onto an already-running
-VM, run `deploy/deploy.sh --config <yml> --local` by hand inside it.
-
-**Refresh the host's source snapshot after changing this worktree** (the host deploys
-from its copy, not from here). The remote side MUST clear the worktree before
-extracting: a tar overlay never deletes files removed from the source, so a stale
-overlay silently ships retired modules (observed 2026-09-30: a quarantined tool left
-in `tools/implementations/` parked MIRA's boot gate with an ImportError). The clear
-preserves the host-local state the tarball excludes and cannot restore (`.git`,
-`venv`, `.env`, `data`, `logs`, `scratch`, `.claude`, `.DS_Store`) and removes
-everything else at the top level:
-
-```bash
-cd ~/Programming/GitHub/mira-OSS && tar --exclude=.git --exclude=data --exclude=logs \
-  --exclude=scratch --exclude=__pycache__ --exclude='*.pyc' --exclude=.env \
-  --exclude=venv --exclude=.claude -czf - . | \
-  ssh "$LIBVIRT_HOST" 'mkdir -p "$MIRA_HOST_WORKTREE" \
-    && find "$MIRA_HOST_WORKTREE" -mindepth 1 -maxdepth 1 \
-    ! -name .git ! -name venv ! -name .env ! -name data ! -name logs \
-    ! -name scratch ! -name .claude ! -name .DS_Store -exec rm -rf {} + \
-    && tar -C "$MIRA_HOST_WORKTREE" -xzf -'
-```
-
-**`deploy/deploy.sh --local` (added 2026-09-16):** installs MIRA from the CURRENT
-DIRECTORY (a mira-OSS checkout, typically with uncommitted dev changes) instead of
-wget-ing the main-branch tarball from GitHub — same target, ownership, and downstream
-steps. Run from the repo root. Excludes (parity with the GitHub tarball): `.git`,
-`venv`, `__pycache__`, `*.pyc`, `.env`, `.claude`, `.DS_Store`, `data`, `logs`,
-`scratch`. Note the deploy is greenfield-only: it installs the schema into an empty
-`mira_service` (drop the DB first on re-deploys — oneshot.sh does this for you).
-
-**Deploy model-route defaults (lunaroute):** `deploy/mira_service_schema.sql` seeds all
-five `model_configs` routes at the lunaroute gateway — `primary` on `glm-5.3`
-(`provider_key`), the four aux routes on the `glm-5.3-flash` family (`subcortical_key`).
-`deploy/python.sh` no longer string-patches the schema; hosted installs apply the seed
-rows and then `deploy/postgresql.sh` rewrites `primary` from the chat config and the aux
-routes from the subcortical config with UPDATEs after application (same mechanism as
-OFFLINE_SQL), so a default (lunaroute) config leaves the seed untouched and any departure
-is applied live. `chat_provider_type` takes `openai` (any OpenAI-compatible endpoint) or
-`anthropic`; the old value `generic` is gone (breaking, no alias). The mechanism is owned
-by `deploy/AGENTS.md`; a staging-copy refresh needs no patch.
-
-**Working with the deployed instance** (minting API tokens, chat endpoint, DB probing,
-turn-in-flight rules, memory/schema maps): read the snapshot toolkit's `AGENTS.md`
-on the host ($SNAPSHOTS/AGENTS.md) — the full quickbook of
-validated commands lives there. Sarcophagi lineage (v1/v2/v3), extraction tooling, and
-restore contracts are documented there too.
+Dev-instance VM work — spawning a VM, deploying a dev build, restoring or
+extracting a sarcophagus, refreshing the host's worktree snapshot — is owned
+by `deploy/vm/AGENTS.md` (modes, transports, sarcophagus contract, the
+reference-host recipes); install mechanics by `deploy/AGENTS.md`. Read both
+before any deploy or restore task. The deployed-instance quickbook (token
+minting, chat endpoint, DB probing, turn-in-flight rules) lives on the host at
+$SNAPSHOTS/AGENTS.md.

@@ -115,6 +115,13 @@ inventing a parallel one.
 - **Verified-on stamps.** Sparse, and only where the date itself is the fact
   (a flow exercised end-to-end on a date, a failure mode learned the hard way
   on a date); never as change history.
+- **Reverse-edge sweep.** `Consumers:`/Wiring sets are written from a grep, not
+  recall: enumerate the module's importers, published/subscribed event names, and
+  public symbols repo-wide, then write the set from the sweep output. Recall omits
+  exactly the edges that matter — an unrepresented concurrent writer is invisible
+  to a claim-by-claim read of the map. (Observed 2026-10-06: in the two-wave sweep,
+  every missing-wiring finding came from the code→map direction; none from rereading
+  the map.)
 
 ## ## Files — one bullet per file
 
@@ -172,6 +179,14 @@ verified symptom and the working alternative if one exists. If the bug
 affects how code must be written across the directory, it becomes a Rule
 instead.
 
+Unqualified universals — `all`, `only`, `every`, `never`, `nothing else` —
+that do not survive a repo-wide grep of the named symbol or property. The
+highest-yield inaccuracy class (observed 2026-10-06): enumerations drift as
+code grows — "all routers registered" missing the router added last month,
+"the only DELETE trigger" missing the failure-branch delete, "every payload"
+missing the one writing a different key. Name the exception list and keep it
+current, or drop the quantifier.
+
 ## Anchors
 
 Path anchors are repo-root-relative (`clients/llm/types.py`). Bare file
@@ -212,6 +227,18 @@ assumed:
 4. The report must include a per-file read account (full / partial with line
    ranges / grep-only) for every file in the directory. A map with gaps in
    this account is a Partial result.
+
+**Two-wave refinement sweep** (established 2026-10-06, corpus-wide).
+Wave 1, refinement: one agent per map, primed by mission only — refinement,
+not replacement; null result permitted — reading every source file in its
+directory end-to-end, editing only its own map. Wave 2, blind verification:
+read-only agents with no knowledge of wave 1 verify every claim
+section-by-section and trace wiring BOTH directions — map→code (each claimed
+edge traced to its endpoint) and code→map (the reverse-edge sweep).
+Reconciliation is single-writer: re-check each finding's quoted map text
+against the current file before applying (verifier quotes can go stale),
+apply factual corrections and wiring an agent would act on, record marginalia
+as reported-not-applied.
 
 ## Anchor audits (run before finishing)
 
@@ -277,6 +304,7 @@ event has a deterministic action:
 | New member of a registry, enum, or contract family | Update the blast-radius Rule or the add-one recipe in the owning map |
 | Directory reaches >=2 source files, or gains an invariant its parent's map does not own | Create its AGENTS.md (shape above) |
 | File moved between directories | Update both maps' ## Files sections |
+| New or removed cross-directory edge (import, call site, event publish/subscribe, registration site) | Update the callee's map `Consumers:`/Wiring in the same commit; the caller's map cites it when load-bearing |
 | New map created or removed | Update the parent map's ## Files pointer and the root map's registry table |
 | A map crosses 60 lines | Consolidation pass in the same commit (merge bullets, cite owners, delete decoration); at 80, split with subdirectory maps instead |
 
