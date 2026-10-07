@@ -1,9 +1,8 @@
 """History replay: REST history rows to scrollback blocks.
 
-Pure — rows in, ``rich.text.Text`` blocks out, no I/O. Replayed text goes
-through the same ``text.display_lines`` sanitize/tag-filter path as live
-turns and uses the same ``transcript`` elements (``you``/``mira_label``/
-``mira_lines``), so a replayed conversation is indistinguishable from a live
+Pure — rows in, Rich renderables out, no I/O. Replayed text goes through
+the same ``text.display_lines`` sanitize/tag-filter path as live turns and
+uses the same ``transcript`` elements (``you``/``mira_reply``), so a replayed conversation is indistinguishable from a live
 one. ``user`` and ``assistant`` rows are replayed; ``tool`` rows, segment
 sentinels (defensively — ``session_only`` pages exclude them) and rows with
 no displayable text are skipped.
@@ -13,7 +12,7 @@ from __future__ import annotations
 
 import json
 
-from rich.text import Text
+from rich.console import RenderableType
 
 from tui import transcript
 from tui.client import _is_sentinel
@@ -41,9 +40,9 @@ def _display_text(content: object) -> str:
     return "\n".join(str(part) for part in parts if isinstance(part, str) and part)
 
 
-def replay_blocks(rows: list[HistoryMessage]) -> list[Text]:
+def replay_blocks(rows: list[HistoryMessage]) -> list[RenderableType]:
     """Scrollback blocks for one chronological run of history rows."""
-    blocks: list[Text] = []
+    blocks: list[RenderableType] = []
     for row in rows:
         if _is_sentinel(row) or row.role not in ("user", "assistant"):
             continue
@@ -55,6 +54,5 @@ def replay_blocks(rows: list[HistoryMessage]) -> list[Text]:
         else:
             lines = display_lines(text)
             if lines:
-                blocks.append(transcript.mira_label())
-                blocks.append(transcript.mira_lines(lines))
+                blocks.extend(transcript.mira_reply(lines))
     return blocks

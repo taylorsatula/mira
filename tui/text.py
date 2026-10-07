@@ -152,6 +152,12 @@ class ReplyStream:
     def has_text(self) -> bool:
         return self._shown
 
+    @property
+    def breaks_before_pending(self) -> bool:
+        """A paragraph break is owed before ``pending()``: the blank line
+        commits with that text, so a live view shows it ahead of the tail."""
+        return self._blank_pending
+
     def feed(self, entry_id: str, delta: str) -> list[str]:
         """Append ``delta`` to the entry ``entry_id``; return the lines this
         newly committed. A different ``entry_id`` first flushes the current

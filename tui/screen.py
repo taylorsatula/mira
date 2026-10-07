@@ -13,9 +13,10 @@ cooked mode, which turns ECHO on — the double-print bug). Nothing here
 counts rows or moves the cursor by hand; prompt_toolkit's renderer measures
 and erases the bar.
 
-Callers hand over Rich ``Text`` blocks; ``Intent`` objects (``Submit``,
-``Interrupt``, ``Quit``, ``ToggleThinking``) are posted to the caller's
-inbox with ``put_nowait``. Contract: ``tui/FRONTEND_PLAN.md`` "### ``tui/screen.py``".
+Callers hand over Rich renderables (``transcript`` elements), rendered at
+the live terminal width for scrollback and the live region alike;
+``Intent`` objects (``Submit``, ``Interrupt``, ``Quit``, ``ToggleThinking``)
+are posted to the caller's inbox with ``put_nowait``. Contract: ``tui/FRONTEND_PLAN.md`` "### ``tui/screen.py``".
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from typing import Literal
 from prompt_toolkit.application import Application
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
-from prompt_toolkit.formatted_text import StyleAndTextTuples
+from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples, to_formatted_text
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import (
     ConditionalContainer,
@@ -45,8 +46,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import TextArea
-from rich.console import Console
-from rich.text import Text
+from rich.console import Console, RenderableType
 
 # Redraw cadence for the busy spinner and the elapsed-seconds counter.
 REFRESH_INTERVAL = 0.5
@@ -72,7 +72,6 @@ STYLE = Style.from_dict(
         "status.busy": "ansibrightblack",
         "status.alert": "ansired",
         "outbox": "ansicyan",
-        "pending": "",
     }
 )
 
@@ -86,7 +85,7 @@ class Status:
 
 @dataclass(frozen=True)
 class Live:
-    pending: str = ""  # ReplyStream.pending()
+    pending: RenderableType | None = None  # in-progress reply rows (transcript.mira_rows)
     sending: str | None = None  # sent, not yet accepted (turn_started)
     queued: tuple[str, ...] = ()  # waiting behind the current reply, oldest first
     status: Status = Status("")
@@ -113,6 +112,17 @@ class ToggleThinking:
 
 
 Intent = Submit | Interrupt | Quit | ToggleThinking
+
+
+def _console() -> Console:
+    return Console(
+        file=io.StringIO(),
+        force_terminal=True,
+        color_system="standard",
+        markup=False,
+        emoji=False,
+        highlight=False,
+    )
 
 
 def _cap(ceiling: int, divisor: int, rows: int) -> int:
@@ -149,17 +159,13 @@ class Screen:
         self._closing = False
         self._finished = asyncio.Event()  # set once the Application has torn down
 
-        self._console = Console(
-            file=io.StringIO(),
-            force_terminal=True,
-            color_system="standard",
-            markup=False,
-            emoji=False,
-            highlight=False,
-            # no soft_wrap: Rich word-wraps at the live terminal width (set
-            # per render) instead of letting the terminal hard-cut mid-word.
-            # Scrollback therefore does not reflow on a later resize.
-        )
+        # no soft_wrap: Rich word-wraps at the live terminal width (set per
+        # render) instead of letting the terminal hard-cut mid-word.
+        # Scrollback therefore does not reflow on a later resize.
+        self._console = _console()
+        # The live region renders through its own console: it is drawn from
+        # inside the print step, after _render filled the scrollback buffer.
+        self._live_console = _console()
 
         self._input = TextArea(
             multiline=True,
@@ -181,7 +187,7 @@ class Screen:
 
     # --- public API -------------------------------------------------------
 
-    async def emit(self, *blocks: Text, live: Live | None = None) -> None:
+    async def emit(self, *blocks: RenderableType, live: Live | None = None) -> None:
         """Print blocks to scrollback (and apply ``live``) in one print step."""
         data = self._render(blocks)
         if live is not None:
@@ -264,8 +270,17 @@ class Screen:
 
     def _build_container(self) -> HSplit:
         def pending_fragments() -> StyleAndTextTuples:
-            # Cursor fragment at the end makes the Window follow the tail.
-            return [("class:pending", self._live.pending), ("[SetCursorPosition]", "")]
+            # The same renderer and width as scrollback, so a line keeps its
+            # wrap when it commits. Cursor fragment at the end makes the
+            # Window follow the tail.
+            pending = self._live.pending
+            if pending is None:
+                return []
+            console = self._live_console
+            console.width = self._columns()
+            with console.capture() as capture:
+                console.print(pending, end="")
+            return [*to_formatted_text(ANSI(capture.get())), ("[SetCursorPosition]", "")]
 
         def outbox_fragments() -> StyleAndTextTuples:
             live = self._live
@@ -303,7 +318,7 @@ class Screen:
                     min=1, max=_cap(PENDING_MAX_ROWS_CEILING, PENDING_ROWS_DIVISOR, self._rows())
                 ),
             ),
-            filter=Condition(lambda: bool(self._live.pending)),
+            filter=Condition(lambda: self._live.pending is not None),
         )
         outbox = ConditionalContainer(
             Window(
@@ -377,7 +392,7 @@ class Screen:
 
     # --- printing ---------------------------------------------------------
 
-    def _render(self, blocks: tuple[Text, ...]) -> str:
+    def _render(self, blocks: tuple[RenderableType, ...]) -> str:
         console = self._console
         console.width = self._columns()  # word-wrap scrollback at the live width
         buf = console.file

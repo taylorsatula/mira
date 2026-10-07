@@ -28,6 +28,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Literal
 
+from rich.console import RenderableType
 from rich.text import Text
 
 from tui import transcript
@@ -173,6 +174,7 @@ class _Turn:
     activity: Literal["replying", "thinking", "tool"] = "replying"
     tool_name: str = ""
     thinking: ReplyStream = field(default_factory=ReplyStream)  # reasoning stream, shown when toggled on
+    opened: bool = False  # MIRA's box has printed its labelled first row
 
 
 class ChatSession:
@@ -318,16 +320,18 @@ class ChatSession:
 
     def _live(self) -> Live:
         turn, flight = self._turn, self._in_flight
-        pending = ""
+        pending = None
         if turn is not None:
             # While reasoning is the live activity and the view is on, the
             # live region tail-follows the thinking stream, not the reply.
-            stream = (
-                turn.thinking
-                if self._show_thinking and turn.activity == "thinking"
-                else turn.stream
-            )
-            pending = stream.pending()
+            thinking = self._show_thinking and turn.activity == "thinking"
+            stream = turn.thinking if thinking else turn.stream
+            text = stream.pending()
+            if text:
+                if stream.breaks_before_pending:
+                    text = "\n" + text  # the blank row it commits with, so nothing jumps
+                body = (transcript.thinking_lines if thinking else transcript.mira_lines)([text])
+                pending = transcript.mira_rows(body, opens=not turn.opened)
         return Live(
             pending=pending,
             sending=flight.text if flight else None,
@@ -335,8 +339,25 @@ class ChatSession:
             status=self._status(),
         )
 
-    async def _emit(self, *blocks: Text) -> None:
+    async def _emit(self, *blocks: RenderableType) -> None:
         await asyncio.wait_for(self._screen.emit(*blocks, live=self._live()), EMIT_TIMEOUT)
+
+    @staticmethod
+    def _in_box(turn: _Turn, *bodies: Text) -> list[RenderableType]:
+        """``bodies`` as rows of the turn's box; the turn's first row carries the label."""
+        rows: list[RenderableType] = []
+        for body in bodies:
+            rows.append(transcript.mira_rows(body, opens=not turn.opened))
+            turn.opened = True
+        return rows
+
+    def _meta(self, body: Text) -> RenderableType:
+        """A notice or alert: inside MIRA's box while it is open, so the box
+        stays unbroken; on its own otherwise."""
+        turn = self._turn
+        if turn is not None and turn.opened:
+            return transcript.mira_rows(body, opens=False)
+        return body
 
     def _refresh(self) -> None:
         self._screen.set_live(self._live())
@@ -355,10 +376,12 @@ class ChatSession:
             case ToggleThinking():
                 self._show_thinking = not self._show_thinking
                 await self._emit(
-                    transcript.notice(
-                        "showing MIRA's thinking · Ctrl+T hides it"
-                        if self._show_thinking
-                        else "hiding MIRA's thinking"
+                    self._meta(
+                        transcript.notice(
+                            "showing MIRA's thinking · Ctrl+T hides it"
+                            if self._show_thinking
+                            else "hiding MIRA's thinking"
+                        )
                     )
                 )
             case AuthOk():
@@ -381,7 +404,7 @@ class ChatSession:
                         turn.thinking.feed("", item.content) if self._show_thinking else []
                     )
                     if lines:
-                        await self._emit(transcript.thinking_lines(lines))
+                        await self._emit(*self._in_box(turn, transcript.thinking_lines(lines)))
                     else:
                         self._refresh()
             case ToolUpdate():
@@ -469,7 +492,7 @@ class ChatSession:
         try:
             await self._client.send_halt(turn.turn_id)
         except ClientError as error:
-            await self._emit(transcript.alert(f"could not stop: {error.message} [{error.code}]"))
+            await self._emit(self._meta(transcript.alert(f"could not stop: {error.message} [{error.code}]")))
             return
         turn.halt_requested = True
         self._refresh()
@@ -624,16 +647,13 @@ class ChatSession:
         await self._emit(*blocks)
 
     async def _lost_connection(self, headline: Text) -> None:
-        blocks = [headline]
+        blocks: list[RenderableType] = []
         turn = self._turn
         if turn is not None:
-            thinking = turn.thinking.finish()
-            if thinking:
-                blocks.append(transcript.thinking_lines(thinking))
-            lines = turn.stream.finish()
-            if lines:
-                blocks.append(transcript.mira_lines(lines))
-            blocks.append(transcript.notice("reply cut off"))
+            bodies = self._tail_bodies(turn) + [transcript.notice("reply cut off")]
+            blocks.extend(self._in_box(turn, *bodies))
+            blocks.append(transcript.mira_close())
+        blocks.append(headline)
         flight = self._in_flight
         if flight is not None:
             blocks.append(
@@ -681,7 +701,7 @@ class ChatSession:
         turn = self._turn
         if turn is not None and turn.turn_id == turn_id:
             return turn
-        await self._emit(transcript.alert(f"protocol error: {kind} for a turn that is not active"))
+        await self._emit(self._meta(transcript.alert(f"protocol error: {kind} for a turn that is not active")))
         return None
 
     async def _on_turn_started(self, event: TurnStarted) -> None:
@@ -694,9 +714,9 @@ class ChatSession:
         now = time.monotonic()
         self._turn = _Turn(event.turn_id, ReplyStream(), now)
         self._in_flight = None
-        # The You block and the live region change in ONE print step: the text
-        # is in the live region until this emit lands it in scrollback.
-        await self._emit(transcript.you(flight.text), transcript.mira_label())
+        # The user's box and the live region change in ONE print step: the
+        # text is in the live region until this emit lands it in scrollback.
+        await self._emit(transcript.you(flight.text))
         if self._halt_on_start:
             self._halt_on_start = False
             await self._halt(self._turn)
@@ -708,7 +728,7 @@ class ChatSession:
         turn.activity = "replying"
         lines = turn.stream.feed(event.entry_id, event.content)
         if lines:
-            await self._emit(transcript.mira_lines(lines))
+            await self._emit(*self._in_box(turn, transcript.mira_lines(lines)))
         else:
             self._refresh()
 
@@ -716,13 +736,13 @@ class ChatSession:
         turn = await self._current(event.turn_id, "tool")
         if turn is None:
             return
-        blocks: list[Text] = []
+        bodies: list[Text] = []
         thinking = turn.thinking.flush()  # a tool event ends the reasoning step too
         if thinking:
-            blocks.append(transcript.thinking_lines(thinking))
+            bodies.append(transcript.thinking_lines(thinking))
         lines = turn.stream.flush()  # a tool event ends the provider step
         if lines:
-            blocks.append(transcript.mira_lines(lines))
+            bodies.append(transcript.mira_lines(lines))
         if event.event in ("tool_detected", "tool_executing"):
             turn.activity = "tool"
             turn.tool_name = event.tool_name
@@ -730,24 +750,26 @@ class ChatSession:
             turn.activity = "replying"
             turn.tools.add(event.tool_id)
             ok = event.event == "tool_completed" and not event.is_error
-            blocks.append(transcript.tool_line(event.tool_name, ok))
-        if blocks:
-            await self._emit(*blocks)
+            bodies.append(transcript.tool_line(event.tool_name, ok))
+        if bodies:
+            await self._emit(*self._in_box(turn, *bodies))
         else:
             self._refresh()
 
     async def _on_model_error(self, event: ModelError) -> None:
-        blocks: list[Text] = []
+        notice = transcript.notice(f"model error: {event.message} — MIRA is retrying")
         turn = self._turn
-        if turn is not None and turn.turn_id == event.turn_id:
-            thinking = turn.thinking.flush()  # the notice must not land inside a paragraph
-            if thinking:
-                blocks.append(transcript.thinking_lines(thinking))
-            lines = turn.stream.flush()  # the notice must not land inside a paragraph
-            if lines:
-                blocks.append(transcript.mira_lines(lines))
-        blocks.append(transcript.notice(f"model error: {event.message} — MIRA is retrying"))
-        await self._emit(*blocks)
+        if turn is None or turn.turn_id != event.turn_id:
+            await self._emit(notice)
+            return
+        bodies: list[Text] = []
+        thinking = turn.thinking.flush()  # the notice must not land inside a paragraph
+        if thinking:
+            bodies.append(transcript.thinking_lines(thinking))
+        lines = turn.stream.flush()  # the notice must not land inside a paragraph
+        if lines:
+            bodies.append(transcript.mira_lines(lines))
+        await self._emit(*self._in_box(turn, *bodies, notice))
 
     async def _on_context_reset(self, event: ContextReset) -> None:
         turn = await self._current(event.turn_id, "context_reset")
@@ -761,7 +783,7 @@ class ChatSession:
             if shown
             else "the server discarded the reply so far and is restarting it"
         )
-        await self._emit(transcript.notice(text))
+        await self._emit(*self._in_box(turn, transcript.notice(text)))
 
     async def _on_turn_complete(self, event: TurnComplete) -> None:
         turn = await self._current(event.turn_id, "turn_complete")
@@ -772,69 +794,73 @@ class ChatSession:
         shown = turn.stream.has_text
         if not shown:
             lines = display_lines(event.response)  # never when the stream displayed text
-        blocks: list[Text] = []
+        bodies: list[Text] = []
         if thinking:
-            blocks.append(transcript.thinking_lines(thinking))
+            bodies.append(transcript.thinking_lines(thinking))
         if lines:
-            blocks.append(transcript.mira_lines(lines))
+            bodies.append(transcript.mira_lines(lines))
         elif not shown:
-            blocks.append(transcript.notice("(empty reply)"))
+            bodies.append(transcript.notice("(empty reply)"))
         if turn.tools:
-            blocks.append(transcript.reply_footer(len(turn.tools)))
-        await self._end_reply(blocks, turn.halt_requested)
+            bodies.append(transcript.reply_footer(len(turn.tools)))
+        await self._end_reply(turn, bodies)
 
     async def _on_turn_stopped(self, event: TurnStopped) -> None:
         turn = await self._current(event.turn_id, "turn_stopped")
         if turn is None:
             return
-        blocks = self._tail_blocks(turn)
-        if not turn.halt_requested:
-            if event.reason == "stall":
-                blocks.append(transcript.alert(
-                    "MIRA's server stalled (its event loop stopped turning) "
-                    "and dropped this reply"
-                ))
-            else:
-                blocks.append(transcript.notice("the server stopped this reply"))
-        await self._end_reply(blocks, turn.halt_requested)
+        bodies = self._tail_bodies(turn)
+        if turn.halt_requested:
+            bodies.append(transcript.notice("stopped"))
+        elif event.reason == "stall":
+            bodies.append(transcript.alert(
+                "MIRA's server stalled (its event loop stopped turning) "
+                "and dropped this reply"
+            ))
+        else:
+            bodies.append(transcript.notice("the server stopped this reply"))
+        await self._end_reply(turn, bodies)
 
     async def _on_turn_error(self, event: TurnError) -> None:
         turn = await self._current(event.turn_id, "turn_error")
         if turn is None:
             return
-        blocks = self._tail_blocks(turn)
-        blocks.append(transcript.alert(f"MIRA hit an error: {event.message} [{event.code}]"))
-        await self._end_reply(blocks, turn.halt_requested)
+        bodies = self._tail_bodies(turn)
+        bodies.append(transcript.alert(f"MIRA hit an error: {event.message} [{event.code}]"))
+        await self._end_reply(turn, bodies)
 
     @staticmethod
-    def _tail_blocks(turn: _Turn) -> list[Text]:
-        blocks: list[Text] = []
+    def _tail_bodies(turn: _Turn) -> list[Text]:
+        bodies: list[Text] = []
         thinking = turn.thinking.finish()
         if thinking:
-            blocks.append(transcript.thinking_lines(thinking))
+            bodies.append(transcript.thinking_lines(thinking))
         lines = turn.stream.finish()
         if lines:
-            blocks.append(transcript.mira_lines(lines))
-        return blocks
+            bodies.append(transcript.mira_lines(lines))
+        return bodies
 
-    async def _end_reply(self, blocks: list[Text], user_halt: bool) -> None:
-        """Common tail of every turn end: deferred proactives, then the queue —
-        back to the box after a user halt, otherwise the next message is sent."""
+    async def _end_reply(self, turn: _Turn, bodies: list[Text]) -> None:
+        """Common tail of every turn end: the last rows and the bottom border
+        of MIRA's box, deferred proactives, then the queue — back to the box
+        after a user halt, otherwise the next message is sent."""
         self._turn = None
+        blocks = self._in_box(turn, *bodies)
+        blocks.append(transcript.mira_close())
         blocks.extend(self._take_deferred())
-        if user_halt and self._outbox:
+        if turn.halt_requested and self._outbox:
             self._restore_unsent()
             blocks.append(transcript.notice("queued messages returned to the input box"))
         await self._emit(*blocks)
         if self._outbox and self._conn == "connected":
             await self._send_next()
 
-    def _take_deferred(self) -> list[Text]:
-        blocks: list[Text] = []
+    def _take_deferred(self) -> list[RenderableType]:
+        blocks: list[RenderableType] = []
         for content in self._deferred:
             lines = display_lines(content)
             if lines:
-                blocks.extend([transcript.mira_label(), transcript.mira_lines(lines)])
+                blocks.extend(transcript.mira_reply(lines))
         self._deferred.clear()
         return blocks
 
@@ -844,7 +870,7 @@ class ChatSession:
             return
         lines = display_lines(event.content)
         if lines:
-            await self._emit(transcript.mira_label(), transcript.mira_lines(lines))
+            await self._emit(*transcript.mira_reply(lines))
 
     async def _on_protocol_error(self, event: ProtocolError) -> None:
         flight = self._in_flight
@@ -872,11 +898,11 @@ class ChatSession:
                 text = f"not sent — {event.message} [TURN_BUSY] (waited {int(waited)}s)"
             else:
                 text = f"not sent — {event.message} [{event.code}]"
-            await self._emit(transcript.alert(text))
+            await self._emit(self._meta(transcript.alert(text)))
         elif event.code == "NO_MATCHING_ACTIVE_TURN":
-            await self._emit(transcript.notice("nothing to stop — the reply had already ended"))
+            await self._emit(self._meta(transcript.notice("nothing to stop — the reply had already ended")))
         else:
-            await self._emit(transcript.alert(f"protocol error: {event.message} [{event.code}]"))
+            await self._emit(self._meta(transcript.alert(f"protocol error: {event.message} [{event.code}]")))
 
     # --- shutdown --------------------------------------------------------------
 
@@ -905,11 +931,12 @@ class ChatSession:
     async def _print_remaining(self) -> None:
         """After the bar is gone: print whatever the user would otherwise lose —
         a partial reply, held proactive messages, unsent and unconfirmed texts."""
-        blocks: list[Text] = []
+        blocks: list[RenderableType] = []
         turn = self._turn
         if turn is not None:
-            blocks.extend(self._tail_blocks(turn))
-            blocks.append(transcript.notice("reply cut off"))
+            bodies = self._tail_bodies(turn) + [transcript.notice("reply cut off")]
+            blocks.extend(self._in_box(turn, *bodies))
+            blocks.append(transcript.mira_close())
             self._turn = None
         blocks.extend(self._take_deferred())
         flight = self._in_flight
