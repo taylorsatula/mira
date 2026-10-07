@@ -3,9 +3,14 @@ Guardrailed local shell execution on the machine MIRA runs on.
 
 This tool runs shell commands LOCALLY on the machine MIRA runs on (a VM,
 container, or host) via subprocess — no network transport. Commands execute as the service
-user from a configured project root. Every command is validated against a
-two-layer destructive-command guardrail before anything executes; a match is
-a hard refusal and the command never reaches the shell.
+user from a configured project root. Every command is validated against the
+operator's blocklist and the destructive-command guardrail before anything
+executes; a match is a hard refusal and the command never reaches the shell.
+
+The operator blocklist (bash_tool config `blocked_patterns`) is matched first
+and outranks every mode, including skip mode: entries are literal text except
+`*`, which matches anything including slashes, spaces, and quotes. It can make
+the tool refuse more, never less.
 
 The two layers cover what the other cannot:
 
@@ -25,6 +30,16 @@ operations; they do not confine a determined command to the project tree, and
 they cannot see through arbitrary obfuscation (base64 payloads, computed
 strings). A refusal is a stop-work signal to the model, not a puzzle to route
 around — every refusal message says so explicitly.
+
+A human-gated escape hatch exists for the recoverable refusals. With the
+operator's config switch `dangerous_skip_permissions_enabled` on, a call may
+pass `skip_permissions=True` to run under the catastrophic core only: the
+rules against system-ruining, unrecoverable, and audit-erasing actions stay,
+while recoverable judgment calls (system-config overwrites, service control —
+including restarting MIRA itself — package removal, the git revert rules) are
+relaxed. The operator's blocklist is never relaxed. Every bypass is appended
+to `guardrail_bypass.log` under the configured log_dir and marked in the
+result, so it is visible in-transcript and on disk.
 """
 
 import inspect
@@ -38,7 +53,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Iterable, List, NoReturn, Optional, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from tools.repo import Tool
 from tools.registry import registry
@@ -75,6 +90,32 @@ class BashToolConfig(BaseModel):
             "The detached job's own lifetime is never bounded by it."
         ),
     )
+    dangerous_skip_permissions_enabled: bool = Field(
+        default=False,
+        description=(
+            "Master gate for the skip_permissions parameter. Without it, any "
+            "skip_permissions=True call errors. The operator's switch, not "
+            "the model's."
+        ),
+    )
+    blocked_patterns: List[str] = Field(
+        default_factory=list,
+        description=(
+            "User-authored blocklist. Each entry is matched against the raw "
+            "command string; all characters are literal except *, which matches "
+            "anything including slashes, spaces, and quotes. Highest priority; "
+            "not bypassable by skip mode."
+        ),
+    )
+
+    @field_validator("blocked_patterns")
+    @classmethod
+    def _reject_blank_blocklist_entries(cls, value: List[str]) -> List[str]:
+        """A blank entry compiles to a match-everything regex; refuse it at load."""
+        for entry in value:
+            if not entry.strip():
+                raise ValueError("blocked_patterns entries must be non-empty strings")
+        return value
 
 
 registry.register("bash_tool", BashToolConfig)
@@ -95,6 +136,26 @@ def _refuse(rule: str, reason: str, offending: str) -> NoReturn:
         f"Command blocked by the destructive-command guardrail ({rule}): {reason}. "
         f"Offending text: {offending!r}. {_ESCALATION}"
     )
+
+
+def _compile_blocklist(
+    patterns: Tuple[str, ...],
+) -> Tuple[Tuple[str, "re.Pattern[str]"], ...]:
+    """
+    Compile operator blocklist entries to (original text, regex) pairs.
+
+    Every character is literal except `*`, which is relaxed to `.*` so it
+    crosses slashes, spaces, and quotes — a blocklist over-matches rather than
+    under-matches. Matching is re.search over the raw command string, the same
+    surface the pattern layer sees, so it fires before quoting is removed.
+    Compiled by the handlers (not the validator) and passed in as inert data;
+    the protected battery's purity walk never sees a compiler.
+    """
+    compiled = []
+    for raw in patterns:
+        body = re.escape(raw).replace("\\*", ".*")
+        compiled.append((raw, re.compile(body)))
+    return tuple(compiled)
 
 
 # -- pattern layer ------------------------------------------------------------
@@ -284,6 +345,19 @@ _DESTRUCTIVE_PATTERNS: List[Tuple[str, "re.Pattern[str]", str]] = [
     ),
 ]
 
+# Pattern rules enforced in every mode, including skip_permissions: the
+# system-ruining, unrecoverable, or audit-erasing core. Every other rule in
+# _DESTRUCTIVE_PATTERNS names a recoverable judgment call the operator may
+# relax per call via skip_permissions. Note `losetup` sits inside
+# volume-metadata-destroy and therefore stays refused in skip mode too.
+_CATASTROPHIC_PATTERNS = frozenset({
+    "no-preserve-root", "root-delete", "format-filesystem", "raw-disk-write",
+    "block-device-redirect", "kernel-interface-write", "partition-table-edit",
+    "volume-metadata-destroy", "fork-bomb-colon", "fork-bomb-named",
+    "kill-all-processes", "ssh-key-plant", "sudoers-write",
+    "pipe-download-to-shell", "decode-to-shell", "log-destruction",
+})
+
 
 # -- argument layer -----------------------------------------------------------
 #
@@ -297,15 +371,22 @@ _TRUNCATE_VERBS = frozenset({"truncate", "tee"})
 _WRITE_VERBS = frozenset({"cp", "install", "ln"})
 _INPLACE_EDIT_VERBS = frozenset({"sed", "perl"})
 
-# Never legitimate from this tool, in any argument position.
-_PROHIBITED_VERBS = frozenset({
-    "shutdown", "reboot", "poweroff", "halt", "telinit", "wipefs",
-    "fdisk", "parted", "sgdisk", "gdisk", "cfdisk", "sfdisk",
-    "blkdiscard", "swapoff", "ifdown", "killall5",
-    "userdel", "deluser", "groupdel", "chpasswd", "passwd", "visudo",
-    "mdadm", "pvcreate", "vgcreate", "lvremove", "vgremove", "pvremove",
-    "chattr", "mkfs",
+# Verbs with no recovery path, refused in every mode. `visudo` belongs here:
+# sudo changes survive the skip-mode check-in as persistent privilege.
+_CATASTROPHIC_VERBS = frozenset({
+    "mkfs", "wipefs", "fdisk", "parted", "sgdisk", "gdisk", "cfdisk", "sfdisk",
+    "blkdiscard", "mdadm", "pvcreate", "vgcreate", "lvremove", "vgremove",
+    "pvremove", "killall5", "visudo",
 })
+# Verbs a competent operator with a backup habit recovers from: refused by
+# default, relaxed under skip_permissions.
+_SKIP_RELAXABLE_VERBS = frozenset({
+    "shutdown", "reboot", "poweroff", "halt", "telinit", "swapoff", "ifdown",
+    "userdel", "deluser", "groupdel", "chpasswd", "passwd", "chattr",
+})
+# Never legitimate from this tool in default mode, in any argument position.
+# The union is exactly the pre-skip-mode set, so default behavior is unchanged.
+_PROHIBITED_VERBS = _CATASTROPHIC_VERBS | _SKIP_RELAXABLE_VERBS
 
 # Command runners that stand in front of the real verb.
 _WRAPPERS = frozenset({
@@ -427,12 +508,26 @@ def _protected_ancestors(root: str) -> FrozenSet[str]:
     return frozenset(protected)
 
 
-def _classify_path(path: str, root: str, ancestors: FrozenSet[str]) -> Optional[str]:
+def _classify_path(
+    path: str,
+    root: str,
+    ancestors: FrozenSet[str],
+    skip: bool = False,
+) -> Optional[str]:
     """
     Name the protection rule a resolved absolute path violates.
 
     Returns None when the path is not protected. Deleting and modifying paths
     *inside* the project root stays legal; that is the tool's contract.
+
+    Skip mode narrows system-path protection to the protected containers
+    themselves: `/etc/nginx` is content an operator restores from a backup,
+    while `/etc` is the container whose loss takes the host with it. Two trees
+    keep their contents protected even under skip mode — `/dev` (block devices
+    have no recovery path) and `/Volumes` (a mounted volume is usually the
+    backup itself). Everything else inside a system directory is skip-eligible
+    recoverable content; the operator's blocklist is the tripwire for anything
+    instance-specific.
     """
     resolved = _normalize_absolute(path)
     if resolved == "/":
@@ -444,6 +539,8 @@ def _classify_path(path: str, root: str, ancestors: FrozenSet[str]) -> Optional[
         return app_rule or None
     head = resolved[1:].partition("/")[0]
     if head in _SYSTEM_DIR_NAMES:
+        if skip and resolved != "/" + head and head not in ("dev", "Volumes"):
+            return None
         return "system-path-delete"
     if resolved in _SELF_ONLY_DIRS:
         return "system-dir-delete"
@@ -563,8 +660,14 @@ def _verb_name(token: str) -> str:
 
 
 def _path_operands(args: Iterable[str]) -> List[str]:
-    """Command arguments that are paths rather than flags."""
-    return [arg for arg in args if not arg.startswith("-")]
+    """Command arguments that are paths rather than flags.
+
+    An empty string is never a path: shlex keeps BSD `sed -i ''`'s empty
+    suffix as a token, and resolving it yields the cwd — a false positive
+    against the project root — so empty operands are dropped here for every
+    verb. An empty token is a flag suffix, not a path.
+    """
+    return [arg for arg in args if arg and not arg.startswith("-")]
 
 
 def _check_operand(
@@ -573,15 +676,18 @@ def _check_operand(
     cwd: str,
     root: str,
     ancestors: FrozenSet[str],
+    skip: bool = False,
 ) -> None:
     """
     Refuse a destructive verb's path operand if it cannot be proven safe.
 
     Resolves relative operands against the effective cwd, refuses operands whose
     meaning depends on shell expansion, and refuses globs that would empty a
-    protected directory.
+    protected directory. Skip mode trusts the host shell to resolve `~`/`$VAR`
+    itself, drops the glob checks, and keeps only the container-only path
+    classification.
     """
-    if any(char in operand for char in _EXPANSION_CHARS):
+    if not skip and any(char in operand for char in _EXPANSION_CHARS):
         _refuse(
             "unverifiable-expansion",
             _RULE_REASONS["unverifiable-expansion"],
@@ -589,9 +695,12 @@ def _check_operand(
         )
 
     resolved = _resolve_operand(operand, cwd)
-    hit = _classify_path(resolved, root, ancestors)
+    hit = _classify_path(resolved, root, ancestors, skip)
     if hit:
         _refuse(hit, _RULE_REASONS[hit], f"{verb} {operand}")
+
+    if skip:
+        return
 
     if not any(char in operand for char in _GLOB_CHARS):
         return
@@ -619,6 +728,7 @@ def _check_redirect_targets(
     cwd: str,
     root: str,
     ancestors: FrozenSet[str],
+    skip: bool = False,
 ) -> None:
     """Refuse output redirections aimed at a protected path."""
     for index, token in enumerate(tokens):
@@ -635,14 +745,20 @@ def _check_redirect_targets(
         if _resolve_operand(target, cwd) == "/dev/null":
             continue
         resolved = _resolve_operand(target, cwd)
-        hit = _classify_path(resolved, root, ancestors)
+        hit = _classify_path(resolved, root, ancestors, skip)
         if hit:
             _refuse(hit, _RULE_REASONS[hit], f"{token} {target}")
 
 
-def _check_prohibited_verb(verb: str) -> None:
-    """Refuse verbs that have no legitimate use from this tool."""
-    if verb in _PROHIBITED_VERBS or verb.startswith("mkfs."):
+def _check_prohibited_verb(verb: str, skip: bool = False) -> None:
+    """Refuse verbs that have no legitimate use from this tool.
+
+    Skip mode keeps only the catastrophic subset — verbs that ruin the system
+    with no recovery path. The recoverable remainder (power state, account and
+    password changes) becomes a skip-mode judgment call.
+    """
+    forbidden = _CATASTROPHIC_VERBS if skip else _PROHIBITED_VERBS
+    if verb in forbidden or verb.startswith("mkfs."):
         _refuse(
             "prohibited-command",
             "this command has no legitimate use against the remote host and "
@@ -651,15 +767,28 @@ def _check_prohibited_verb(verb: str) -> None:
         )
 
 
-def _check_runlevel(args: List[str]) -> None:
-    """Refuse `init N`, which changes the system runlevel."""
+def _check_runlevel(args: List[str], skip: bool = False) -> None:
+    """Refuse `init N`, which changes the system runlevel.
+
+    Relaxed in skip mode alongside the runlevel-change pattern: a target or
+    power change is recoverable, exactly the class a check-in legitimizes.
+    """
+    if skip:
+        return
     operands = _path_operands(args)
     if operands and operands[0] in {"0", "1", "2", "3", "4", "5", "6"}:
         _refuse("runlevel-change", "changing the system runlevel", f"init {operands[0]}")
 
 
-def _check_service_control(verb: str, args: List[str]) -> None:
-    """Refuse systemd and SysV operations that power off or disable the host."""
+def _check_service_control(verb: str, args: List[str], skip: bool = False) -> None:
+    """Refuse systemd and SysV operations that power off or disable the host.
+
+    Relaxed in skip mode: delegating a service restart to the instance after
+    a check-in — including restarting MIRA itself — is one of the workflow
+    wins the operator enables the switch for.
+    """
+    if skip:
+        return
     operands = _path_operands(args)
     if verb == "systemctl":
         if not operands:
@@ -702,7 +831,12 @@ def _check_pkill(args: List[str]) -> None:
 
 
 def _check_crontab(args: List[str]) -> None:
-    """Refuse `crontab -r`, which wipes every scheduled job for the user."""
+    """Refuse `crontab -r`, which wipes every scheduled job for the user.
+
+    Enforced in both modes (operator decision, 2026-10-03): scheduled jobs are
+    standing automation the human owns, and wiping them has no recovery path
+    short of the operator's memory of what was scheduled.
+    """
     if any(arg in ("-r", "--remove") for arg in args):
         _refuse("cron-wipe", "removing every scheduled job for the user", "crontab -r")
 
@@ -713,27 +847,38 @@ def _check_mount(
     cwd: str,
     root: str,
     ancestors: FrozenSet[str],
+    skip: bool = False,
 ) -> None:
-    """Refuse unmounting broadly or remounting a protected filesystem."""
+    """Refuse unmounting broadly or remounting a protected filesystem.
+
+    Enforced in both modes (operator decision, 2026-10-03): `umount -a` takes
+    every filesystem offline in one move.
+    """
     if any(arg in ("-a", "--all", "-f", "--force") for arg in args):
         _refuse("mount-change", f"{verb} applied to every filesystem", " ".join([verb] + list(args)))
     for operand in _path_operands(args):
         if any(char in operand for char in _EXPANSION_CHARS):
             continue
-        hit = _classify_path(_resolve_operand(operand, cwd), root, ancestors)
+        hit = _classify_path(_resolve_operand(operand, cwd), root, ancestors, skip)
         if hit:
             _refuse(hit, _RULE_REASONS[hit], f"{verb} {operand}")
 
 
-def _check_dd(args: List[str], cwd: str, root: str, ancestors: FrozenSet[str]) -> None:
+def _check_dd(
+    args: List[str],
+    cwd: str,
+    root: str,
+    ancestors: FrozenSet[str],
+    skip: bool = False,
+) -> None:
     """Refuse a dd write target that is a device or a protected path."""
     for arg in args:
         if not arg.startswith("of="):
             continue
         target = arg[len("of="):]
-        if any(char in target for char in _EXPANSION_CHARS):
+        if not skip and any(char in target for char in _EXPANSION_CHARS):
             _refuse("unverifiable-expansion", _RULE_REASONS["unverifiable-expansion"], arg)
-        hit = _classify_path(_resolve_operand(target, cwd), root, ancestors)
+        hit = _classify_path(_resolve_operand(target, cwd), root, ancestors, skip)
         if hit:
             _refuse(hit, _RULE_REASONS[hit], arg)
 
@@ -812,7 +957,13 @@ def _find_narrows(args: List[str]) -> bool:
     return narrowed
 
 
-def _check_find(args: List[str], cwd: str, root: str, ancestors: FrozenSet[str]) -> None:
+def _check_find(
+    args: List[str],
+    cwd: str,
+    root: str,
+    ancestors: FrozenSet[str],
+    skip: bool = False,
+) -> None:
     """
     Refuse a find that deletes without a narrowing predicate over a safe tree.
 
@@ -831,10 +982,10 @@ def _check_find(args: List[str], cwd: str, root: str, ancestors: FrozenSet[str])
         starts.append(arg)
     narrowed = _find_narrows(args)
     for start in starts or ["."]:
-        if any(char in start for char in _EXPANSION_CHARS):
+        if not skip and any(char in start for char in _EXPANSION_CHARS):
             _refuse("unverifiable-expansion", _RULE_REASONS["unverifiable-expansion"], f"find {start}")
         resolved = _resolve_operand(start, cwd)
-        hit = _classify_path(resolved, root, ancestors)
+        hit = _classify_path(resolved, root, ancestors, skip)
         if hit and not (narrowed and _at_or_under(resolved, root)):
             _refuse(hit, _RULE_REASONS[hit], f"find {start}")
 
@@ -845,22 +996,23 @@ def _check_path_verbs(
     cwd: str,
     root: str,
     ancestors: FrozenSet[str],
+    skip: bool = False,
 ) -> None:
     """Dispatch a path-taking verb to its operand check."""
     if verb in _DELETION_VERBS or verb in _RELOCATE_VERBS or verb in _PERMISSION_VERBS:
         for operand in _path_operands(args):
-            _check_operand(operand, verb, cwd, root, ancestors)
+            _check_operand(operand, verb, cwd, root, ancestors, skip)
     elif verb in _TRUNCATE_VERBS or verb in _WRITE_VERBS:
         for operand in _path_operands(args):
-            _check_operand(operand, verb, cwd, root, ancestors)
+            _check_operand(operand, verb, cwd, root, ancestors, skip)
     elif verb in _INPLACE_EDIT_VERBS:
         if any(arg == "-i" or arg.startswith("-i") for arg in args):
             for operand in _path_operands(args):
-                _check_operand(operand, verb, cwd, root, ancestors)
+                _check_operand(operand, verb, cwd, root, ancestors, skip)
     elif verb == "dd":
-        _check_dd(args, cwd, root, ancestors)
+        _check_dd(args, cwd, root, ancestors, skip)
     elif verb == "find":
-        _check_find(args, cwd, root, ancestors)
+        _check_find(args, cwd, root, ancestors, skip)
 
 
 def _looks_nested(token: str) -> bool:
@@ -912,6 +1064,7 @@ def _analyze_substitutions(
     root: str,
     ancestors: FrozenSet[str],
     depth: int,
+    skip: bool = False,
 ) -> None:
     """
     Re-run the full argument layer over every command substitution body.
@@ -930,7 +1083,7 @@ def _analyze_substitutions(
     if "$(" not in joined and "`" not in joined:
         return
     for body in _dollar_bodies(joined) + _backtick_bodies(joined):
-        _analyze_command(body, cwd, root, ancestors, depth + 1)
+        _analyze_command(body, cwd, root, ancestors, depth + 1, skip)
 
 
 def _strip_wrapper_args(verb: str, rest: List[str]) -> List[str]:
@@ -962,6 +1115,7 @@ def _analyze_shell(
     root: str,
     ancestors: FrozenSet[str],
     depth: int,
+    skip: bool = False,
 ) -> None:
     """Recurse into a `sh -c '<command>'` style argument."""
     for index, token in enumerate(rest):
@@ -970,7 +1124,7 @@ def _analyze_shell(
         if "c" not in token and token != "--command":
             continue
         if index + 1 < len(rest):
-            _analyze_command(rest[index + 1], cwd, root, ancestors, depth + 1)
+            _analyze_command(rest[index + 1], cwd, root, ancestors, depth + 1, skip)
 
 
 def _analyze_wrapper(
@@ -980,6 +1134,7 @@ def _analyze_wrapper(
     root: str,
     ancestors: FrozenSet[str],
     depth: int,
+    skip: bool = False,
 ) -> None:
     """
     Analyze what a command runner will actually run.
@@ -989,12 +1144,12 @@ def _analyze_wrapper(
     (`eval "rm -rf /"`, `ssh host reboot`).
     """
     inner = _strip_wrapper_args(verb, rest)
-    _analyze_segment(inner, cwd, root, ancestors, depth + 1)
+    _analyze_segment(inner, cwd, root, ancestors, depth + 1, skip)
     for token in inner:
         if _looks_nested(token):
-            _analyze_command(token, cwd, root, ancestors, depth + 1)
+            _analyze_command(token, cwd, root, ancestors, depth + 1, skip)
         elif _verb_name(token) in _PROHIBITED_VERBS:
-            _check_prohibited_verb(_verb_name(token))
+            _check_prohibited_verb(_verb_name(token), skip)
 
 
 def _analyze_segment(
@@ -1003,6 +1158,7 @@ def _analyze_segment(
     root: str,
     ancestors: FrozenSet[str],
     depth: int,
+    skip: bool = False,
 ) -> str:
     """
     Analyze one simple command. Returns the cwd in effect for the next segment.
@@ -1012,7 +1168,7 @@ def _analyze_segment(
 
     # A substitution body is a command line in every token position — not
     # just under a wrapper verb — so analyze it before the verb-specific walk.
-    _analyze_substitutions(tokens, cwd, root, ancestors, depth)
+    _analyze_substitutions(tokens, cwd, root, ancestors, depth, skip)
 
     index = 0
     while index < len(tokens) and _ENV_ASSIGNMENT.match(tokens[index]):
@@ -1024,10 +1180,10 @@ def _analyze_segment(
     rest = tokens[index + 1:]
 
     if verb in _SHELLS:
-        _analyze_shell(rest, cwd, root, ancestors, depth)
+        _analyze_shell(rest, cwd, root, ancestors, depth, skip)
         return cwd
     if verb in _WRAPPERS:
-        _analyze_wrapper(verb, rest, cwd, root, ancestors, depth)
+        _analyze_wrapper(verb, rest, cwd, root, ancestors, depth, skip)
         return cwd
 
     # `cd` changes what every later relative path in this command means.
@@ -1037,19 +1193,19 @@ def _analyze_segment(
             return _resolve_operand(operands[0], cwd)
         return cwd
 
-    _check_prohibited_verb(verb)
+    _check_prohibited_verb(verb, skip)
     if verb == "init":
-        _check_runlevel(rest)
-    _check_service_control(verb, rest)
+        _check_runlevel(rest, skip)
+    _check_service_control(verb, rest, skip)
     if verb in ("pkill", "pgrep"):
         _check_pkill(rest)
     elif verb == "crontab":
         _check_crontab(rest)
     elif verb in ("umount", "mount"):
-        _check_mount(verb, rest, cwd, root, ancestors)
+        _check_mount(verb, rest, cwd, root, ancestors, skip)
     else:
-        _check_path_verbs(verb, rest, cwd, root, ancestors)
-    _check_redirect_targets(tokens, cwd, root, ancestors)
+        _check_path_verbs(verb, rest, cwd, root, ancestors, skip)
+    _check_redirect_targets(tokens, cwd, root, ancestors, skip)
     return cwd
 
 
@@ -1093,14 +1249,21 @@ def _analyze_command(
     root: str,
     ancestors: FrozenSet[str],
     depth: int = 0,
+    skip: bool = False,
 ) -> None:
     """Run the argument layer over a command line."""
     effective_cwd = cwd
     for segment in _split_segments(_tokenize(command)):
-        effective_cwd = _analyze_segment(segment, effective_cwd, root, ancestors, depth)
+        effective_cwd = _analyze_segment(segment, effective_cwd, root, ancestors, depth, skip)
 
 
-def _validate_command(command: str, root: str, cwd: Optional[str] = None) -> None:
+def _validate_command(
+    command: str,
+    root: str,
+    cwd: Optional[str] = None,
+    skip_permissions: bool = False,
+    blocked: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (),
+) -> None:
     """
     Refuse a command the destructive-command guardrail cannot prove safe.
 
@@ -1109,23 +1272,41 @@ def _validate_command(command: str, root: str, cwd: Optional[str] = None) -> Non
         root: The configured project root; it and its ancestors are protected.
         cwd: The directory the command will actually run in, used to resolve
             relative operands. Defaults to root.
+        skip_permissions: Run under the catastrophic core only. The operator's
+            config gate is enforced at the call site; this function itself only
+            narrows which rules apply.
+        blocked: The operator's compiled blocklist entries, checked before
+            everything and never relaxed by skip mode.
 
     Raises:
         ValueError: Naming the matched rule and the offending text. A refused
             command is never sent to the host.
     """
+    # 1. Operator blocklist — always, unbypassable. A match is traceable to
+    # config, not code: the user's own pattern is quoted back.
+    for raw, pattern in blocked:
+        match = pattern.search(command)
+        if match:
+            _refuse("user-blocklist", f"blocked by your configured pattern {raw!r}", match.group(0))
+
+    # 2. Pattern layer — default: all rules. Skip: catastrophic subset only.
     for name, pattern, reason in _DESTRUCTIVE_PATTERNS:
+        if skip_permissions and name not in _CATASTROPHIC_PATTERNS:
+            continue
         for match in pattern.finditer(command):
             if name in _APP_TREE_PATH_RULES and _match_in_editable_app_tree(match):
                 continue
             _refuse(name, reason, match.group(0))
 
+    # 3. Argument layer — default: full analysis. Skip: reduced analysis
+    # (catastrophic verbs, match-everything kills, container-only paths).
     normalized_root = _normalize_absolute(root)
     _analyze_command(
         command,
         _normalize_absolute(cwd) if cwd else normalized_root,
         normalized_root,
         _protected_ancestors(normalized_root),
+        skip=skip_permissions,
     )
 
 
@@ -1148,11 +1329,20 @@ class BashTool(Tool):
     # Any shell command may mutate host state — no per-operation gating
     parallel_safe = False
 
-    simple_description = "Run shell commands locally on this machine; destructive patterns are refused."
+    simple_description = (
+        "Run shell commands locally on this machine; destructive patterns are "
+        "refused. For precise file edits, invoke the 'precise-file-editing' skill."
+    )
 
     tool_schema = {
         "name": "bash_tool",
-        "description": "Run shell commands locally on this machine; destructive patterns are refused.",
+        "description": (
+            "Run shell commands locally on this machine; destructive patterns are "
+            "refused. For fast, precise edits to files, invoke the "
+            "'precise-file-editing' skill via invoke_skill_tool — it teaches the "
+            "efficient one-liner patterns (perl/sed in-place edits, heredoc writes, "
+            "targeted reads)."
+        ),
         "input_schema": {
             "type": "object",
             "additionalProperties": False,
@@ -1178,7 +1368,10 @@ class BashTool(Tool):
                         "human. Paths that depend on shell expansion ($VAR, ~, backticks) are "
                         "refused for destructive verbs — pass explicit literal paths. Not "
                         "sandboxed: it can read the whole machine's filesystem, but "
-                        "system-destructive operations are refused." + _SELF_EDIT_NOTE
+                        "system-destructive operations are refused. For precise edits to "
+                        "files, the 'precise-file-editing' skill teaches the fastest "
+                        "patterns (perl in-place substitution, heredoc writes, targeted "
+                        "reads)." + _SELF_EDIT_NOTE
                     ),
                 },
                 "cwd": {
@@ -1205,6 +1398,18 @@ class BashTool(Tool):
                     "description": (
                         "For run_background: short label used in the generated log filename, "
                         "not a path. Defaults to 'job'. The full log path is returned."
+                    ),
+                },
+                "skip_permissions": {
+                    "type": "boolean",
+                    "description": (
+                        "Runs this command with only the catastrophic-core guardrail: rules "
+                        "against system-ruining, unrecoverable, or audit-erasing actions. "
+                        "Everything else is permitted. Set true ONLY when the human has "
+                        "already approved this exact command in this conversation, after you "
+                        "stated the command and its purpose. If you have not asked, ask and "
+                        "wait. A refusal is still a stop signal; skip_permissions is the "
+                        "human's override, never yours."
                     ),
                 },
             },
@@ -1327,6 +1532,52 @@ class BashTool(Tool):
             return cfg.default_timeout_seconds
         return max(1, min(int(requested), cfg.max_timeout_seconds))
 
+    def _validate_for_run(
+        self,
+        cfg: BashToolConfig,
+        command: str,
+        workdir: str,
+        skip_permissions: bool,
+    ) -> None:
+        """
+        Config hard gate + the full guardrail, in one place for both operations.
+
+        The gate is the enforcement backstop for the ask-first contract: with
+        the operator's switch off, a skip_permissions call is an error, never
+        a silent partial relaxation. The user blocklist is compiled from config
+        here (outside the pure validator) and passed in as inert data.
+        """
+        if skip_permissions and not cfg.dangerous_skip_permissions_enabled:
+            raise ValueError(
+                "skip_permissions is disabled on this instance "
+                "(dangerous_skip_permissions_enabled is false). Do not retry with it "
+                "set; if this exact action is genuinely needed, ask the operator to "
+                "enable the feature."
+            )
+        _validate_command(
+            command,
+            cfg.root,
+            workdir,
+            skip_permissions=skip_permissions,
+            blocked=_compile_blocklist(tuple(cfg.blocked_patterns)),
+        )
+        if skip_permissions:
+            self._audit_bypass(cfg, workdir, command)
+
+    def _audit_bypass(self, cfg: BashToolConfig, cwd: str, command: str) -> None:
+        """Append one line per skip-mode invocation to guardrail_bypass.log.
+
+        Detection rather than prevention, by design: the ask-first gate is
+        instruction-following and the config gate is the hard backstop. This
+        record is the operator's after-the-fact audit trail.
+        """
+        log_dir = self._resolve(cfg, cfg.log_dir)
+        os.makedirs(log_dir, exist_ok=True)
+        path = posixpath.join(log_dir, "guardrail_bypass.log")
+        stamp = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(f"{stamp} cwd={cwd} command={command!r}\n")
+
     # -- run ----------------------------------------------------------------
 
     def run(self, operation: str, command: str, **kwargs) -> Dict[str, Any]:
@@ -1336,7 +1587,7 @@ class BashTool(Tool):
         Args:
             operation: "run" to execute and wait, "run_background" to detach with nohup.
             command: Shell command run with bash -lc on the local machine.
-            **kwargs: cwd, timeout_seconds, log_name as applicable.
+            **kwargs: cwd, timeout_seconds, log_name, skip_permissions as applicable.
 
         Returns:
             Dict with exit code and captured output (run) or process ID and log path
@@ -1371,12 +1622,13 @@ class BashTool(Tool):
         command: str,
         cwd: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
+        skip_permissions: bool = False,
     ) -> Dict[str, Any]:
         # The working directory is resolved before validation so relative
         # operands in the command are checked against where they will really
         # land, not against the project root by assumption.
         workdir = self._resolve(cfg, cwd) if cwd else posixpath.normpath(cfg.root)
-        _validate_command(command, cfg.root, workdir)
+        self._validate_for_run(cfg, command, workdir, skip_permissions)
         timeout = self._clamp_timeout(cfg, timeout_seconds)
         composed = f"cd {shlex.quote(workdir)} && bash -lc {shlex.quote(command)}"
         result = self._execute_local(
@@ -1384,7 +1636,7 @@ class BashTool(Tool):
         )
         stdout, stdout_truncated = self._truncate(result.stdout, cfg.max_output_bytes)
         stderr, stderr_truncated = self._truncate(result.stderr, cfg.max_output_bytes)
-        return {
+        outcome = {
             "success": True,
             "exit_code": result.returncode,
             "cwd": workdir,
@@ -1393,6 +1645,9 @@ class BashTool(Tool):
             "stdout_truncated": stdout_truncated,
             "stderr_truncated": stderr_truncated,
         }
+        if skip_permissions:
+            outcome["guardrail"] = "bypassed"
+        return outcome
 
     def _run_background(
         self,
@@ -1400,6 +1655,7 @@ class BashTool(Tool):
         command: str,
         cwd: Optional[str] = None,
         log_name: Optional[str] = None,
+        skip_permissions: bool = False,
     ) -> Dict[str, Any]:
         workdir = self._resolve(cfg, cwd) if cwd else posixpath.normpath(cfg.root)
         # Start-failure site 1 — cwd not a directory: refuse it at resolve
@@ -1410,7 +1666,7 @@ class BashTool(Tool):
             raise ValueError(
                 f"run_background failed to start: cwd '{workdir}' is not a directory"
             )
-        _validate_command(command, cfg.root, workdir)
+        self._validate_for_run(cfg, command, workdir, skip_permissions)
         log_dir = self._resolve(cfg, cfg.log_dir)
         stamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
         slug = re.sub(r"[^A-Za-z0-9._-]+", "_", log_name or "job").strip("_")[:60] or "job"
@@ -1448,10 +1704,13 @@ class BashTool(Tool):
                 pid = line[len("PID:"):].strip()
             elif line.startswith("LOG:"):
                 log_from_host = line[len("LOG:"):].strip()
-        return {
+        outcome = {
             "success": True,
             "pid": pid,
             "log_path": log_from_host,
             "cwd": workdir,
             "command": command,
         }
+        if skip_permissions:
+            outcome["guardrail"] = "bypassed"
+        return outcome

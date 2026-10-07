@@ -59,7 +59,8 @@
 
 - `bash_guardrail_probe.py` — Regression battery for the
   `tools/implementations/bash_tool.py` destructive-command guardrail.
-  Calls the real module-level `_validate_command(command, root, cwd)` against a
+  Calls the real module-level `_validate_command(command, root, cwd,
+  skip_permissions, blocked)` against a
   destructive corpus (filesystem-root and project-root deletion including
   relative, quoted, globbed and shell-expanded spellings; system-tree deletion;
   disk and filesystem destruction; power and runlevel changes; system permission
@@ -67,9 +68,18 @@
   download-to-shell; service and package removal; fork bombs; the user's
   standing git rules refusing `checkout`/`restore`/`reset --hard`/`clean -f`;
   other host damage) and a benign corpus of realistic ML-harness commands that
-  must not be refused. Exits non-zero on any bypass or false positive and prints
+  must not be refused; plus the skip_permissions matrix (must-refuse cases
+  pinning the catastrophic core, protected containers, the `/dev` and
+  `/Volumes` content pins, cron-wipe, mount-change, and losetup — must-allow
+  cases pinning the relaxed classes: system-config content, service control
+  including mira itself, power verbs, packages, firewall, the standing git
+  rules, shell expansions, content globs) and the operator-blocklist matrix
+  (entries refuse in BOTH modes; `*` crosses slashes, spaces, and quotes).
+  Exits non-zero on any bypass or false positive and prints
   the firing rule name per case, so an over-broad match is visible rather than
-  silently credited. Self-checks before running that `_validate_command` is
+  silently credited. Known pre-existing red on main: N01–N08
+  (interpreter-payload escapes) bypass — exit 1 with exactly those 8 is the
+  expected state until that separate fix lands. Self-checks before running that `_validate_command` is
   still pure, via a recursive `dis` walk allowlisting every global it loads.
   Run from the repo root:
   `python3 tests/protected/bash_guardrail_probe.py` (the `-m` form fails —
