@@ -48,6 +48,8 @@ from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import TextArea
 from rich.console import Console, RenderableType
 
+from tui.transcript import spinner
+
 # Redraw cadence for the busy spinner and the elapsed-seconds counter.
 REFRESH_INTERVAL = 0.5
 
@@ -60,8 +62,6 @@ INPUT_ROWS_DIVISOR = 3
 OUTBOX_MAX_ROWS_CEILING = 4    # one row per unsent message; overflow collapses to a count
 OUTBOX_ROWS_DIVISOR = 6
 
-SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-SPINNER_STEP_SECONDS = 0.1  # frame advances per 0.1 s of wall time; the redraw cadence decides what is seen
 ELLIPSIS = "…"
 RULE_CHAR = "─"
 
@@ -302,7 +302,7 @@ class Screen:
             st = self._live.status
             text = st.text
             if st.tone == "busy":
-                frame = SPINNER_FRAMES[int(time.monotonic() / SPINNER_STEP_SECONDS) % len(SPINNER_FRAMES)]
+                frame = spinner(time.monotonic())
                 text = f"{frame} {text}"
                 if st.since is not None:
                     text += f" · {max(0, int(time.monotonic() - st.since))}s"

@@ -88,7 +88,13 @@ def replay_blocks(rows: list[HistoryMessage]) -> list[RenderableType]:
         if row.role == "tool":
             name = row.metadata.get("tool_name")
             if isinstance(name, str):
-                reply.bodies.append(transcript.tool_line(name, ok=not row.is_error))
+                arguments = row.metadata.get("tool_arguments")
+                ok = not row.is_error
+                reply.bodies.append(transcript.tool_line(
+                    name, ok, arguments if isinstance(arguments, dict) else None, None
+                ))
+                if not ok and isinstance(row.content, str) and row.content.strip():
+                    reply.bodies.append(transcript.tool_error(row.content))
                 reply.tools.add(row.tool_call_id or row.id)
             continue
         lines = display_lines(_display_text(row.content))

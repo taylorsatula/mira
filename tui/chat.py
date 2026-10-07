@@ -28,7 +28,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Literal
 
-from rich.console import RenderableType
+from rich.console import Group, RenderableType
 from rich.text import Text
 
 from tui import transcript
@@ -170,6 +170,7 @@ class _Turn:
     stream: ReplyStream
     started: float
     tools: set[str] = field(default_factory=set)  # unique tool_ids that finished
+    running: dict[str, transcript.RunningTool] = field(default_factory=dict)  # by tool_id, shown live
     halt_requested: bool = False
     activity: Literal["replying", "thinking", "tool"] = "replying"
     tool_name: str = ""
@@ -317,11 +318,11 @@ class ChatSession:
                 f"MIRA {self._available_update} is available — run `mira update`",
                 "alert",
             )
-        return Status("ready")
+        return Status("")
 
     def _live(self) -> Live:
         turn, flight = self._turn, self._in_flight
-        pending = None
+        pending: RenderableType | None = None
         if turn is not None:
             # While reasoning is the live activity and the view is on, the
             # live region tail-follows the thinking stream, not the reply.
@@ -333,6 +334,11 @@ class ChatSession:
                     text = "\n" + text  # the blank row it commits with, so nothing jumps
                 body = (transcript.thinking_lines if thinking else transcript.mira_lines)([text])
                 pending = transcript.mira_rows(body, opens=not turn.opened)
+            if turn.running:
+                tools = transcript.tools_running(
+                    list(turn.running.values()), opens=pending is None and not turn.opened
+                )
+                pending = tools if pending is None else Group(pending, tools)
         return Live(
             pending=pending,
             sending=flight.text if flight else None,
@@ -756,11 +762,24 @@ class ChatSession:
         if event.event in ("tool_detected", "tool_executing"):
             turn.activity = "tool"
             turn.tool_name = event.tool_name
+            run = turn.running.setdefault(
+                event.tool_id, transcript.RunningTool(event.tool_name, time.monotonic())
+            )
+            if event.arguments is not None:
+                run.arguments = event.arguments
         else:
-            turn.activity = "replying"
+            run = turn.running.pop(event.tool_id, None)
+            if turn.running:
+                turn.tool_name = next(reversed(turn.running.values())).name
+            else:
+                turn.activity = "replying"
             turn.tools.add(event.tool_id)
             ok = event.event == "tool_completed" and not event.is_error
-            bodies.append(transcript.tool_line(event.tool_name, ok))
+            arguments = event.arguments if event.arguments is not None else run and run.arguments
+            seconds = time.monotonic() - run.started if run else None
+            bodies.append(transcript.tool_line(event.tool_name, ok, arguments, seconds))
+            if not ok and event.result and event.result.strip():
+                bodies.append(transcript.tool_error(event.result))
         if bodies:
             await self._emit(*self._in_box(turn, *bodies))
         else:

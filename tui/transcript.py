@@ -1,6 +1,7 @@
 """Scrollback look of the MIRA TUI.
 
-Pure: Rich renderables built from plain strings, never from markup, so model
+Pure: Rich renderables built from plain strings (the running-tool panel
+alone reads the monotonic clock as it renders, for its spinner and timer), never from markup, so model
 or user text cannot raise ``MarkupError`` or pick up emoji codes. All text
 passes through ``text.sanitize``, because Rich does not strip ESC. A block's
 leading blank line is part of the block; spacing lives here and nowhere else.
@@ -23,7 +24,10 @@ which wraps it to the band and spaces it off a box above it.
 
 from __future__ import annotations
 
+import json
 import re
+import time
+from dataclasses import dataclass
 
 from rich.console import Console, ConsoleOptions, RenderableType, RenderResult
 from rich.text import Text
@@ -50,6 +54,13 @@ BORDER_FRACTION = 2 / 3
 ME_INDENT = len(MIRA_LABEL)
 TAB_SIZE = 4
 
+SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+SPINNER_STEP_SECONDS = 0.1  # frame advances per 0.1 s of wall time; the redraw cadence decides what is seen
+# The tool argument that names what a call does goes in the header, not a row.
+OPERATION_ARG = "operation"
+# Argument rows in the running-tool panel indent under the tool name.
+TOOL_ARG_INDENT = "    "
+
 # Indentation plus a list marker: wrapped rows of the line hang under its text.
 _HANG_RE = re.compile(r"[ \t]*(?:(?:[-*+•]|\d{1,3}[.)])[ \t]+)?")
 _HEADING_RE = re.compile(r"#{1,6}[ \t]+")
@@ -70,12 +81,44 @@ def _border(band: int) -> int:
     return max(1, round(band * BORDER_FRACTION))
 
 
+def spinner(now: float) -> str:
+    return SPINNER_FRAMES[int(now / SPINNER_STEP_SECONDS) % len(SPINNER_FRAMES)]
+
+
+def _duration(seconds: float) -> str:
+    if seconds < 10:
+        return f"{seconds:.1f}s"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes, rest = divmod(int(seconds), 60)
+    return f"{minutes}m {rest:02d}s"
+
+
+def _one_line(value: object) -> str:
+    """An argument value as one display line: strings by their first line
+    (``…`` when more follow), anything else as compact JSON."""
+    if isinstance(value, str):
+        first, _, rest = value.strip().partition("\n")
+        return sanitize(first + (" …" if rest.strip() else ""))
+    return sanitize(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def _operation(arguments: dict[str, object]) -> str | None:
+    operation = arguments.get(OPERATION_ARG)
+    return sanitize(operation) if isinstance(operation, str) and operation else None
+
+
 def _wrap(console: Console, body: Text, width: int) -> list[Text]:
-    """Word-wrap ``body`` to ``width`` cells; blank lines stay as empty rows."""
+    """Word-wrap ``body`` to ``width`` cells; blank lines stay as empty rows.
+    A ``no_wrap`` body keeps one row per line, cut with an ellipsis."""
     rows: list[Text] = []
     for line in body.split("\n", allow_blank=True):
         line.expand_tabs(TAB_SIZE)
-        rows.extend(_wrap_line(console, line, max(1, width)))
+        if body.no_wrap:
+            line.truncate(max(1, width), overflow="ellipsis")
+            rows.append(line)
+        else:
+            rows.extend(_wrap_line(console, line, max(1, width)))
     return rows
 
 
@@ -143,6 +186,48 @@ class _MiraRows:
                 out.append(MIRA_GUTTER if row.plain else MIRA_GUTTER.rstrip(), style=MIRA_STYLE)
             out.append_text(row)
         yield out
+
+
+@dataclass
+class RunningTool:
+    """A tool call between its first frame and its result."""
+
+    name: str
+    started: float  # time.monotonic() of the first frame
+    arguments: dict[str, object] | None = None  # set by tool_executing
+
+
+class _ToolsRunning:
+    """The live panel for running tools, inside MIRA's box: per tool a
+    header (spinner, name, operation, time so far), then one row per
+    argument, each cut to the band."""
+
+    def __init__(self, tools: list[RunningTool], opens: bool) -> None:
+        self._tools = tools
+        self._opens = opens
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        now = time.monotonic()
+        lines: list[Text] = []
+        for tool in self._tools:
+            arguments = tool.arguments or {}
+            header = [sanitize(tool.name)]
+            operation = _operation(arguments)
+            if operation:
+                header.append(operation)
+            header.append(_duration(now - tool.started))
+            lines.append(Text(f"{spinner(now)} " + " · ".join(header), style=MIRA_STYLE))
+            rows = {k: v for k, v in arguments.items() if k != OPERATION_ARG}
+            key_width = max((len(k) for k in rows), default=0)
+            for key, value in rows.items():
+                lines.append(Text.assemble(
+                    TOOL_ARG_INDENT,
+                    (sanitize(key).ljust(key_width), "dim"),
+                    "  ",
+                    _one_line(value),
+                ))
+        body = Text("\n", no_wrap=True).join(lines)
+        yield from _MiraRows(body, self._opens).__rich_console__(console, options)
 
 
 class _MiraClose:
@@ -258,10 +343,34 @@ def thinking_lines(lines: list[str]) -> Text:
     return Text("\n", style="dim italic").join(_markdown(sanitize(line)) for line in lines)
 
 
-def tool_line(name: str, ok: bool) -> Text:
-    if ok:
-        return Text(f"· used {sanitize(name)}", style="dim")
-    return Text(f"· {sanitize(name)} failed", style="dim red")
+def tools_running(tools: list[RunningTool], *, opens: bool) -> RenderableType:
+    return _ToolsRunning(tools, opens)
+
+
+def tool_line(name: str, ok: bool, arguments: dict[str, object] | None, seconds: float | None) -> Text:
+    """One row: the tool, its operation, how long it ran, and its longest
+    string argument (usually the command, query or content), cut to fit."""
+    parts = [f"used {sanitize(name)}" if ok else f"{sanitize(name)} failed"]
+    arguments = arguments or {}
+    operation = _operation(arguments)
+    if operation:
+        parts.append(operation)
+    if seconds is not None:
+        parts.append(_duration(seconds))
+    detail = max(
+        (v for k, v in arguments.items() if k != OPERATION_ARG and isinstance(v, str) and v.strip()),
+        key=len,
+        default=None,
+    )
+    if detail is not None:
+        parts.append(_one_line(detail))
+    return Text("· " + " · ".join(parts), style="dim" if ok else "dim red", no_wrap=True)
+
+
+def tool_error(message: str) -> Text:
+    """A failed tool's message, first line, wrapped under its tool line."""
+    first = sanitize(message.strip().partition("\n")[0])
+    return Text("  " + first, style="red")
 
 
 def reply_footer(tools: int) -> Text:
