@@ -16,6 +16,12 @@ path (reinstall via ``install.sh`` — the old database is renamed aside and
 Vault credentials are preserved — then ask MIRA to bring its history forward
 itself via its bash tool).
 
+``mira update --nightly`` skips the release ladder entirely and installs the
+HEAD of ``taylorsatula/mira-OSS`` main, identified as ``nightly-<shortsha>``.
+A successful update records the SHA in ``<MIRA_APP_DIR>/data/nightly_stamp``
+(written by ``deploy/update.sh`` after the health poll passes), and the next
+nightly run is a no-op while main has not moved.
+
 Environment (both this module and ``deploy/update.sh`` honor the same names;
 they exist so verification probes can run the real flow against a throwaway
 install root):
@@ -39,7 +45,9 @@ import urllib.request
 from pathlib import Path
 
 from utils.release_identity import (
+    BRANCH_TARBALL_URL,
     TAG_TARBALL_URL,
+    fetch_branch_head_sha,
     fetch_latest_release_tag,
     get_current_version,
     version_sort_key,
@@ -52,6 +60,22 @@ def _fail(message: str) -> None:
     print(f"mira update: {message}", file=sys.stderr)
 
 
+def _download(url: str, destination: Path, name: str) -> Path:
+    """
+    Download ``url`` into ``destination`` as ``name``.
+
+    Raises:
+        OSError: On any transport failure, including the download bound.
+    """
+    tarball = destination / name
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "mira-update"}
+    )
+    with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
+        tarball.write_bytes(response.read())
+    return tarball
+
+
 def _download_release(tag: str, destination: Path) -> Path:
     """
     Download the release tarball for ``tag`` into ``destination``.
@@ -59,14 +83,7 @@ def _download_release(tag: str, destination: Path) -> Path:
     Raises:
         OSError: On any transport failure, including the download bound.
     """
-    url = TAG_TARBALL_URL.format(tag=tag)
-    tarball = destination / f"{tag}.tar.gz"
-    request = urllib.request.Request(
-        url, headers={"User-Agent": "mira-update"}
-    )
-    with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
-        tarball.write_bytes(response.read())
-    return tarball
+    return _download(TAG_TARBALL_URL.format(tag=tag), destination, f"{tag}.tar.gz")
 
 
 def _extract_release(tarball: Path, destination: Path) -> Path:
@@ -102,7 +119,78 @@ def _print_breaking_block(tag: str, release_tree: Path) -> None:
     print("     in the new install.")
 
 
-def run_update(release_tree: Path | None = None) -> int:
+def _gate_and_hand_off(
+    release_tree: Path, label: str, tag: str, extra_env: dict[str, str] | None = None
+) -> int:
+    """
+    Run the BREAKING.md and update.sh gates, then hand off to the tree's
+    ``deploy/update.sh`` with ``tag``. Nothing on the installed machine is
+    touched before the handoff. The env carries the install roots
+    (MIRA_APP_DIR / MIRA_TUI_VENV) so a non-default root set by the caller
+    flows through unchanged, plus any ``extra_env`` (the nightly mode adds
+    NIGHTLY / NIGHTLY_SHA).
+    """
+    if (release_tree / "BREAKING.md").is_file():
+        _print_breaking_block(label, release_tree)
+        return 1
+
+    updater = release_tree / "deploy" / "update.sh"
+    if not updater.is_file():
+        _fail(f"release {label} carries no deploy/update.sh — it predates in-place update.")
+        return 1
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    result = subprocess.run(
+        ["bash", str(updater), str(release_tree), tag],
+        env=env,
+    )
+    return result.returncode
+
+
+def _run_nightly_update() -> int:
+    """
+    Update the install to the OSS repo's ``main`` HEAD.
+
+    Identity is the branch-head SHA (displayed as its first 12 chars), not
+    the VERSION file: a nightly tree can carry the same VERSION as the
+    installed tree while the code differs. The SHA is recorded in
+    ``<MIRA_APP_DIR>/data/nightly_stamp`` by ``deploy/update.sh`` after the
+    health poll passes, so a failed update does not advance the stamp.
+    """
+    app_dir = Path(os.environ.get("MIRA_APP_DIR", "/opt/mira/app"))
+    stamp_path = app_dir / "data" / "nightly_stamp"
+    try:
+        sha = fetch_branch_head_sha()
+    except Exception as error:
+        _fail(f"could not resolve the OSS main head ({type(error).__name__}: {error}).")
+        return 1
+    if stamp_path.is_file():
+        try:
+            stamped = stamp_path.read_text().strip()
+        except OSError as error:
+            _fail(f"cannot read the nightly stamp ({error}).")
+            return 1
+        if stamped == sha:
+            print(f"MIRA nightly {sha[:12]} already current.")
+            return 0
+
+    label = f"nightly-{sha[:12]}"
+    print(f"MIRA {label} is available — updating in place.")
+    with tempfile.TemporaryDirectory(prefix="mira-update-") as scratch:
+        try:
+            tarball = _download(BRANCH_TARBALL_URL, Path(scratch), f"{label}.tar.gz")
+            release_tree = _extract_release(tarball, Path(scratch))
+        except (OSError, ValueError, tarfile.TarError) as error:
+            _fail(f"could not fetch the {label} tree ({type(error).__name__}: {error}).")
+            return 1
+        return _gate_and_hand_off(
+            release_tree, label, label,
+            extra_env={"NIGHTLY": "1", "NIGHTLY_SHA": sha},
+        )
+
+
+def run_update(nightly: bool = False, release_tree: Path | None = None) -> int:
     """
     Resolve, gate, and hand off to the release's own ``deploy/update.sh``.
 
@@ -116,6 +204,8 @@ def run_update(release_tree: Path | None = None) -> int:
     live path resolves and downloads it). The tree's own ``VERSION`` is the
     release identity; every later step is identical.
     """
+    if nightly:
+        return _run_nightly_update()
     try:
         current = get_current_version()
     except OSError as error:
@@ -155,19 +245,4 @@ def run_update(release_tree: Path | None = None) -> int:
             _fail(f"could not fetch the {latest} release ({type(error).__name__}: {error}).")
             return 1
 
-        if (release_tree / "BREAKING.md").is_file():
-            _print_breaking_block(latest, release_tree)
-            return 1
-
-        updater = release_tree / "deploy" / "update.sh"
-        if not updater.is_file():
-            _fail(f"release {latest} carries no deploy/update.sh — it predates in-place update.")
-            return 1
-        # The release's own updater runs the machine half; env carries the
-        # install roots (MIRA_APP_DIR / MIRA_TUI_VENV) so a non-default root
-        # set by the caller flows through unchanged.
-        result = subprocess.run(
-            ["bash", str(updater), str(release_tree), tag],
-            env=os.environ.copy(),
-        )
-        return result.returncode
+        return _gate_and_hand_off(release_tree, latest, tag)

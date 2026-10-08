@@ -42,6 +42,13 @@
 # Environment:
 #   MIRA_APP_DIR   install root        (default /opt/mira/app)
 #   MIRA_TUI_VENV  TUI client venv      (default /opt/mira/tui-venv)
+#   NIGHTLY        set to 1 by `mira update --nightly`: the version-equality
+#                  no-op is skipped (a nightly tree can carry the same VERSION
+#                  as the installed tree; only the code differs) and, on a
+#                  successful update, NIGHTLY_SHA is recorded in
+#                  <APP_DIR>/data/nightly_stamp.
+#   NIGHTLY_SHA    the resolved OSS main-head SHA (passed by tui/update.py;
+#                  written to the stamp after the health poll passes)
 #   LOUD_MODE      true for verbose output (deploy lib convention)
 #
 # Service management (stop, restart, health-poll) applies ONLY to the
@@ -95,7 +102,7 @@ if [ -f "${TREE}/BREAKING.md" ]; then
 fi
 NEW_VERSION="$(cat "${TREE}/VERSION")"
 CUR_VERSION="$(cat "${APP_DIR}/VERSION")"
-if [ "$NEW_VERSION" = "$CUR_VERSION" ]; then
+if [ "$NEW_VERSION" = "$CUR_VERSION" ] && [ "${NIGHTLY:-0}" != "1" ]; then
     print_info "Already at ${CUR_VERSION} — nothing to do."
     exit 0
 fi
@@ -349,6 +356,16 @@ if [ -d "${OLD_VENV}.pre-update-${STAMP}" ]; then
 fi
 if [ -e "${TUI_VENV}.pre-update-${STAMP}" ]; then
     rm -rf "${TUI_VENV}.pre-update-${STAMP}"
+fi
+
+# Nightly mode: record the installed branch-head SHA. Written only now —
+# after the health poll passed — so a failed update does not advance the
+# stamp and `mira update --nightly` retries the same SHA. The SHA comes
+# from the environment (tui/update.py resolved it); it is never re-derived
+# here.
+if [ "${NIGHTLY:-0}" = "1" ] && [ -n "${NIGHTLY_SHA:-}" ]; then
+    mkdir -p "${APP_DIR}/data"
+    printf '%s\n' "${NIGHTLY_SHA}" > "${APP_DIR}/data/nightly_stamp"
 fi
 
 print_success "MIRA updated: ${CUR_VERSION} → ${NEW_VERSION}"

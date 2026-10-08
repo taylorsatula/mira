@@ -3,7 +3,8 @@
 CLI:
 - ``update``            subcommand: update the deployed install in place
   (resolve the newest published release, refuse breaking releases, rebuild
-  venvs, swap code, restart; exit 0/1). Runs before the chat client and
+  venvs, swap code, restart; exit 0/1). ``update --nightly`` updates to the
+  OSS repo's main HEAD instead. Runs before the chat client and
   needs no endpoint store. Machine half: ``deploy/update.sh``.
 - ``--config PATH``   override the endpoint-store path (default
   ``~/.config/mira-tui/config.json``); needed for live verification runs.
@@ -61,11 +62,14 @@ def main(argv: list[str] | None = None) -> int:
 
     # `mira update` — the only subcommand; dispatched before argparse so the
     # flag surface of the chat client stays untouched. It runs standalone:
-    # no endpoint store is loaded, no chat client starts.
+    # no endpoint store is loaded, no chat client starts. `--nightly` is
+    # its only flag: update to the OSS repo's main HEAD instead of the
+    # newest published release.
     if args_list and args_list[0] == "update":
         from tui.update import run_update
 
-        return run_update()
+        nightly = len(args_list) > 1 and args_list[1] == "--nightly"
+        return run_update(nightly=nightly)
 
     parser = argparse.ArgumentParser(
         prog="tui",

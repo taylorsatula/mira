@@ -24,6 +24,13 @@ FETCH_TIMEOUT_SECONDS = 10
 GITHUB_REPO = "taylorsatula/mira"
 TAG_TARBALL_URL = f"https://github.com/{GITHUB_REPO}/archive/refs/tags/v{{tag}}.tar.gz"
 
+# The OSS development repo: `mira update --nightly` installs its main HEAD
+# as a ``nightly-<shortsha>`` identity, so patchfixes reach installs without
+# cutting a release.
+OSS_REPO = "taylorsatula/mira-OSS"
+BRANCH_TARBALL_URL = f"https://github.com/{OSS_REPO}/archive/refs/heads/main.tar.gz"
+BRANCH_HEAD_URL = f"https://api.github.com/repos/{OSS_REPO}/commits/main"
+
 
 def version_sort_key(raw: str) -> tuple[int, ...] | None:
     """
@@ -86,3 +93,27 @@ def fetch_latest_release_tag() -> str:
         raise ValueError(f"release response carried no tag_name: {payload!r}")
     tag = tag.strip()
     return tag[1:] if tag[:1] in ("v", "V") else tag
+
+
+def fetch_branch_head_sha() -> str:
+    """
+    Full SHA of the OSS repo's ``main`` HEAD.
+
+    Raises:
+        urllib.error.URLError: On any transport failure, including the
+            ``FETCH_TIMEOUT_SECONDS`` bound expiring.
+        ValueError: When the response is not JSON, or carries no usable ``sha``.
+    """
+    request = urllib.request.Request(
+        BRANCH_HEAD_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "mira-release-check",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
+        payload = json.loads(response.read())
+    sha = payload.get("sha")
+    if not isinstance(sha, str) or not sha.strip():
+        raise ValueError(f"branch-head response carried no sha: {payload!r}")
+    return sha.strip()
