@@ -73,12 +73,12 @@ CONNECT_CANCEL_TIMEOUT = 5.0
 QUEUE_PUT_TIMEOUT = 5.0
 
 # The server answers TURN_BUSY while any turn for this user holds its per-user
-# lock. The lock-release window after a reply (the terminal frame is sent inside
-# the turn task, the lock is released in its finally: a threadpool hop plus a
-# Valkey call) is covered by the quick delays; a slow provider streaming a long
-# reply can stretch the hold, which the steady poll covers. A bounced send waits in the live region and is resent
-# until MAX_WAIT has passed since the FIRST bounce, then goes back to the box.
-# Ctrl+C cancels the wait.
+# lock. The WS transport frees the lock before queueing the terminal frame, so
+# a follow-up send never races the just-finished turn; the remaining cause is
+# heartbeat turns, observed holding the lock for minutes on the dev VM
+# (journal 2026-10-01), which the steady poll covers. A bounced send waits in
+# the live region and is resent until MAX_WAIT has passed since the FIRST
+# bounce, then goes back to the box. Ctrl+C cancels the wait.
 TURN_BUSY_RETRY_DELAYS = (0.5, 1.0, 2.0)
 TURN_BUSY_POLL_SECONDS = 3.0
 TURN_BUSY_MAX_WAIT_SECONDS = 600.0

@@ -766,9 +766,17 @@ class WebSocketChatHandler:
         turn_id: UUID,
         cancel_event: threading.Event,
     ) -> None:
-        """Validate attachments, run the orchestrator, commit, then emit one terminal frame."""
+        """Validate attachments, run the orchestrator, commit, release the turn
+        lock, then emit one terminal frame — in that order. The lock is freed
+        before the terminal frame is queued, so a client that has watched the
+        turn end can send its next message immediately: releasing after the
+        frame left a window where that next message bounced TURN_BUSY against
+        a turn the client had already seen complete. Frame order on the
+        connection is unaffected — every earlier frame of the turn was queued
+        while the lock was held."""
         segment_id: UUID | None = None
         start_time = utc_now()
+        terminal_frame: dict[str, object] | None = None
         lock_token = await run_in_threadpool(self.user_request_lock.acquire, user_id)
         if lock_token is None:
             await connection.send({
@@ -902,14 +910,14 @@ class WebSocketChatHandler:
             processing_time_ms = int((utc_now() - start_time).total_seconds() * 1000)
             metadata = result["metadata"]
             if metadata.get("stopped"):
-                await connection.send({
+                terminal_frame = {
                     "type": "turn_stopped",
                     "turn_id": turn_id,
                     "segment_id": segment_id,
                     "reason": metadata["stop_reason"],
-                })
+                }
             else:
-                await connection.send({
+                terminal_frame = {
                     "type": "turn_complete",
                     "turn_id": turn_id,
                     "segment_id": segment_id,
@@ -918,41 +926,56 @@ class WebSocketChatHandler:
                     "tools_used": list(metadata.get("tools_used") or []),
                     "processing_time_ms": processing_time_ms,
                     "emotion": metadata.get("emotion"),
-                })
+                }
         except (ValueError, PydanticValidationError) as error:
             if segment_id is None:
-                await connection.send({
+                terminal_frame = {
                     "type": "protocol_error",
                     "code": "INVALID_MESSAGE",
                     "message": str(error),
-                })
+                }
             else:
-                await connection.send({
+                terminal_frame = {
                     "type": "turn_error",
                     "turn_id": turn_id,
                     "segment_id": segment_id,
                     "code": "TURN_VALIDATION_FAILED",
                     "message": get_friendly_error_message(error),
-                })
+                }
         except Exception as error:
             logger.error("WebSocket turn failed for user %s: %s", user_id, error, exc_info=True)
             if segment_id is not None:
-                await connection.send({
+                terminal_frame = {
                     "type": "turn_error",
                     "turn_id": turn_id,
                     "segment_id": segment_id,
                     "code": "TURN_PROCESSING_FAILED",
                     "message": get_friendly_error_message(error),
-                })
+                }
             else:
-                await connection.send({
+                terminal_frame = {
                     "type": "protocol_error",
                     "code": "TURN_SETUP_FAILED",
                     "message": get_friendly_error_message(error),
-                })
+                }
         finally:
             renewal_stop.set()
             await run_in_threadpool(self.user_request_lock.release, user_id, lock_token)
+
+        # Not inside the try: the lock must already be free when this frame is
+        # queued. A send failure here cannot be reported to the client (this
+        # frame was the report) and the lock is already released, so it is
+        # logged and the turn task ends. terminal_frame is None only if the
+        # task was cancelled (BaseException bypasses the except clauses) — the
+        # cancellation then continues past this point on its own.
+        if terminal_frame is not None:
+            try:
+                await connection.send(terminal_frame)
+            except Exception:
+                logger.error(
+                    "Terminal frame send failed for user %s (turn %s) after lock release",
+                    user_id, turn_id, exc_info=True,
+                )
 
     def _prepare_image(self, message: MessageFrame) -> CompressedImage | None:
         if message.image is None:
