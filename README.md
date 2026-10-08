@@ -182,20 +182,28 @@ any per-user tool config; defaults ship safe and off):
   recoverable judgment calls are relaxed after the human has approved the
   exact command in the conversation: system-config overwrites, service
   control (including restarting MIRA itself), package removal, firewall
-  flushes, and the git checkout/restore/reset/clean rules. `/dev` and
-  `/Volumes` contents stay protected even in skip mode — block devices and
-  mounted backups have no recovery path. Every executed bypass is logged
-  one line per invocation to `<log_dir>/guardrail_bypass.log` and marked
-  `"guardrail": "bypassed"` in the tool result, so it is visible both
-  in-transcript and on disk.
+  flushes, and the git checkout/restore/reset/clean rules. `/dev`,
+  `/Volumes`, and `/var/log` contents stay protected even in skip mode —
+  block devices, mounted backups, and the audit trail have no recovery path.
+  Skip mode still refuses paths it cannot resolve (`~`, `$VAR`, a `cd` into
+  either), globs that would empty a protected directory, any write to sudo's
+  config or an SSH `authorized_keys` however the path is spelled, and any
+  edit to the bash tool's own source or MIRA's `config/` directory. Every
+  executed bypass is logged one line per invocation to
+  `<log_dir>/guardrail_bypass.log` — which the tool itself is refused from
+  writing, deleting, or truncating — and marked `"guardrail": "bypassed"` in
+  the tool result, so it is visible both in-transcript and on disk.
 - **`blocked_patterns`** (default `[]`) — the operator's personal tripwires.
   Each entry is matched against the raw command string before anything else
   runs; every character is literal except `*`, which matches anything,
-  including slashes, spaces, and quotes (e.g. `rm * /etc*` blocks every
-  delete spelling of an /etc path, quoted or not). Blocklist entries cannot
-  be bypassed by any mode — including skip mode — and config can never make
-  the tool refuse *less*, only more. A refusal names your own pattern, so it
-  is always traceable to config, not code.
+  including slashes, spaces, quotes, and newlines (e.g. `rm * /etc*` blocks
+  every delete spelling of an /etc path, quoted or not). Matching is literal
+  and case-sensitive otherwise: `systemctl restart mira` does not match a
+  double-spaced or differently-cased spelling, so put `*` where spacing may
+  vary. Blocklist entries cannot be bypassed by any mode — including skip
+  mode — and config can never make the tool refuse *less*, only more. A
+  refusal names your own pattern, so it is always traceable to config, not
+  code.
 
 For precise file edits, MIRA carries a built-in skill, `precise-file-editing`,
 teaching the fast shell one-liner patterns (perl/sed in-place substitution,

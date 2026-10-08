@@ -9,8 +9,8 @@ executes; a match is a hard refusal and the command never reaches the shell.
 
 The operator blocklist (bash_tool config `blocked_patterns`) is matched first
 and outranks every mode, including skip mode: entries are literal text except
-`*`, which matches anything including slashes, spaces, and quotes. It can make
-the tool refuse more, never less.
+`*`, which matches anything including slashes, spaces, quotes, and newlines.
+It can make the tool refuse more, never less.
 
 The two layers cover what the other cannot:
 
@@ -18,12 +18,15 @@ The two layers cover what the other cannot:
   string before any quoting is removed, it catches destructive literals buried
   inside quotes or nested interpreters (`bash -c "rm -rf /"`,
   `python -c "os.system('rm -rf /')"`) that tokenization would hide.
-- **Argument layer** — the command is tokenized, split into simple commands, and
-  each command's verb and path operands are resolved against the effective
-  working directory. This is what catches the operations no regex can express:
-  relative paths (`rm -rf .` from the project root), quoted and globbed spellings
-  of a protected path, shell expansions that cannot be resolved before the host
-  shell sees them, and destructive verbs other than `rm`.
+- **Argument layer** — the command is split into the lines bash runs (heredoc
+  bodies cut out as data), each line is tokenized and split into simple
+  commands, and each command's verb and path operands are resolved against the
+  effective working directory. This is what catches the operations no regex can
+  express: relative paths (`rm -rf .` from the project root), quoted and globbed
+  spellings of a protected path, shell expansions that cannot be resolved before
+  the host shell sees them, respelled persistence targets (sudo config, SSH
+  authorized_keys), and destructive verbs other than `rm`. Quoting it cannot
+  balance is refused, never guessed at.
 
 Both layers are a safety net, not a sandbox. They stop known-catastrophic
 operations; they do not confine a determined command to the project tree, and
@@ -37,7 +40,10 @@ pass `skip_permissions=True` to run under the catastrophic core only: the
 rules against system-ruining, unrecoverable, and audit-erasing actions stay,
 while recoverable judgment calls (system-config overwrites, service control —
 including restarting MIRA itself — package removal, the git revert rules) are
-relaxed. The operator's blocklist is never relaxed. Every bypass is appended
+relaxed. The operator's blocklist is never relaxed, and neither are the
+argument-layer checks that keep the core honest: unresolvable expansions,
+container-emptying globs, persistence targets, the log trees, the bypass log
+itself, and this file and MIRA's config directory. Every bypass is appended
 to `guardrail_bypass.log` under the configured log_dir and marked in the
 result, so it is visible in-transcript and on disk.
 """
@@ -103,8 +109,8 @@ class BashToolConfig(BaseModel):
         description=(
             "User-authored blocklist. Each entry is matched against the raw "
             "command string; all characters are literal except *, which matches "
-            "anything including slashes, spaces, and quotes. Highest priority; "
-            "not bypassable by skip mode."
+            "anything including slashes, spaces, quotes, and newlines. Highest "
+            "priority; not bypassable by skip mode."
         ),
     )
 
@@ -145,16 +151,18 @@ def _compile_blocklist(
     Compile operator blocklist entries to (original text, regex) pairs.
 
     Every character is literal except `*`, which is relaxed to `.*` so it
-    crosses slashes, spaces, and quotes — a blocklist over-matches rather than
-    under-matches. Matching is re.search over the raw command string, the same
-    surface the pattern layer sees, so it fires before quoting is removed.
-    Compiled by the handlers (not the validator) and passed in as inert data;
-    the protected battery's purity walk never sees a compiler.
+    crosses slashes, spaces, quotes, and newlines (re.DOTALL) — a blocklist
+    over-matches rather than under-matches, so `systemctl restart *mira` still
+    fires on a backslash-continued `systemctl restart \\<newline>mira`.
+    Matching is re.search over the raw command string, the same surface the
+    pattern layer sees, so it fires before quoting is removed. Compiled by the
+    handlers (not the validator) and passed in as inert data; the protected
+    battery's purity walk never sees a compiler.
     """
     compiled = []
     for raw in patterns:
         body = re.escape(raw).replace("\\*", ".*")
-        compiled.append((raw, re.compile(body)))
+        compiled.append((raw, re.compile(body, re.DOTALL)))
     return tuple(compiled)
 
 
@@ -357,6 +365,11 @@ _CATASTROPHIC_PATTERNS = frozenset({
     "kill-all-processes", "ssh-key-plant", "sudoers-write",
     "pipe-download-to-shell", "decode-to-shell", "log-destruction",
 })
+# A misspelled name here would silently drop that rule from skip mode, so the
+# subset relation is checked at import rather than trusted.
+_UNKNOWN_CATASTROPHIC = _CATASTROPHIC_PATTERNS - {name for name, _, _ in _DESTRUCTIVE_PATTERNS}
+if _UNKNOWN_CATASTROPHIC:
+    raise RuntimeError(f"_CATASTROPHIC_PATTERNS names unknown rules: {sorted(_UNKNOWN_CATASTROPHIC)}")
 
 
 # -- argument layer -----------------------------------------------------------
@@ -369,24 +382,33 @@ _RELOCATE_VERBS = frozenset({"mv"})
 _PERMISSION_VERBS = frozenset({"chmod", "chown", "chgrp", "setfacl"})
 _TRUNCATE_VERBS = frozenset({"truncate", "tee"})
 _WRITE_VERBS = frozenset({"cp", "install", "ln"})
-_INPLACE_EDIT_VERBS = frozenset({"sed", "perl"})
+_INPLACE_EDIT_VERBS = frozenset({"sed", "perl", "gawk", "awk"})
+# Copy verbs outside the classifier's reach: their operands are checked only
+# for persistence planting and audit-log tampering (_check_planting).
+_COPY_VERBS = frozenset({"rsync", "scp"})
 
-# Verbs with no recovery path, refused in every mode. `visudo` belongs here:
-# sudo changes survive the skip-mode check-in as persistent privilege.
+# Never legitimate from this tool in default mode, in any argument position.
+_PROHIBITED_VERBS = frozenset({
+    "mkfs", "wipefs", "fdisk", "parted", "sgdisk", "gdisk", "cfdisk", "sfdisk",
+    "blkdiscard", "mdadm", "pvcreate", "vgcreate", "lvremove", "vgremove",
+    "pvremove", "killall5", "visudo",
+    "shutdown", "reboot", "poweroff", "halt", "telinit", "swapoff", "ifdown",
+    "userdel", "deluser", "groupdel", "chpasswd", "passwd", "chattr",
+})
+# The subset with no recovery path, refused in every mode. `visudo` belongs
+# here: sudo changes survive the skip-mode check-in as persistent privilege.
+# The remainder (power, account, password, attribute verbs) is what a
+# competent operator with a backup habit recovers from, relaxed under skip.
 _CATASTROPHIC_VERBS = frozenset({
     "mkfs", "wipefs", "fdisk", "parted", "sgdisk", "gdisk", "cfdisk", "sfdisk",
     "blkdiscard", "mdadm", "pvcreate", "vgcreate", "lvremove", "vgremove",
     "pvremove", "killall5", "visudo",
 })
-# Verbs a competent operator with a backup habit recovers from: refused by
-# default, relaxed under skip_permissions.
-_SKIP_RELAXABLE_VERBS = frozenset({
-    "shutdown", "reboot", "poweroff", "halt", "telinit", "swapoff", "ifdown",
-    "userdel", "deluser", "groupdel", "chpasswd", "passwd", "chattr",
-})
-# Never legitimate from this tool in default mode, in any argument position.
-# The union is exactly the pre-skip-mode set, so default behavior is unchanged.
-_PROHIBITED_VERBS = _CATASTROPHIC_VERBS | _SKIP_RELAXABLE_VERBS
+if not _CATASTROPHIC_VERBS <= _PROHIBITED_VERBS:
+    raise RuntimeError(
+        f"_CATASTROPHIC_VERBS names verbs outside _PROHIBITED_VERBS: "
+        f"{sorted(_CATASTROPHIC_VERBS - _PROHIBITED_VERBS)}"
+    )
 
 # Command runners that stand in front of the real verb.
 _WRAPPERS = frozenset({
@@ -422,8 +444,17 @@ _MATCH_ALL_REGEXES = frozenset({".", ".*", ".+", "^", "$", "^.*$", "^.*", ".*$",
 # same command precisely.
 _APP_TREE_PATH_RULES = frozenset({"system-path-delete", "overwrite-system-config"})
 
-_OPERATORS = frozenset({";", ";;", "&", "&&", "|", "||", "|&", "(", ")", "{", "}", "\n"})
-_WRITE_REDIRECTS = frozenset({">", ">>", "&>", "&>>", "1>", "2>", ">", "<>"})
+# Newlines never reach the tokenizer unquoted: _split_lines splits on them
+# first, so each line is its own command chain.
+_OPERATORS = frozenset({";", ";;", "&", "&&", "|", "||", "|&", "(", ")", "{", "}"})
+_WRITE_REDIRECTS = frozenset({">", ">>", ">|", "&>", "&>>", "<>"})
+_SED_INPLACE = re.compile(r"^-[nrsuzE]*i")
+# Perl switches that consume the rest of their cluster as a value.
+_PERL_VALUE_SWITCHES = "MmIxFdDCV"
+# Marks a working directory this guardrail cannot know (skip mode only: a `cd`
+# with no target or into an expansion or glob, any `pushd`/`popd`). Relative
+# operands against it are refused.
+_UNKNOWN_CWD = ""
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _DURATION = re.compile(r"^\d+(?:\.\d+)?[smhd]?$")
 _INTEGER = re.compile(r"^[-+]?\d+$")
@@ -445,6 +476,16 @@ _SELF_ONLY_DIRS = frozenset({
     "/home", "/Users",
 })
 
+# Skip mode relaxes system-directory contents, except these. On macOS `/etc`,
+# `/var` and `/tmp` are symlinks into `/private`, so the `/private` spellings
+# are the same containers. The log trees are the host's audit trail.
+_SKIP_ALIAS_CONTAINERS = frozenset({"/private/etc", "/private/var", "/private/tmp"})
+_LOG_TREES = ("/var/log", "/private/var/log")
+
+# Persistence targets, refused in every mode (_planting_rule). Sudo config is
+# any `/etc/sudo*` entry; the names here are what a glob is tested against.
+_SUDO_CONFIG_NAMES = ("sudoers", "sudoers.d", "sudo.conf", "sudo_logsrvd.conf")
+_SSH_KEY_NAMES = ("authorized_keys", "authorized_keys2")
 _RULE_REASONS: Dict[str, str] = {
     "filesystem-root": "the command targets the filesystem root",
     "project-root-delete": (
@@ -478,6 +519,30 @@ _RULE_REASONS: Dict[str, str] = {
     "unglobbable-parent": (
         "the glob expands inside a protected directory, so which entries it "
         "matches cannot be verified here"
+    ),
+    "unverifiable-cwd": (
+        "an earlier `cd`, `pushd`, `popd`, or `env -C` moved into a directory "
+        "this guardrail cannot resolve, so a relative path after it cannot be "
+        "proven safe. Use an explicit literal absolute path instead"
+    ),
+    "unparseable-quoting": (
+        "the command's quoting is unbalanced, so its structure cannot be "
+        "verified. Balance the quotes"
+    ),
+    "log-destruction": "the command targets the host's log tree, which is the audit trail",
+    "sudoers-write": "the command targets sudo's configuration, which grants persistent privilege",
+    "ssh-key-plant": (
+        "the command writes into an SSH directory or authorized_keys file, "
+        "which grants persistent access to the host"
+    ),
+    "audit-log-tamper": (
+        "the command targets guardrail_bypass.log (or a directory holding it), "
+        "the operator's record of every skip_permissions call"
+    ),
+    "guardrail-self-edit": (
+        "the command targets this guardrail's own source or MIRA's config "
+        "directory, which define what this tool may do; changes there are the "
+        "operator's to make"
     ),
 }
 
@@ -522,25 +587,40 @@ def _classify_path(
 
     Skip mode narrows system-path protection to the protected containers
     themselves: `/etc/nginx` is content an operator restores from a backup,
-    while `/etc` is the container whose loss takes the host with it. Two trees
-    keep their contents protected even under skip mode — `/dev` (block devices
-    have no recovery path) and `/Volumes` (a mounted volume is usually the
-    backup itself). Everything else inside a system directory is skip-eligible
-    recoverable content; the operator's blocklist is the tripwire for anything
-    instance-specific.
+    while `/etc` is the container whose loss takes the host with it. The
+    `/private/etc`, `/private/var` and `/private/tmp` spellings of the macOS
+    containers count as containers too. Three trees keep their contents
+    protected even under skip mode — `/dev` (block devices have no recovery
+    path), `/Volumes` (a mounted volume is usually the backup itself), and the
+    log trees (the audit trail). Everything else inside a system directory is
+    skip-eligible recoverable content; the operator's blocklist is the
+    tripwire for anything instance-specific.
+
+    The guardrail's own source file (and the directories holding it) and
+    MIRA's config directory are refused in every mode, ahead of the app-tree
+    exemption that makes the rest of the code tree editable.
     """
     resolved = _normalize_absolute(path)
     if resolved == "/":
         return "filesystem-root"
     if resolved in ancestors:
         return "project-root-delete"
+    if resolved in _GUARDRAIL_PATHS or any(
+        _at_or_under(resolved, config_dir) for config_dir in _APP_CONFIG_DIRS
+    ):
+        return "guardrail-self-edit"
     app_rule = _classify_app_tree_path(resolved)
     if app_rule is not None:
         return app_rule or None
     head = resolved[1:].partition("/")[0]
     if head in _SYSTEM_DIR_NAMES:
-        if skip and resolved != "/" + head and head not in ("dev", "Volumes"):
-            return None
+        if skip:
+            if resolved in _SKIP_ALIAS_CONTAINERS:
+                return "system-path-delete"
+            if any(_at_or_under(resolved, tree) for tree in _LOG_TREES):
+                return "log-destruction"
+            if resolved != "/" + head and head not in ("dev", "Volumes"):
+                return None
         return "system-path-delete"
     if resolved in _SELF_ONLY_DIRS:
         return "system-dir-delete"
@@ -590,6 +670,32 @@ def _load_app_tree() -> Optional[Tuple[str, FrozenSet[str]]]:
 
 # Inert from import onwards: (app root, untracked top-level names) or None.
 _APP_TREE: Optional[Tuple[str, FrozenSet[str]]] = _load_app_tree()
+
+
+def _load_guardrail_paths() -> Tuple[FrozenSet[str], FrozenSet[str]]:
+    """
+    (this file plus the directories between it and the code-tree root,
+    MIRA's config directory) under both the symlink-resolved and the as-loaded
+    spelling of the tree.
+
+    These define what the tool may do — the rules, the skip gate's default, the
+    operator's blocklist — so the app-tree exemption never covers them. The
+    holding directories are included because moving `tools/` aside and putting
+    a replacement in its place swaps the guardrail without touching this file's
+    path. Read once at import, like _APP_TREE, so the validator sees inert
+    strings.
+    """
+    guarded = set()
+    config_dirs = set()
+    for spelling in {str(Path(__file__).resolve()), os.path.abspath(__file__)}:
+        implementations_dir = posixpath.dirname(spelling)
+        tools_dir = posixpath.dirname(implementations_dir)
+        guarded.update({spelling, implementations_dir, tools_dir})
+        config_dirs.add(posixpath.join(posixpath.dirname(tools_dir), "config"))
+    return frozenset(guarded), frozenset(config_dirs)
+
+
+_GUARDRAIL_PATHS, _APP_CONFIG_DIRS = _load_guardrail_paths()
 
 
 def _classify_app_tree_path(resolved: str) -> Optional[str]:
@@ -642,9 +748,15 @@ def _at_or_under(path: str, root: str) -> bool:
 
 
 def _resolve_operand(operand: str, cwd: str) -> str:
-    """Resolve one command operand to an absolute path against the effective cwd."""
+    """Resolve one command operand to an absolute path against the effective cwd.
+
+    A relative operand against _UNKNOWN_CWD is refused: there is no directory
+    to resolve it against.
+    """
     if posixpath.isabs(operand):
         return _normalize_absolute(operand)
+    if cwd == _UNKNOWN_CWD:
+        _refuse("unverifiable-cwd", _RULE_REASONS["unverifiable-cwd"], operand)
     return _normalize_absolute(posixpath.join(cwd, operand))
 
 
@@ -652,6 +764,134 @@ def _matches_everything(basename: str) -> bool:
     """True when a glob basename can match every entry in its directory."""
     collapsed = re.sub(r"\[[^\]]*\]", "?", basename)
     return bool(collapsed) and all(char in "*?." for char in collapsed)
+
+
+def _glob_matches(component: str, name: str) -> bool:
+    """
+    True when one path component — literal or shell glob — can name `name`.
+
+    Bash semantics without dotglob: a glob reaches a dot-name only when the
+    component itself starts with a literal dot. A bracket expression this
+    translation cannot compile counts as a match, so an unreadable glob is
+    treated as dangerous rather than safe.
+    """
+    if not any(char in component for char in _GLOB_CHARS):
+        return component == name
+    if name.startswith(".") and not component.startswith("."):
+        return False
+    pattern = ""
+    index = 0
+    while index < len(component):
+        char = component[index]
+        if char == "*":
+            pattern += ".*"
+        elif char == "?":
+            pattern += "."
+        elif char == "[":
+            start = index + 1
+            if start < len(component) and component[start] in "!^":
+                start += 1
+            # A `]` right after `[` or `[!` is a literal member, not the close.
+            close = component.find("]", start + 1)
+            if close == -1:
+                pattern += re.escape(char)
+            else:
+                members = component[index + 1:close]
+                if members[:1] in ("!", "^"):
+                    members = "^" + members[1:]
+                pattern += "[" + members.replace("\\", "\\\\") + "]"
+                index = close
+        else:
+            pattern += re.escape(char)
+        index += 1
+    try:
+        return re.fullmatch(pattern, name) is not None
+    except re.error:
+        return True
+
+
+def _glob_overlaps(path: str, target: str) -> bool:
+    """
+    True when a resolved, possibly globbed path can name `target`, a directory
+    holding it, or something inside it — compared component by component, so
+    `.mira_logs/*` and `.m*` both reach `.mira_logs/guardrail_bypass.log`.
+    """
+    parts = [part for part in path.split("/") if part]
+    target_parts = [part for part in target.split("/") if part]
+    return all(_glob_matches(part, name) for part, name in zip(parts, target_parts))
+
+
+def _glob_split(resolved: str, skip: bool) -> Tuple[str, str, bool]:
+    """
+    (directory the glob expands in, the globbed component, whether that
+    component is the last one) for a resolved path containing a glob.
+
+    Default mode looks only at the final component. Skip mode, whose path
+    classifier relaxes container contents, takes the FIRST globbed component:
+    `/*/nginx` expands inside `/`, where every match is a protected container.
+    """
+    if not skip:
+        return posixpath.dirname(resolved), posixpath.basename(resolved), True
+    parts = resolved.split("/")
+    for index, part in enumerate(parts):
+        if any(char in part for char in _GLOB_CHARS):
+            return "/".join(parts[:index]) or "/", part, index == len(parts) - 1
+    return posixpath.dirname(resolved), posixpath.basename(resolved), True
+
+
+def _planting_rule(resolved: str, ssh_keys: bool) -> Optional[str]:
+    """
+    Name the persistence rule a resolved (possibly globbed) path violates.
+
+    Sudo configuration — any `/etc/sudo*` entry, `/private/etc` included — is
+    refused for every checked verb, matching the sudoers-write pattern that
+    refuses any literal mention. With ssh_keys, an SSH directory itself or an
+    `authorized_keys*` file inside one is refused: callers set it for verbs
+    that write (copy, link, move, truncate, in-place edit, dd, redirect), not
+    for deletes or permission changes, which plant nothing.
+    """
+    parts = [part for part in resolved.split("/") if part]
+    if parts[:1] == ["private"]:
+        parts = parts[1:]
+    if len(parts) >= 2 and _glob_matches(parts[0], "etc") and (
+        parts[1].startswith("sudo")
+        or any(_glob_matches(parts[1], name) for name in _SUDO_CONFIG_NAMES)
+    ):
+        return "sudoers-write"
+    if not ssh_keys:
+        return None
+    for index, part in enumerate(parts):
+        if not _glob_matches(part, ".ssh"):
+            continue
+        if index == len(parts) - 1:
+            return "ssh-key-plant"
+        child = parts[index + 1]
+        if child.startswith("authorized_keys") or any(
+            _glob_matches(child, name) for name in _SSH_KEY_NAMES
+        ):
+            return "ssh-key-plant"
+    return None
+
+
+def _check_planting(
+    resolved: str,
+    offending: str,
+    root: str,
+    audit_log: Optional[str],
+    ssh_keys: bool,
+) -> None:
+    """Refuse a resolved operand that plants persistence or reaches the audit log.
+
+    Enforced in every mode. The audit log is reached by naming it, a directory
+    holding it below the project root, or a glob that can expand to either; the
+    root and its ancestors belong to the path classifier, which refuses them
+    for every destructive verb.
+    """
+    rule = _planting_rule(resolved, ssh_keys)
+    if rule:
+        _refuse(rule, _RULE_REASONS[rule], offending)
+    if audit_log and not _at_or_under(root, resolved) and _glob_overlaps(resolved, audit_log):
+        _refuse("audit-log-tamper", _RULE_REASONS["audit-log-tamper"], offending)
 
 
 def _verb_name(token: str) -> str:
@@ -677,50 +917,39 @@ def _check_operand(
     root: str,
     ancestors: FrozenSet[str],
     skip: bool = False,
+    audit_log: Optional[str] = None,
+    ssh_keys: bool = False,
 ) -> None:
     """
     Refuse a destructive verb's path operand if it cannot be proven safe.
 
     Resolves relative operands against the effective cwd, refuses operands whose
-    meaning depends on shell expansion, and refuses globs that would empty a
-    protected directory. Skip mode trusts the host shell to resolve `~`/`$VAR`
-    itself, drops the glob checks, and keeps only the container-only path
-    classification.
+    meaning depends on shell expansion (in every mode: `~`, `$HOME`, and
+    `${X:-/etc}` all resolve where the host shell decides), classifies the
+    resolved path, refuses persistence planting and audit-log tampering
+    (_check_planting; ssh_keys for verbs that write), and refuses globs that
+    could empty a protected directory or expand inside one. Skip mode narrows
+    only the classification to containers (see _classify_path) and locates the
+    glob at its first globbed component (see _glob_split).
     """
-    if not skip and any(char in operand for char in _EXPANSION_CHARS):
-        _refuse(
-            "unverifiable-expansion",
-            _RULE_REASONS["unverifiable-expansion"],
-            f"{verb} {operand}",
-        )
+    offending = f"{verb} {operand}"
+    if any(char in operand for char in _EXPANSION_CHARS):
+        _refuse("unverifiable-expansion", _RULE_REASONS["unverifiable-expansion"], offending)
 
     resolved = _resolve_operand(operand, cwd)
     hit = _classify_path(resolved, root, ancestors, skip)
     if hit:
-        _refuse(hit, _RULE_REASONS[hit], f"{verb} {operand}")
+        _refuse(hit, _RULE_REASONS[hit], offending)
 
-    if skip:
-        return
+    if any(char in operand for char in _GLOB_CHARS):
+        parent, component, final = _glob_split(resolved, skip)
+        if _classify_path(parent, root, ancestors, skip):
+            if final and _matches_everything(component):
+                _refuse("protected-glob", _RULE_REASONS["protected-glob"], offending)
+            if not _at_or_under(parent, root):
+                _refuse("unglobbable-parent", _RULE_REASONS["unglobbable-parent"], offending)
 
-    if not any(char in operand for char in _GLOB_CHARS):
-        return
-
-    parent = posixpath.dirname(resolved)
-    parent_hit = _classify_path(parent, root, ancestors)
-    if not parent_hit:
-        return
-    if _matches_everything(posixpath.basename(resolved)):
-        _refuse(
-            "protected-glob",
-            _RULE_REASONS["protected-glob"],
-            f"{verb} {operand}",
-        )
-    if not _at_or_under(parent, root):
-        _refuse(
-            "unglobbable-parent",
-            _RULE_REASONS["unglobbable-parent"],
-            f"{verb} {operand}",
-        )
+    _check_planting(resolved, offending, root, audit_log, ssh_keys)
 
 
 def _check_redirect_targets(
@@ -729,25 +958,34 @@ def _check_redirect_targets(
     root: str,
     ancestors: FrozenSet[str],
     skip: bool = False,
+    audit_log: Optional[str] = None,
 ) -> None:
-    """Refuse output redirections aimed at a protected path."""
+    """Refuse output redirections aimed at a protected path.
+
+    Skip mode also refuses a target that depends on shell expansion, whose
+    container-only classification cannot be applied to a path it cannot see.
+    """
     for index, token in enumerate(tokens):
         if token not in _WRITE_REDIRECTS:
             continue
         if index + 1 >= len(tokens):
             continue
         target = tokens[index + 1]
+        offending = f"{token} {target}"
         # `2>&1` and friends name a descriptor, not a path.
         if target.startswith("&") or _INTEGER.match(target):
             continue
+        if skip and any(char in target for char in _EXPANSION_CHARS):
+            _refuse("unverifiable-expansion", _RULE_REASONS["unverifiable-expansion"], offending)
+        resolved = _resolve_operand(target, cwd)
         # /dev/null is the bit bucket: discarding output there is benign no
         # matter what protected path classification would otherwise say.
-        if _resolve_operand(target, cwd) == "/dev/null":
+        if resolved == "/dev/null":
             continue
-        resolved = _resolve_operand(target, cwd)
         hit = _classify_path(resolved, root, ancestors, skip)
         if hit:
-            _refuse(hit, _RULE_REASONS[hit], f"{token} {target}")
+            _refuse(hit, _RULE_REASONS[hit], offending)
+        _check_planting(resolved, offending, root, audit_log, ssh_keys=True)
 
 
 def _check_prohibited_verb(verb: str, skip: bool = False) -> None:
@@ -870,17 +1108,20 @@ def _check_dd(
     root: str,
     ancestors: FrozenSet[str],
     skip: bool = False,
+    audit_log: Optional[str] = None,
 ) -> None:
     """Refuse a dd write target that is a device or a protected path."""
     for arg in args:
         if not arg.startswith("of="):
             continue
         target = arg[len("of="):]
-        if not skip and any(char in target for char in _EXPANSION_CHARS):
+        if any(char in target for char in _EXPANSION_CHARS):
             _refuse("unverifiable-expansion", _RULE_REASONS["unverifiable-expansion"], arg)
-        hit = _classify_path(_resolve_operand(target, cwd), root, ancestors, skip)
+        resolved = _resolve_operand(target, cwd)
+        hit = _classify_path(resolved, root, ancestors, skip)
         if hit:
             _refuse(hit, _RULE_REASONS[hit], arg)
+        _check_planting(resolved, arg, root, audit_log, ssh_keys=True)
 
 
 def _find_exec_deletes(args: List[str]) -> bool:
@@ -963,6 +1204,7 @@ def _check_find(
     root: str,
     ancestors: FrozenSet[str],
     skip: bool = False,
+    audit_log: Optional[str] = None,
 ) -> None:
     """
     Refuse a find that deletes without a narrowing predicate over a safe tree.
@@ -971,7 +1213,9 @@ def _check_find(
     `find . -delete` from the same directory removes the whole harness, and
     `find / ...` walks off the project tree entirely. A predicate only earns
     the carve-out when it demonstrably narrows: `-name '*'` matches everything
-    and does not count, and neither does an unparseable expression.
+    and does not count, and neither does an unparseable expression. A walk
+    over the audit log's directory additionally needs a `-name`/`-iname` that
+    provably excludes the log (_find_spares).
     """
     if "-delete" not in args and not _find_exec_deletes(args):
         return
@@ -982,12 +1226,38 @@ def _check_find(
         starts.append(arg)
     narrowed = _find_narrows(args)
     for start in starts or ["."]:
-        if not skip and any(char in start for char in _EXPANSION_CHARS):
-            _refuse("unverifiable-expansion", _RULE_REASONS["unverifiable-expansion"], f"find {start}")
+        offending = f"find {start}"
+        if any(char in start for char in _EXPANSION_CHARS):
+            _refuse("unverifiable-expansion", _RULE_REASONS["unverifiable-expansion"], offending)
         resolved = _resolve_operand(start, cwd)
         hit = _classify_path(resolved, root, ancestors, skip)
         if hit and not (narrowed and _at_or_under(resolved, root)):
-            _refuse(hit, _RULE_REASONS[hit], f"find {start}")
+            _refuse(hit, _RULE_REASONS[hit], offending)
+        _check_planting(resolved, offending, root, None, ssh_keys=False)
+        if audit_log and _glob_overlaps(resolved, audit_log) and not _find_spares(
+            args, posixpath.basename(audit_log)
+        ):
+            _refuse("audit-log-tamper", _RULE_REASONS["audit-log-tamper"], offending)
+
+
+def _find_spares(args: List[str], name: str) -> bool:
+    """
+    True when a find expression provably never matches a file named `name`:
+    some un-negated `-name`/`-iname` pattern excludes it and no `-o`/`,`
+    disjunction can bring it back.
+    """
+    if any(arg in ("-o", "-or", ",") for arg in args):
+        return False
+    for index, arg in enumerate(args[:-1]):
+        if arg not in ("-name", "-iname") or (index and args[index - 1] in ("!", "-not")):
+            continue
+        pattern = args[index + 1]
+        if arg == "-iname":
+            if not _glob_matches(pattern.lower(), name.lower()):
+                return True
+        elif not _glob_matches(pattern, name):
+            return True
+    return False
 
 
 def _check_path_verbs(
@@ -997,22 +1267,98 @@ def _check_path_verbs(
     root: str,
     ancestors: FrozenSet[str],
     skip: bool = False,
+    audit_log: Optional[str] = None,
 ) -> None:
     """Dispatch a path-taking verb to its operand check."""
-    if verb in _DELETION_VERBS or verb in _RELOCATE_VERBS or verb in _PERMISSION_VERBS:
+    if verb in _DELETION_VERBS or verb in _PERMISSION_VERBS:
         for operand in _path_operands(args):
-            _check_operand(operand, verb, cwd, root, ancestors, skip)
-    elif verb in _TRUNCATE_VERBS or verb in _WRITE_VERBS:
+            _check_operand(operand, verb, cwd, root, ancestors, skip, audit_log)
+    elif verb in _RELOCATE_VERBS or verb in _TRUNCATE_VERBS or verb in _WRITE_VERBS:
         for operand in _path_operands(args):
-            _check_operand(operand, verb, cwd, root, ancestors, skip)
+            _check_operand(operand, verb, cwd, root, ancestors, skip, audit_log, ssh_keys=True)
     elif verb in _INPLACE_EDIT_VERBS:
-        if any(arg == "-i" or arg.startswith("-i") for arg in args):
-            for operand in _path_operands(args):
-                _check_operand(operand, verb, cwd, root, ancestors, skip)
+        for operand in _inplace_operands(verb, args):
+            _check_operand(operand, verb, cwd, root, ancestors, skip, audit_log, ssh_keys=True)
+    elif verb in _COPY_VERBS:
+        for operand in _path_operands(args):
+            offending = f"{verb} {operand}"
+            _check_planting(_resolve_operand(operand, cwd), offending, root, audit_log, ssh_keys=True)
     elif verb == "dd":
-        _check_dd(args, cwd, root, ancestors, skip)
+        _check_dd(args, cwd, root, ancestors, skip, audit_log)
     elif verb == "find":
-        _check_find(args, cwd, root, ancestors, skip)
+        _check_find(args, cwd, root, ancestors, skip, audit_log)
+
+
+def _inplace_operands(verb: str, args: List[str]) -> List[str]:
+    """
+    The file operands an in-place edit rewrites, or [] when the call does not
+    edit in place.
+
+    sed: `-i`, `-i.bak`, `-Ei`-style clusters, or `--in-place[=SUFFIX]`; every
+    non-flag argument counts, the script included. perl: a switch cluster
+    reaching `i` (`-pi`, `-0pi`, `-i.bak`); `-e`/`-E` values and, without
+    them, the program file are code, not targets. gawk/awk: `-i inplace`
+    (or `--include=inplace`); the program text and flag values are skipped.
+    """
+    if verb == "sed":
+        if any(arg.startswith("--in-place") or _SED_INPLACE.match(arg) for arg in args):
+            return _path_operands(args)
+        return []
+    in_place = False
+    program_given = False
+    operands: List[str] = []
+    if verb == "perl":
+        takes_value = False
+        for arg in args:
+            if takes_value:
+                takes_value = False
+                continue
+            if arg.startswith("-") and arg != "-" and not arg.startswith("--"):
+                cluster = arg[1:]
+                for position, letter in enumerate(cluster):
+                    if letter == "i":
+                        in_place = True
+                        break
+                    if letter in "eE":
+                        program_given = True
+                        takes_value = position == len(cluster) - 1
+                        break
+                    if letter in _PERL_VALUE_SWITCHES:
+                        break
+                continue
+            if not arg or arg.startswith("-"):
+                continue
+            if not program_given:
+                program_given = True
+                continue
+            operands.append(arg)
+        return operands if in_place else []
+    # gawk / awk
+    value_of = ""
+    for arg in args:
+        if value_of:
+            if value_of == "include" and arg in ("inplace", "inplace.awk"):
+                in_place = True
+            value_of = ""
+            continue
+        if arg in ("-i", "--include"):
+            value_of = "include"
+        elif arg in ("-iinplace", "-iinplace.awk", "--include=inplace", "--include=inplace.awk"):
+            in_place = True
+        elif arg in ("-f", "--file", "-e", "--source", "-E", "--exec"):
+            program_given = True
+            value_of = "program"
+        elif arg in ("-v", "--assign", "-F", "--field-separator", "-l", "--load"):
+            value_of = "value"
+        elif arg.startswith(("-f", "-e", "-E", "--file=", "--source=", "--exec=")):
+            program_given = True
+        elif not arg or arg.startswith("-"):
+            continue
+        elif not program_given:
+            program_given = True
+        else:
+            operands.append(arg)
+    return operands if in_place else []
 
 
 def _looks_nested(token: str) -> bool:
@@ -1065,6 +1411,7 @@ def _analyze_substitutions(
     ancestors: FrozenSet[str],
     depth: int,
     skip: bool = False,
+    audit_log: Optional[str] = None,
 ) -> None:
     """
     Re-run the full argument layer over every command substitution body.
@@ -1083,7 +1430,7 @@ def _analyze_substitutions(
     if "$(" not in joined and "`" not in joined:
         return
     for body in _dollar_bodies(joined) + _backtick_bodies(joined):
-        _analyze_command(body, cwd, root, ancestors, depth + 1, skip)
+        _analyze_command(body, cwd, root, ancestors, depth + 1, skip, audit_log)
 
 
 def _strip_wrapper_args(verb: str, rest: List[str]) -> List[str]:
@@ -1116,6 +1463,7 @@ def _analyze_shell(
     ancestors: FrozenSet[str],
     depth: int,
     skip: bool = False,
+    audit_log: Optional[str] = None,
 ) -> None:
     """Recurse into a `sh -c '<command>'` style argument."""
     for index, token in enumerate(rest):
@@ -1124,7 +1472,7 @@ def _analyze_shell(
         if "c" not in token and token != "--command":
             continue
         if index + 1 < len(rest):
-            _analyze_command(rest[index + 1], cwd, root, ancestors, depth + 1, skip)
+            _analyze_command(rest[index + 1], cwd, root, ancestors, depth + 1, skip, audit_log)
 
 
 def _analyze_wrapper(
@@ -1135,19 +1483,27 @@ def _analyze_wrapper(
     ancestors: FrozenSet[str],
     depth: int,
     skip: bool = False,
+    audit_log: Optional[str] = None,
 ) -> None:
     """
     Analyze what a command runner will actually run.
 
     Handles both shapes: the real command as trailing arguments
     (`sudo rm -rf /`) and the real command as a single quoted string
-    (`eval "rm -rf /"`, `ssh host reboot`).
+    (`eval "rm -rf /"`, `ssh host reboot`). In skip mode `env -C DIR` is
+    refused: the wrapped command runs in a directory this walk does not track.
     """
+    if skip and verb == "env":
+        for arg in rest:
+            if arg.startswith(("-C", "--chdir")):
+                _refuse("unverifiable-cwd", _RULE_REASONS["unverifiable-cwd"], f"env {arg}")
+            if not arg.startswith("-") and not _ENV_ASSIGNMENT.match(arg):
+                break
     inner = _strip_wrapper_args(verb, rest)
-    _analyze_segment(inner, cwd, root, ancestors, depth + 1, skip)
+    _analyze_segment(inner, cwd, root, ancestors, depth + 1, skip, audit_log)
     for token in inner:
         if _looks_nested(token):
-            _analyze_command(token, cwd, root, ancestors, depth + 1, skip)
+            _analyze_command(token, cwd, root, ancestors, depth + 1, skip, audit_log)
         elif _verb_name(token) in _PROHIBITED_VERBS:
             _check_prohibited_verb(_verb_name(token), skip)
 
@@ -1159,6 +1515,7 @@ def _analyze_segment(
     ancestors: FrozenSet[str],
     depth: int,
     skip: bool = False,
+    audit_log: Optional[str] = None,
 ) -> str:
     """
     Analyze one simple command. Returns the cwd in effect for the next segment.
@@ -1168,7 +1525,7 @@ def _analyze_segment(
 
     # A substitution body is a command line in every token position — not
     # just under a wrapper verb — so analyze it before the verb-specific walk.
-    _analyze_substitutions(tokens, cwd, root, ancestors, depth, skip)
+    _analyze_substitutions(tokens, cwd, root, ancestors, depth, skip, audit_log)
 
     index = 0
     while index < len(tokens) and _ENV_ASSIGNMENT.match(tokens[index]):
@@ -1180,18 +1537,28 @@ def _analyze_segment(
     rest = tokens[index + 1:]
 
     if verb in _SHELLS:
-        _analyze_shell(rest, cwd, root, ancestors, depth, skip)
+        _analyze_shell(rest, cwd, root, ancestors, depth, skip, audit_log)
         return cwd
     if verb in _WRAPPERS:
-        _analyze_wrapper(verb, rest, cwd, root, ancestors, depth, skip)
+        _analyze_wrapper(verb, rest, cwd, root, ancestors, depth, skip, audit_log)
         return cwd
 
-    # `cd` changes what every later relative path in this command means.
+    # `cd` changes what every later relative path in this command means. In
+    # skip mode a target this walk cannot resolve — none (`cd` alone goes
+    # home), an expansion, or a glob — makes the cwd unknown, so later
+    # relative operands are refused instead of resolved against a guess.
     if verb == "cd":
         operands = _path_operands(rest)
-        if operands and not any(char in operands[0] for char in _EXPANSION_CHARS):
-            return _resolve_operand(operands[0], cwd)
-        return cwd
+        target = operands[0] if operands else ""
+        if not target or any(char in target for char in _EXPANSION_CHARS):
+            return _UNKNOWN_CWD if skip else cwd
+        if skip and any(char in target for char in _GLOB_CHARS):
+            return _UNKNOWN_CWD
+        if cwd == _UNKNOWN_CWD and not posixpath.isabs(target):
+            return _UNKNOWN_CWD
+        return _resolve_operand(target, cwd)
+    if skip and verb in ("pushd", "popd"):
+        return _UNKNOWN_CWD
 
     _check_prohibited_verb(verb, skip)
     if verb == "init":
@@ -1204,19 +1571,19 @@ def _analyze_segment(
     elif verb in ("umount", "mount"):
         _check_mount(verb, rest, cwd, root, ancestors, skip)
     else:
-        _check_path_verbs(verb, rest, cwd, root, ancestors, skip)
-    _check_redirect_targets(tokens, cwd, root, ancestors, skip)
+        _check_path_verbs(verb, rest, cwd, root, ancestors, skip, audit_log)
+    _check_redirect_targets(tokens, cwd, root, ancestors, skip, audit_log)
     return cwd
 
 
 def _tokenize(command: str) -> List[str]:
     """
-    Split a command line into shell tokens, keeping operators as separate items.
+    Split one line into shell tokens, keeping operators as separate items.
 
     `commenters` is cleared so a `#` mid-command does not silently hide the rest
-    of the line from analysis. On unbalanced quoting — where shlex is stricter
-    than bash — falls back to a crude split so this layer still runs; the
-    pattern layer has already examined the raw string either way.
+    of the line from analysis (_split_lines has already neutralized quotes
+    inside real comments). Unbalanced quoting is refused: any guessed split
+    could hide a command boundary the host shell will honor.
     """
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
@@ -1224,7 +1591,7 @@ def _tokenize(command: str) -> List[str]:
     try:
         return list(lexer)
     except ValueError:
-        return [token for token in re.split(r"[\s;|&()<>]+", command) if token]
+        _refuse("unparseable-quoting", _RULE_REASONS["unparseable-quoting"], command)
 
 
 def _split_segments(tokens: List[str]) -> List[List[str]]:
@@ -1243,6 +1610,187 @@ def _split_segments(tokens: List[str]) -> List[List[str]]:
     return segments
 
 
+def _heredoc_delimiter(command: str, start: int) -> Optional[Tuple[str, bool, bool, int]]:
+    """
+    Parse the heredoc word after a `<<` that ends at `start`.
+
+    Returns (delimiter, strip_tabs, body_expands, index past the word), or None
+    when no word follows or a quote in it never closes. Any quoting in the word
+    makes the body literal; unquoted, the body undergoes command substitution.
+    """
+    index = start
+    strip_tabs = command.startswith("-", index)
+    if strip_tabs:
+        index += 1
+    while index < len(command) and command[index] in " \t":
+        index += 1
+    word_start = index
+    word = ""
+    quoted = False
+    while index < len(command) and command[index] not in " \t\n;&|()<>":
+        char = command[index]
+        if char in "'\"":
+            close = command.find(char, index + 1)
+            if close == -1:
+                return None
+            word += command[index + 1:close]
+            quoted = True
+            index = close + 1
+        elif char == "\\" and index + 1 < len(command):
+            word += command[index + 1]
+            quoted = True
+            index += 2
+        else:
+            word += char
+            index += 1
+    if index == word_start:
+        return None
+    return word, strip_tabs, not quoted, index
+
+
+def _split_lines(command: str) -> List[Tuple[str, bool]]:
+    """
+    Split a command into what bash runs line by line, in order.
+
+    Returns (text, is_heredoc_body) pairs. A line is everything up to an
+    unquoted newline; a newline inside quotes stays in its line. shlex treats
+    newlines as plain whitespace, so without this split `ls\\nrm -rf .` would
+    tokenize as one `ls` command and the second line would go unchecked.
+
+    On the way the text is made shlex-safe without changing what it means to
+    bash: backslash-newline continuations are joined, ANSI-C `$'...'` strings
+    are rewritten so their escaped quotes do not unbalance shlex (the `$` is
+    kept, so the expansion rules still see it), and quote characters inside
+    comments are escaped (a comment's apostrophe would otherwise open a quote
+    that swallows the following lines). Comment text itself stays in the line,
+    so the argument layer still analyzes it conservatively.
+
+    Heredoc bodies are data, not commands: they are cut out of the line stream.
+    A body whose delimiter is unquoted is still returned, flagged, because its
+    `$(...)` and backtick substitutions execute. `<<` inside `$((`, `((`, `${`,
+    or `$[` is arithmetic or parameter syntax, not a heredoc, and never hides
+    the lines after it.
+    """
+    items: List[Tuple[str, bool]] = []
+    line: List[str] = []
+    pending: List[Tuple[str, bool, bool]] = []
+    nesting: List[str] = []
+    quote = ""
+    index = 0
+    length = len(command)
+    while index < length:
+        char = command[index]
+        if quote == "'":
+            line.append(char)
+            if char == "'":
+                quote = ""
+            index += 1
+            continue
+        if quote == "$'":
+            if char == "\\" and index + 1 < length:
+                escaped = command[index + 1]
+                line.append("'\\''" if escaped == "'" else char + escaped)
+                index += 2
+                continue
+            line.append(char)
+            if char == "'":
+                quote = ""
+            index += 1
+            continue
+        if char == "\\" and index + 1 < length:
+            if command[index + 1] != "\n":
+                line.append(command[index:index + 2])
+            index += 2
+            continue
+        if quote == '"':
+            line.append(char)
+            if char == '"':
+                quote = ""
+            index += 1
+            continue
+        if char == "\n":
+            items.append(("".join(line), False))
+            line = []
+            index += 1
+            for delimiter, strip_tabs, expands in pending:
+                body: List[str] = []
+                while index < length:
+                    end = command.find("\n", index)
+                    if end == -1:
+                        end = length
+                    raw = command[index:end]
+                    index = end + 1
+                    if (raw.lstrip("\t") if strip_tabs else raw) == delimiter:
+                        break
+                    body.append(raw)
+                if expands and body:
+                    items.append(("\n".join(body), True))
+            pending = []
+            continue
+        if char in "'\"":
+            quote = char
+            line.append(char)
+            index += 1
+            continue
+        if command.startswith("$'", index):
+            quote = "$'"
+            line.append("$'")
+            index += 2
+            continue
+        if char == "#" and (index == 0 or command[index - 1] in " \t\n;&|()<>"):
+            end = command.find("\n", index)
+            if end == -1:
+                end = length
+            comment = command[index:end]
+            line.append(comment.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"'))
+            index = end
+            continue
+        opener = ""
+        for candidate in ("$((", "((", "$(", "${", "$[", "("):
+            if command.startswith(candidate, index):
+                opener = candidate
+                break
+        if opener:
+            nesting.append("((" if opener.endswith("((") else opener)
+            line.append(opener)
+            index += len(opener)
+            continue
+        if char == ")" and nesting:
+            if nesting[-1] == "((" and command.startswith("))", index):
+                nesting.pop()
+                line.append("))")
+                index += 2
+                continue
+            if nesting[-1] in ("(", "$("):
+                nesting.pop()
+        elif (char == "}" and nesting and nesting[-1] == "${") or (
+            char == "]" and nesting and nesting[-1] == "$["
+        ):
+            nesting.pop()
+        elif command.startswith("<<<", index):
+            line.append("<<<")
+            index += 3
+            continue
+        elif command.startswith("<<", index):
+            parsed = None
+            if not any(context in ("((", "${", "$[") for context in nesting):
+                parsed = _heredoc_delimiter(command, index + 2)
+            if parsed:
+                delimiter, strip_tabs, expands, end = parsed
+                pending.append((delimiter, strip_tabs, expands))
+                line.append(command[index:end])
+                index = end
+                continue
+            line.append("<<")
+            index += 2
+            continue
+        line.append(char)
+        index += 1
+    if line:
+        items.append(("".join(line), False))
+    return items
+
+
 def _analyze_command(
     command: str,
     cwd: str,
@@ -1250,11 +1798,26 @@ def _analyze_command(
     ancestors: FrozenSet[str],
     depth: int = 0,
     skip: bool = False,
+    audit_log: Optional[str] = None,
 ) -> None:
-    """Run the argument layer over a command line."""
+    """
+    Run the argument layer over a command, one line at a time.
+
+    The effective cwd carries across lines exactly as it carries across `;`,
+    so `cd /etc` on one line governs the relative paths on the next. An
+    expanding heredoc body contributes only its substitution bodies.
+    """
     effective_cwd = cwd
-    for segment in _split_segments(_tokenize(command)):
-        effective_cwd = _analyze_segment(segment, effective_cwd, root, ancestors, depth, skip)
+    for text, heredoc_body in _split_lines(command):
+        if heredoc_body:
+            if depth < _MAX_NESTING:
+                for body in _dollar_bodies(text) + _backtick_bodies(text):
+                    _analyze_command(body, effective_cwd, root, ancestors, depth + 1, skip, audit_log)
+            continue
+        for segment in _split_segments(_tokenize(text)):
+            effective_cwd = _analyze_segment(
+                segment, effective_cwd, root, ancestors, depth, skip, audit_log
+            )
 
 
 def _validate_command(
@@ -1263,6 +1826,7 @@ def _validate_command(
     cwd: Optional[str] = None,
     skip_permissions: bool = False,
     blocked: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (),
+    audit_log: Optional[str] = None,
 ) -> None:
     """
     Refuse a command the destructive-command guardrail cannot prove safe.
@@ -1277,6 +1841,9 @@ def _validate_command(
             narrows which rules apply.
         blocked: The operator's compiled blocklist entries, checked before
             everything and never relaxed by skip mode.
+        audit_log: Absolute path of guardrail_bypass.log. Writing, deleting,
+            or truncating it (or a directory holding it) is refused in every
+            mode. None when the caller has no audit log to protect.
 
     Raises:
         ValueError: Naming the matched rule and the offending text. A refused
@@ -1299,7 +1866,9 @@ def _validate_command(
             _refuse(name, reason, match.group(0))
 
     # 3. Argument layer — default: full analysis. Skip: reduced analysis
-    # (catastrophic verbs, match-everything kills, container-only paths).
+    # (catastrophic verbs, match-everything kills, container-only paths);
+    # expansions, protected globs, persistence targets, and the audit log
+    # are checked in both.
     normalized_root = _normalize_absolute(root)
     _analyze_command(
         command,
@@ -1307,6 +1876,7 @@ def _validate_command(
         normalized_root,
         _protected_ancestors(normalized_root),
         skip=skip_permissions,
+        audit_log=_normalize_absolute(audit_log) if audit_log else None,
     )
 
 
@@ -1554,29 +2124,35 @@ class BashTool(Tool):
                 "set; if this exact action is genuinely needed, ask the operator to "
                 "enable the feature."
             )
+        audit_log = self._audit_log_path(cfg)
         _validate_command(
             command,
             cfg.root,
             workdir,
             skip_permissions=skip_permissions,
             blocked=_compile_blocklist(tuple(cfg.blocked_patterns)),
+            audit_log=audit_log,
         )
         if skip_permissions:
-            self._audit_bypass(cfg, workdir, command)
+            self._audit_bypass(audit_log, workdir, command)
 
-    def _audit_bypass(self, cfg: BashToolConfig, cwd: str, command: str) -> None:
+    def _audit_log_path(self, cfg: BashToolConfig) -> str:
+        """guardrail_bypass.log under the configured log_dir (inside root)."""
+        return posixpath.join(self._resolve(cfg, cfg.log_dir), "guardrail_bypass.log")
+
+    def _audit_bypass(self, path: str, cwd: str, command: str) -> None:
         """Append one line per skip-mode invocation to guardrail_bypass.log.
 
         Detection rather than prevention, by design: the ask-first gate is
         instruction-following and the config gate is the hard backstop. This
-        record is the operator's after-the-fact audit trail.
+        record is the operator's after-the-fact audit trail; the validator
+        refuses commands that would write, delete, or truncate it. Both fields
+        are repr-escaped so an embedded newline cannot forge a second line.
         """
-        log_dir = self._resolve(cfg, cfg.log_dir)
-        os.makedirs(log_dir, exist_ok=True)
-        path = posixpath.join(log_dir, "guardrail_bypass.log")
+        os.makedirs(posixpath.dirname(path), exist_ok=True)
         stamp = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
         with open(path, "a", encoding="utf-8") as handle:
-            handle.write(f"{stamp} cwd={cwd} command={command!r}\n")
+            handle.write(f"{stamp} cwd={cwd!r} command={command!r}\n")
 
     # -- run ----------------------------------------------------------------
 

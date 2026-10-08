@@ -58,30 +58,20 @@
 ## Files
 
 - `bash_guardrail_probe.py` — Regression battery for the
-  `tools/implementations/bash_tool.py` destructive-command guardrail.
-  Calls the real module-level `_validate_command(command, root, cwd,
-  skip_permissions, blocked)` against a
-  destructive corpus (filesystem-root and project-root deletion including
-  relative, quoted, globbed and shell-expanded spellings; system-tree deletion;
-  disk and filesystem destruction; power and runlevel changes; system permission
-  and ownership changes; mass process signalling; system-config writes;
-  download-to-shell; service and package removal; fork bombs; the user's
-  standing git rules refusing `checkout`/`restore`/`reset --hard`/`clean -f`;
-  other host damage) and a benign corpus of realistic ML-harness commands that
-  must not be refused; plus the skip_permissions matrix (must-refuse cases
-  pinning the catastrophic core, protected containers, the `/dev` and
-  `/Volumes` content pins, cron-wipe, mount-change, and losetup — must-allow
-  cases pinning the relaxed classes: system-config content, service control
-  including mira itself, power verbs, packages, firewall, the standing git
-  rules, shell expansions, content globs) and the operator-blocklist matrix
-  (entries refuse in BOTH modes; `*` crosses slashes, spaces, and quotes).
-  Exits non-zero on any bypass or false positive and prints
-  the firing rule name per case, so an over-broad match is visible rather than
-  silently credited. Known pre-existing red on main: N01–N08
-  (interpreter-payload escapes) bypass — exit 1 with exactly those 8 is the
-  expected state until that separate fix lands. Self-checks before running that `_validate_command` is
-  still pure, via a recursive `dis` walk allowlisting every global it loads.
-  Run from the repo root:
-  `python3 tests/protected/bash_guardrail_probe.py` (the `-m` form fails —
-  no `__init__.py` in `tests/`).
+  `tools/implementations/bash_tool.py` guardrail, calling the real
+  `_validate_command(command, root, cwd, skip_permissions, blocked, audit_log)`
+  with the handlers' audit-log path. Five matrices, each case with its
+  expectation: the default destructive and benign corpora (the parity baseline
+  — leave them as-is when a change targets another mode), skip_permissions
+  must-refuse/must-allow, the operator blocklist (both modes), and the
+  both-modes matrix (default-mode closures plus the line-splitter, heredoc, and
+  editing-skill shapes that must keep passing). The case tables are the
+  coverage record; read them, not this bullet. Exits non-zero on any bypass or
+  false positive and prints the firing rule per case. Known pre-existing red:
+  N01–N08 (interpreter-payload escapes) bypass — exit 1 with exactly those 8 is
+  the expected state until that separate fix lands. Self-checks first that
+  `_validate_command` is still pure (recursive `dis` walk allowlisting every
+  global it loads). Run from the repo root:
+  `python3 tests/protected/bash_guardrail_probe.py` (the `-m` form fails — no
+  `__init__.py` in `tests/`).
 - `injection_defense_probe.py` — Battery for `utils/untrusted_content.py`. Offline half (network blocked): `_reveal_hidden` must surface each hidden payload (base64, hex, `\x` escapes, percent, HTML entities, tag characters, letter-spacing) and reveal nothing on designated benign text; `wrap_untrusted` over every case and hostile source labels must keep exactly one boundary, no raw `<`/`>`/`"` inside it, and no tag characters. Live half: tier-1 `InjectionScreen.assess()` over 64 labeled attacks (indirect and subtle manipulation; each names the questions it should trigger) and 46 hard benign cases through a real `SystemOneClient` built from `config.systemone`; `screen()` witnessed on one auto-rejected and one auto-passed case. Tier 2 (the escalation LLM) is not exercised — it resolves a route from `model_configs`. Fails only on a safety failure (attack auto-passed unless recorded as a documented miss; benign auto-rejected), an offline failure, a witness failure, or a blocked side effect; reports drift between safe dispositions, per-question counts, corpus loss, and the smallest safety margins for wording work. Run from the repo root: `SYSTEMONE_API_KEY=... python3 tests/protected/injection_defense_probe.py`.

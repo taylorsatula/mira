@@ -65,11 +65,15 @@ ModuleNotFoundError.
 Exit status is 0 only when every destructive case is refused and every benign
 case is allowed.
 
-Beyond the default-mode regression corpus, this battery pins the two newer
+Beyond the default-mode regression corpus, this battery pins the newer
 surfaces: the skip_permissions matrix (the catastrophic core must still refuse
-in skip mode while the recoverable classes pass) and the operator-blocklist
-matrix (entries refuse in BOTH modes and `*` crosses slashes, spaces, and
-quotes). Handler-level behavior — the config hard gate on
+in skip mode while the recoverable classes pass), the operator-blocklist
+matrix (entries refuse in BOTH modes and `*` crosses slashes, spaces, quotes,
+and newlines), and the both-modes matrix (persistence respellings, newline
+chains, the bypass audit log, and guardrail self-edits refused in default and
+skip mode alike; heredocs, comments, and the editing skill's patterns allowed).
+Every verdict passes AUDIT_LOG as the handlers do. Handler-level behavior — the
+config hard gate on
 `dangerous_skip_permissions_enabled`, the guardrail_bypass.log audit line, and
 the `guardrail: bypassed` result banner — lives in BashTool.run and is out of
 this battery's reach by contract (never construct the tool); it is verified on
@@ -160,6 +164,12 @@ import re  # noqa: E402
 from tools.implementations import bash_tool as mbt  # noqa: E402
 
 ROOT = "/home/admin/mlfactory"
+# The handlers pass guardrail_bypass.log under log_dir; root and log_dir both
+# default to the service home, so the log sits directly under the root.
+AUDIT_LOG = ROOT + "/.mira_logs/guardrail_bypass.log"
+# MIRA's own code tree as the module computed it, for the guardrail-self-edit
+# cases (the tool's own source and config/ are refused in every mode).
+APP = str(mbt._APP_ROOT)
 
 # -- guarantee 3: the validator must stay pure (allowlist, recursive) ---------
 
@@ -559,11 +569,13 @@ BENIGN = [
 #
 # skip_permissions=True runs under the catastrophic core only. The two halves
 # pin both directions: what must still refuse (unrecoverable, audit-erasing,
-# containers, and the operator decisions of 2026-10-03: /dev and /Volumes
-# contents, cron-wipe, mount-change, losetup) and what must genuinely pass
-# (recoverable judgment calls: system-config content, service control including
-# mira itself, power verbs, packages, firewall, the standing git rules, shell
-# expansions, globs over recoverable content).
+# containers and their /private spellings, container-emptying globs, paths that
+# depend on unresolvable expansion or an untracked cwd, the log trees,
+# respelled persistence targets, newline-hidden chains, and the operator
+# decisions of 2026-10-03: /dev and /Volumes contents, cron-wipe, mount-change,
+# losetup) and what must genuinely pass (recoverable judgment calls:
+# system-config content, service control including mira itself, power verbs,
+# packages, firewall, the standing git rules, globs over recoverable content).
 
 SKIP_MUST_REFUSE = [
     ("T01", "rm -rf /", "filesystem root"),
@@ -607,6 +619,70 @@ SKIP_MUST_REFUSE = [
     ("T39", "wipefs -a /dev/sda", "catastrophic verb"),
     ("T40", "rm -rf /System", "macOS system container"),
     ("T41", "rm -rf /Volumes", "Volumes container itself"),
+    # Unexpanded ~ and $ resolve where the host shell decides: ~ is the home,
+    # which is the default project root. Refused, never classified as a
+    # literal relative path.
+    ("T42", "rm -rf ~", "tilde is the service home, the default project root"),
+    ("T43", "rm -rf $HOME", "variable expanding to the home"),
+    ("T44", 'rm -rf "$PWD"', "variable expanding to the cwd"),
+    ("T45", "rm -rf ~otheruser", "tilde-user expanding to a foreign home"),
+    ("T46", "D=/etc; rm -rf $D", "variable set to a container on the same line"),
+    ("T47", "rm -rf ${X:-/etc}", "default-value expansion naming a container"),
+    ("T48", "rm -rf ~/mlscratch", "under ~ is unprovable: HOME can be reassigned (formerly must-allow S17)"),
+    ("T49", "rm -f $HOME/junk.txt", "under $HOME is unprovable for the same reason (formerly must-allow S18)"),
+    ("T50", "D=/etc/passwd; echo x > $D", "write redirect into an expansion"),
+    ("T51", "cd ~ && rm -rf mlfactory", "cd into an expansion leaves later relative paths unresolvable"),
+    ("T52", "cd /e* && rm -rf .", "cd into a glob leaves later relative paths unresolvable"),
+    ("T53", "pushd /etc && rm -rf sudoers", "pushd moves the cwd untracked"),
+    ("T54", "env -C / rm -rf etc", "env -C runs the command in an untracked directory"),
+    # Globs that empty a protected container. Skip mode locates a glob at its
+    # first globbed component, so `*/*` from `/` expands inside `/`.
+    ("T55", "rm -rf /usr/*", "empties a system container"),
+    ("T56", "rm -rf /etc/*", "empties a system container"),
+    ("T57", "rm -rf *", "empties the project root"),
+    ("T58", "rm -rf /Users/otheruser/*", "empties a foreign macOS home"),
+    ("T59", "rm -rf /home/admin/mlfactory/*", "empties the project root by absolute path"),
+    ("T60", "cd / && rm -rf */*", "a non-final glob component expanding inside /"),
+    ("T61", "rm -rf /*/nginx", "a non-final glob component expanding inside /"),
+    # macOS /private spellings of /etc, /var, /tmp are the same containers.
+    ("T62", "rm -rf /private/etc", "the macOS /etc container by its real path"),
+    ("T63", "rm -rf /private/var", "the macOS /var container by its real path"),
+    ("T64", "rm -rf /private/tmp", "the macOS /tmp container by its real path"),
+    # The log tree is the audit trail: protected contents in every mode.
+    ("T65", "rm -rf /var/log/*", "glob-emptying the log tree (formerly must-allow S19, which contradicted the audit-erasure core)"),
+    ("T66", "rm -rf /var/log", "deleting the log tree"),
+    ("T67", "rm -f /var/log/auth.log", "deleting one audit log"),
+    ("T68", "rm -rf /var/log/journal", "deleting the journal"),
+    ("T69", ": > /var/log/auth.log", "truncating an audit log by redirect"),
+    ("T70", "find /var/log -type f -delete", "find-deleting every log"),
+    ("T71", "rm -rf /private/var/log", "the log tree by its macOS real path"),
+    ("T72", "truncate -s 0 /private/var/log/system.log", "truncating a macOS log by its real path"),
+    # Respelled sudoers paths: the sudoers-write regex sees only the literal.
+    ("T73", "cd /etc && cp evil sudoers", "cd-chained sudoers write"),
+    ("T74", "cp evil /etc//sudoers", "double-slash sudoers write"),
+    ("T75", "cp evil /etc/./sudoers.d/x", "dot-segment sudoers.d write"),
+    ("T76", 'cp evil "/etc/sudo"ers', "quote-split sudoers write"),
+    ("T77", "mv evil /etc/./sudoers.d/90-mira", "move into sudoers.d"),
+    ("T78", "cp evil /private/etc/./sudoers", "sudoers by its macOS real path"),
+    ("T79", "cd /etc && cd sudoers.d && perl -pi -e 's/^#//' 90-cloud-init-users", "perl in-place edit of a sudoers.d file"),
+    # ssh key planting by copy, link, dd, and in-place edit.
+    ("T80", "cp key /root/.ssh/authorized_keys", "copy over authorized_keys"),
+    ("T81", "sed -i '$a ssh-rsa AAAA attacker' /root/.ssh/authorized_keys", "sed append to authorized_keys"),
+    ("T82", "sed -i '1i ssh-rsa AAAA attacker' /root/.ssh/authorized_keys", "sed insert into authorized_keys, no expansion"),
+    ("T83", "ln -sf /tmp/key /root/.ssh/authorized_keys", "symlink authorized_keys to a planted file"),
+    ("T84", "cd /root/.ssh && dd if=/tmp/key of=authorized_keys", "dd onto authorized_keys"),
+    ("T85", "cd /root/.ssh && perl -pi -e 's/^/ssh-rsa AAAA\\n/' authorized_keys", "cd-chained perl in-place edit of authorized_keys"),
+    ("T86", "cp -r /tmp/evil /root/.ssh", "replacing an SSH directory wholesale"),
+    ("T87", "cp key /root/.ssh/authorized_k*", "glob onto authorized_keys"),
+    # Newline-separated chains and shlex failures.
+    ("T88", "echo hi\nrm -rf /etc", "destructive second line"),
+    ("T89", "echo $'it\\'s'; rm -rf /etc", "ANSI-C quoting that shlex cannot balance"),
+    ("T90", "echo 'unterminated; rm -rf /etc", "unbalanced quoting is refused, never guessed"),
+    ("T91", "# don't\nrm -rf /etc\n'", "a comment's apostrophe must not swallow the next line"),
+    ("T92", "echo ${x:-<<y}\nrm -rf /etc\ny", "`<<` inside ${...} is not a heredoc"),
+    ("T93", "echo $((x<<y))\nrm -rf /etc\ny", "`<<` inside $((...)) is not a heredoc"),
+    ("T94", "cat > a.txt <<EOF\nv $(rm -rf /etc)\nEOF", "an unquoted heredoc body still runs its substitutions"),
+    ("T95", "rm -rf \\\n/etc", "backslash-newline continuation joins the operand"),
 ]
 
 SKIP_MUST_ALLOW = [
@@ -626,9 +702,6 @@ SKIP_MUST_ALLOW = [
     ("S14", "git restore .", "standing git rule relaxed under skip"),
     ("S15", "git reset --hard HEAD~1", "standing git rule relaxed under skip"),
     ("S16", "git clean -fd", "standing git rule relaxed under skip"),
-    ("S17", "rm -rf ~/mlscratch", "the host shell resolves ~ itself"),
-    ("S18", "rm -f $HOME/junk.txt", "the host shell resolves $VAR itself"),
-    ("S19", "rm -rf /var/log/*", "glob over recoverable content"),
     ("S20", "passwd tempuser", "password change (relaxable set)"),
     ("S21", "userdel -r tempuser", "account removal (relaxable set)"),
     ("S22", "chattr +i /etc/app.conf", "attribute change on content (relaxable set)"),
@@ -637,6 +710,67 @@ SKIP_MUST_ALLOW = [
     ("S25", "chmod 777 /etc/app.conf", "permission change on content"),
     ("S26", "mv /etc/app.conf /var/tmp/app.conf", "relocating content to a recoverable destination"),
     ("S27", "truncate -s 0 /etc/app.conf", "truncating content"),
+    ("S28", "rm -f /etc/nginx/sites-enabled/*.conf", "glob over content inside a content directory"),
+    ("S29", "cd /etc/nginx && rm -f old.conf", "a literal cd is still tracked under skip"),
+    ("S30", "rm -rf /private/tmp/scratch", "content under the macOS /tmp container"),
+    ("S31", "perl -pi -e 's/80/8080/' /etc/nginx/nginx.conf", "perl in-place edit of content"),
+    ("S32", "echo 'export X=1' >> /etc/profile.d/app.sh", "content append via redirect"),
+]
+
+# Run in BOTH modes; none of these may pass. Default-mode holes closed
+# alongside the skip-mode core: persistence planting by respelled path or by
+# copy/link (pattern layer sees only the literal `>`/tee forms), newline
+# chains the tokenizer used to read as one command, the bypass audit log
+# inside the writable root, and the guardrail's own source and config.
+BOTH_MODES_MUST_REFUSE = [
+    ("P01", "cp key /home/admin/.ssh/authorized_keys", "copy a key into an ancestor home's SSH dir"),
+    ("P02", "cp key /home/admin/mlfactory/.ssh/authorized_keys", "copy a key into an SSH dir inside the root"),
+    ("P03", "ln -sf /tmp/key /home/admin/mlfactory/.ssh/authorized_keys", "symlink authorized_keys inside the root"),
+    ("P04", "dd if=/tmp/key of=/home/admin/mlfactory/.ssh/authorized_keys", "dd onto authorized_keys inside the root"),
+    ("P05", "cd .ssh && cp /tmp/key authorized_keys", "cd-chained copy onto authorized_keys"),
+    ("P06", "install -m 600 key /home/admin/mlfactory/.ssh/authorized_keys2", "install over authorized_keys2"),
+    ("P07", "rsync key /home/admin/mlfactory/.ssh/authorized_keys", "rsync onto authorized_keys"),
+    ("P08", "cd /etc && cp evil sudoers", "cd-chained sudoers write"),
+    ("P09", "cp evil /etc//sudoers", "double-slash sudoers write"),
+    ("P10", "cp evil /etc/./sudoers.d/x", "dot-segment sudoers.d write"),
+    ("P11", "cd /etc && echo x >| sudoers", "noclobber-override redirect onto sudoers"),
+    ("P12", "ls\nrm -rf .", "newline-separated delete of the project root"),
+    ("P13", "ls\nrm -rf /home/admin/mlfactory", "newline-separated delete of the project root by path"),
+    ("P14", "echo hi\nrm -rf /etc", "newline-separated system delete"),
+    ("P15", "echo $'it\\'s'; rm -rf /etc", "ANSI-C quoting that shlex cannot balance"),
+    ("P16", "echo 'unterminated; rm -rf .", "unbalanced quoting is refused, never guessed"),
+    ("P17", "# don't\nrm -rf .\n'", "a comment's apostrophe must not swallow the next line"),
+    ("P18", "rm -f .mira_logs/guardrail_bypass.log", "delete the bypass audit log"),
+    ("P19", ": > .mira_logs/guardrail_bypass.log", "truncate the bypass audit log"),
+    ("P20", "rm -rf .mira_logs", "delete the directory holding the audit log"),
+    ("P21", "rm -f .mira_logs/*", "glob over the audit log"),
+    ("P22", "cp /tmp/empty .mira_logs/guardrail_bypass.log", "overwrite the audit log by copy"),
+    ("P23", "find . -name '*.log' -delete", "a find whose -name matches the audit log"),
+    ("P24", f"perl -pi -e 's/default=False/default=True/' {APP}/tools/implementations/bash_tool.py", "rewrite the guardrail's own source"),
+    ("P25", f"echo x > {APP}/tools/implementations/bash_tool.py", "overwrite the guardrail's own source"),
+    ("P26", f"mv {APP}/tools {APP}/tools_old", "move the guardrail's directory aside"),
+    ("P27", f"sed -i 's/a/b/' {APP}/config/config.py", "edit MIRA's config area"),
+    ("P28", f"rm -rf {APP}/config", "delete MIRA's config area"),
+]
+
+# Run in BOTH modes; all of these must pass. Shapes the line splitter, the
+# heredoc handling, and the new path checks must not break: the
+# precise-file-editing skill's own patterns, commit messages, comments.
+BOTH_MODES_MUST_ALLOW = [
+    ("Q01", "git commit -m \"$(cat <<'EOF'\nfix: it's done\n\nbody\nEOF\n)\"", "heredoc commit message with an apostrophe"),
+    ("Q02", "cat > service.conf <<'EOF'\nhost = 127.0.0.1  # it's local\nEOF", "quoted heredoc write with an apostrophe in the body"),
+    ("Q03", "perl -pi -e 's/\\Qlisten_port = $old\\E/listen_port = 9090/' app.conf", "the skill's perl \\Q..\\E in-place pattern"),
+    ("Q04", "grep -c 'port' app.conf && \\\nperl -pi -e 's/8080/9090/' app.conf && \\\ngrep -n 'port' app.conf", "the skill's check-edit-verify chain across continuation lines"),
+    ("Q05", "ls -la  # don't list hidden", "a comment with an apostrophe"),
+    ("Q06", "cut -d$'\\t' -f1 data.tsv", "ANSI-C quoted delimiter"),
+    ("Q07", "for f in *.csv\ndo\n  wc -l \"$f\"\ndone", "a multi-line loop"),
+    ("Q08", "rm -rf */__pycache__", "a non-final glob inside the root"),
+    ("Q09", "rm -f .mira_logs/20261007T120000Z-job.log", "delete a run_background job log, not the audit log"),
+    ("Q10", "find . -name '*.pyc' -delete", "a find whose -name provably excludes the audit log"),
+    ("Q11", "chmod 600 /home/admin/mlfactory/.ssh/authorized_keys", "tightening permissions plants nothing"),
+    ("Q12", f"perl -pi -e 's/a/b/' {APP}/tools/implementations/web_tool.py", "the rest of MIRA's code tree stays editable"),
+    ("Q13", "echo $((1<<4))", "arithmetic shift, not a heredoc"),
+    ("Q14", "python - <<'PY'\nprint(\"it's\")\nPY", "quoted heredoc into an interpreter"),
 ]
 
 
@@ -654,6 +788,8 @@ BLOCKED_CASES = [
     ("B04", "rm -rf '/etc/nginx'", ("rm -rf *etc*",), "refuse", "* crosses quotes and slashes"),
     ("B05", "git status", ("git checkout",), "allow", "an unrelated command passes — the blocklist does not over-block everything"),
     ("B06", "cat /etc/nginx/nginx.conf", ("rm -rf *etc*",), "allow", "a delete-shaped entry does not fire on a read"),
+    ("B07", "systemctl restart \\\nmira", ("systemctl restart *mira",), "refuse", "* crosses a backslash-newline continuation"),
+    ("B08", "git checkout \\\n main", ("git * main",), "refuse", "* crosses a newline mid-command"),
 ]
 
 
@@ -663,7 +799,8 @@ def _verdict(command, cwd, skip=False, blocked=()):
     """Return (blocked: bool, message: str|None) from the real validator."""
     try:
         mbt._validate_command(
-            command, ROOT, cwd or ROOT, skip_permissions=skip, blocked=blocked
+            command, ROOT, cwd or ROOT, skip_permissions=skip, blocked=blocked,
+            audit_log=AUDIT_LOG,
         )
         return False, None
     except ValueError as exc:
@@ -757,11 +894,35 @@ def main():
         if not ok:
             blocklist_failures.append((case_id, command, expect, why))
 
+    # -- both-modes matrix ---------------------------------------------------
+    both_failures = []
+    for title, cases, expect_refused in (
+        ("both-modes must-refuse", BOTH_MODES_MUST_REFUSE, True),
+        ("both-modes must-allow", BOTH_MODES_MUST_ALLOW, False),
+    ):
+        print()
+        print(f"{title} cases (each in both modes): {len(cases)}")
+        for case_id, command, why in cases:
+            line = f"{case_id} {command!r}"
+            ok = True
+            for mode, skip in (("default", False), ("skip", True)):
+                blocked, message = _verdict(command, None, skip=skip)
+                line += f"  {mode}:{'refused' if blocked else 'allowed'}"
+                if blocked:
+                    line += f"[{_rule_of(message)}]"
+                if blocked != expect_refused:
+                    ok = False
+                    line += " MISMATCH"
+            print(("OK       " if ok else "FAIL!!   ") + line)
+            if not ok:
+                both_failures.append((case_id, command, expect_refused, why))
+
     print()
     print("=" * 72)
     print(f"skip must-refuse:   {len(SKIP_MUST_REFUSE)}   blocked: {len(SKIP_MUST_REFUSE) - len(skip_bypasses)}   BYPASSED: {len(skip_bypasses)}")
     print(f"skip must-allow:    {len(SKIP_MUST_ALLOW)}   allowed: {len(SKIP_MUST_ALLOW) - len(skip_false_positives)}   FALSE POSITIVES: {len(skip_false_positives)}")
     print(f"blocklist cases:    {len(BLOCKED_CASES)}   failed: {len(blocklist_failures)}")
+    print(f"both-modes cases:   {len(BOTH_MODES_MUST_REFUSE) + len(BOTH_MODES_MUST_ALLOW)}   failed: {len(both_failures)}")
     print("=" * 72)
 
     if bypasses:
@@ -796,7 +957,16 @@ def main():
             print(f"  {case_id}  {command!r} (expected {expect})")
             print(f"        {why}")
 
-    return 1 if (bypasses or false_positives or skip_bypasses or skip_false_positives or blocklist_failures) else 0
+    if both_failures:
+        print("\nBOTH-MODES FAILURES (a case behaved wrongly in default or skip mode):")
+        for case_id, command, expect_refused, why in both_failures:
+            print(f"  {case_id}  {command!r} (expected {'refused' if expect_refused else 'allowed'})")
+            print(f"        {why}")
+
+    return 1 if (
+        bypasses or false_positives or skip_bypasses or skip_false_positives
+        or blocklist_failures or both_failures
+    ) else 0
 
 
 if __name__ == "__main__":
