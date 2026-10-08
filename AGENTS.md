@@ -8,6 +8,8 @@ MIRA is a self-hosted personal AI assistant — persistent long-term memory, a u
 
 **Stack.** PostgreSQL + pgvector with RLS — user isolation is a database property enforced from the contextvar; never hand-filter queries (`clients/postgres_client.py`). Valkey (cache, sessions, queues, locks). Vault holds every credential; env vars and fallbacks are prohibited (`clients/vault_client.py`; per-user secrets via `utils/user_credentials.py`). Per-user encrypted SQLite for tool data (`encrypted__` column prefix). Embeddings and LLM inference resolve from DB config rows — local llama.cpp or any cloud provider, selected by route name, never hardcoded.
 
+**Tribal terms.** Did you encounter a tribal knowledge word that seems out of context in a user message or tool result? Go check it here: `docs/GLOSSARY.md` (one sentence per term, with the owning map).
+
 ## Nested AGENTS.md Maps — Shape & Maintenance
 
 Every directory with ≥2 source files, or any invariant not documented in its
