@@ -104,6 +104,7 @@ unnecessary edit costs a line; a missed one misleads every session.
   `deploy/deploy.sh`, and hands off with stdin reattached to `/dev/tty` so
   `curl … | bash` stays interactive; forwards installer flags (`--config`,
   `--loud`, `--local`). Release mechanics owned by `deploy/AGENTS.md`.
+- `.env.example` — repo-root env-var template (container first-boot vars plus the runtime feature switches `config/config_manager.py` reads). Nothing loads it; the operative container contract is `deploy/.env.example` + `deploy/docker/scripts/init-mira.sh`.
 - `README.md`, `license.txt`, `NEARFUTURE_FEATURES.md` — static repo documents;
   no runtime consumers.
 - `BREAKING.md` — transient breaking-release marker: its presence makes `mira update`
