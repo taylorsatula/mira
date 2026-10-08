@@ -145,7 +145,10 @@ first after any context compaction**, then the orientation list at the bottom.
    else UNVERIFIED); `context_reset` / `INVALID_MESSAGE` / `TURN_SETUP_FAILED`
    only if reproducible (else UNVERIFIED).
 4. Ask the user to try it by hand in iTerm2/Terminal.app: resize narrower and
-   shorter mid-stream (pyte could not verify reflow / height-shrink residue).
+   shorter mid-stream (the client-writable residue classes are now closed
+   and probe-verified via a CPR-answering pty harness — see the pinned
+   contract; the height-shrink reflow class a pty cannot model is
+   understood and accepted).
 5. Report EXECUTED / UNVERIFIED per path; do not commit unless asked.
   UNVERIFIED pending the live VM: real-server timing/lock/halt latency,
   `TURN_SETUP_FAILED`/`INVALID_MESSAGE` paths, real tool payloads; not driven:
@@ -407,8 +410,23 @@ REST `_post_chat` + `preflight` go away (WS auth replaces preflight).
   leaves raw mode**: `await app.renderer.wait_for_cpr_responses()` (bounded,
   library default 1 s), then synchronously, with no await in between:
   `app.renderer.erase()` → write the rendered ANSI through `app.output`
-  (`write_raw` + `flush`) → `app._request_absolute_cursor_position()` →
+  (`write_raw` + `flush`) → request a cursor position → await its answer →
   `app._redraw()`. Our own emits are serialized by an `asyncio.Lock`.
+  **Resize re-anchoring (2026-10-08, probe-verified with a CPR-answering
+  pty harness):** scrollback renders at the live width inside the lock; the
+  redraw never runs before a cursor answer has re-anchored the renderer —
+  a repaint with no answer since the erase paints a minimum-height bar at
+  the physical cursor, no later erase reaches those rows, and they scroll
+  into append-only scrollback. `Screen.run` installs three
+  instance-attribute shadows over the library hooks (`_handle_resize`,
+  `_gated_redraw`, `_report_cursor`): pre-resize cursor answers are
+  discarded (computed against pre-reflow geometry), and every repaint —
+  including the 0.5 s auto-refresh and the library's own resize repaint —
+  is gated until a post-resize answer lands. Known accepted residual: one
+  bar's rule rows per resize storm, from the relative `cursor_up` erase
+  under-reaching after a reflow; a real terminal's height-shrink itself
+  additionally scrolls the bar into scrollback before any client byte
+  runs — unfixable by any client.
   `patch_stdout(raw=True)` stays as the safety net for stray library writes
   (rare path; it uses `run_in_terminal` internally — accepted).
 - **Push-to-bottom at startup.** After `renderer.reset()` the next redraw
