@@ -89,8 +89,8 @@ MAX_CONTENT_LENGTH = 100_000
 # ``put_nowait``()s it into an in-process queue — it never touches the network
 # — so a healthy send needs a single event-loop turn, effectively instantly.
 # The bound is therefore sized against the turn's structural envelope, not the
-# send's: one turn is capped at 50 local tool calls (orchestrator
-# MAX_LOCAL_TOOL_CALLS_PER_TURN) at ~180s provider timeout apiece, and this
+# send's: one turn is capped at MAX_LOCAL_TOOL_CALLS_PER_TURN local tool calls
+# (orchestrator) at ~180s provider timeout apiece, and this
 # per-chunk wait is a small fraction of that envelope while remaining orders of
 # magnitude above any healthy loop's scheduling latency. A wait that exceeds it
 # means the loop is wedged; the expiry path in ``stream_to_connection`` then

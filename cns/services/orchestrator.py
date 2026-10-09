@@ -80,7 +80,14 @@ TOOL_RESULT_MAX_CHARS = 31999  # Max chars for single tool result before truncat
 
 # Tool result persistence
 TOMBSTONE_MODE = False  # When True, tool results not persisted to history
-MAX_LOCAL_TOOL_CALLS_PER_TURN = 50
+
+# Ceiling on local tool calls in one user turn. Reaching it disables tools and
+# gives the model one final generation step to answer from what it gathered, so
+# this bounds turn length alongside api.timeout (per model step) rather than
+# standing in for a wall-clock deadline. Derived consumers: the HTTP chat lock
+# TTL and the websocket/MCP timeout rationales (cns/api/chat.py, mcp.py),
+# which size themselves from this plus the provider timeouts.
+MAX_LOCAL_TOOL_CALLS_PER_TURN = 1000
 
 logger = logging.getLogger(__name__)
 
