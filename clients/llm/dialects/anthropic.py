@@ -136,11 +136,14 @@ class AnthropicDialect(Dialect):
             # anthropic.Timeout is the SDK's own re-export of its vendored
             # httpx Timeout class (httpx on SDK 0.x, httpx2 on SDK 1.x) - passing
             # an externally-constructed httpx.Timeout is rejected by SDK 1.x.
-            timeout=anthropic.Timeout(connect=30.0, read=600.0, write=30.0, pool=30.0),
+            timeout=anthropic.Timeout(connect=30.0, read=900.0, write=30.0, pool=30.0),
             # config.api.timeout is accepted-but-not-applied on the Anthropic
-            # route by design (hrzs, declined): the 600s read window is kept
-            # for long non-streaming/extended-thinking responses. The tradeoff
-            # of wiring the knob was weighed at census-20260930b and declined
+            # route by design (hrzs, declined): the hardcoded read window is
+            # kept for long non-streaming/extended-thinking responses, sized
+            # to match api.provider_response_timeout (900s, 2026-10-08 — the
+            # stall bound and the read window move together, else the tighter
+            # one is the only bound that exists). The tradeoff of wiring the
+            # knob was weighed at census-20260930b and declined
             # (Taylor, 2026-09-30).
         )
         from utils.logging_config import instrument_anthropic_client
