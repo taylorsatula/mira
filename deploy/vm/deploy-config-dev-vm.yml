@@ -35,6 +35,7 @@ systemone_endpoint: ""
 systemone_model: ""
 systemone_api_key: ""
 db_password: ""
+user_name: ""
 timezone: ""
 install_playwright: yes
 install_systemd: yes

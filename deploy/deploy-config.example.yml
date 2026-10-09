@@ -87,7 +87,7 @@ embedding_provider: remote
 # Remote only (leave "" for local): full URL ending in /v1/embeddings, the
 # model the endpoint serves, and its bearer token ("" if it takes none).
 embedding_endpoint: "https://gw.lunaroute.com/v1/embeddings"
-embedding_model: "emb-nomic-moe"
+embedding_model: "emb-qwen3"
 # "" = reuse chat_api_key on the lunaroute gateway; set a key for any other
 # remote endpoint that requires one.
 embedding_api_key: ""
@@ -116,6 +116,13 @@ systemone_api_key: ""
 # "" = the install uses the documented sentinel password ((changethisifdeployingpwd)).
 # Avoid single quotes in a custom password (SQL interpolation limitation).
 db_password: ""
+
+# ---------------------------------------------------------------------------
+# Your name
+# ---------------------------------------------------------------------------
+# First name for the single-mode local account — what MIRA calls you in its
+# welcome messages and orientation memory. "" = the "Friend" default.
+user_name: ""
 
 # ---------------------------------------------------------------------------
 # Timezone

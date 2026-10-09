@@ -36,10 +36,12 @@ logger = logging.getLogger(__name__)
 # mode (`GET /v0/auth/local/session`). This must never adopt a real person's
 # identity; `user@localhost` matches the row pre-multi-user installs seeded,
 # so an upgraded install adopts its existing data instead of provisioning a
-# second identity. The timezone is derived from this install's configured
-# default rather than hardcoded.
+# second identity. The timezone and the account's first name are derived from
+# this install's configured defaults (SystemConfig.timezone and
+# SystemConfig.local_session_first_name — the latter deploy-collected via
+# MIRA_LOCAL_SESSION_FIRST_NAME, defaulting to "Friend") rather than hardcoded
+# here.
 LOCAL_SESSION_EMAIL = "user@localhost"
-LOCAL_SESSION_FIRST_NAME = "Friend"
 LOCAL_SESSION_LAST_NAME: Optional[str] = None
 LOCAL_SESSION_CURRENT_FOCUS = "Get oriented with MIRA"
 
@@ -232,11 +234,12 @@ class AuthService:
         from config.config_manager import config as system_config
 
         timezone = system_config.system.timezone
+        first_name = system_config.system.local_session_first_name
         user = self.db.get_user_by_email(LOCAL_SESSION_EMAIL)
         if user is None:
             user_id = self.db.create_user(
                 email=LOCAL_SESSION_EMAIL,
-                first_name=LOCAL_SESSION_FIRST_NAME,
+                first_name=first_name,
                 last_name=LOCAL_SESSION_LAST_NAME,
                 timezone=timezone,
                 current_focus=LOCAL_SESSION_CURRENT_FOCUS,
@@ -244,7 +247,7 @@ class AuthService:
             )
             self._initialize_account(
                 user_id=user_id,
-                first_name=LOCAL_SESSION_FIRST_NAME,
+                first_name=first_name,
                 timezone=timezone,
                 current_focus=LOCAL_SESSION_CURRENT_FOCUS,
             )

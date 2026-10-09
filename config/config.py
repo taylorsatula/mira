@@ -106,6 +106,10 @@ class SystemConfig(BaseModel):
         default_factory=get_default_timezone,
         description="Default timezone (IANA name); defaults to the host system timezone, overridable via MIRA_TIMEZONE"
     )
+    local_session_first_name: str = Field(
+        default="Friend",
+        description="First name for the single-mode local account (auth/service.py create_local_session) and its orientation content; deploy collects it and writes MIRA_LOCAL_SESSION_FIRST_NAME, and the app-side default is the historical 'Friend'"
+    )
 
     @field_validator("timezone")
     @classmethod

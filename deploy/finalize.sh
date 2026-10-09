@@ -24,6 +24,15 @@ SYSTEMONE_ENV_FILE="/opt/mira/systemone.env"
     if [ -n "${CONFIG_TIMEZONE:-}" ]; then
         echo "MIRA_TIMEZONE=${CONFIG_TIMEZONE}"
     fi
+    # The install's user-name choice, same mechanism: the app maps
+    # MIRA_LOCAL_SESSION_FIRST_NAME → SystemConfig.local_session_first_name,
+    # which create_local_session uses for the local account's first_name and
+    # orientation content. config.sh resolves "" to "Friend" so this always
+    # carries a concrete name; an upgraded install that predates the key keeps
+    # the app-side "Friend" default (the env var is simply absent).
+    if [ -n "${CONFIG_USER_NAME:-}" ]; then
+        echo "MIRA_LOCAL_SESSION_FIRST_NAME=${CONFIG_USER_NAME}"
+    fi
     if [ "${CONFIG_INJECTION_SCREEN}" = "yes" ]; then
         echo "MIRA_INJECTION_SCREEN_ENABLED=1"
         echo "MIRA_SYSTEMONE_PROVIDER=${CONFIG_SYSTEMONE_PROVIDER}"

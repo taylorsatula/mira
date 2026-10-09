@@ -46,10 +46,13 @@ SYSTEM_FEATURE_FLAG_ENVIRONMENT_FIELDS: dict[str, str] = {
 }
 
 # Registry of string-valued SystemConfig overrides: environment variable name -> field name.
-# Deploy writes MIRA_TIMEZONE into the service unit so an install's timezone is an explicit
-# operator choice rather than the hardcoded field default.
+# Deploy writes MIRA_TIMEZONE and MIRA_LOCAL_SESSION_FIRST_NAME into /opt/mira/systemone.env
+# (EnvironmentFile for the unit, sourced by the no-systemd launcher and the container) so an
+# install's timezone and the local account's first name are explicit operator choices rather
+# than hardcoded field defaults.
 SYSTEM_STRING_ENVIRONMENT_FIELDS: dict[str, str] = {
     "MIRA_TIMEZONE": "timezone",
+    "MIRA_LOCAL_SESSION_FIRST_NAME": "local_session_first_name",
 }
 
 # Registry of string-valued SystemOneConfig overrides: environment variable name -> field

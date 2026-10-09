@@ -28,6 +28,7 @@ CONFIG_SUBCORTICAL_API_KEY=""
 CONFIG_SUBCORTICAL_MODEL=""
 CONFIG_BUILD_LLAMA_CPP=""
 CONFIG_TIMEZONE=""                   # IANA name; empty = this host's system timezone
+CONFIG_USER_NAME=""                  # first name for the single-mode local account; empty = "Friend"
 CONFIG_EMBEDDING_PROVIDER=""         # local / remote
 CONFIG_EMBEDDING_ENDPOINT=""         # remote only: POST /v1/embeddings URL
 CONFIG_EMBEDDING_MODEL=""            # remote only
@@ -45,6 +46,7 @@ STATUS_KAGI=""
 STATUS_EMBEDDINGS=""
 STATUS_SYSTEMONE=""
 STATUS_DB_PASSWORD=""
+STATUS_USER_NAME=""
 STATUS_TIMEZONE=""
 STATUS_PLAYWRIGHT=""
 STATUS_SYSTEMD=""
@@ -415,7 +417,7 @@ else
         CONFIG_SUBCORTICAL_MODEL="glm-5.3-flash"
         CONFIG_EMBEDDING_PROVIDER="remote"
         CONFIG_EMBEDDING_ENDPOINT="https://gw.lunaroute.com/v1/embeddings"
-        CONFIG_EMBEDDING_MODEL="emb-nomic-moe"
+        CONFIG_EMBEDDING_MODEL="emb-qwen3"
         CONFIG_INJECTION_SCREEN="yes"
         CONFIG_SYSTEMONE_PROVIDER="remote"
         CONFIG_SYSTEMONE_ENDPOINT="https://gw.lunaroute.com/v1/systemone"
@@ -593,7 +595,7 @@ if [ "$LUNAROUTE_MODE" != "yes" ]; then
 # Embeddings (remote lunaroute by default; local model when air-gapped)
 echo -e "${BOLD}${BLUE}4. Embeddings${RESET}"
 echo -e "${DIM}   A remote OpenAI-compatible POST /v1/embeddings endpoint skips the local${RESET}"
-echo -e "${DIM}   PyTorch model. The default is the lunaroute gateway serving emb-nomic-moe${RESET}"
+echo -e "${DIM}   PyTorch model. The default is the lunaroute gateway serving emb-qwen3${RESET}"
 echo -e "${DIM}   (the same key as the chat tier works). The installer probes it for its${RESET}"
 echo -e "${DIM}   vector length. The choice is permanent for this install: stored memories${RESET}"
 echo -e "${DIM}   are only comparable with the model that made them.${RESET}"
@@ -612,8 +614,8 @@ if [[ "$REMOTE_EMBEDDINGS_INPUT" =~ ^[Yy](es)?$ ]]; then
         CONFIG_EMBEDDING_ENDPOINT="${EMBEDDING_ENDPOINT_INPUT:-https://gw.lunaroute.com/v1/embeddings}"
     done
     while [ -z "$CONFIG_EMBEDDING_MODEL" ]; do
-        read -p "$(echo -e ${CYAN}Model${RESET}) [default: emb-nomic-moe]: " EMBEDDING_MODEL_INPUT
-        CONFIG_EMBEDDING_MODEL="${EMBEDDING_MODEL_INPUT:-emb-nomic-moe}"
+        read -p "$(echo -e ${CYAN}Model${RESET}) [default: emb-qwen3]: " EMBEDDING_MODEL_INPUT
+        CONFIG_EMBEDDING_MODEL="${EMBEDDING_MODEL_INPUT:-emb-qwen3}"
     done
     # Lunaroute is full-service: the chat key already covers embeddings, so no
     # second prompt. Any other endpoint supplies its own key.
@@ -689,9 +691,20 @@ else
     STATUS_DB_PASSWORD="${CHECKMARK} Custom password set"
 fi
 
+# Your Name (the single-mode local account's first_name; Enter keeps "Friend")
+echo -e "${BOLD}${BLUE}7. Your Name${RESET} ${DIM}(how MIRA addresses you — Enter keeps: Friend)${RESET}"
+read -p "$(echo -e ${CYAN}First name${RESET}) (or Enter for default): " USER_NAME_INPUT
+if [ -z "$USER_NAME_INPUT" ]; then
+    CONFIG_USER_NAME="Friend"
+    STATUS_USER_NAME="${DIM}Friend (default)${RESET}"
+else
+    CONFIG_USER_NAME="$USER_NAME_INPUT"
+    STATUS_USER_NAME="${CHECKMARK} ${CONFIG_USER_NAME}"
+fi
+
 # Timezone (defaults to this machine's system timezone; the app validates
 # the IANA name at boot and fails fast on garbage)
-echo -e "${BOLD}${BLUE}7. Timezone${RESET} ${DIM}(IANA name — Enter uses this machine's: ${SYSTEM_TIMEZONE})${RESET}"
+echo -e "${BOLD}${BLUE}8. Timezone${RESET} ${DIM}(IANA name — Enter uses this machine's: ${SYSTEM_TIMEZONE})${RESET}"
 read -p "$(echo -e ${CYAN}Timezone${RESET}): " TIMEZONE_INPUT
 if [ -z "$TIMEZONE_INPUT" ]; then
     CONFIG_TIMEZONE="$SYSTEM_TIMEZONE"
@@ -701,7 +714,7 @@ fi
 STATUS_TIMEZONE="${CHECKMARK} ${CONFIG_TIMEZONE}"
 
 # Playwright Browser Installation (optional)
-echo -e "${BOLD}${BLUE}8. Playwright Browser${RESET} ${DIM}(OPTIONAL - for JS-heavy webpage extraction)${RESET}"
+echo -e "${BOLD}${BLUE}9. Playwright Browser${RESET} ${DIM}(OPTIONAL - for JS-heavy webpage extraction)${RESET}"
 read -p "$(echo -e ${CYAN}Install Playwright?${RESET}) (y/n, default=y): " PLAYWRIGHT_INPUT
 # Default to yes if user just presses Enter
 if [ -z "$PLAYWRIGHT_INPUT" ]; then
@@ -716,7 +729,7 @@ else
 fi
 
 # Systemd service option (Linux only)
-echo -e "${BOLD}${BLUE}9. Service Supervision${RESET} ${DIM}(OPTIONAL - auto-start on boot; systemd on Linux, launchd on macOS)${RESET}"
+echo -e "${BOLD}${BLUE}10. Service Supervision${RESET} ${DIM}(OPTIONAL - auto-start on boot; systemd on Linux, launchd on macOS)${RESET}"
 if [ "$OS" = "linux" ]; then
     read -p "$(echo -e ${CYAN}Install as systemd service?${RESET}) (y/n): " SYSTEMD_INPUT
     if [[ "$SYSTEMD_INPUT" =~ ^[Yy](es)?$ ]]; then
@@ -756,6 +769,14 @@ if [ -z "$CONFIG_TIMEZONE" ]; then
 fi
 [ -n "$STATUS_TIMEZONE" ] || STATUS_TIMEZONE="${CHECKMARK} ${CONFIG_TIMEZONE}"
 
+# User-name resolution: an empty CONFIG_USER_NAME (yml "" — Enter already
+# defaults in the interview) means the app-side default applies, but resolve
+# it here so the env file and summary always carry a concrete name.
+if [ -z "$CONFIG_USER_NAME" ]; then
+    CONFIG_USER_NAME="Friend"
+fi
+[ -n "$STATUS_USER_NAME" ] || STATUS_USER_NAME="${CHECKMARK} ${CONFIG_USER_NAME}"
+
 echo ""
 echo -e "${BOLD}Configuration Summary:${RESET}"
 if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
@@ -781,6 +802,7 @@ echo -e "  Kagi:            ${STATUS_KAGI}"
 echo -e "  Embeddings:      ${STATUS_EMBEDDINGS}"
 echo -e "  Injection Scr:   ${STATUS_SYSTEMONE}"
 echo -e "  DB Password:     ${STATUS_DB_PASSWORD}"
+echo -e "  Your Name:       ${STATUS_USER_NAME}"
 echo -e "  Timezone:        ${STATUS_TIMEZONE}"
 echo -e "  Playwright:      ${STATUS_PLAYWRIGHT}"
 # The label names the supervisor that actually exists: systemd is Linux-only,
