@@ -9,6 +9,24 @@
 : "${OS:?Error: OS must be set}"
 : "${MIRA_USER:?Error: MIRA_USER must be set}"
 
+# The context window and live-compaction trigger are facts about the chosen chat
+# endpoint, not literals: resolve the window from the endpoint's models list and
+# set compaction to 80% of it (deploy/lib/context_window_config.sh). An endpoint
+# that does not report the model's window — an air-gapped llama-server, an
+# Anthropic-dialect endpoint, any gateway whose list omits the field — falls back
+# to the app-side defaults with a warning: the install completes, and MIRA's
+# context-overflow remediation handles a window smaller than the value assumed.
+echo -ne "${DIM}${ARROW}${RESET} Resolving context window... "
+if resolve_context_window /opt/mira/app/venv/bin/python3 \
+        "${CONFIG_CHAT_ENDPOINT:-}" "${CONFIG_CHAT_MODEL:-}" "${CONFIG_CHAT_API_KEY:-}"; then
+    echo -e "${CHECKMARK} ${DIM}${CONTEXT_WINDOW_TOKENS} tokens, ${COMPACTION_TRIGGER_TOKENS} compaction trigger${RESET}"
+else
+    echo -e "${WARNING}"
+    print_warning "No context window reported (reason above); using ${CONTEXT_WINDOW_FALLBACK_TOKENS} tokens with an 80% compaction trigger."
+    CONTEXT_WINDOW_TOKENS="$CONTEXT_WINDOW_FALLBACK_TOKENS"
+    COMPACTION_TRIGGER_TOKENS=$(( CONTEXT_WINDOW_TOKENS * 8 / 10 ))
+fi
+
 # One mechanism for the install-time environment on every start path: the
 # systemd unit reads this file via EnvironmentFile, the no-systemd launcher
 # (Step 15b) and the container's s6 mira/run source it when present. Non-secret
@@ -32,6 +50,15 @@ SYSTEMONE_ENV_FILE="/opt/mira/systemone.env"
     # the app-side "Friend" default (the env var is simply absent).
     if [ -n "${CONFIG_USER_NAME:-}" ]; then
         echo "MIRA_LOCAL_SESSION_FIRST_NAME=${CONFIG_USER_NAME}"
+    fi
+    # The resolved context window and its 80% live-compaction trigger, same
+    # mechanism: the app maps MIRA_CONTEXT_WINDOW_TOKENS/MIRA_COMPACTION_TRIGGER_TOKENS
+    # onto ApiConfig.context_window_tokens/compaction_trigger_tokens
+    # (config/config_manager.py). Always written, fallback included, so the
+    # install's window is explicit rather than inherited from field defaults.
+    if [ -n "${CONTEXT_WINDOW_TOKENS:-}" ]; then
+        echo "MIRA_CONTEXT_WINDOW_TOKENS=${CONTEXT_WINDOW_TOKENS}"
+        echo "MIRA_COMPACTION_TRIGGER_TOKENS=${COMPACTION_TRIGGER_TOKENS}"
     fi
     if [ "${CONFIG_INJECTION_SCREEN}" = "yes" ]; then
         echo "MIRA_INJECTION_SCREEN_ENABLED=1"

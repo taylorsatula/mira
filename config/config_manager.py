@@ -102,6 +102,44 @@ def _load_system_string_overrides() -> dict[str, str]:
     return overrides
 
 
+# Registry of integer-valued ApiConfig overrides: environment variable name -> field name.
+# Deploy resolves the chosen chat model's context window from its endpoint's models list at
+# install time and writes both values into /opt/mira/systemone.env (EnvironmentFile for the
+# unit, sourced by the no-systemd launcher and the container), so the window and the live
+# compaction trigger are facts about the endpoint the operator chose rather than literals.
+# The app-side field defaults stay as the last-resort fallback for a non-deploy run.
+API_INT_ENVIRONMENT_FIELDS: dict[str, str] = {
+    "MIRA_CONTEXT_WINDOW_TOKENS": "context_window_tokens",
+    "MIRA_COMPACTION_TRIGGER_TOKENS": "compaction_trigger_tokens",
+}
+
+
+def _load_api_int_overrides() -> dict[str, int]:
+    """Load integer-valued ApiConfig overrides from the process environment.
+
+    Parsing is strict: a set variable must be a positive integer. Values are
+    checked by the ApiConfig validators at construction, so a compaction trigger
+    at or above the window raises at config load instead of surfacing mid-turn.
+    """
+    overrides: dict[str, int] = {}
+    for environment_name, field_name in API_INT_ENVIRONMENT_FIELDS.items():
+        raw_value = os.getenv(environment_name)
+        if raw_value is None or raw_value == "":
+            continue
+        try:
+            parsed = int(raw_value)
+        except ValueError:
+            raise ValueError(
+                f"{environment_name} must be an integer token count, got {raw_value!r}"
+            ) from None
+        if parsed <= 0:
+            raise ValueError(
+                f"{environment_name} must be a positive token count, got {raw_value!r}"
+            )
+        overrides[field_name] = parsed
+    return overrides
+
+
 def _load_systemone_overrides() -> dict[str, str]:
     """Load strict SystemOneConfig overrides from the process environment.
 
@@ -158,6 +196,7 @@ class AppConfig(BaseModel):
         
         try:
             instance = cls(
+                api=ApiConfig(**_load_api_int_overrides()),
                 system=SystemConfig(
                     **_load_system_feature_flag_overrides(),
                     **_load_system_string_overrides(),
