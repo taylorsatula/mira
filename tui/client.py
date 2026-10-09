@@ -384,8 +384,9 @@ class MiraClient:
                             break  # newest sentinel is itself the newest collapsed one
                         if mode == "session_only":
                             break
-                        # The newest sentinel is active/paused: the newest collapsed
-                        # one may still be in THIS page, below the boundary.
+                        # The newest sentinel is active/paused: the newest real
+                        # collapsed one may still be in THIS page, below the
+                        # boundary.
                         collapsed_here = [
                             i
                             for i in sentinel_indices
@@ -398,7 +399,8 @@ class MiraClient:
                     collapsed = [
                         i
                         for i, m in enumerate(page)
-                        if _is_sentinel(m) and m.metadata.get("status") == "collapsed"
+                        if _is_sentinel(m)
+                        and m.metadata.get("status") == "collapsed"
                     ]
                     if collapsed:
                         summary_sentinel = page[collapsed[-1]]

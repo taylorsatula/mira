@@ -9,9 +9,10 @@ leading blank line is part of the block; spacing lives here and nowhere else.
 Conversation turns are open boxes inside a band narrower than the terminal
 (``_band``), word-wrapped here at render time so the gutter repeats on every
 wrapped row. MIRA's box opens with the ``:MIRA`` label on its first row,
-continues with a ``╵`` gutter, and closes with a ``╰╴╴╴`` border along the
-bottom left; the user's box opens with a ``╴╴╴╮`` border along the top right
-and carries ``ME:`` / ``╵`` on the right edge. Both are printable top to
+continues with a ``╵`` gutter, and closes with a ``╰`` border along the
+bottom left; the user's box carries ``ME:`` / ``╵`` on the right edge and
+closes with a ``╯`` border along the bottom right. Both borders run
+``BORDER_WIDTH`` cells from their own side. Both are printable top to
 bottom without knowing their final height, which is what append-only
 scrollback requires: the user's box prints whole, MIRA's prints row by row
 as the reply streams and closes when the turn ends.
@@ -47,9 +48,9 @@ BORDER_CHAR = "╴"
 # The band is the turn area: five sixths of the terminal width, so turns
 # never run to the window edge and scale with the window.
 BAND_MARGIN_DIVISOR = 6
-# Each border runs two thirds of the band from its own side; MIRA's (bottom
-# left) and the user's (top right) overlap in the middle third.
-BORDER_FRACTION = 2 / 3
+# Each border is a fixed short run from its own side; MIRA's (bottom
+# left) and the user's (bottom right) sit inside the band without touching.
+BORDER_WIDTH = 20
 # The user's text starts at the same indent as MIRA's.
 ME_INDENT = len(MIRA_LABEL)
 TAB_SIZE = 4
@@ -76,9 +77,6 @@ _INLINE_RE = re.compile(
 def _band(width: int) -> int:
     return max(1, width - width // BAND_MARGIN_DIVISOR)
 
-
-def _border(band: int) -> int:
-    return max(1, round(band * BORDER_FRACTION))
 
 
 def spinner(now: float) -> str:
@@ -234,29 +232,24 @@ class _MiraClose:
     """The bottom-left border that ends MIRA's box."""
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-        yield Text("╰" + BORDER_CHAR * _border(_band(options.max_width)), style=MIRA_STYLE)
+        yield Text("╰" + BORDER_CHAR * BORDER_WIDTH, style=MIRA_STYLE)
 
 
 class _You:
-    """The user's box: top-right border, then the message in the band,
-    ``ME:`` on the first row. A one-row message sits against the label; a
-    longer one fills the band from MIRA's text indent."""
+    """The user's box: the message in the band, ``ME:`` on the first row,
+    then a bottom-right border. A one-row message sits against the label;
+    a longer one fills the band from MIRA's text indent."""
 
     def __init__(self, text: str) -> None:
         self._text = text
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         band = _band(options.max_width)
-        border = _border(band)
         width = max(1, band - ME_INDENT - len(ME_LABEL))
         rows = _wrap(console, Text(self._text), width)
         box = width if len(rows) > 1 else rows[0].cell_len
         indent = " " * max(0, band - len(ME_LABEL) - box)
-        out = Text.assemble(
-            "\n",
-            " " * max(0, band - 1 - border),
-            (BORDER_CHAR * border + "╮", ME_STYLE),
-        )
+        out = Text()
         for i, row in enumerate(rows):
             out.append("\n" + indent)
             out.append_text(row)
@@ -265,6 +258,8 @@ class _You:
                 out.append(ME_LABEL, style=f"bold {ME_STYLE}")
             else:
                 out.append(ME_GUTTER, style=ME_STYLE)
+        out.append("\n" + " " * max(0, band - 1 - BORDER_WIDTH))
+        out.append(BORDER_CHAR * BORDER_WIDTH + "╯", style=ME_STYLE)
         yield out
 
 
@@ -380,6 +375,20 @@ def reply_footer(tools: int) -> Text:
 
 def notice(text: str) -> Text:
     return Text(sanitize(text), style="dim")
+
+
+def segment_summary(title: str, body: str) -> Text:
+    """A collapsed segment's summary: the dim context block above the
+    replayed session — a labelled title row, then the summary body.
+    Title and body are model-generated, so both are sanitized here."""
+    head = Text("— previous session", style="bold dim")
+    if title:
+        head.append(": " + sanitize(title), style="bold dim")
+    rows = [head]
+    body = body.strip("\n")
+    if body:
+        rows.extend(Text(sanitize(line), style="dim") for line in body.split("\n"))
+    return Text("\n").join(rows)
 
 
 def alert(text: str) -> Text:

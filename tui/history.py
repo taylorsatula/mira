@@ -7,10 +7,14 @@ a live one: a ``user`` row is the user's box, and the ``assistant`` and
 ``tool`` rows that share a ``turn_id`` (metadata) form one MIRA box — text,
 a ``tool_line`` per tool row (``metadata.tool_name``, ``is_error``), the
 tool-count footer, a paragraph break before text that follows earlier
-text. Rows without a ``turn_id`` are a box each. Segment sentinels
-(defensively — ``session_only`` pages exclude them), other roles, and rows
-with no displayable text are skipped. Not recoverable from history: the
-reasoning view and the ``stopped`` row of a halted turn.
+text. Rows without a ``turn_id`` are a box each. A collapsed sentinel
+(``metadata.status``) carries its segment's summary in ``content`` and
+renders as the dim ``transcript.segment_summary`` block — in
+``session_plus_summary`` mode the newest one is the block above the
+replayed session, and when no active segment has messages it is the only
+block. Active/paused boundaries, other roles, and rows with no displayable
+text are skipped. Not recoverable from history: the reasoning view and the
+``stopped`` row of a halted turn.
 """
 
 from __future__ import annotations
@@ -47,6 +51,20 @@ def _display_text(content: object) -> str:
     return "\n".join(str(part) for part in parts if isinstance(part, str) and part)
 
 
+def _segment_summary(row: HistoryMessage) -> Text | None:
+    """A collapsed sentinel as its summary block — its ``content`` is the
+    segment's summary, its ``display_title`` the header. None for
+    active/paused boundaries and for a collapsed row with nothing to show."""
+    if row.metadata.get("status") != "collapsed":
+        return None
+    title = row.metadata.get("display_title")
+    title = title if isinstance(title, str) else ""
+    body = _display_text(row.content)
+    if not title and not body:
+        return None
+    return transcript.segment_summary(title, body)
+
+
 @dataclass
 class _Reply:
     """MIRA's box for one turn while its rows are read."""
@@ -70,7 +88,14 @@ def replay_blocks(rows: list[HistoryMessage]) -> list[RenderableType]:
     blocks: list[RenderableType] = []
     reply: _Reply | None = None
     for row in rows:
-        if _is_sentinel(row) or row.role not in ("user", "assistant", "tool"):
+        if _is_sentinel(row):
+            summary = _segment_summary(row)
+            if summary is not None:
+                _close(reply, blocks)
+                reply = None
+                blocks.append(summary)
+            continue
+        if row.role not in ("user", "assistant", "tool"):
             continue
         if row.role == "user":
             _close(reply, blocks)

@@ -101,7 +101,12 @@ async def _chat(store: EndpointStore, config: EndpointConfig) -> int:
         return 1
     try:
         session = ChatSession(
-            client, Screen(inbox), inbox, store.active_name() or "default", config.base_url
+            client,
+            Screen(inbox),
+            inbox,
+            store.active_name() or "default",
+            config.base_url,
+            config.history_fetch,
         )
         return await session.run()
     finally:

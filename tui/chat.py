@@ -74,9 +74,8 @@ QUEUE_PUT_TIMEOUT = 5.0
 
 # The server answers TURN_BUSY while any turn for this user holds its per-user
 # lock. The WS transport frees the lock before queueing the terminal frame, so
-# a follow-up send never races the just-finished turn; the remaining cause is
-# heartbeat turns, observed holding the lock for minutes on the dev VM
-# (journal 2026-10-01), which the steady poll covers. A bounced send waits in
+# a follow-up send never races the just-finished turn; the steady poll covers
+# the window where another turn still holds the lock. A bounced send waits in
 # the live region and is resent until MAX_WAIT has passed since the FIRST
 # bounce, then goes back to the box. Ctrl+C cancels the wait.
 TURN_BUSY_RETRY_DELAYS = (0.5, 1.0, 2.0)
@@ -212,12 +211,14 @@ class ChatSession:
         inbox: asyncio.Queue,
         endpoint_label: str,
         base_url: str,
+        history_mode: str,
     ) -> None:
         self._client = client
         self._screen = screen
         self._inbox = inbox
         self._label = endpoint_label
         self._base_url = base_url
+        self._history_mode = history_mode
 
         self._outbox: deque[str] = deque()
         self._in_flight: _InFlight | None = None
@@ -263,14 +264,17 @@ class ChatSession:
             await self._print_remaining()
 
     async def _load_history(self) -> None:
-        """Startup replay: the current segment's earlier messages into
-        scrollback, before the bar exists (direct writes; the pump is not
-        started yet, so wire frames arriving meanwhile wait in the socket).
-        Tool rows, sentinels and summaries are skipped. A fetch failure
-        degrades to an alert — the chat still works without history."""
-        await self._emit(transcript.notice("loading earlier messages from this session…"))
+        """Startup replay into scrollback, before the bar exists (direct
+        writes; the pump is not started yet, so wire frames arriving
+        meanwhile wait in the socket). The endpoint's ``history_fetch`` mode
+        selects how much; the default ``session_plus_summary`` puts the
+        newest collapsed segment's summary above the active segment's
+        earlier messages — and, when no active segment has messages, shows
+        only the summary. A fetch failure degrades to an alert — the chat
+        still works without history."""
+        await self._emit(transcript.notice("loading earlier messages…"))
         try:
-            rows = await self._client.fetch_history("session_only")
+            rows = await self._client.fetch_history(self._history_mode)
         except ClientError as error:
             await self._emit(
                 transcript.alert(
