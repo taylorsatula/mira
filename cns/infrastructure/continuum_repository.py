@@ -848,8 +848,9 @@ class ContinuumRepository:
         Called at API entry point when a real user message arrives.
         This is the authoritative source for segment turn count.
 
-        If the segment is paused, atomically resumes it to 'active' —
-        the timeout clock restarts from this message.
+        If the segment is paused, atomically resumes it to 'active'. The
+        request lock keeps the timeout sweep from collapsing it while this
+        turn runs.
 
         For continuing segments the sentinel already exists in the DB, so we
         read its segment_id from the RETURNING clause. For new segments we
@@ -872,10 +873,12 @@ class ContinuumRepository:
         # Atomically increment turn count, ensure status is 'active', and stamp
         # last_turn_at. Matches both 'active' and 'paused' segments — a paused
         # segment is auto-resumed when the user sends a message.
-        # last_turn_at closes a race window: without it, the timeout service can
-        # see the reactivated segment and compute inactivity from the last
-        # *committed* message (which may be hours old). The stamp records fresh
-        # activity before the new message is committed via uow.commit().
+        # last_turn_at records fresh activity at message arrival, before the
+        # turn's messages commit via uow.commit(). The timeout service's lock
+        # probe defers live turns (cns/services/segment_timeout_service.py).
+        # If a turn dies without committing, this arrival time remains
+        # available as crash grace after its lock expires, even when committed
+        # messages are older.
         now_iso = format_utc_iso(utc_now())
         query = """
             UPDATE messages
