@@ -17,7 +17,7 @@ Vault credentials are preserved — then ask MIRA to bring its history forward
 itself via its bash tool).
 
 ``mira update --nightly`` skips the release ladder entirely and installs the
-HEAD of ``taylorsatula/mira-OSS`` main, identified as ``nightly-<shortsha>``.
+HEAD of ``taylorsatula/mira`` main, identified as ``nightly-<shortsha>``.
 A successful update records the SHA in ``<MIRA_APP_DIR>/data/nightly_stamp``
 (written by ``deploy/update.sh`` after the health poll passes), and the next
 nightly run is a no-op while main has not moved.
@@ -150,7 +150,7 @@ def _gate_and_hand_off(
 
 def _run_nightly_update() -> int:
     """
-    Update the install to the OSS repo's ``main`` HEAD.
+    Update the install to the ``main`` HEAD of ``taylorsatula/mira``.
 
     Identity is the branch-head SHA (displayed as its first 12 chars), not
     the VERSION file: a nightly tree can carry the same VERSION as the
@@ -163,7 +163,7 @@ def _run_nightly_update() -> int:
     try:
         sha = fetch_branch_head_sha()
     except Exception as error:
-        _fail(f"could not resolve the OSS main head ({type(error).__name__}: {error}).")
+        _fail(f"could not resolve the main head ({type(error).__name__}: {error}).")
         return 1
     if stamp_path.is_file():
         try:
