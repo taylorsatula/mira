@@ -80,7 +80,11 @@ def check_cancelled() -> None:
     """Raise GenerationCancelled if the current request has been cancelled.
 
     Lightweight check — call between stream chunks, before tool execution,
-    and at agentic loop boundaries.
+    and at agentic loop boundaries. A tool that blocks between boundaries
+    longer than a moment must also observe the signal itself, polling
+    ``get_cancel_event()`` at a bounded cadence and terminating its own
+    work (see ``bash_tool._execute_local``); a blocking call placed between
+    cancellation checks makes cancellation unreachable for its duration.
     """
     evt = _cancel_event.get(None)
     if evt is not None and evt.is_set():

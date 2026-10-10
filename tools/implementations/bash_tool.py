@@ -56,6 +56,7 @@ import re
 import shlex
 import signal
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Iterable, List, NoReturn, Optional, Tuple
 
@@ -64,12 +65,48 @@ from pydantic import BaseModel, Field, field_validator
 from tools.repo import Tool
 from tools.registry import registry
 from utils.timezone_utils import utc_now
+from utils.user_context import get_cancel_event, get_cancel_reason
 
 
 # Home directory of the user MIRA runs as, whatever it is named. Path.home()
 # raises when no home can be determined — a loud import failure, never a
 # silently wrong working directory.
 _SERVICE_HOME = str(Path.home())
+
+# Foreground waits are sliced at this cadence so each slice re-checks the
+# turn's cancel signal (the ``cancel_event`` contextvar). The tool loop
+# honors cancellation only at tool boundaries, so a single
+# communicate(timeout=effective) would make cancellation unreachable for
+# up to max_timeout_seconds while the turn's deadline, the user's halt, and
+# a client disconnect all wait. A slice of one second bounds the
+# cancellation-to-kill latency to one slice plus the drain below, and the
+# per-slice TimeoutExpired overhead is negligible against the ceiling.
+_CANCEL_POLL_SECONDS = 1.0
+# After a cancellation or timeout group kill, the pipes are drained within
+# this budget; a drain that also expires means a descendant escaped the
+# killed group and holds the inherited pipe ends, so the pipes are
+# abandoned rather than blocking the caller on a read that can never EOF.
+_CANCEL_DRAIN_SECONDS = 5.0
+
+_BACKGROUND_JOBS_DDL = """
+    pid TEXT PRIMARY KEY,
+    pgid TEXT NOT NULL,
+    log_path TEXT NOT NULL,
+    command TEXT NOT NULL,
+    started_at TEXT NOT NULL
+"""
+
+
+def ensure_background_jobs(db) -> None:
+    """Create the background-jobs table if absent (idempotent).
+
+    One row per run_background launch: the nohup'd child's pid, the process
+    group that job and its descendants share, its log path, the command,
+    and the start time. kill_background only ever stops pids present here,
+    which is its whole safety property: the tool can only stop jobs it
+    launched.
+    """
+    db.create_table("background_jobs", _BACKGROUND_JOBS_DDL)
 
 
 class BashToolConfig(BaseModel):
@@ -1919,11 +1956,13 @@ class BashTool(Tool):
             "properties": {
                 "operation": {
                     "type": "string",
-                    "enum": ["run", "run_background"],
+                    "enum": ["run", "run_background", "kill_background"],
                     "description": (
                         "run: execute and wait, returning exit code and output. "
                         "run_background: start detached with nohup and return immediately "
-                        "with the process ID and log path."
+                        "with the process ID and log path. kill_background: stop a "
+                        "background job this tool previously launched, by its pid "
+                        "(the command field is ignored for this operation)."
                     ),
                 },
                 "command": {
@@ -1968,6 +2007,15 @@ class BashTool(Tool):
                     "description": (
                         "For run_background: short label used in the generated log filename, "
                         "not a path. Defaults to 'job'. The full log path is returned."
+                    ),
+                },
+                "pid": {
+                    "type": "string",
+                    "description": (
+                        "For kill_background: the process ID of a background job this "
+                        "tool launched (from the run_background result or the "
+                        "conversation). Only pids this tool recorded can be stopped; "
+                        "anything else is refused."
                     ),
                 },
                 "skip_permissions": {
@@ -2015,31 +2063,21 @@ class BashTool(Tool):
         shell_command: str,
         *,
         timeout_seconds: Optional[float] = None,
-        kill_group: bool = False,
     ) -> subprocess.CompletedProcess:
-        """Run a composed shell command locally via subprocess."""
+        """Run a composed shell command locally via subprocess.
+
+        The child is started as its own session leader, so its pid names
+        the whole process group and any kill SIGKILLs every descendant —
+        the escalation the GNU `timeout -k` wrapper used to provide. That
+        binary is absent on stock macOS, so the wrapper must not appear in
+        any composed command; the parent timeout bounds duration and this
+        group kill supplies the enforcement.
+        """
         effective = timeout_seconds or float(cfg.default_timeout_seconds)
-        if not kill_group:
-            try:
-                return subprocess.run(
-                    ["bash", "-c", shell_command],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=effective,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise ValueError(
-                    f"Command exceeded {effective:.0f}s and was killed. "
-                    f"The process may still be running."
-                ) from exc
-            except OSError as exc:
-                raise ValueError(f"Could not launch the local shell: {exc}") from exc
-        # kill_group: the child is started as its own session leader, so its
-        # pid names the whole process group and a timeout SIGKILLs every
-        # descendant — the escalation the GNU `timeout -k` wrapper used to
-        # provide. That binary is absent on stock macOS, so the wrapper must
-        # not appear in any composed command; the parent timeout bounds
-        # duration and this group kill supplies the enforcement.
+        # The wait is sliced at _CANCEL_POLL_SECONDS so the turn's cancel
+        # signal is re-checked every slice (see the constant's rationale);
+        # the overall budget stays `effective`, enforced by the deadline
+        # check in the slice loop.
         try:
             with subprocess.Popen(
                 ["bash", "-c", shell_command],
@@ -2047,45 +2085,76 @@ class BashTool(Tool):
                 stderr=subprocess.PIPE,
                 start_new_session=True,
             ) as proc:
-                try:
-                    stdout, stderr = proc.communicate(timeout=effective)
-                except subprocess.TimeoutExpired as exc:
+                stdout: Optional[bytes] = None
+                stderr: Optional[bytes] = None
+                deadline = time.monotonic() + effective
+                while stdout is None:
                     try:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    except OSError as kill_exc:
-                        # The group kill itself failed (e.g. EPERM on a
-                        # zombie-led, live-member-free group). Raise the
-                        # timeout-shaped error here so the outer OSError
-                        # handler cannot relabel a kill failure as a
-                        # launch failure.
-                        raise ValueError(
-                            f"Command exceeded {effective:.0f}s and its "
-                            f"process group was killed."
-                        ) from kill_exc
-                    try:
-                        stdout, stderr = proc.communicate(timeout=effective)
-                    except subprocess.TimeoutExpired:
-                        # The second bounded wait also expired: a descendant
-                        # escaped the killed process group (setsid or
-                        # double-fork) and holds the inherited pipe ends, so
-                        # the drain can never reach EOF. Abandon it — close
-                        # both pipes and report the timeout instead of
-                        # blocking forever.
-                        if proc.stdout:
-                            proc.stdout.close()
-                        if proc.stderr:
-                            proc.stderr.close()
-                    raise ValueError(
-                        f"Command exceeded {effective:.0f}s and its process "
-                        f"group was killed."
-                    ) from exc
+                        stdout, stderr = proc.communicate(
+                            timeout=min(_CANCEL_POLL_SECONDS, effective)
+                        )
+                    except subprocess.TimeoutExpired as exc:
+                        cancel_event = get_cancel_event()
+                        if cancel_event is not None and cancel_event.is_set():
+                            cancelled_message = (
+                                "Command was stopped by turn cancellation "
+                                f"(reason: {get_cancel_reason()}) and its "
+                                "process group was killed; partial output "
+                                "was discarded."
+                            )
+                            self._kill_group(proc, cancelled_message)
+                            self._drain_killed(proc, _CANCEL_DRAIN_SECONDS)
+                            raise ValueError(cancelled_message) from exc
+                        if time.monotonic() >= deadline:
+                            timeout_message = (
+                                f"Command exceeded {effective:.0f}s and its "
+                                "process group was killed."
+                            )
+                            self._kill_group(proc, timeout_message)
+                            self._drain_killed(proc, _CANCEL_DRAIN_SECONDS)
+                            raise ValueError(timeout_message) from exc
+                        # Slice elapsed with neither completion nor
+                        # cancellation: keep waiting. The deadline check
+                        # above bounds the total wait to one slice past
+                        # `effective`.
                 return subprocess.CompletedProcess(
                     ["bash", "-c", shell_command], proc.returncode, stdout, stderr
                 )
         except OSError as exc:
             raise ValueError(f"Could not launch the local shell: {exc}") from exc
+
+    def _kill_group(self, proc: subprocess.Popen, fail_message: str) -> None:
+        """SIGKILL the child's process group.
+
+        ProcessLookupError means the group is already gone (an exited
+        leader), the normal no-op. Any other signalling failure raises the
+        caller's timeout/cancel-shaped message here, so the outer OSError
+        handler cannot relabel a kill failure as a launch failure.
+        """
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as kill_exc:
+            raise ValueError(fail_message) from kill_exc
+
+    def _drain_killed(
+        self, proc: subprocess.Popen, drain_seconds: float
+    ) -> None:
+        """After the group kill, drain the pipes within drain_seconds.
+
+        A drain that also expires means a descendant escaped the killed
+        process group (setsid or double-fork) and holds the inherited pipe
+        ends, so the drain can never reach EOF — abandon it: close both
+        pipes instead of blocking forever.
+        """
+        try:
+            proc.communicate(timeout=drain_seconds)
+        except subprocess.TimeoutExpired:
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                proc.stderr.close()
 
     @staticmethod
     def _decode(raw: bytes) -> str:
@@ -2180,6 +2249,7 @@ class BashTool(Tool):
         handlers = {
             "run": self._run,
             "run_background": self._run_background,
+            "kill_background": self._kill_background,
         }
         handler = handlers.get(operation)
         if handler is None:
@@ -2208,7 +2278,7 @@ class BashTool(Tool):
         timeout = self._clamp_timeout(cfg, timeout_seconds)
         composed = f"cd {shlex.quote(workdir)} && bash -lc {shlex.quote(command)}"
         result = self._execute_local(
-            cfg, composed, timeout_seconds=float(timeout), kill_group=True
+            cfg, composed, timeout_seconds=float(timeout)
         )
         stdout, stdout_truncated = self._truncate(result.stdout, cfg.max_output_bytes)
         stderr, stderr_truncated = self._truncate(result.stderr, cfg.max_output_bytes)
@@ -2255,8 +2325,15 @@ class BashTool(Tool):
         # or /dev/null — no long-lived process holds the inherited stdout
         # pipe, so `_execute_local` returns as soon as PID/LOG print and `$!`
         # is the survivable job process itself, not a wrapper subshell.
+        # `echo "PGID:$$"` records the wrapper's pid: the wrapper is the
+        # session leader `_execute_local` creates, so it is the group the
+        # launched job and its descendants share — and that group outlives
+        # the wrapper, because the nohup'd child stays a member. It is
+        # recorded so `kill_background` can still address live descendants
+        # after the job's own shell has exited.
         composed = (
             f"mkdir -p {shlex.quote(log_dir)} && cd {shlex.quote(workdir)} || exit 1; "
+            f"echo \"PGID:$$\"; "
             f"nohup bash -lc {shlex.quote(command)} "
             f"> {shlex.quote(log_path)} 2>&1 </dev/null & "
             f"child=$!; echo \"PID:$child\"; echo \"LOG:{log_path}\""
@@ -2274,10 +2351,13 @@ class BashTool(Tool):
             )
         stdout = self._decode(result.stdout)
         pid: Optional[str] = None
+        pgid: Optional[str] = None
         log_from_host = log_path
         for line in stdout.splitlines():
             if line.startswith("PID:"):
                 pid = line[len("PID:"):].strip()
+            elif line.startswith("PGID:"):
+                pgid = line[len("PGID:"):].strip()
             elif line.startswith("LOG:"):
                 log_from_host = line[len("LOG:"):].strip()
         outcome = {
@@ -2289,4 +2369,132 @@ class BashTool(Tool):
         }
         if skip_permissions:
             outcome["guardrail"] = "bypassed"
+        if pid is not None:
+            # Record the launch so kill_background can stop it later: only
+            # pids present in this table are stoppable from the
+            # conversation, which is the operation's whole safety property.
+            # The group is recorded because it outlives the job's own shell
+            # (the nohup'd child and its descendants stay members), which is
+            # what lets a job whose shell exited still be stopped.
+            ensure_background_jobs(self.db)
+            self.db.insert(
+                "background_jobs",
+                {
+                    "pid": pid,
+                    "pgid": pgid or "",
+                    "log_path": log_from_host,
+                    "command": command,
+                    "started_at": utc_now().isoformat(),
+                },
+            )
         return outcome
+
+    def _kill_background(
+        self,
+        cfg: BashToolConfig,
+        command: str,
+        pid: Optional[str] = None,
+        skip_permissions: bool = False,
+    ) -> Dict[str, Any]:
+        """Stop a background job this tool launched. `command` is ignored
+        here: it is required by the shared schema and run() always passes
+        it, so the signature must accept it.
+
+        Only pids recorded by run_background are stoppable. The group is
+        resolved from the recorded child while the child is alive (os.getpgid,
+        authoritative); when the child has already exited but descendants
+        remain in the group, the pgid recorded at launch is addressed
+        instead, after confirming that group still exists. The recorded
+        group id can in principle be recycled onto an unrelated process once
+        the whole group is gone; the existence probe narrows that window to
+        the pid counter wrapping onto the recorded value, and the exposure is
+        bounded to pids this tool itself recorded. A group kill reaches
+        everything in the group; a descendant that left it with setsid is out
+        of reach and is named in the result note.
+        """
+        if pid is None or not str(pid).strip():
+            raise ValueError(
+                "kill_background requires the pid of a background job this tool "
+                "launched; find it in the run_background result or the "
+                "conversation that started it."
+            )
+        pid_clean = str(pid).strip()
+        # A kill on a store whose background_jobs table was never created
+        # must hit the designed refusal below, not a raw sqlite error.
+        ensure_background_jobs(self.db)
+        row = self.db.fetchone(
+            "SELECT pid, pgid, log_path, command, started_at FROM background_jobs "
+            "WHERE pid = :pid",
+            {"pid": pid_clean},
+        )
+        if row is None:
+            raise ValueError(
+                f"No background job recorded with pid {pid_clean}. kill_background "
+                "only stops jobs this tool launched; check the conversation for the "
+                "pid, or stop the process from an operator shell."
+            )
+        try:
+            group = os.getpgid(int(pid_clean))
+            anchor_alive = True
+        except (ProcessLookupError, ValueError):
+            # The job's own shell exited; its descendants may still be
+            # running in the group recorded at launch. Fall back to that
+            # group, addressing it only while it still exists.
+            anchor_alive = False
+            group = self._recorded_pgid(row)
+            if group is None:
+                self.db.delete("background_jobs", "pid = :pid", {"pid": pid_clean})
+                return {
+                    "success": True,
+                    "pid": pid_clean,
+                    "status": "already exited",
+                    "command": row["command"],
+                    "note": (
+                        "No process group was recorded for this job and its shell "
+                        "is gone; nothing was signalled. If descendants survived "
+                        "it, stop them from an operator shell."
+                    ),
+                }
+            try:
+                os.killpg(group, 0)
+            except ProcessLookupError:
+                self.db.delete("background_jobs", "pid = :pid", {"pid": pid_clean})
+                return {
+                    "success": True,
+                    "pid": pid_clean,
+                    "status": "already exited",
+                    "command": row["command"],
+                }
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except ProcessLookupError:
+            status = "already exited"
+        except OSError as exc:
+            raise ValueError(
+                f"Could not stop background job pid {pid_clean} (group {group}): {exc}"
+            ) from exc
+        else:
+            status = "killed"
+        self.db.delete("background_jobs", "pid = :pid", {"pid": pid_clean})
+        result: Dict[str, Any] = {
+            "success": True,
+            "pid": pid_clean,
+            "status": status,
+            "command": row["command"],
+            "log_path": row["log_path"],
+        }
+        if not anchor_alive:
+            result["note"] = (
+                "The job's own shell had already exited, so the process group "
+                "recorded at launch was addressed directly. A descendant that "
+                "left that group with setsid is not reachable and may still run."
+            )
+        return result
+
+    @staticmethod
+    def _recorded_pgid(row: Dict[str, Any]) -> Optional[int]:
+        """The pgid recorded at launch, or None when absent or malformed."""
+        try:
+            return int(row.get("pgid") or "")
+        except (TypeError, ValueError):
+            return None

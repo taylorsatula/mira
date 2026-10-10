@@ -11,7 +11,13 @@ from contextvars import copy_context
 from dataclasses import dataclass, field
 from typing import Any
 
-from clients.llm.events import StreamEvent, ToolCompletedEvent, ToolErrorEvent, ToolExecutingEvent
+from clients.llm.events import (
+    GenerationCancelled,
+    StreamEvent,
+    ToolCompletedEvent,
+    ToolErrorEvent,
+    ToolExecutingEvent,
+)
 from clients.llm.types import ToolCall, ToolResult
 from tools.repo import ParameterError
 from utils.user_context import check_cancelled, get_cancel_event
@@ -142,6 +148,7 @@ class ToolLoopExecutor:
         if parallel:
             check_cancelled()
             context = copy_context()
+            deferred_cancel: GenerationCancelled | None = None
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 futures = {}
                 for tool_call in parallel:
@@ -159,9 +166,21 @@ class ToolLoopExecutor:
                         arguments=dict(tool_call.input),
                     )
                 for future in concurrent.futures.as_completed(futures):
-                    execution = future.result()
+                    try:
+                        execution = future.result()
+                    except GenerationCancelled as cancelled:
+                        # A sibling tool observed the cancel signal and
+                        # aborted. Every other started tool still owes its
+                        # terminal event, so the remaining futures are drained
+                        # and their events yielded before the cancellation is
+                        # re-raised after the batch (the aborted tool has no
+                        # result of its own to report).
+                        deferred_cancel = cancelled
+                        continue
                     self._emit_tool_result(execution, breaker, results)
                     yield from self._events_for_tool_execution(execution)
+            if deferred_cancel is not None:
+                raise deferred_cancel
             check_cancelled()
 
         return tuple(results)
@@ -209,6 +228,13 @@ class ToolLoopExecutor:
                 self._tool_result_hash_material(raw_result, result_content),
                 None,
             )
+        except GenerationCancelled:
+            # A cancellation signal raised inside a tool must reach the
+            # orchestrator's stopped-turn semantics. The broad handler
+            # below would otherwise convert it into model-facing error
+            # feedback and the turn would continue as if the tool had
+            # merely failed — the cancel signal downgraded to content.
+            raise
         except Exception as error:
             logger.error("Tool execution failed for %s: %s", tool_call.tool_name, error, exc_info=True)
             result_content = f"Error: {error}{self._schema_hint(tool_call.tool_name, error)}"
