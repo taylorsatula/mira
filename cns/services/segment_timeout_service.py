@@ -213,6 +213,44 @@ class SegmentTimeoutService:
                 if current_time < guard_until:
                     return False
 
+        end_time = self._segment_activity_anchor(segment)
+
+        # Calculate inactive duration
+        inactive_duration = current_time - end_time
+        inactive_minutes = inactive_duration.total_seconds() / 60
+
+        # Time-of-day aware staleness threshold, evaluated in the segment
+        # owner's local time. Optional per-window overrides fall back to the
+        # base segment_timeout when unset.
+        threshold = config.system.segment_timeout
+        user_tz = self._get_user_timezone(segment['user_id'])
+        local_hour = convert_from_utc(current_time, user_tz).hour
+        if 6 <= local_hour <= 9:
+            threshold = config.system.segment_timeout_morning or threshold
+        elif 23 <= local_hour or local_hour <= 6:
+            threshold = config.system.segment_timeout_late_night or threshold
+
+        # Check if timeout exceeded
+        timed_out = inactive_minutes >= threshold
+
+        if timed_out:
+            segment_id = segment['metadata'].get('segment_id')
+            logger.debug(
+                f"Segment {segment_id} timed out: "
+                f"inactive_minutes={inactive_minutes:.1f}, threshold={threshold}"
+            )
+
+        return timed_out
+
+    def _segment_activity_anchor(self, segment: ActiveSegmentRow) -> datetime:
+        """
+        Compute a segment's last-activity anchor: max of its last committed
+        message, the sentinel's last_turn_at stamp, and (fallback) the
+        sentinel's creation time.
+
+        Single source for the timeout decision and the published event's
+        inactive_duration_minutes: the two must agree by construction.
+        """
         # Query for last message in segment, keyed on the segment's own
         # identity. Messages of OTHER segments — including a successor
         # segment's heartbeat ticks — are not this segment's activity and
@@ -245,39 +283,25 @@ class SegmentTimeoutService:
         # commit) leaves the arrival stamp (increment_segment_turn) as the
         # only fresher-than-committed signal once its lock expires; without
         # this read such a segment collapses on stale committed messages
-        # alone.
+        # alone. A malformed stamp is a per-segment fault and must not
+        # abort the whole sweep cycle for every user; warn and treat as
+        # absent, mirroring the tolerant heartbeat_wake_at parse in
+        # _is_timed_out.
         last_turn_at_str = segment['metadata'].get('last_turn_at')
         if last_turn_at_str:
-            last_turn_at = parse_utc_time_string(last_turn_at_str)
-            if last_turn_at > end_time:
-                end_time = last_turn_at
+            try:
+                last_turn_at = parse_utc_time_string(last_turn_at_str)
+            except (ValueError, TypeError):
+                logger.warning(
+                    "Unparseable last_turn_at %r on segment %s; "
+                    "ignoring the stamp",
+                    last_turn_at_str, segment['metadata'].get('segment_id'),
+                )
+            else:
+                if last_turn_at > end_time:
+                    end_time = last_turn_at
 
-        # Calculate inactive duration
-        inactive_duration = current_time - end_time
-        inactive_minutes = inactive_duration.total_seconds() / 60
-
-        # Time-of-day aware staleness threshold, evaluated in the segment
-        # owner's local time. Optional per-window overrides fall back to the
-        # base segment_timeout when unset.
-        threshold = config.system.segment_timeout
-        user_tz = self._get_user_timezone(segment['user_id'])
-        local_hour = convert_from_utc(current_time, user_tz).hour
-        if 6 <= local_hour <= 9:
-            threshold = config.system.segment_timeout_morning or threshold
-        elif 23 <= local_hour or local_hour <= 6:
-            threshold = config.system.segment_timeout_late_night or threshold
-
-        # Check if timeout exceeded
-        timed_out = inactive_minutes >= threshold
-
-        if timed_out:
-            segment_id = segment['metadata'].get('segment_id')
-            logger.debug(
-                f"Segment {segment_id} timed out: "
-                f"inactive_minutes={inactive_minutes:.1f}, threshold={threshold}"
-            )
-
-        return timed_out
+        return end_time
 
     def _get_last_message_time(
         self,
@@ -334,17 +358,9 @@ class SegmentTimeoutService:
         metadata = segment['metadata']
         segment_id = metadata.get('segment_id')
 
-        # Query for last message time, keyed on segment identity exactly as
-        # the timeout check does — the two computations must agree.
-        end_time = self._get_last_message_time(
-            segment['continuum_id'],
-            segment['user_id'],
-            segment_id
-        )
-
-        if not end_time:
-            # No messages found — use sentinel creation time (same fallback as _is_timed_out)
-            end_time = segment['created_at']
+        # Same anchor helper as the timeout decision, so the reported
+        # inactive_duration_minutes agrees with the decision basis exactly.
+        end_time = self._segment_activity_anchor(segment)
 
         # Calculate inactive duration
         inactive_duration = current_time - end_time
