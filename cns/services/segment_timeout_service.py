@@ -11,11 +11,19 @@ from typing import Optional, TypedDict
 from cns.core.events import SegmentTimeoutEvent
 from cns.integration.event_bus import EventBus
 from cns.infrastructure.continuum_repository import ActiveSegmentRow, get_continuum_repository
+from utils.distributed_lock import UserRequestLock
 from utils.database_session_manager import get_shared_session_manager
 from utils.timezone_utils import utc_now, convert_from_utc, parse_utc_time_string
 from config import config
 
 logger = logging.getLogger(__name__)
+
+# Per-user request lock, probed between timeout determination and
+# publication. Same key the transports acquire (`user_lock:{user_id}`,
+# pinned in UserRequestLock's constructor); probe-only use never acquires
+# or renews, and TTL is irrelevant to `is_locked` (key existence). Built
+# at module import, Valkey resolved lazily on first operation.
+_user_request_lock = UserRequestLock()
 
 
 class TimeoutCheckResult(TypedDict):
@@ -78,6 +86,25 @@ class SegmentTimeoutService:
             for segment in active_segments:
                 # Check if segment has timed out
                 if self._is_timed_out(segment, current_time):
+                    # Held lock means a turn is in flight: turn persistence is
+                    # atomic, so an uncommitted turn is invisible to the
+                    # inactivity clock no matter how active it is. Skip this
+                    # segment for this cycle: no event, no attempt, no claim;
+                    # the next cycle re-evaluates, and the turn's final
+                    # committed message re-anchors the clock at turn end.
+                    # `is_locked` raises when Valkey is down; the raise
+                    # propagates through this job's log-and-reraise. An
+                    # unverifiable "no turn in flight" must never default
+                    # to collapsing.
+                    if _user_request_lock.is_locked(segment['user_id']):
+                        logger.debug(
+                            "Deferring timeout for segment %s of user %s: "
+                            "turn in flight (user request lock held)",
+                            segment['metadata'].get('segment_id'),
+                            segment['user_id'],
+                        )
+                        continue
+
                     # Publish timeout event
                     self._publish_timeout_event(segment, current_time)
                     timeouts_published += 1
@@ -205,10 +232,20 @@ class SegmentTimeoutService:
             # reach the collapse handler's tombstone circuit breaker naturally.
             end_time = segment['created_at']
 
-        # Race condition guard: increment_segment_turn() stamps last_turn_at
-        # atomically when a user message arrives, BEFORE the message is committed
-        # via uow.commit(). Without this, a segment resumed after a long pause
-        # appears timed-out because the last committed message is hours old.
+        # last_turn_at is the heartbeat liveness channel plus a bounded
+        # crash grace, not the live-turn guard (the lock probe in
+        # check_timeouts owns that). stamp_segment_liveness()
+        # (cns/infrastructure/continuum_repository.py) stamps it at every
+        # wake-turn dispatch, so a hung wake turn keeps this anchor fresh
+        # for one threshold window even after its lock expires; the retry
+        # path re-stamps under the _LIVENESS_STAMP_FAILURE_CAP = 3
+        # anti-starvation bound (cns/services/heartbeat_service.py), so a
+        # persistently failing heartbeat cannot starve this sweep forever.
+        # A turn that died without committing (process death, failed
+        # commit) leaves the arrival stamp (increment_segment_turn) as the
+        # only fresher-than-committed signal once its lock expires; without
+        # this read such a segment collapses on stale committed messages
+        # alone.
         last_turn_at_str = segment['metadata'].get('last_turn_at')
         if last_turn_at_str:
             last_turn_at = parse_utc_time_string(last_turn_at_str)
