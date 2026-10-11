@@ -106,6 +106,9 @@ unnecessary edit costs a line; a missed one misleads every session.
   `--loud`, `--local`). Release mechanics owned by `deploy/AGENTS.md`.
 - `README.md`, `license.txt`, `NEARFUTURE_FEATURES.md` — static repo documents;
   no runtime consumers.
+- `BREAKING.md` — transient breaking-release marker: its presence makes `mira update`
+  refuse the tree and print the manual path. Contract owned by `deploy/AGENTS.md`;
+  removed in the first release that is safe again.
 - `UPGRADE_PATH.md` — unimplemented design guide; its design-only status, the
   no-upgrade-path doctrine, and the dead `--migrate` references are owned by
   `deploy/AGENTS.md` and `docs/AGENTS.md`.

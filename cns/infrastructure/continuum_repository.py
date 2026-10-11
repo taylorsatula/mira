@@ -289,10 +289,18 @@ class ContinuumRepository:
 
     def _ensure_active_segment(self, continuum_id: UUID, user_id: str, current_message_time: datetime, db: PostgresClient) -> None:
         """
-        Ensure active segment exists, creating one when the segment's first
-        real message is saved.
+        Ensure a live segment sentinel exists, creating one when the segment's
+        first real message is saved.
 
-        The sentinel is created whenever no active sentinel exists — which
+        "Live" means status 'active' OR 'paused' — a paused segment is still
+        the current segment (find_active_segment's contract), not the absence
+        of one. Saving while the segment sits paused must reuse that sentinel:
+        idx_messages_live_segment_unique admits exactly one live sentinel per
+        continuum, and minting a second one bricks every later turn entry
+        (increment_segment_turn resumes both rows to 'active' and the index
+        rejects the second).
+
+        The sentinel is created whenever no live sentinel exists — which
         includes the segment's first real message — matching the turn-1
         initialization of create_segment_boundary_sentinel. The INSERT runs
         on the autocommitted connection, so it lands in a separate commit
@@ -304,16 +312,16 @@ class ContinuumRepository:
             current_message_time: Timestamp of message being saved
             db: Database client
         """
-        # Check if active segment already exists
-        active_segment_query = """
+        # Check if a live (active or paused) segment already exists
+        live_segment_query = """
             SELECT * FROM messages
             WHERE continuum_id = %s
                 AND metadata->>'is_segment_boundary' = 'true'
-                AND metadata->>'status' = 'active'
-            ORDER BY created_at DESC
+                AND metadata->>'status' IN ('active', 'paused')
+            ORDER BY created_at DESC, id DESC
             LIMIT 1
         """
-        active_segments = db.execute_query(active_segment_query, (continuum_id,))
+        active_segments = db.execute_query(live_segment_query, (continuum_id,))
 
         if not active_segments:
             # No active segment - create one for this segment's first message
@@ -389,7 +397,7 @@ class ContinuumRepository:
             )
 
             # Direct INSERT with conflict on the unique partial index
-            # (idx_messages_active_segment_unique). If a concurrent call already
+            # (idx_messages_live_segment_unique). If a concurrent call already
             # created an active sentinel for this continuum, DO NOTHING — the
             # race loser silently no-ops instead of creating a duplicate.
             # Content-type tag stamped like every other write path so the
@@ -401,13 +409,21 @@ class ContinuumRepository:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (continuum_id)
                     WHERE metadata->>'is_segment_boundary' = 'true'
-                      AND metadata->>'status' = 'active'
+                      AND metadata->>'status' IN ('active', 'paused')
                 DO NOTHING
                 """,
                 base_tuple
             )
 
             logger.info(f"Created segment boundary sentinel for continuum {continuum_id}")
+        else:
+            # A live (possibly paused) sentinel exists — reuse it, never mint
+            # a second one. Align the contextvar so later segment-scoped work
+            # names the segment that actually exists. Rows are plain dicts
+            # here (dict_row); metadata arrives parsed as a nested dict.
+            existing_id = active_segments[0]['metadata'].get('segment_id')
+            if existing_id and existing_id != get_current_segment_id():
+                set_current_segment_id(existing_id)
     
     def save_messages_batch(self, messages: list[Message], continuum_id: str | UUID, user_id: str) -> None:
         """
@@ -856,6 +872,14 @@ class ContinuumRepository:
         # available as crash grace after its lock expires, even when committed
         # messages are older.
         now_iso = format_utc_iso(utc_now())
+        # Single-row update pinned by subquery: exactly one live sentinel
+        # (active or paused) exists per continuum — idx_messages_live_segment_unique
+        # enforces it — so the subquery's deterministic pick (created_at DESC,
+        # id DESC tiebreak; backfilled first-message timestamps can tie) must
+        # resolve to that sentinel. A multi-row UPDATE matching both an active
+        # and a paused row would flip both to 'active' and violate the index —
+        # the 2026-10-10 lockout. No rows returned means no live sentinel:
+        # allocate a fresh id in memory (below).
         query = """
             UPDATE messages
             SET metadata = jsonb_set(
@@ -863,9 +887,14 @@ class ContinuumRepository:
                 '{segment_turn_count}',
                 to_jsonb((metadata->>'segment_turn_count')::int + 1)
             ) || jsonb_build_object('status', 'active', 'last_turn_at', %s::text)
-            WHERE continuum_id = %s
-                AND metadata->>'is_segment_boundary' = 'true'
-                AND metadata->>'status' IN ('active', 'paused')
+            WHERE id = (
+                SELECT id FROM messages
+                WHERE continuum_id = %s
+                    AND metadata->>'is_segment_boundary' = 'true'
+                    AND metadata->>'status' IN ('active', 'paused')
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            )
             RETURNING (metadata->>'segment_turn_count')::int as turn_count,
                       metadata->>'segment_id' as segment_id
         """

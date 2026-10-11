@@ -2497,8 +2497,21 @@ class ContinuumDomainHandler(BaseDomainHandler):
             }
 
         elif action == "pause_session":
+            from cns.api.chat import _user_request_lock
             from cns.infrastructure.continuum_pool import get_continuum_pool
             from cns.infrastructure.continuum_repository import get_continuum_repository
+
+            # A live turn owns the segment: pausing underneath it makes every
+            # save path that distinguishes paused from active diverge from the
+            # turn's reality (the 2026-10-10 duplicate-sentinel lockout), and
+            # pause's purpose — stopping the idle-timeout clock — is void
+            # while a turn is running anyway. Same probe the collapse action
+            # and the timeout service use; is_locked raises when Valkey is
+            # down (fail-fast infrastructure).
+            if _user_request_lock.is_locked(self.user_id):
+                raise ValidationError(
+                    "A turn is currently running — pause once it completes."
+                )
 
             continuum_pool = get_continuum_pool()
             continuum = continuum_pool.get_or_create()
@@ -2587,8 +2600,18 @@ class ContinuumDomainHandler(BaseDomainHandler):
             }
 
         elif action == "resume_session":
+            from cns.api.chat import _user_request_lock
             from cns.infrastructure.continuum_pool import get_continuum_pool
             from cns.infrastructure.continuum_repository import get_continuum_repository
+
+            # A live turn while the segment is paused is exactly the divergent
+            # state this must not compound — resume underneath it and the turn
+            # keeps writing to a segment the rest of the system re-reads as
+            # active mid-flight. Same probe as pause_session.
+            if _user_request_lock.is_locked(self.user_id):
+                raise ValidationError(
+                    "A turn is currently running — resume once it completes."
+                )
 
             continuum_pool = get_continuum_pool()
             continuum = continuum_pool.get_or_create()

@@ -6,6 +6,8 @@ MIRA keeps one continuous conversation while storing durable boundaries as segme
 
 New messages append to the current active segment. The active segment remains expanded while the conversation is ongoing.
 
+A segment can be paused — by the idle-timeout service or an explicit pause — and later resumed by the next message or an explicit resume. A paused segment is still the current segment: at most one live sentinel (active or paused) exists per continuum, enforced by a unique partial index, and a save that lands while the segment sits paused reuses that sentinel rather than minting a second one. Pausing and resuming are refused while a turn is running.
+
 If the active history becomes too large before natural collapse, live context compaction replaces older provider-request messages with a rolling continuation brief. The original PostgreSQL message history remains intact.
 
 ## Segment Collapse

@@ -386,9 +386,14 @@ CREATE TABLE messages (
 CREATE INDEX idx_messages_user ON messages(user_id);
 CREATE INDEX idx_messages_continuum_time ON messages(continuum_id, created_at);
 CREATE INDEX idx_messages_tool_call ON messages(tool_call_id) WHERE tool_call_id IS NOT NULL;
-CREATE UNIQUE INDEX idx_messages_active_segment_unique ON messages(continuum_id)
+-- One live sentinel per continuum: active or paused. A paused segment is
+-- still the current segment (find_active_segment's contract); leaving paused
+-- outside the index let a save mint a second live sentinel behind a paused
+-- one, and increment_segment_turn's resume then violated the index on every
+-- subsequent message (2026-10-10 lockout).
+CREATE UNIQUE INDEX idx_messages_live_segment_unique ON messages(continuum_id)
     WHERE metadata->>'is_segment_boundary' = 'true'
-      AND metadata->>'status' = 'active';
+      AND metadata->>'status' IN ('active', 'paused');
 CREATE INDEX idx_messages_active_segments ON messages(continuum_id, created_at)
     WHERE metadata->>'is_segment_boundary' = 'true'
       AND metadata->>'status' IN ('active', 'paused');
