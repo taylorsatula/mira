@@ -4,7 +4,7 @@
 
 MIRA is a self-hosted personal AI assistant — persistent long-term memory, a user model and Persona that grow from conversation history, a terminal chat client. One operator's account per install by default (`auth/mode.py`, `MIRA_AUTH_MODE`); the server is a FastAPI app on Hypercorn with a streaming WebSocket chat protocol, plain HTTP chat, and opt-in federation and MCP mounts (`main.py`).
 
-**The spine — place every file against this flow.** A chat turn enters at `cns/api/` (HTTP or WS; auth installs the `user_id` contextvar; one turn per user via a Valkey lock) → the orchestrator composes the system prompt through an event-bus round-trip with `working_memory/` trinkets, surfaces memories from `lt_memory/`, and runs the LLM behind a DB-configured route name (`clients/llm/`) plus the tool loop (`tools/`) → `UnitOfWork.commit()` persists Postgres first, then the Valkey cache → events publish post-commit; subscribers react synchronously (`cns/core/events.py` taxonomy, `cns/integration/event_bus.py`): memory extraction on segment collapse, user-model/Persona/portrait pipelines, trinket refresh. Concurrently with turns: APScheduler jobs (segment-collapse sweep, memory scoring, entity merge, heartbeat wake cycle, auth cleanup) and autonomous sidebar agents (`agents/`).
+**The spine — place every file against this flow.** A chat turn enters at `cns/api/` (HTTP or WS; auth installs the `user_id` contextvar; one turn per user via a Valkey lock) → the orchestrator composes the system prompt through an event-bus round-trip with `working_memory/` trinkets, surfaces memories from `lt_memory/`, and runs the LLM behind a DB-configured route name (`clients/llm/`) plus the tool loop (`tools/`) → `UnitOfWork.commit()` persists Postgres first, then the Valkey cache → events publish post-commit; subscribers react synchronously (`cns/core/events.py` taxonomy, `cns/integration/event_bus.py`): memory extraction on segment collapse, user-model/Persona/portrait pipelines, trinket refresh. Concurrently with turns: APScheduler jobs (segment-collapse sweep, memory scoring, entity merge, auth cleanup) and autonomous sidebar agents (`agents/` — including the Heartbeat brief system's dispatcher trigger) (`agents/`).
 
 **Stack.** PostgreSQL + pgvector with RLS — user isolation is a database property enforced from the contextvar; never hand-filter queries (`clients/postgres_client.py`). Valkey (cache, sessions, queues, locks). Vault holds every credential; env vars and fallbacks are prohibited (`clients/vault_client.py`; per-user secrets via `utils/user_credentials.py`). Per-user encrypted SQLite for tool data (`encrypted__` column prefix). Embeddings and LLM inference resolve from DB config rows — local llama.cpp or any cloud provider, selected by route name, never hardcoded.
 
@@ -84,9 +84,9 @@ unnecessary edit costs a line; a missed one misleads every session.
 
 - `main.py` — application entry point and wiring hub: router mounts, the
   middleware stack, the global `APIError` → HTTP-status mapping, lifespan
-  startup/shutdown ordering (LT_Memory factory → CNS graph → sidebar/heartbeat/release-check
+  startup/shutdown ordering (LT_Memory factory → CNS graph → sidebar/release-check
   jobs → announcement; `websocket_chat.close_all_connections()` awaited at
-  shutdown; Valkey flush preserves the `heartbeat:` and
+  shutdown; Valkey flush preserves the
   `pending_memories:`/`pending_memories_done:`/`pending_memories_attempts:`
   prefixes — the durable record of user-confirmed memories), the pre-server
   POST gate before bind, and the conditional mounts: the federation router when

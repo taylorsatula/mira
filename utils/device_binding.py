@@ -1,8 +1,9 @@
 """Device low-power binding site for the heartbeat wake cycle.
 
-At the end of every dispatcher pass, cns/services/heartbeat_service.py knows
-the earliest time any user's next heartbeat wake is due — the per-user sleep
-schedule lives on segment sentinels as `heartbeat_wake_at`. This module is the
+The device-power binding aggregates the earliest armed-brief wake time
+across users (agents/triggers/heartbeat_trigger.py:
+publish_device_wake_aggregate) — the per-user sleep
+schedule lives in the heartbeat_armed_users Postgres presence table. This module is the
 single sanctioned place where that fact crosses out of MIRA into a
 deployer-supplied shim that bridges to whatever C++ actually puts the metal
 into a low-power state and arms the wake.
@@ -55,19 +56,20 @@ flow is:
 1. Config shape: extend `DevicePowerBindingConfig` in `config/config.py`. The
    heartbeat config block is consumed at two places — job registration and
    every tick — read both before changing semantics
-   (`cns/services/heartbeat_service.py`: `register_heartbeat_job`,
-   `heartbeat_tick`). If the config becomes per-user, follow the established
+   (`agents/triggers/heartbeat_trigger.py`: `register_device_wake_job`,
+   `publish_device_wake_aggregate`). If the config becomes per-user, follow the established
    per-user override pattern in `config/config_manager.py` / the
    `config.<tool>_tool` merge in `utils/tool_config_store.py`, NOT a new
    mechanism.
 
-2. The publisher: `heartbeat_tick()` in `cns/services/heartbeat_service.py`
-   computes the aggregation (earliest wake across users, "stay awake" cases)
-   right after the per-segment loop and hands one ISO timestamp to
-   `notify_heartbeat_sleep()` below. Any configurability that changes WHEN or
-   WHAT gets published — per-user bindings, publishing on confirm instead of
-   per-pass, an opt-out — is decided there. Read the loop's `stay_awake` /
-   `earliest_wake` tracking comments; every branch has a reason.
+2. The publisher: `publish_device_wake_aggregate()` in
+   `agents/triggers/heartbeat_trigger.py` reads the earliest
+   `heartbeat_armed_users.earliest_wake_at` across users (one aggregate
+   query) and hands that ISO timestamp to `notify_heartbeat_sleep()` below;
+   an empty table publishes nothing and leaves the device at full power.
+   Any configurability that changes WHEN or WHAT gets published — per-user
+   bindings, publish-on-transition instead of per-pass, an opt-out — is
+   decided there.
 
 3. This module: `notify_heartbeat_sleep()` is the only entry point callers
    should use. The loader (`_load_arm_fn`) resolves the shim from config and
@@ -78,10 +80,10 @@ flow is:
    far-side capabilities extend what MIRA puts in `HeartbeatSleepMetadata`
    (or add new `kind` values), never the argument list.
 
-4. The heartbeat status surface: `heartbeat_state()` in
-   `cns/services/heartbeat_service.py` feeds the control API
-   (`cns/api/heartbeat_api.py`). If operators should be able to see or toggle
-   the binding at runtime, that's the surface to extend — it already reports
+4. The briefs inspection surface: `cns/api/heartbeat_api.py` (GET /briefs,
+   brief detail, cancel) is where operators see armed briefs and their
+   schedules. If operators should be able to see or toggle the binding at
+   runtime, that's the surface to extend — it already reports
    latch, config, and recent decisions.
 
 5. Verification: this is a live-path module. Any behavioral change gets a

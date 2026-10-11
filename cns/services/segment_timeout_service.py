@@ -188,31 +188,6 @@ class SegmentTimeoutService:
         Returns:
             True if segment has timed out
         """
-        # A pending heartbeat wake is a liveness commitment: MIRA has been told
-        # to sleep until heartbeat_wake_at and will produce activity when the
-        # wake fires. Collapsing inside that window would compress the session
-        # out from under the sleep. The grace window also covers the wake turn
-        # itself: the stimulus commits when the turn completes, so there is a
-        # stretch after wake_at where the sleep has ended but no fresh message
-        # exists yet. A malformed or absent stamp changes nothing.
-        wake_at_str = segment['metadata'].get('heartbeat_wake_at')
-        if wake_at_str:
-            try:
-                wake_at = parse_utc_time_string(wake_at_str)
-            except (ValueError, TypeError):
-                wake_at = None
-                logger.warning(
-                    "Unparseable heartbeat_wake_at %r on segment %s; "
-                    "ignoring the wake guard",
-                    wake_at_str, segment['metadata'].get('segment_id'),
-                )
-            if wake_at is not None:
-                guard_until = wake_at + timedelta(
-                    seconds=config.heartbeat.wake_grace_seconds
-                )
-                if current_time < guard_until:
-                    return False
-
         end_time = self._segment_activity_anchor(segment)
 
         # Calculate inactive duration
@@ -252,12 +227,11 @@ class SegmentTimeoutService:
         inactive_duration_minutes: the two must agree by construction.
         """
         # Query for last message in segment, keyed on the segment's own
-        # identity. Messages of OTHER segments — including a successor
-        # segment's heartbeat ticks — are not this segment's activity and
-        # must not feed its timeout decision (a stranded mid-collapse
-        # sentinel whose recovery re-match computed end_time from a
-        # successor's fresh messages never looked timed out, so the stale
-        # claim was never re-claimed).
+        # identity. Messages of OTHER segments are not this segment's
+        # activity and must not feed its timeout decision (a stranded
+        # mid-collapse sentinel whose recovery re-match computed end_time
+        # from a successor's fresh messages never looked timed out, so the
+        # stale claim was never re-claimed).
         end_time = self._get_last_message_time(
             segment['continuum_id'],
             segment['user_id'],
@@ -270,23 +244,14 @@ class SegmentTimeoutService:
             # reach the collapse handler's tombstone circuit breaker naturally.
             end_time = segment['created_at']
 
-        # last_turn_at is the heartbeat liveness channel plus a bounded
-        # crash grace, not the live-turn guard (the lock probe in
-        # check_timeouts owns that). stamp_segment_liveness()
-        # (cns/infrastructure/continuum_repository.py) stamps it at every
-        # wake-turn dispatch, so a hung wake turn keeps this anchor fresh
-        # for one threshold window even after its lock expires; the retry
-        # path re-stamps under the _LIVENESS_STAMP_FAILURE_CAP = 3
-        # anti-starvation bound (cns/services/heartbeat_service.py), so a
-        # persistently failing heartbeat cannot starve this sweep forever.
-        # A turn that died without committing (process death, failed
-        # commit) leaves the arrival stamp (increment_segment_turn) as the
-        # only fresher-than-committed signal once its lock expires; without
-        # this read such a segment collapses on stale committed messages
-        # alone. A malformed stamp is a per-segment fault and must not
-        # abort the whole sweep cycle for every user; warn and treat as
-        # absent, mirroring the tolerant heartbeat_wake_at parse in
-        # _is_timed_out.
+        # last_turn_at is a bounded crash grace, not the live-turn guard (the
+        # lock probe in check_timeouts owns that): a turn that died without
+        # committing (process death, failed commit) leaves the arrival stamp
+        # (increment_segment_turn) as the only fresher-than-committed signal
+        # once its lock expires; without this read such a segment collapses
+        # on stale committed messages alone. A malformed stamp is a
+        # per-segment fault and must not abort the whole sweep cycle for
+        # every user; warn and treat as absent.
         last_turn_at_str = segment['metadata'].get('last_turn_at')
         if last_turn_at_str:
             try:
@@ -314,8 +279,8 @@ class SegmentTimeoutService:
 
         Every turn message (assistant, tool result, user) carries the segment's
         id in metadata — membership is keyed on identity, not on a position in
-        the continuum, so a successor segment's messages (including its
-        heartbeat ticks) can never masquerade as this segment's activity.
+        the continuum, so a successor segment's messages can never masquerade
+        as this segment's activity.
 
         Args:
             continuum_id: Continuum UUID

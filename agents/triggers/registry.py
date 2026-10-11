@@ -16,6 +16,7 @@ change.
 from dataclasses import dataclass
 
 from agents.triggers.memory_floor_trigger import MemoryFloorTrigger
+from agents.triggers.heartbeat_trigger import HeartbeatTrigger
 
 # Every class here is instantiated and registered on the SidebarDispatcher at
 # startup by utils/sidebar_jobs.py:register_sidebar_jobs. Order is dispatch
@@ -23,6 +24,7 @@ from agents.triggers.memory_floor_trigger import MemoryFloorTrigger
 # AND rejected by the trigger-rules API.
 TRIGGER_CLASSES: list[type] = [
     MemoryFloorTrigger,
+    HeartbeatTrigger,
 ]
 
 

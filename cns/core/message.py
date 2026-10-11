@@ -144,10 +144,6 @@ class MessageMetadata(TypedDict, total=False):
     tool_calls: list[dict[str, object]]
     tool_name: str
     tool_arguments: dict[str, object]
-    # Heartbeat wake-cycle fields (cns/services/heartbeat_service.py)
-    heartbeat: str  # 'true' on a heartbeat stimulus user message
-    tick_id: str  # hb_ identifier tying the stimulus to its decision record
-    heartbeat_decision: str  # 'keepsleeping' | 'breakout', stamped post-turn
     tool_result_id: str
     tool_result_session_id: str
     tool_result_compacted: bool
@@ -199,11 +195,6 @@ class MessageMetadata(TypedDict, total=False):
     downstream_failed_at: str
     extraction_abandoned: bool
     extraction_content_failures: int
-    # Heartbeat scheduling fields, stamped on the active segment sentinel
-    # (heartbeat_wake_at is a sleep commitment; heartbeat_retry_at a backoff)
-    heartbeat_wake_at: str
-    heartbeat_retry_at: str
-    heartbeat_failures: int
     # API rejection marker (api/chat.py)
     type: str  # e.g. "size_limit_rejection"
     # Same-hazard extension found by the fix-time probe (wider net than the

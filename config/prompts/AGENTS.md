@@ -44,6 +44,7 @@
   - `agents/whilethecatsaway_system.txt` — curiosity-driven idle-time research: explore, store memories with `pending_id` tracking, structured completion summary. Consumer: `agents/implementations/whilethecatsaway_agent.py`.
   - `agents/memory_curator_integration.txt` — integration-mode rubric: merge / link (exact link-type vocabulary) / stand-alone decisions for newly extracted memories. Self-contained (runs with `inherit_base_prompt=False`). Consumer: `agents/implementations/memory_curator_agent.py`.
   - `agents/memory_curator_floor.txt` — floor-mode rubric: archive / salvage / leave triage for sampled low-value memories. Self-contained. Consumer: `agents/implementations/memory_curator_agent.py`.
+  - `agents/heartbeat_agent_system.txt` — brief-gate rubric: per-brief bail-then-check-then-dispatch protocol; `heartbeat_tool report` as the sole tool and outcome channel; missions dispatch to specialized agents, never inline; no memory creation from brief runs. Consumer: `agents/implementations/heartbeat_agent.py`.
 
 ## Wiring
 

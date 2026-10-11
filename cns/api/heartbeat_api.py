@@ -1,16 +1,16 @@
 """
-Heartbeat control API — external cancel/resume/status for the wake cycle.
+Heartbeat API -- inspect and manage briefs (wake-ups with missions).
 
-Taylor-facing control surface for cns/services/heartbeat_service.py. Cancel
-pauses future ticks for the user (Valkey latch) and cancels any in-flight
-heartbeat turn through the same cancel-event machinery the websocket halt
-uses. Resume clears the latch. Status reports the latch, config, and recent
-decisions from heartbeat_tool's store.
+Per-user briefs surface for the future web frontend: GET endpoints
+enumerate and fetch briefs; POST cancel kills a brief by id. Authenticated
+per-user like every other router (get_current_user); a user only ever sees
+their own briefs.
 """
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 
 from auth.api import get_current_user
 from auth.types import SessionData, APITokenContext
@@ -22,36 +22,90 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_VALID_OPS = ("cancel", "resume", "status")
+_VALID_STATES = ("armed", "done", "bailed", "failed_permanently", "cancelled")
 
 
-class HeartbeatControlHandler(PropagatingHandler):
-    """One handler, three ops; op maps onto a heartbeat_service function."""
+class BriefCancelBody(BaseModel):
+    note: str
 
-    def process_request(self, *, user_id: str, op: str) -> dict[str, Any]:
-        from cns.services.heartbeat_service import (
-            cancel_heartbeat,
-            heartbeat_state,
-            resume_heartbeat,
+
+class HeartbeatBriefsHandler(PropagatingHandler):
+    """GET/POST over heartbeat_tool's store for the authenticated user."""
+
+    def process_request(
+        self,
+        *,
+        user_id: str,
+        brief_id: Optional[str] = None,
+        state_filter: Optional[str] = None,
+        cancel_note: Optional[str] = None,
+    ) -> dict[str, Any]:
+        from tools.implementations.heartbeat_tool import (
+            ensure_briefs_table,
+            _brief_row_public,
         )
+        from utils.userdata_manager import get_user_data_manager
 
         set_current_user_id(user_id)
-        if op == "cancel":
-            result = cancel_heartbeat(user_id)
-        elif op == "resume":
-            result = resume_heartbeat(user_id)
+        db = get_user_data_manager(user_id)
+        ensure_briefs_table(db)
+
+        if brief_id is not None:
+            row = db.fetchone("SELECT * FROM briefs WHERE id = :id", {"id": brief_id})
+            if row is None:
+                raise ValidationError(f"No brief with id {brief_id}")
+            return {"brief": _brief_row_public(row)}
+
+        if state_filter is not None:
+            if state_filter not in _VALID_STATES:
+                raise ValidationError(
+                    f"state must be one of {', '.join(_VALID_STATES)}, got: {state_filter}"
+                )
+            rows = db.fetchall(
+                "SELECT * FROM briefs WHERE state = :state ORDER BY next_wake_at ASC",
+                {"state": state_filter},
+            )
         else:
-            result = heartbeat_state(user_id)
-        return {"heartbeat": result}
+            rows = db.fetchall("SELECT * FROM briefs ORDER BY next_wake_at ASC")
+        return {"briefs": [_brief_row_public(r) for r in rows], "count": len(rows)}
 
 
-@router.post("/heartbeat/{op}")
-def heartbeat_control_endpoint(
-    op: str,
+@router.get("/heartbeat/briefs")
+def list_briefs(
+    state: Optional[str] = None,
     current_user: SessionData | APITokenContext = Depends(get_current_user),
 ):
-    if op not in _VALID_OPS:
-        raise ValidationError(f"Unknown heartbeat op: {op}. Valid: {', '.join(_VALID_OPS)}")
-    handler = HeartbeatControlHandler()
-    response = handler.handle_request(user_id=current_user.user_id, op=op)
+    handler = HeartbeatBriefsHandler()
+    response = handler.handle_request(
+        user_id=current_user.user_id, brief_id=None, state_filter=state
+    )
     return response.to_dict()
+
+
+@router.get("/heartbeat/briefs/{brief_id}")
+def get_brief(
+    brief_id: str,
+    current_user: SessionData | APITokenContext = Depends(get_current_user),
+):
+    handler = HeartbeatBriefsHandler()
+    response = handler.handle_request(
+        user_id=current_user.user_id, brief_id=brief_id
+    )
+    return response.to_dict()
+
+
+@router.post("/heartbeat/briefs/{brief_id}/cancel")
+def cancel_brief(
+    brief_id: str,
+    body: BriefCancelBody,
+    current_user: SessionData | APITokenContext = Depends(get_current_user),
+):
+    if not body.note or not body.note.strip():
+        raise ValidationError("note is required on cancel")
+    set_current_user_id(current_user.user_id)
+    from tools.implementations.heartbeat_tool import HeartbeatTool
+
+    tool = HeartbeatTool()
+    result = tool.run("cancel", brief_id=brief_id, note=body.note.strip())
+    return {"success": True, "data": result}
+

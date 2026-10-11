@@ -1,86 +1,304 @@
 """
-heartbeat_tool -- MIRA's keepsleeping/breakout decision record for the wake cycle.
+heartbeat_tool -- briefs: MIRA's authored wake-up-with-a-mission system.
 
-The heartbeat scheduler (cns/services/heartbeat_service.py) wakes MIRA with a
-synthetic stimulus; MIRA records its decision here via `confirm`. The service
-reads the decision back from this table after the turn to drive breakout
-pushes, and the digest in the next stimulus includes recent decisions.
+A brief is a persisted payload the scheduler injects at a wake time:
+type ('one-off' | 'scheduled'), mission, condition_check, bail_if, and a
+schedule. The heartbeat trigger surfaces due briefs to the HeartbeatAgent
+(agents/implementations/heartbeat_agent.py), which evaluates bail_if first,
+then the condition, executes the mission when the condition holds, and
+records each brief's outcome via the 'report' operation.
 
-The tool never wakes anything itself: it is the record-keeping half of the
-wake cycle, plus a status view for normal turns.
+Storage split:
+- Brief content lives in per-user SQLite (this tool's store, same database
+  as reminders), with the user-authored text columns encrypted at rest via
+  the encrypted__ prefix convention.
+- The Postgres heartbeat_armed_users table carries only (user_id,
+  earliest_wake_at) presence so the sidebar dispatcher can enumerate users
+  with armed briefs (dormant users included) and the device-power binding
+  can sleep the metal between wakes. State lives in SQLite; Postgres
+  carries presence, not truth.
 """
+
 import inspect
 import logging
-from typing import Any, Dict, Optional
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 from tools.repo import Tool
 from tools.registry import registry
-from utils.timezone_utils import format_utc_iso, utc_now
-from utils.user_context import get_user_preferences
+from utils.timezone_utils import format_utc_iso, parse_utc_time_string, utc_now
 
 logger = logging.getLogger(__name__)
 
-_VALID_DECISIONS = ("keepsleeping", "breakout")
+# ---------------------------------------------------------------------------
+# Per-user SQLite: briefs table
+# ---------------------------------------------------------------------------
 
-# Single DDL source for the heartbeat log. The tool creates it on first use;
-# cns/services/heartbeat_service.py calls ensure_heartbeat_log() before its
-# read paths (digest, decision readback, state) so ordering never matters.
-HEARTBEAT_LOG_DDL = """
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tick_id TEXT NOT NULL,
-    decision TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    wake_in_seconds INTEGER,
-    created_at TEXT NOT NULL
+BRIEFS_DDL = """
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL CHECK (type IN ('one-off', 'scheduled')),
+    encrypted__mission TEXT NOT NULL,
+    encrypted__condition_check TEXT NOT NULL,
+    encrypted__bail_if TEXT,
+    schedule TEXT NOT NULL,
+    interval_seconds INTEGER NOT NULL DEFAULT 600,
+    state TEXT NOT NULL DEFAULT 'armed'
+        CHECK (state IN ('armed', 'done', 'bailed', 'failed_permanently', 'cancelled')),
+    next_wake_at TEXT NOT NULL,
+    consecutive_false INTEGER NOT NULL DEFAULT 0,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    encrypted__last_result TEXT,
+    last_wake_at TEXT,
+    author TEXT NOT NULL DEFAULT 'mira',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 """
 
-HEARTBEAT_LOG_INDEX_DDL = (
-    "CREATE INDEX IF NOT EXISTS idx_heartbeat_log_tick ON heartbeat_log(tick_id)"
+BRIEFS_STATE_INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_briefs_state_wake ON briefs(state, next_wake_at)"
 )
 
-# Minimum accepted wake_in_seconds. Below this a "sleep" is a tight retry loop
-# that burns a full LLM turn per iteration; the default interval (300s) is the
-# floor for meaningful quiet periods.
-_MIN_WAKE_SECONDS = 60
+_MIN_INTERVAL_SECONDS = 60
+# Decay/backoff both use base * 2^count capped at this exponent, then the
+# max_interval_seconds config ceiling applies on top.
+_MAX_DECAY_EXPONENT = 3
+_NOTE_MAX_CHARS = 2000
+_MISSION_MAX_CHARS = 4000
 
 
-def ensure_heartbeat_log(db) -> None:
-    """Create the heartbeat log table and index if absent (idempotent).
+def ensure_briefs_table(db) -> None:
+    """Create the briefs table and index if absent. Idempotent."""
+    db.create_table("briefs", BRIEFS_DDL)
+    db.execute(BRIEFS_STATE_INDEX_DDL)
 
-    Also adds wake_in_seconds to a table created before that column existed;
-    the duplicate-column error from an already-migrated table is the expected
-    no-op path."""
-    db.create_table("heartbeat_log", HEARTBEAT_LOG_DDL)
-    try:
-        db.execute(
-            "ALTER TABLE heartbeat_log ADD COLUMN wake_in_seconds INTEGER"
+
+def _brief_row_public(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Shape a raw briefs row for tool/API responses (id, state, timing, notes)."""
+    return {
+        "id": row.get("id"),
+        "type": row.get("type"),
+        "state": row.get("state"),
+        "schedule": row.get("schedule"),
+        "next_wake_at": row.get("next_wake_at"),
+        "interval_seconds": row.get("interval_seconds"),
+        "consecutive_false": row.get("consecutive_false"),
+        "consecutive_failures": row.get("consecutive_failures"),
+        "mission": row.get("encrypted__mission"),
+        "condition_check": row.get("encrypted__condition_check"),
+        "bail_if": row.get("encrypted__bail_if"),
+        "last_result": row.get("encrypted__last_result"),
+        "last_wake_at": row.get("last_wake_at"),
+        "author": row.get("author"),
+        "created_at": row.get("created_at"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Postgres coordination: armed-user presence
+# ---------------------------------------------------------------------------
+
+
+def upsert_armed_user(user_id: str, wake_at_utc: str) -> None:
+    """Record that this user has at least one armed brief due at wake_at_utc.
+
+    Called on schedule and on every re-arm; the row carries the earliest
+    pending wake so the dispatcher's eligibility union and the device-power
+    binding can sleep until then.
+    """
+    from utils.database_session_manager import get_shared_session_manager
+
+    session = get_shared_session_manager()
+    with session.get_admin_session() as admin:
+        admin.execute_query(
+            """
+            INSERT INTO heartbeat_armed_users (user_id, earliest_wake_at, updated_at)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (user_id) DO UPDATE SET
+                earliest_wake_at = EXCLUDED.earliest_wake_at,
+                updated_at = NOW()
+            """,
+            (user_id, wake_at_utc),
         )
-    except Exception as exc:
-        if "duplicate column name" not in str(exc):
-            raise
-    db.execute(HEARTBEAT_LOG_INDEX_DDL)
+
+
+def remove_armed_user(user_id: str) -> None:
+    """Drop the armed-brief presence row (last armed brief left terminal state)."""
+    from utils.database_session_manager import get_shared_session_manager
+
+    session = get_shared_session_manager()
+    with session.get_admin_session() as admin:
+        admin.execute_query("DELETE FROM heartbeat_armed_users WHERE user_id = %s", (user_id,))
+
+
+def refresh_armed_marker(db, user_id: str) -> None:
+    """Recompute the Postgres presence row from the user's armed briefs.
+
+    Called after any state transition: upserts the earliest armed wake time,
+    or removes the row when nothing is armed.
+    """
+    rows = db.fetchall(
+        "SELECT next_wake_at FROM briefs WHERE state = 'armed' ORDER BY next_wake_at ASC"
+    )
+    if rows:
+        upsert_armed_user(user_id, rows[0]["next_wake_at"])
+    else:
+        remove_armed_user(user_id)
+
+
+# ---------------------------------------------------------------------------
+# Scheduling helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_wake_at(wake_at: str, daily_at: Optional[str]) -> datetime:
+    """Resolve a wake time: one-off takes wake_at (ISO or 'in N seconds');
+    scheduled takes daily_at ('HH:MM', user-local) and fires next."""
+    from utils.user_context import get_user_preferences
+
+    now = utc_now()
+    if daily_at is not None:
+        import re
+
+        match = re.fullmatch(r"(\d{1,2}):(\d{2})", daily_at.strip())
+        if not match:
+            raise ValueError(
+                f"daily_at must be 'HH:MM' (24h, user-local), got: {daily_at!r}"
+            )
+        hour, minute = int(match.group(1)), int(match.group(2))
+        if hour > 23 or minute > 59:
+            raise ValueError(f"daily_at out of range: {daily_at!r}")
+        tz_name = get_user_preferences().timezone
+        # DST-strict resolution, the codebase's sanctioned pair for
+        # user-supplied exact wall times (reminder_tool, punchclock_tool):
+        # local_datetime_to_utc_iso raises on ambiguous/nonexistent wall
+        # times instead of silently guessing. Compute the candidate date in
+        # user-local terms (today, rolling to tomorrow when the moment has
+        # passed), then resolve that wall time strictly.
+        from utils.timezone_utils import local_datetime_to_utc_iso, convert_from_utc
+
+        local_now = convert_from_utc(now, tz_name)
+        candidate_date = local_now.date()
+        if (hour, minute) <= (local_now.hour, local_now.minute):
+            candidate_date += timedelta(days=1)
+        wall = f"{candidate_date.isoformat()}T{hour:02d}:{minute:02d}:00"
+        return parse_utc_time_string(local_datetime_to_utc_iso(wall, tz_name))
+    if wake_at is None:
+        raise ValueError("one-off briefs require wake_at (ISO 8601 or 'in N seconds')")
+    stripped = wake_at.strip()
+    if stripped.lower().startswith("in "):
+        try:
+            seconds = int(stripped[3:].strip().split()[0])
+        except (ValueError, IndexError):
+            raise ValueError(f"could not parse relative wake_at: {wake_at!r}")
+        if seconds <= 0:
+            raise ValueError("relative wake_at must be positive seconds")
+        return now + timedelta(seconds=seconds)
+    try:
+        parsed = parse_utc_time_string(stripped)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(
+            f"could not parse wake_at {wake_at!r} as ISO 8601 or 'in N seconds': {exc}"
+        )
+    return parsed
+
+
+def _next_daily_occurrence(schedule_daily: str) -> str:
+    """Compute the next user-local daily occurrence as a UTC ISO timestamp."""
+    dt = _parse_wake_at(None, schedule_daily)
+    return format_utc_iso(dt)
+
+
+def _clamped_interval(base_seconds: int, count: int) -> int:
+    """interval * 2^min(count, cap), clamped by config ceiling."""
+    from config.config_manager import config
+
+    seconds = base_seconds * (2 ** min(count, _MAX_DECAY_EXPONENT))
+    return min(seconds, config.heartbeat.max_interval_seconds)
+
+
+def _max_rearm_seconds() -> int:
+    """Ceiling for an agent-requested re-arm (report wake_in_seconds)."""
+    from config.config_manager import config
+
+    return int(config.heartbeat.max_interval_seconds)
+
+
+# ---------------------------------------------------------------------------
+# Tool config and registration
+# ---------------------------------------------------------------------------
 
 
 class HeartbeatToolConfig(BaseModel):
     """Configuration for heartbeat_tool."""
 
     enabled: bool = Field(default=True, description="Whether the heartbeat tool is enabled")
-    status_limit: int = Field(default=10, ge=1, le=50, description="Max records returned by 'status'")
 
 
 registry.register("heartbeat_tool", HeartbeatToolConfig)
 
 
+# The schema the HeartbeatAgent sees: report only. The agent must never
+# schedule, cancel, or inspect other briefs mid-run.
+HEARTBEAT_AGENT_SCHEMA = {
+    "name": "heartbeat_tool",
+    "description": (
+        "Record the outcome of a heartbeat brief you were dispatched to execute. "
+        "Call once per brief carried by this work item, before complete_task."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "operation": {
+                "const": "report",
+                "description": "Report a brief outcome.",
+            },
+            "brief_id": {
+                "type": "string",
+                "description": "The brf_ identifier of the brief, from the work item payload.",
+            },
+            "outcome": {
+                "type": "string",
+                "enum": ["fired", "false", "bailed"],
+                "description": (
+                    "fired: the condition held and you executed the mission. "
+                    "false: the condition did not hold (re-arms on schedule, "
+                    "optionally sooner via wake_in_seconds). "
+                    "bailed: the bail_if condition held; the brief is moot, "
+                    "report it without executing the mission."
+                ),
+            },
+            "note": {
+                "type": "string",
+                "description": (
+                    "What you found and did. Stored as the brief's last_result and "
+                    "shown to the user, so write it to stand alone."
+                ),
+            },
+            "wake_in_seconds": {
+                "type": "integer",
+                "description": (
+                    "With outcome 'false' only: re-arm in this many seconds instead "
+                    "of the decayed interval, minimum 60."
+                ),
+            },
+        },
+        "required": ["operation", "brief_id", "outcome", "note"],
+        "additionalProperties": False,
+    },
+}
+
+
 class HeartbeatTool(Tool):
-    """Record heartbeat wake-cycle decisions and expose their history."""
+    """Author, inspect, and report briefs (heartbeat wake-ups with missions)."""
 
     name = "heartbeat_tool"
-    simple_description = "records keepsleeping/breakout heartbeat decisions"
-    parallel_safe = False  # confirm writes; sequential by default
+    simple_description = "schedules briefs (wake-ups with a mission) and records their outcomes"
+    parallel_safe = False  # briefs writes; sequential by default
 
-    _parallel_safe_operations = frozenset({"status"})
+    _parallel_safe_operations = frozenset({"list", "status"})
 
     @classmethod
     def is_call_parallel_safe(cls, tool_input: Dict[str, Any]) -> bool:
@@ -88,57 +306,122 @@ class HeartbeatTool(Tool):
 
     tool_schema = {
         "name": "heartbeat_tool",
-        "description": "Record the keepsleeping/breakout decision for a heartbeat wake tick.",
+        "description": (
+            "Schedule and manage briefs: persisted wake-ups carrying a mission, a "
+            "condition to check at wake, and (one-offs) a bail_if early-exit. "
+            "At the wake time the HeartbeatAgent is dispatched with the brief's "
+            "payload: it evaluates bail_if first, then the condition, and executes "
+            "the mission only when the condition holds."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "operation": {
                     "type": "string",
-                    "enum": ["confirm", "status"],
-                    "description": "Operation to perform."
+                    "enum": ["schedule", "list", "cancel", "report", "status"],
+                    "description": "Operation to perform.",
                 },
-                "tick_id": {
+                "type": {
                     "type": "string",
-                    "description": "Tick identifier in hb_ form, taken verbatim from the heartbeat stimulus message. Required for 'confirm'; ignored by 'status'."
+                    "enum": ["one-off", "scheduled"],
+                    "description": (
+                        "Brief type, for 'schedule'. one-off: fires once until its "
+                        "condition holds, then dies (bail_if required). scheduled: "
+                        "recurs perpetually (e.g. daily), bail_if optional."
+                    ),
                 },
-                "decision": {
+                "mission": {
                     "type": "string",
-                    "enum": ["keepsleeping", "breakout"],
-                    "description": "keepsleeping: nothing needs attention, end the turn after confirming. breakout: something needs attention or action, continue the turn. Required for 'confirm'; ignored by 'status'."
+                    "description": (
+                        "What to do when the condition holds. Self-contained: the "
+                        "agent sees only this text and the condition, never the "
+                        "conversation that authored them."
+                    ),
                 },
-                "reason": {
+                "condition_check": {
                     "type": "string",
-                    "description": "One-line justification for the decision, under 300 characters; longer values are rejected. Required for 'confirm'; ignored by 'status'."
+                    "description": (
+                        "The check to perform at wake. Write it as a verifiable "
+                        "predicate the agent can evaluate with tools."
+                    ),
                 },
-                "wake_in_seconds": {
+                "bail_if": {
+                    "type": "string",
+                    "description": (
+                        "Early-exit condition, checked BEFORE the condition at every "
+                        "wake. When it holds, the brief terminates without running the "
+                        "mission. Required for one-off briefs; optional for scheduled."
+                    ),
+                },
+                "wake_at": {
+                    "type": "string",
+                    "description": (
+                        "One-off only: first wake time. ISO 8601 datetime or 'in N "
+                        "seconds'."
+                    ),
+                },
+                "daily_at": {
+                    "type": "string",
+                    "description": (
+                        "Scheduled only: 'HH:MM' in the user's local timezone, daily."
+                    ),
+                },
+                "interval_seconds": {
                     "type": "integer",
-                    "description": "With decision 'keepsleeping' only — providing it with 'breakout' raises an error: sleep this many seconds before the next wake, with no heartbeat ticks in between. Minimum 60; values above the configured ceiling are rejected. Omit to sleep the default interval. Only for 'confirm'."
+                    "description": (
+                        "Re-arm cadence when the condition is false, seconds (default "
+                        "600, minimum 60). Sustained false results decay toward "
+                        "max_interval_seconds."
+                    ),
                 },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum records returned by 'status', 1-50, default 10. Only for 'status'."
-                }
+                "brief_id": {
+                    "type": "string",
+                    "description": (
+                        "brf_ identifier, for 'cancel' and 'report'."
+                    ),
+                },
+                "outcome": {
+                    "type": "string",
+                    "enum": ["fired", "false", "bailed"],
+                    "description": "Brief outcome, for 'report'.",
+                },
+                "note": {
+                    "type": "string",
+                    "description": (
+                        "Outcome note ('report') or reasoning ('schedule'/'cancel', "
+                        "optional). For 'report', what was found and done; shown to "
+                        "the user, so write it to stand alone."
+                    ),
+                },
+                "state_filter": {
+                    "type": "string",
+                    "description": "Optional state filter for 'list': armed|done|bailed|failed_permanently|cancelled.",
+                },
             },
             "required": ["operation"],
-            "additionalProperties": False
-        }
+            "additionalProperties": False,
+        },
     }
 
     def __init__(self):
         super().__init__()
         self.logger = logging.getLogger(__name__)
         from utils.user_context import has_user_context
+
         if has_user_context():
-            self._ensure_tables()
+            ensure_briefs_table(self.db)
 
     def _ensure_tables(self) -> None:
-        ensure_heartbeat_log(self.db)
+        ensure_briefs_table(self.db)
 
     def run(self, operation: str, **kwargs) -> Dict[str, Any]:
         try:
             self._ensure_tables()
             handlers = {
-                "confirm": self._confirm,
+                "schedule": self._schedule,
+                "list": self._list,
+                "cancel": self._cancel,
+                "report": self._report,
                 "status": self._status,
             }
             method = handlers.get(operation)
@@ -152,97 +435,355 @@ class HeartbeatTool(Tool):
             self.logger.error(f"Error in {operation}: {e}")
             raise
 
-    def _confirm(
-        self, tick_id: str, decision: str, reason: str,
-        wake_in_seconds: Optional[int] = None,
+    # ------------------------------------------------------------------
+    # schedule
+    # ------------------------------------------------------------------
+
+    def _schedule(
+        self,
+        type: Optional[str] = None,
+        mission: Optional[str] = None,
+        condition_check: Optional[str] = None,
+        bail_if: Optional[str] = None,
+        wake_at: Optional[str] = None,
+        daily_at: Optional[str] = None,
+        interval_seconds: Optional[int] = None,
+        note: Optional[str] = None,
     ) -> Dict[str, Any]:
         from config.config_manager import config
+        from utils.user_context import get_current_user_id
 
-        if not tick_id or not tick_id.startswith("hb_"):
+        if type not in ("one-off", "scheduled"):
+            raise ValueError("type must be 'one-off' or 'scheduled'")
+        if not mission or not mission.strip():
+            raise ValueError("mission is required and must not be blank")
+        if len(mission) > _MISSION_MAX_CHARS:
+            raise ValueError(f"mission exceeds {_MISSION_MAX_CHARS} characters (got {len(mission)})")
+        if not condition_check or not condition_check.strip():
+            raise ValueError("condition_check is required and must not be blank")
+        if len(condition_check) > _MISSION_MAX_CHARS:
             raise ValueError(
-                "tick_id is required for 'confirm' and must be the hb_ identifier "
-                "from the heartbeat stimulus message"
+                f"condition_check exceeds {_MISSION_MAX_CHARS} characters (got {len(condition_check)})"
             )
-        if decision not in _VALID_DECISIONS:
+        if type == "one-off" and (not bail_if or not bail_if.strip()):
+            raise ValueError("one-off briefs require a non-empty bail_if")
+        if bail_if and len(bail_if) > _MISSION_MAX_CHARS:
+            raise ValueError(f"bail_if exceeds {_MISSION_MAX_CHARS} characters (got {len(bail_if)})")
+
+        base_interval = (
+            interval_seconds
+            if interval_seconds is not None
+            else config.heartbeat.default_interval_seconds
+        )
+        if not isinstance(base_interval, int) or base_interval < _MIN_INTERVAL_SECONDS:
             raise ValueError(
-                f"decision must be one of {', '.join(_VALID_DECISIONS)}, got: {decision}"
+                f"interval_seconds must be an integer >= {_MIN_INTERVAL_SECONDS}, got: {base_interval!r}"
             )
-        if not reason or not reason.strip():
-            raise ValueError("reason is required for 'confirm' and must not be blank")
-        if len(reason) > 300:
-            raise ValueError(f"reason exceeds 300 characters (got {len(reason)})")
 
-        requested_sleep: Optional[int] = None
-        if wake_in_seconds is not None:
-            if decision != "keepsleeping":
-                raise ValueError(
-                    "wake_in_seconds only applies with decision 'keepsleeping'; "
-                    "a breakout turn is already awake"
-                )
-            max_sleep = config.heartbeat.max_sleep_seconds
-            if not isinstance(wake_in_seconds, int) or wake_in_seconds < _MIN_WAKE_SECONDS:
-                raise ValueError(
-                    f"wake_in_seconds must be an integer of at least {_MIN_WAKE_SECONDS} "
-                    f"seconds, got: {wake_in_seconds!r}"
-                )
-            if wake_in_seconds > max_sleep:
-                raise ValueError(
-                    f"wake_in_seconds exceeds the configured ceiling of {max_sleep} "
-                    f"seconds ({max_sleep / 3600:.0f}h), got: {wake_in_seconds}"
-                )
-            requested_sleep = wake_in_seconds
+        # Per-type schedule inputs, enforced before _parse_wake_at can
+        # AttributeError on None: one-off requires wake_at, scheduled
+        # requires daily_at. The cross-pairing (one-off + daily_at) is
+        # rejected too — a one-off must name its one wake moment, not borrow
+        # the daily-occurrence machinery.
+        if type == "one-off" and not wake_at:
+            raise ValueError("one-off briefs require wake_at (ISO 8601 or 'in N seconds')")
+        if type == "one-off" and daily_at:
+            raise ValueError("one-off briefs take wake_at, not daily_at")
+        if type == "scheduled" and not daily_at:
+            raise ValueError("scheduled briefs require daily_at ('HH:MM' user-local)")
 
-        self.db.insert("heartbeat_log", {
-            "tick_id": tick_id,
-            "decision": decision,
-            "reason": reason.strip(),
-            "wake_in_seconds": requested_sleep,
-            "created_at": format_utc_iso(utc_now()),
-        })
-
-        if decision == "keepsleeping":
-            if requested_sleep is not None:
-                guidance = (
-                    f"Decision recorded. Sleeping for {requested_sleep} seconds with "
-                    "no heartbeat ticks in between. End the turn now; your final "
-                    "message must be exactly the single word: keepsleeping"
-                )
-            else:
-                guidance = (
-                    "Decision recorded. Nothing needs attention. End the turn now; "
-                    "your final message must be exactly the single word: keepsleeping"
-                )
+        # Resolve first wake time. A one-off's schedule field is its first
+        # wake ISO timestamp; a scheduled brief's is its 'HH:MM' local time.
+        wake_dt = _parse_wake_at(wake_at, daily_at)
+        if type == "one-off":
+            schedule_value = format_utc_iso(wake_dt)
         else:
-            prefs = get_user_preferences()
-            display_name = (prefs.first_name or "").strip() or "friend"
-            guidance = (
-                f"Decision recorded. Continue this turn normally: act on what needs "
-                f"attention, then end with the message {display_name} should see. Write it "
-                f"to stand alone; {display_name} may not have been watching."
-            )
+            schedule_value = daily_at.strip()
+
+        brief_id = f"brf_{uuid4().hex[:12]}"
+        now_iso = format_utc_iso(utc_now())
+        row = {
+            "id": brief_id,
+            "type": type,
+            "encrypted__mission": mission.strip(),
+            "encrypted__condition_check": condition_check.strip(),
+            "encrypted__bail_if": bail_if.strip() if bail_if else None,
+            "schedule": schedule_value,
+            "interval_seconds": base_interval,
+            "state": "armed",
+            "next_wake_at": format_utc_iso(wake_dt),
+            "consecutive_false": 0,
+            "consecutive_failures": 0,
+            "encrypted__last_result": None,
+            "last_wake_at": None,
+            "author": "mira",
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+        self.db.insert("briefs", row)
+        refresh_armed_marker(self.db, str(get_current_user_id()))
+
         return {
             "success": True,
-            "decision": decision,
-            "wake_in_seconds": requested_sleep,
-            "message": guidance,
+            "brief_id": brief_id,
+            "type": type,
+            "next_wake_at": row["next_wake_at"],
+            "interval_seconds": base_interval,
+            "message": (
+                f"Brief {brief_id} armed ({type}). The HeartbeatAgent will wake "
+                f"with its payload at {row['next_wake_at']}"
+                + (f" (daily at {schedule_value} local)" if type == "scheduled" else "")
+                + "."
+            ),
         }
 
-    def _status(self, limit: Optional[int] = None) -> Dict[str, Any]:
-        from config.config_manager import config
+    # ------------------------------------------------------------------
+    # list / status
+    # ------------------------------------------------------------------
 
-        max_records = config.heartbeat_tool.status_limit
-        if limit is not None:
-            max_records = max(1, min(int(limit), 50))
+    def _list(self, state_filter: Optional[str] = None) -> Dict[str, Any]:
+        valid_states = ("armed", "done", "bailed", "failed_permanently", "cancelled")
+        if state_filter is not None and state_filter not in valid_states:
+            raise ValueError(f"state_filter must be one of {valid_states}, got: {state_filter!r}")
+        if state_filter:
+            rows = self.db.fetchall(
+                "SELECT * FROM briefs WHERE state = :state ORDER BY next_wake_at ASC",
+                {"state": state_filter},
+            )
+        else:
+            rows = self.db.fetchall("SELECT * FROM briefs ORDER BY next_wake_at ASC")
+        return {
+            "success": True,
+            "briefs": [_brief_row_public(r) for r in rows],
+            "count": len(rows),
+        }
+
+    def _status(self) -> Dict[str, Any]:
         rows = self.db.fetchall(
-            "SELECT tick_id, decision, reason, wake_in_seconds, created_at FROM heartbeat_log "
-            "ORDER BY created_at DESC LIMIT ?",
-            (max_records,),
+            "SELECT id, state, encrypted__last_result, last_wake_at, updated_at "
+            "FROM briefs WHERE state IN ('done', 'bailed', 'failed_permanently') "
+            "ORDER BY updated_at DESC LIMIT 10"
         )
         return {
             "success": True,
-            "records": rows,
+            "recent_outcomes": [
+                {
+                    "id": r.get("id"),
+                    "state": r.get("state"),
+                    "last_result": r.get("encrypted__last_result"),
+                    "last_wake_at": r.get("last_wake_at"),
+                    "updated_at": r.get("updated_at"),
+                }
+                for r in rows
+            ],
             "count": len(rows),
-            "wake_mode": config.heartbeat.wake_mode,
-            "interval_seconds": config.heartbeat.interval_seconds,
-            "max_sleep_seconds": config.heartbeat.max_sleep_seconds,
         }
+
+    # ------------------------------------------------------------------
+    # cancel
+    # ------------------------------------------------------------------
+
+    def _cancel(self, brief_id: Optional[str] = None, note: Optional[str] = None) -> Dict[str, Any]:
+        from utils.user_context import get_current_user_id
+
+        if not brief_id:
+            raise ValueError("brief_id is required for 'cancel'")
+        row = self.db.fetchone("SELECT * FROM briefs WHERE id = :id", {"id": brief_id})
+        if row is None:
+            raise ValueError(f"No brief with id {brief_id}")
+        now_iso = format_utc_iso(utc_now())
+        self.db.execute(
+            "UPDATE briefs SET state = 'cancelled', "
+            "encrypted__last_result = :note, updated_at = :now WHERE id = :id",
+            {"note": note or "cancelled by user/mira", "now": now_iso, "id": brief_id},
+        )
+        refresh_armed_marker(self.db, str(get_current_user_id()))
+        return {
+            "success": True,
+            "brief_id": brief_id,
+            "state": "cancelled",
+            "message": f"Brief {brief_id} cancelled. It will not wake again.",
+        }
+
+    # ------------------------------------------------------------------
+    # report (the agent's outcome channel)
+    # ------------------------------------------------------------------
+
+    def _report(
+        self,
+        brief_id: Optional[str] = None,
+        outcome: Optional[str] = None,
+        note: Optional[str] = None,
+        wake_in_seconds: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        from utils.user_context import get_current_user_id
+
+        if not brief_id:
+            raise ValueError("brief_id is required for 'report'")
+        if outcome not in ("fired", "false", "bailed"):
+            raise ValueError("outcome must be 'fired', 'false', or 'bailed'")
+        if note is not None and len(note) > _NOTE_MAX_CHARS:
+            raise ValueError(f"note exceeds {_NOTE_MAX_CHARS} characters (got {len(note)})")
+
+        row = self.db.fetchone("SELECT * FROM briefs WHERE id = :id", {"id": brief_id})
+        if row is None:
+            raise ValueError(f"No brief with id {brief_id}")
+        if row.get("state") != "armed":
+            raise ValueError(
+                f"Brief {brief_id} is '{row.get('state')}', not armed; refusing to report on it"
+            )
+
+        user_id = str(get_current_user_id())
+        now = utc_now()
+        now_iso = format_utc_iso(now)
+        base_interval = int(row.get("interval_seconds") or 600)
+
+        if outcome == "bailed":
+            self.db.execute(
+                "UPDATE briefs SET state = 'bailed', encrypted__last_result = :note, "
+                "last_wake_at = :now, updated_at = :now WHERE id = :id",
+                {"note": note or "bail_if held; brief is moot", "now": now_iso, "id": brief_id},
+            )
+            refresh_armed_marker(self.db, user_id)
+            return {
+                "success": True,
+                "brief_id": brief_id,
+                "state": "bailed",
+                "message": f"Brief {brief_id} bailed. Its exit note: {note or 'bail_if held'}",
+            }
+
+        if outcome == "fired":
+            if row.get("type") == "one-off":
+                self.db.execute(
+                    "UPDATE briefs SET state = 'done', encrypted__last_result = :note, "
+                    "last_wake_at = :now, updated_at = :now WHERE id = :id",
+                    {"note": note or "condition held; mission executed", "now": now_iso, "id": brief_id},
+                )
+                refresh_armed_marker(self.db, user_id)
+                return {
+                    "success": True,
+                    "brief_id": brief_id,
+                    "state": "done",
+                    "message": f"Brief {brief_id} fired and is complete.",
+                }
+            # scheduled: re-arm at the next daily occurrence, reset counters
+            next_wake = _next_daily_occurrence(row.get("schedule"))
+            self.db.execute(
+                "UPDATE briefs SET encrypted__last_result = :note, next_wake_at = :nw, "
+                "consecutive_false = 0, consecutive_failures = 0, last_wake_at = :now, "
+                "updated_at = :now WHERE id = :id",
+                {"note": note, "nw": next_wake, "now": now_iso, "id": brief_id},
+            )
+            refresh_armed_marker(self.db, user_id)
+            return {
+                "success": True,
+                "brief_id": brief_id,
+                "state": "armed",
+                "next_wake_at": next_wake,
+                "message": f"Brief {brief_id} fired; re-armed for {next_wake}.",
+            }
+
+        # outcome == 'false': re-arm, decayed, unless the agent requested sooner
+        false_count = int(row.get("consecutive_false") or 0) + 1
+        if wake_in_seconds is not None:
+            if not isinstance(wake_in_seconds, int) or wake_in_seconds < _MIN_INTERVAL_SECONDS:
+                raise ValueError(
+                    f"wake_in_seconds must be an integer >= {_MIN_INTERVAL_SECONDS}, got: {wake_in_seconds!r}"
+                )
+            if wake_in_seconds > _max_rearm_seconds():
+                raise ValueError(
+                    f"wake_in_seconds exceeds the ceiling of {_max_rearm_seconds()} "
+                    f"seconds (config.heartbeat.max_interval_seconds); rejected, not clamped"
+                )
+            delay = wake_in_seconds
+        else:
+            delay = _clamped_interval(base_interval, false_count)
+        next_wake = format_utc_iso(now + timedelta(seconds=delay))
+        self.db.execute(
+            "UPDATE briefs SET encrypted__last_result = :note, next_wake_at = :nw, "
+            "consecutive_false = :cf, last_wake_at = :now, updated_at = :now WHERE id = :id",
+            {
+                "note": note or "condition did not hold",
+                "nw": next_wake,
+                "cf": false_count,
+                "now": now_iso,
+                "id": brief_id,
+            },
+        )
+        refresh_armed_marker(self.db, user_id)
+        return {
+            "success": True,
+            "brief_id": brief_id,
+            "state": "armed",
+            "next_wake_at": next_wake,
+            "consecutive_false": false_count,
+            "message": (
+                f"Brief {brief_id} re-armed for {next_wake} "
+                f"(decay step {false_count})."
+            ),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Failure accounting (agent death paths, no report received)
+# ---------------------------------------------------------------------------
+
+
+def apply_run_failure(brief_ids: List[str], failure_note: str) -> List[Dict[str, Any]]:
+    """Advance the failure state machine for briefs whose agent run died
+    without reporting them (failed/timed out/capped/rejected).
+
+    Called by the HeartbeatAgent's on_completion with every carried brief
+    that received no valid report. Backoff is interval * 2^failures; at
+    max_failures the brief goes failed_permanently with an exit note.
+    """
+    from config.config_manager import config
+    from utils.user_context import get_current_user_id
+
+    from utils.userdata_manager import get_user_data_manager
+
+    user_id = str(get_current_user_id())
+    db = get_user_data_manager(user_id)
+    ensure_briefs_table(db)
+
+    max_failures = config.heartbeat.max_failures
+    now = utc_now()
+    now_iso = format_utc_iso(now)
+    results = []
+    for brief_id in brief_ids:
+        row = db.fetchone("SELECT * FROM briefs WHERE id = :id", {"id": brief_id})
+        if row is None or row.get("state") != "armed":
+            continue
+        failures = int(row.get("consecutive_failures") or 0) + 1
+        base_interval = int(row.get("interval_seconds") or 600)
+        if failures >= max_failures:
+            db.execute(
+                "UPDATE briefs SET state = 'failed_permanently', "
+                "encrypted__last_result = :note, consecutive_failures = :cf, "
+                "last_wake_at = :now, updated_at = :now WHERE id = :id",
+                {
+                    "note": f"{failure_note} (gave up after {failures} consecutive failed runs)",
+                    "cf": failures,
+                    "now": now_iso,
+                    "id": brief_id,
+                },
+            )
+            results.append({"brief_id": brief_id, "state": "failed_permanently"})
+        else:
+            delay = _clamped_interval(base_interval, failures)
+            next_wake = format_utc_iso(now + timedelta(seconds=delay))
+            db.execute(
+                "UPDATE briefs SET encrypted__last_result = :note, "
+                "consecutive_failures = :cf, next_wake_at = :nw, last_wake_at = :now, "
+                "updated_at = :now WHERE id = :id",
+                {
+                    "note": failure_note,
+                    "cf": failures,
+                    "nw": next_wake,
+                    "now": now_iso,
+                    "id": brief_id,
+                },
+            )
+            results.append({"brief_id": brief_id, "state": "armed", "next_wake_at": next_wake})
+    refresh_armed_marker(db, user_id)
+    return results

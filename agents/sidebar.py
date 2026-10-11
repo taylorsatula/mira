@@ -286,7 +286,8 @@ class SidebarDispatcher:
     # ------------------------------------------------------------------
 
     def _get_eligible_users(self) -> list[dict]:
-        """Get users who have sidebar triggers configured."""
+        """Users the dispatcher polls: anyone active in the last two days,
+        plus anyone with an armed heartbeat brief."""
         from utils.database_session_manager import get_shared_session_manager
 
         session_manager = get_shared_session_manager()
@@ -294,5 +295,8 @@ class SidebarDispatcher:
             return session.execute_query("""
                 SELECT id FROM users
                 WHERE is_active = TRUE
-                AND last_activity_date >= CURRENT_DATE - INTERVAL '2 days'
+                  AND (
+                      last_activity_date >= CURRENT_DATE - INTERVAL '2 days'
+                      OR id IN (SELECT user_id FROM heartbeat_armed_users)
+                  )
             """)

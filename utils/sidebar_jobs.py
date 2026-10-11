@@ -33,7 +33,19 @@ def register_sidebar_jobs(scheduler_service, tool_repo, event_bus) -> None:
     # derives its valid trigger/field set from the same list
     # (agents/triggers/registry.py), so what dispatches is exactly what is
     # rule-addressable.
+    from config.config_manager import config as app_config
+
     for trigger_class in TRIGGER_CLASSES:
+        # HeartbeatTrigger is the opt-in double gate's registration half:
+        # never constructed when the heartbeat brief system is disabled
+        # (its poll-time half re-checks config.heartbeat.enabled inside
+        # check_for_new_items).
+        if (
+            getattr(trigger_class, "trigger_id", "") == "heartbeat"
+            and not app_config.heartbeat.enabled
+        ):
+            logger.info("Heartbeat disabled; HeartbeatTrigger not registered")
+            continue
         dispatcher.register_trigger(trigger_class())
 
     scheduler_service.register_job(
@@ -49,3 +61,9 @@ def register_sidebar_jobs(scheduler_service, tool_repo, event_bus) -> None:
         f"{sidebar_config.poll_interval_minutes}m, "
         f"max {sidebar_config.max_concurrent_agents} concurrent agents"
     )
+
+    # Device-power binding: publish the earliest armed-brief wake time so a
+    # bound device can sleep until then (no-op without a deployer shim).
+    from agents.triggers.heartbeat_trigger import register_device_wake_job
+
+    register_device_wake_job(scheduler_service)

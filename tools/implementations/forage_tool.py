@@ -10,7 +10,7 @@ Default mode is fire-and-forget: returns instantly, results appear in
 the context window when the agent finishes. With blocking=true the
 agent runs synchronously on the caller's thread and the briefing comes
 back in the tool result — for turns that need the findings before they
-end (heartbeat wake turns especially).
+end.
 """
 import logging
 import threading
@@ -122,8 +122,8 @@ class ForageTool(Tool):
                         "agent finishes, and the briefing comes back inside this tool "
                         "result instead of appearing in your context window later. "
                         "Wall-clock bounded by the blocking agent timeout. Use it when "
-                        "you need the findings within this turn — a heartbeat turn "
-                        "deciding keepsleeping vs breakout, or answering a question you "
+                        "you need the findings within this turn — for a "
+                        "decision or when answering a question you "
                         "cannot answer without the research. Default false: background "
                         "dispatch, results arrive when ready."
                     ),

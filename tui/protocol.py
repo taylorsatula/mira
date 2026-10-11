@@ -236,7 +236,7 @@ class TurnErrorFrame(ProtocolModel):
 
 
 class ProactiveMessageFrame(ProtocolModel):
-    """Server-initiated assistant message (heartbeat breakout) with no client
+    """Server-initiated proactive assistant message with no client
     turn behind it. Render as an assistant message."""
 
     type: Literal["proactive_message"]

@@ -126,10 +126,6 @@ class ExtractionOrchestrator:
         segment_uuid = UUID(segment_id) if isinstance(segment_id, str) else segment_id
 
         # Step 2: Load messages after boundary, stop at next boundary.
-        # Heartbeat filtering happens in the loop below, not in SQL, so the
-        # all-heartbeat case (nothing extractable) can be distinguished from
-        # the anomalous empty-segment case and marked as extracted instead of
-        # being retried by the sweep forever.
         message_rows = db_client.execute_query("""
             SELECT * FROM messages
             WHERE continuum_id = %s
@@ -139,18 +135,6 @@ class ExtractionOrchestrator:
             ORDER BY created_at
         """, (str(continuum_id), boundary_time))
 
-        # Turn ids of keepsleeping heartbeat stimuli: every message of those
-        # turns is dropped. Breakout turns (heartbeat_decision = 'breakout')
-        # are real conversation and stay extractable.
-        heartbeat_turn_ids = {
-            parsed.get('turn_id')
-            for row in message_rows
-            for parsed in [self._parse_metadata(row.get('metadata', {}))]
-            if parsed.get('heartbeat') == 'true'
-            and parsed.get('heartbeat_decision', 'keepsleeping') != 'breakout'
-        }
-        heartbeat_turn_ids.discard(None)
-
         messages = []
         for msg_row in message_rows:
             msg_metadata = self._parse_metadata(msg_row.get('metadata', {}))
@@ -158,15 +142,6 @@ class ExtractionOrchestrator:
             # Stop at next segment boundary
             if msg_metadata.get('is_segment_boundary'):
                 break
-
-            if (
-                msg_metadata.get('heartbeat') == 'true'
-                and msg_metadata.get('heartbeat_decision', 'keepsleeping') != 'breakout'
-            ) or (
-                msg_metadata.get('turn_id')
-                and msg_metadata.get('turn_id') in heartbeat_turn_ids
-            ):
-                continue
 
             messages.append(Message(
                 id=msg_row['id'],
@@ -184,12 +159,11 @@ class ExtractionOrchestrator:
             return False
 
         if not messages:
-            # Every message in the segment belonged to keepsleeping heartbeat
-            # turns: nothing to extract. Mark the boundary so the sweep does
-            # not retry this segment forever.
+            # No extractable content in the segment. Mark the boundary so the
+            # sweep does not retry this segment forever.
             logger.info(
-                f"Segment {segment_id} contains only keepsleeping heartbeat "
-                "turns; marking extracted with no memories"
+                f"Segment {segment_id} contains no extractable messages; "
+                "marking extracted with no memories"
             )
             db_client.execute_query("""
                 UPDATE messages
