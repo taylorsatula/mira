@@ -67,6 +67,9 @@ OUTBOX_ROWS_DIVISOR = 6
 ELLIPSIS = "…"
 RULE_CHAR = "─"
 
+# OSC 2 window/tab title, written once the app owns the terminal.
+TERMINAL_TITLE = ":mira:"
+
 STYLE = Style.from_dict(
     {
         "rule": "ansibrightblack",
@@ -576,6 +579,11 @@ class Screen:
         # pre_run executes inside _run_async; the first CPR request and redraw
         # follow in the same task step with no await, so any emit that sees
         # _running == True runs after the first frame.
+        #
+        # The title rides that same first frame: set_title buffers OSC 2 on the
+        # output object, which only the renderer flushes, so setting it here for
+        # a later emit to flush would put a byte outside the print step.
+        self._app.output.set_title(TERMINAL_TITLE)
         self._running = True
 
     def _ensure_bottom(self) -> None:
