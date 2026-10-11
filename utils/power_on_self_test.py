@@ -53,6 +53,18 @@ POST_GATE_FAILURE_ACTIONS = ("park", "exit")
 POST_SERVER_POST_DEADLINE_SECONDS = 60
 LLM_PROVIDER_PROBE_MAX_WORKERS = 4
 LLM_PROVIDER_PROBE_MAX_TOKENS = 32
+# First-token stall bound for the reachability probe, not a generation bound:
+# success is the first well-formed streamed token, so the bound only has to
+# exceed how long a healthy provider can take before its first token. A
+# thinking model under load can spend 25s+ before the first token while
+# streaming normally after that (measured: gw.lunaroute.com glm-5.3,
+# 2026-10-11, first streamed byte 25.2s solo), and the gate probes its
+# targets concurrently over one API key — observed first-token latency then
+# has a tail past 60s (solo pass ~48s; concurrent attempts stalled past 60s
+# while the same endpoint answered a direct curl in 25s during the same
+# minute). The previous min(timeout, 15) cap measured thinking latency
+# instead of reachability and parked the boot gate on a healthy provider.
+LLM_PROVIDER_PROBE_FIRST_TOKEN_SECONDS = 120
 POST_PROBE_TEXT = "mira post probe"
 REPORT_BEGIN = "MIRA_POST_REPORT_BEGIN"
 REPORT_END = "MIRA_POST_REPORT_END"
@@ -1309,6 +1321,7 @@ def _llm_probe_targets(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _probe_llm_target(target: dict[str, Any]) -> dict[str, Any]:
     from clients.llm.dialect_registry import get_registry
+    from clients.llm.events import CompleteEvent, TextEvent, ThinkingEvent, ToolDetectedEvent
     from clients.llm.lifecycle import LLMLifecycle
     from clients.llm.resolver import ModelSelection
     from clients.llm.types import Request, RequestMetadata, ThinkingConfig, coerce_dialect_name
@@ -1325,7 +1338,7 @@ def _probe_llm_target(target: dict[str, Any]) -> dict[str, Any]:
         effort=None,
         model_config_name=target["name"],
     )
-    timeout = min(config.api.provider_response_timeout, 15)
+    timeout = LLM_PROVIDER_PROBE_FIRST_TOKEN_SECONDS
     dialect_class = get_registry().get(dialect_name)
     dialect = dialect_class.from_selection(
         selection,
@@ -1345,19 +1358,46 @@ def _probe_llm_target(target: dict[str, Any]) -> dict[str, Any]:
             model_config_name=selection.model_config_name,
         ),
     )
-    result = LLMLifecycle(response_timeout_seconds=timeout).complete(request, dialect)
-    reasoning_text = result.reasoning.text if result.reasoning is not None else ""
-    if not result.text.strip() and not reasoning_text.strip() and not result.tool_calls:
-        raise RuntimeError("Provider returned no text, reasoning, or tool calls")
+    # Reachability is judged on the first well-formed streamed token, not on
+    # a completed completion: the dialects raise ProviderProtocolError on
+    # malformed chunks, so any yielded event is well-formed by construction,
+    # and a thinking model's first token may be a reasoning delta. A hung
+    # endpoint that never streams still stalls (ProviderStallError at the
+    # bound); an endpoint that errors or sends garbage still fails.
+    events = LLMLifecycle(response_timeout_seconds=timeout).stream(request, dialect)
+    first_event = None
+    for event in events:
+        if isinstance(event, (TextEvent, ThinkingEvent, ToolDetectedEvent)):
+            first_event = event
+            break
+        if isinstance(event, CompleteEvent):
+            # Stream ended without a single token event: a completion carrying
+            # no text, reasoning, or tool calls is not a reachable provider.
+            response = event.response
+            reasoning_text = response.reasoning.text if response.reasoning is not None else ""
+            if not response.text.strip() and not reasoning_text.strip() and not response.tool_calls:
+                raise RuntimeError("Provider returned no text, reasoning, or tool calls")
+            first_event = event
+            break
+
+    # Cancel the remainder of the generation: reachability is established,
+    # nothing more is needed. abort_active_stream closes the httpx response
+    # from outside (the documented unblock for a reader in another thread);
+    # closing the lifecycle generator then unwinds both generators and
+    # releases the connection. max_tokens stays capped at
+    # LLM_PROVIDER_PROBE_MAX_TOKENS so the abandoned tail is bounded.
+    abort = getattr(dialect, "abort_active_stream", None)
+    if abort is not None:
+        abort()
+    events.close()
+
     return {
         "target": _llm_target_label(target),
         "dialect_name": dialect_name,
         "model": target["model"],
         "represented_configs": sorted(target.get("represented_configs") or []),
-        "response_chars": len(result.text),
-        "reasoning_chars": len(reasoning_text),
-        "tool_calls": len(result.tool_calls),
-        "stop_reason": result.stop_reason,
+        "first_event": type(first_event).__name__,
+        "first_event_chars": len(getattr(first_event, "content", "") or ""),
     }
 
 
