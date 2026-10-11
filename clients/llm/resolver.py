@@ -78,12 +78,58 @@ class ModelResolver:
 
         name = self._required_non_empty_string(model_config, "model_config")
         model_cfg = get_model_config(name)
+        selection = self._selection_for_config(name, model_cfg, max_tokens=max_tokens, effort=effort)
+        # Transparent divert: while the failover diverter is tripped, every
+        # route resolves to the backup target while KEEPING the original route
+        # name — cost accounting keys usage_pricing off model_config_name, and
+        # nothing downstream learns a new route name. The route is still
+        # resolved first so an unknown route name fails the same way tripped or
+        # not, and _model_config_cache is never mutated.
+        from clients.llm import diverter
+        if diverter.tripped():
+            return ModelResolver._failover_selection(selection)
+        return selection
+
+    @staticmethod
+    def _failover_selection(primary: ModelSelection) -> ModelSelection:
+        """The backup-target selection for one diverted call.
+
+        max_tokens is min(route ceiling, failover cap): the caller's own
+        max_tokens (if it passed one) already resolved into primary.max_tokens,
+        so both the caller's intent and the backup's smaller ceiling hold.
+        effort stays None — the backup runs with its own thinking defaults;
+        a caller that explicitly named an effort keeps it via the Request's
+        thinking config, which is merged downstream of this selection.
+        """
+        from config import config
+
+        cap = config.api.failover_max_tokens_cap
+        return ModelSelection(
+            dialect_name=coerce_dialect_name(config.api.failover_dialect_name),
+            model=ModelResolver._required_non_empty_string(config.api.failover_model, "failover_model"),
+            endpoint_url=ModelResolver._required_non_empty_string(
+                config.api.failover_endpoint_url, "failover_endpoint_url"
+            ),
+            api_key_name=optional_api_key_name(config.api.failover_api_key_name, "failover_api_key_name"),
+            max_tokens=min(primary.max_tokens, cap) if cap else primary.max_tokens,
+            effort=None,
+            model_config_name=primary.model_config_name,
+        )
+
+    @staticmethod
+    def _selection_for_config(
+        name: str,
+        model_cfg,
+        *,
+        max_tokens: int | None,
+        effort: EffortLevel | None,
+    ) -> ModelSelection:
         dialect_name = coerce_dialect_name(model_cfg.dialect_name)
         db_effort = coerce_effort(model_cfg.effort) if model_cfg.effort else None
         return ModelSelection(
             dialect_name=dialect_name,
-            model=self._required_non_empty_string(model_cfg.model, f"model_config '{name}' model"),
-            endpoint_url=self._required_non_empty_string(
+            model=ModelResolver._required_non_empty_string(model_cfg.model, f"model_config '{name}' model"),
+            endpoint_url=ModelResolver._required_non_empty_string(
                 model_cfg.endpoint_url,
                 f"model_config '{name}' endpoint_url",
             ),

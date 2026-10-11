@@ -39,6 +39,41 @@ class ApiConfig(BaseModel):
     )
     compaction_raw_user_turns_to_preserve: int = Field(default=10, description="Number of recent user turns to preserve in raw format without compaction.")
 
+    # Provider failover (diverter): one global backup target for all five routes.
+    # While tripped, ModelResolver diverts every route to this target carrying the
+    # original route name (pricing continuity); the recovery probe job flips back
+    # after consecutive passing probes. See clients/llm/diverter.py.
+    failover_enabled: bool = Field(default=False, description="Enable the provider failover diverter: after N consecutive retryable provider failures, route all LLM calls to the backup target below until the recovery probe confirms the primary recovered.")
+    failover_endpoint_url: Optional[str] = Field(default=None, description="Backup provider endpoint (OpenAI-compatible or the dialect's native shape). Required when failover_enabled.")
+    failover_model: Optional[str] = Field(default=None, description="Backup provider model name. Required when failover_enabled.")
+    failover_dialect_name: Optional[str] = Field(default=None, description="Dialect for the backup provider: openai, anthropic, openrouter, or groq. Required when failover_enabled.")
+    failover_api_key_name: Optional[str] = Field(default=None, description="Vault key name holding the backup provider credential; empty/None for an unauthenticated endpoint (e.g. local llama-server).")
+    failover_max_tokens_cap: Optional[int] = Field(default=None, description="Ceiling applied to each route's max_tokens while diverted (the backup may accept fewer output tokens than the primary route allows); None keeps each route's own ceiling.")
+    failover_recovery_probe_seconds: int = Field(default=120, ge=30, description="Interval of the recovery probe job while the diverter is tripped: probe every primary target with a first-token reachability probe; flip back after failover_flipback_consecutive_passes consecutive full passes. No probes are billed while healthy.")
+    failover_trip_consecutive_failures: int = Field(default=3, ge=1, description="Consecutive retryable provider failures (ProviderRetryableError, including stalls) from the same primary endpoint that trip the diverter. A single success resets the counter; auth and context-overflow errors never count.")
+    failover_flipback_consecutive_passes: int = Field(default=2, ge=1, description="Consecutive passing primary probes required before traffic returns to the primary; one lucky probe cannot cause an outage-flap loop.")
+
+    @model_validator(mode="after")
+    def validate_failover_block(self) -> "ApiConfig":
+        """When the diverter is enabled, its transport coordinates are required."""
+        if not self.failover_enabled:
+            return self
+        missing = [
+            name for name, value in (
+                ("failover_endpoint_url", self.failover_endpoint_url),
+                ("failover_model", self.failover_model),
+                ("failover_dialect_name", self.failover_dialect_name),
+            ) if not value or not str(value).strip()
+        ]
+        if missing:
+            raise ValueError(
+                "failover_enabled requires " + ", ".join(missing) +
+                " (the backup provider's transport coordinates)"
+            )
+        if self.failover_max_tokens_cap is not None and self.failover_max_tokens_cap <= 0:
+            raise ValueError("failover_max_tokens_cap must be a positive integer or None")
+        return self
+
     @model_validator(mode="after")
     def validate_compaction_trigger_tokens(self) -> "ApiConfig":
         if self.compaction_trigger_tokens >= self.context_window_tokens:

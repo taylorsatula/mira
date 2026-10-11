@@ -14,7 +14,8 @@ from clients.llm.events import (
     GenerationCancelled,
     StreamEvent,
 )
-from clients.llm.dialects.base import Dialect, ProviderContextOverflowError
+from clients.llm import diverter
+from clients.llm.dialects.base import Dialect, ProviderContextOverflowError, ProviderRetryableError
 from clients.llm.dialect_registry import get_registry
 from clients.llm.capabilities import Requirements
 from clients.llm.lifecycle import LLMLifecycle
@@ -127,13 +128,24 @@ class LLMProvider:
         dialect.capabilities.validate(self._requirements_for_request(request), dialect.dialect_name)
         lifecycle = LLMLifecycle()
         try:
-            return lifecycle.complete(request, dialect)
+            result = lifecycle.complete(request, dialect)
+        except ProviderRetryableError as error:
+            # Trip counting: consecutive retryable failures from the same
+            # primary endpoint trip the diverter (stalls included). Auth and
+            # context-overflow errors pass through uncounted — a
+            # misconfigured credential or an oversized request must not
+            # divert around itself. While tripped the selection is already
+            # the backup target and the diverter ignores records for it.
+            diverter.record_failure(selection.endpoint_url, error)
+            raise
         except ProviderContextOverflowError as error:
             raise ContextOverflowError(
                 error.estimated_tokens,
                 error.context_window,
                 error.endpoint,
             ) from error
+        diverter.record_success(selection.endpoint_url)
+        return result
 
     def stream_events(
         self,
@@ -176,7 +188,15 @@ class LLMProvider:
             lifecycle = LLMLifecycle()
             for event in lifecycle.stream(request, dialect):
                 yield event
+            # Clean end of stream: a primary success resets the trip counter
+            # (no-op while tripped — see generate_response).
+            diverter.record_success(selection.endpoint_url)
         except GenerationCancelled:
+            raise
+        except ProviderRetryableError as error:
+            # Same trip counting as generate_response; a stall surfaces
+            # mid-iteration of the event loop above.
+            diverter.record_failure(selection.endpoint_url, error)
             raise
         except ProviderContextOverflowError as error:
             raise ContextOverflowError(

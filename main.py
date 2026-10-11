@@ -219,6 +219,11 @@ async def lifespan(app: FastAPI):
         from utils.update_check import register_update_check_job
         register_update_check_job(scheduler_service)
 
+        # Register the failover recovery probe (skips itself when the diverter
+        # is disabled in config, so the POST required-job set stays untouched)
+        from utils.failover_jobs import register_failover_probe_job
+        register_failover_probe_job(scheduler_service)
+
         scheduler_service.start()
     except Exception as e:
         logger.critical(f"Failed to initialize scheduled task system: {e}")

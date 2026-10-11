@@ -84,7 +84,7 @@ unnecessary edit costs a line; a missed one misleads every session.
 
 - `main.py` — application entry point and wiring hub: router mounts, the
   middleware stack, the global `APIError` → HTTP-status mapping, lifespan
-  startup/shutdown ordering (LT_Memory factory → CNS graph → sidebar/release-check
+  startup/shutdown ordering (LT_Memory factory → CNS graph → sidebar/release-check/failover-probe
   jobs → announcement; `websocket_chat.close_all_connections()` awaited at
   shutdown; Valkey flush preserves the
   `pending_memories:`/`pending_memories_done:`/`pending_memories_attempts:`
