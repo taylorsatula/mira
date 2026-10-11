@@ -897,21 +897,6 @@ class ContinuumSearchTool(Tool):
               AND m.content <> ''
               AND COALESCE(m.metadata->>'is_segment_boundary', 'false') = 'false'
               AND COALESCE(m.metadata->>'system_notification', 'false') = 'false'
-              AND NOT (
-                  COALESCE(m.metadata->>'heartbeat', 'false') = 'true'
-                  AND COALESCE(m.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
-              )
-              AND (
-                  m.metadata->>'turn_id' IS NULL
-                  OR m.metadata->>'turn_id' NOT IN (
-                      SELECT other.metadata->>'turn_id'
-                      FROM messages other
-                      WHERE other.continuum_id = m.continuum_id
-                          AND other.metadata->>'heartbeat' = 'true'
-                          AND COALESCE(other.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
-                          AND other.metadata->>'turn_id' IS NOT NULL
-                  )
-              )
             ORDER BY rank DESC, m.created_at ASC
             OFFSET %s
             LIMIT %s
@@ -1239,9 +1224,8 @@ class ContinuumSearchTool(Tool):
 
             if direction == "before":
                 # Scaffolding exclusions mirror continuum_repository.load_segment_messages:
-                # segment boundaries, system notifications, and keepsleeping
-                # heartbeat turns stay out of context; breakout heartbeat turns
-                # are real conversation and stay in.
+                # segment boundaries and system notifications stay out of
+                # context; real conversation stays in.
                 query = """
                     SELECT id, role, content, created_at, metadata
                     FROM messages
@@ -1249,21 +1233,6 @@ class ContinuumSearchTool(Tool):
                       AND created_at < %s
                       AND COALESCE(metadata->>'is_segment_boundary', 'false') = 'false'
                       AND COALESCE(metadata->>'system_notification', 'false') = 'false'
-                      AND NOT (
-                          COALESCE(metadata->>'heartbeat', 'false') = 'true'
-                          AND COALESCE(metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
-                      )
-                      AND (
-                          metadata->>'turn_id' IS NULL
-                          OR metadata->>'turn_id' NOT IN (
-                              SELECT other.metadata->>'turn_id'
-                              FROM messages other
-                              WHERE other.continuum_id = messages.continuum_id
-                                  AND other.metadata->>'heartbeat' = 'true'
-                                  AND COALESCE(other.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
-                                  AND other.metadata->>'turn_id' IS NOT NULL
-                          )
-                      )
                     ORDER BY created_at DESC
                     LIMIT %s
                 """
@@ -1278,21 +1247,6 @@ class ContinuumSearchTool(Tool):
                       AND created_at > %s
                       AND COALESCE(metadata->>'is_segment_boundary', 'false') = 'false'
                       AND COALESCE(metadata->>'system_notification', 'false') = 'false'
-                      AND NOT (
-                          COALESCE(metadata->>'heartbeat', 'false') = 'true'
-                          AND COALESCE(metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
-                      )
-                      AND (
-                          metadata->>'turn_id' IS NULL
-                          OR metadata->>'turn_id' NOT IN (
-                              SELECT other.metadata->>'turn_id'
-                              FROM messages other
-                              WHERE other.continuum_id = messages.continuum_id
-                                  AND other.metadata->>'heartbeat' = 'true'
-                                  AND COALESCE(other.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
-                                  AND other.metadata->>'turn_id' IS NOT NULL
-                          )
-                      )
                     ORDER BY created_at ASC
                     LIMIT %s
                 """

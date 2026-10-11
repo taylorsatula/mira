@@ -221,8 +221,8 @@ class UserDataManager:
         # Initialize trigger rules schema (sidebar agent trigger filters)
         self._init_trigger_rules_schema()
 
-        # Initialize the sidebar-activity schema so heartbeat pregating and
-        # dispatcher dedup work from first boot, before any agent has run.
+        # Initialize the sidebar-activity schema so dispatcher dedup works
+        # from first boot, before any agent has run.
         self._init_sidebar_activity_schema()
 
         logger.info("Tool schemas initialized successfully")
@@ -230,9 +230,8 @@ class UserDataManager:
     def _init_sidebar_activity_schema(self):
         """Create the sidebar_activity table at every user-DB open.
 
-        The table then exists from first boot (heartbeat pregating and
-        dispatcher dedup read it) instead of appearing only when the first
-        agent runs. DDL: module-level ACTIVITY_TABLE_DDL / ACTIVITY_INDEX_DDL.
+        The table then exists from first boot (the dispatcher's dedup reads
+        it) instead of appearing only when the first agent runs. DDL: module-level ACTIVITY_TABLE_DDL / ACTIVITY_INDEX_DDL.
         """
         cursor = self.connection.cursor()
         cursor.execute(ACTIVITY_TABLE_DDL)

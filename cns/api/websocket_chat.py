@@ -295,8 +295,8 @@ class TurnErrorFrame(ProtocolModel):
 class ProactiveMessageFrame(ProtocolModel):
     """Server-initiated assistant message with no client turn behind it.
 
-    Emitted when a heartbeat breakout turn completes, so an open client sees
-    the message live instead of discovering it on the next history load.
+    Pushed when a background worker produces a message an open client should
+    see live instead of discovering it on the next history load.
     """
 
     type: Literal["proactive_message"]
@@ -506,10 +506,9 @@ async def push_proactive_message(
 ) -> int:
     """Push one server-initiated assistant message to a user's open clients.
 
-    Called from the heartbeat service after a breakout turn commits. Returns
-    the number of connections the frame was queued for; zero simply means no
-    client is watching and the message remains visible via history on next
-    load (subject to the heartbeat history filter).
+    Returns the number of connections the frame was queued for; zero simply
+    means no client is watching and the message remains visible via history
+    on next load.
     """
     if not message_id:
         logger.warning("Proactive push for user %s skipped: no final message id", user_id)
@@ -534,8 +533,8 @@ async def push_proactive_message(
 
 
 # The event loop that owns every ChatConnection's outbound queue. Captured on
-# the loop itself when a connection is accepted; the heartbeat service's sync
-# tick crosses to it through push_proactive_message_sync.
+# the loop itself when a connection is accepted; off-loop callers cross to it
+# through push_proactive_message_sync.
 _main_event_loop: asyncio.AbstractEventLoop | None = None
 
 
@@ -548,7 +547,7 @@ def push_proactive_message_sync(
 ) -> int:
     """Sync, thread-safe bridge for push_proactive_message.
 
-    The heartbeat tick runs synchronous on an APScheduler threadpool worker,
+    Background callers run synchronous on APScheduler threadpool workers,
     but the push is a coroutine that must touch the loop-owned connection
     queues. This crosses that boundary the same way stream_to_connection
     does: schedule on the captured main loop and wait with the same bounded
@@ -784,7 +783,7 @@ class WebSocketChatHandler:
         # TTL — so a turn of any legal length (including a silent provider
         # or tool stall with no streamed frame) cannot outlive its own lock
         # and admit a concurrent second turn on the same segment. Mirrors
-        # cns/api/chat.py and the heartbeat dispatcher.
+        # cns/api/chat.py.
         renewal_stop = self.user_request_lock.start_renewal(user_id, lock_token)
 
         try:

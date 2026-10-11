@@ -394,12 +394,17 @@ CREATE INDEX idx_messages_active_segments ON messages(continuum_id, created_at)
       AND metadata->>'status' IN ('active', 'paused');
 CREATE INDEX idx_messages_segment_metadata ON messages USING gin(metadata)
     WHERE metadata->>'is_segment_boundary' = 'true';
--- Keepsleeping heartbeat-turn identification for the NOT EXISTS turn exclusion
--- (history, live context, previous-session context): one index probe instead of
--- a per-row scan. Predicate mirrors the exclusion exactly so the planner can use it.
-CREATE INDEX idx_messages_keepsleeping_turn_id ON messages((metadata->>'turn_id'))
-    WHERE metadata->>'heartbeat' = 'true'
-      AND COALESCE(metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout';
+-- Heartbeat briefs: armed-user presence for dispatcher eligibility and
+-- device-power aggregation. Content lives in per-user SQLite (briefs table,
+-- tools/implementations/heartbeat_tool.py); this table carries presence only.
+-- The dispatcher's user enumeration unions this table so dormant users with
+-- armed briefs stay pollable (a daily brief must fire on day 40 of silence).
+CREATE TABLE IF NOT EXISTS heartbeat_armed_users (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    earliest_wake_at TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_heartbeat_armed_wake ON heartbeat_armed_users(earliest_wake_at);
 CREATE INDEX idx_messages_segment_embedding ON messages
     USING hnsw (segment_embedding vector_cosine_ops)
     WHERE metadata->>'is_segment_boundary' = 'true'

@@ -314,11 +314,10 @@ class SidebarDispatcherConfig(BaseModel):
         default=120, ge=1,
         description=(
             "Wall-clock bound for blocking-mode agent runs (SidebarAgent.run_blocking): "
-            "a blocking run executes inline on the caller's thread inside a turn that is "
-            "itself deadline-bounded — a heartbeat turn's cancel event stops the turn "
-            "only at the next tool boundary, so this, not agent_timeout_overrides, is "
-            "what bounds how long a blocking call can stretch that turn. Must stay at or "
-            "below heartbeat.turn_deadline_seconds for heartbeat use"
+            "a blocking run executes inline on the caller's thread inside a turn, so "
+            "this, not agent_timeout_overrides, is what bounds how long a blocking "
+            "call can stretch the calling turn. The caller's own turn deadline "
+            "(api turn cancel event) still applies on top"
         )
     )
 
@@ -349,86 +348,49 @@ class DevicePowerBindingConfig(BaseModel):
 
 
 class HeartbeatConfig(BaseModel):
-    """Heartbeat wake-cycle configuration.
+    """Heartbeat (briefs) configuration.
 
-    The heartbeat scheduler wakes MIRA periodically with a synthetic stimulus;
-    MIRA decides via heartbeat_tool whether to keep sleeping or break out into
-    a full conversational turn. See cns/services/heartbeat_service.py.
+    A brief is a persisted wake-up carrying a mission, a condition to
+    check at wake, and (one-offs) a bail_if early-exit. The HeartbeatTrigger
+    surfaces due armed briefs to the HeartbeatAgent on the sidebar
+    dispatcher's poll cadence; the agent evaluates each brief and reports
+    its outcome via heartbeat_tool. See tools/implementations/heartbeat_tool.py
+    and agents/triggers/heartbeat_trigger.py.
     """
 
-    enabled: bool = Field(default=True, description="Enable the heartbeat wake cycle")
-    interval_seconds: int = Field(
-        default=300, ge=30,
+    enabled: bool = Field(default=True, description="Enable the heartbeat brief system")
+    default_interval_seconds: int = Field(
+        default=600, ge=60,
         description=(
-            "Default seconds between heartbeat wakes — the delay applied when "
-            "MIRA confirms keepsleeping without requesting a custom sleep"
-        )
+            "Default re-arm cadence in seconds when a brief's condition is false at wake"
+        ),
     )
-    ticker_interval_seconds: int = Field(
-        default=60, ge=15,
+    max_interval_seconds: int = Field(
+        default=4800, ge=60,
         description=(
-            "Scheduler cadence of the wake dispatcher. The dispatcher runs this "
-            "often but a user's tick only fires once now has reached the wake "
-            "time stamped on the segment sentinel (heartbeat_wake_at), so this "
-            "value sets wake-time precision, not wake frequency"
-        )
+            "Ceiling for decayed false re-arms and failure backoff: interval * "
+            "2^count is clamped to this"
+        ),
     )
-    max_sleep_seconds: int = Field(
-        default=21600, ge=60,
+    max_failures: int = Field(
+        default=3, ge=1,
         description=(
-            "Ceiling on a MIRA-requested sleep (heartbeat_tool wake_in_seconds); "
-            "larger values are rejected, not clamped"
-        )
-    )
-    wake_grace_seconds: int = Field(
-        default=900, ge=0,
-        description=(
-            "Grace added to heartbeat_wake_at when the segment timeout service "
-            "checks staleness: collapse stays deferred until wake_at + grace so "
-            "a pending or in-flight wake turn is never treated as inactivity"
-        )
-    )
-    wake_mode: Literal["literal", "pregated"] = Field(
-        default="literal",
-        description=(
-            "literal: MIRA wakes and decides on every tick. pregated: the tick "
-            "first checks for new terminal sidebar-activity records since the "
-            "last wake and skips the LLM turn when nothing new appeared"
-        )
-    )
-    turn_lock_ttl_seconds: int = Field(
-        default=900, ge=60,
-        description=(
-            "TTL for the per-user request lock a heartbeat turn holds. Must "
-            "exceed the longest expected heartbeat turn; renewed in the "
-            "background for the turn's lifetime, so expiry only matters if "
-            "renewal itself fails"
-        )
-    )
-    turn_deadline_seconds: int = Field(
-        default=120, ge=30,
-        description=(
-            "Wall-clock deadline for one heartbeat turn, enforced by setting "
-            "the turn's cancel event: the orchestrator stops the turn at the "
-            "next stream or tool boundary, the stop counts as neither a "
-            "decision nor a failure (keepsleeping fallback, normal re-arm). "
-            "A heartbeat turn holds the same per-user lock a chat turn needs, "
-            "so this bounds how long chat can bounce TURN_BUSY on a tick's "
-            "account — without it a slow gateway plus tool-loop retries can "
-            "stretch one background turn to minutes. Worst-case lock hold is "
-            "this deadline plus one stalled provider pull (up to "
-            "api.provider_response_timeout): a cancel cannot interrupt a "
-            "stream already stalled mid-pull; the bounded async-work-barrier "
-            "wait before the timer starts adds api.async_work_barrier_timeout"
-        )
+            "Consecutive failed agent runs (no valid report) before a brief goes "
+            "failed_permanently with an exit note. Deliberate exemption from the "
+            "infrastructure-failure exclusion rule: a brief whose runs keep dying "
+            "has no separate signal to distinguish provider outage from a "
+            "mission that can never succeed, and an underivable distinction "
+            "must fail closed — the brief parks itself with an exit note and "
+            "the failure history in last_result rather than waking forever. A "
+            "healthy install's briefs re-arm fine after transient blips "
+            "because the backoff (interval x 2^failures) spaces attempts out."
+        ),
     )
     device_power_binding: DevicePowerBindingConfig = Field(
         default_factory=DevicePowerBindingConfig,
         description=(
-            "Low-power device binding for the wake cycle: publishes the "
-            "earliest next wake time to a deployer-supplied shim so the "
-            "metal can sleep between wakes (utils/device_binding.py)"
-        )
+            "Low-power device binding: publishes the earliest armed brief's next "
+            "wake to a deployer-supplied shim so the metal can sleep between "
+            "wakes (utils/device_binding.py)"
+        ),
     )
-
-

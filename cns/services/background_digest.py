@@ -1,10 +1,10 @@
 """
-Background-activity digest: pluggable sources for the heartbeat wake briefing.
+Background-activity digest: pluggable sources for ambient-context briefings.
 
-The heartbeat's stimulus asks the model to decide keepsleeping/breakout against
-a digest of recent background activity. That digest is assembled here from
-registered contributors, so a background surface an install runs can brief the
-model at wake time without the heartbeat knowing its specifics.
+The digest is assembled here from registered contributors, so a background
+surface an install runs can brief a consumer (the HeartbeatAgent evaluating
+briefs, any future wake-path) without that consumer knowing the sources'
+specifics.
 
 A contributor owns one source and its presentation:
 
@@ -136,38 +136,5 @@ class SidebarActivityContributor:
         return lines
 
 
-class HeartbeatDecisionsContributor:
-    """The heartbeat's own decision record, for continuity across wakes."""
-
-    _LIMIT = 5
-    _SNIPPET_CHARS = 200
-
-    def name(self) -> str:
-        return "heartbeat_decisions"
-
-    def contribute(self, user_id: str) -> list[str]:
-        from tools.implementations.heartbeat_tool import ensure_heartbeat_log
-        from utils.userdata_manager import get_user_data_manager
-
-        db = get_user_data_manager(user_id)
-        ensure_heartbeat_log(db)
-        decisions = db.fetchall(
-            "SELECT decision, reason, wake_in_seconds, created_at FROM heartbeat_log "
-            "ORDER BY created_at DESC LIMIT ?",
-            (self._LIMIT,),
-        )
-        if not decisions:
-            return []
-        lines = ["Recent heartbeat decisions:"]
-        for row in decisions:
-            wake_in = row.get("wake_in_seconds")
-            sleep_note = f" (slept {wake_in}s)" if wake_in else ""
-            lines.append(
-                f"- [{row.get('created_at')}] {row.get('decision')}{sleep_note}: "
-                f"{(row.get('reason') or '')[: self._SNIPPET_CHARS]}"
-            )
-        return lines
-
 
 register_background_digest_contributor(SidebarActivityContributor())
-register_background_digest_contributor(HeartbeatDecisionsContributor())

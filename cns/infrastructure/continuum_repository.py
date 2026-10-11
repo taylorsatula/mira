@@ -272,8 +272,7 @@ class ContinuumRepository:
             )
 
             # Track user activity day (upstream activity tracking for vacation-proof scoring)
-            # Heartbeat stimuli are machine-sourced, not user activity.
-            if message.role == "user" and message.metadata.get("heartbeat") != "true":
+            if message.role == "user":
                 try:
                     from utils.user_activity import increment_user_activity_day
                     logger.info(f"[SINGLE] Attempting to increment activity day for user {user_id}")
@@ -490,8 +489,7 @@ class ContinuumRepository:
                     """,
                     base_tuple + (segment_embedding_value,)
                 ))
-                # Heartbeat stimuli are machine-sourced, not user activity.
-                if message.role == "user" and message.metadata.get("heartbeat") != "true":
+                if message.role == "user":
                     has_user_message = True
 
             db.execute_transaction(insert_operations)
@@ -709,30 +707,8 @@ class ContinuumRepository:
             # Include all messages, no additional filter
             pass
         else:
-            # Default to regular messages (exclude system notifications and
-            # keepsleeping heartbeat turns; breakout heartbeat turns are real
-            # conversation the user must be able to read after the fact)
+            # Default to regular messages (exclude system notifications)
             where_conditions.append("COALESCE(metadata->>'system_notification', 'false') != 'true'")
-            where_conditions.append(
-                "NOT ("
-                "COALESCE(metadata->>'heartbeat', 'false') = 'true' "
-                "AND COALESCE(metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'"
-                ")"
-            )
-            # Keepsleeping-turn exclusion, de-correlated on purpose: turn_id is a
-            # per-turn UUID, so equality alone identifies the same turn and the
-            # old `other.continuum_id = messages.continuum_id` predicate was pure
-            # correlation — it forced a re-scan of `messages` per candidate row
-            # (hundreds of loops × ~10 ms seq scan ≈ 6 s per history page on a
-            # ~16k-row table). NOT EXISTS probes the partial index
-            # idx_messages_keepsleeping_turn_id instead.
-            where_conditions.append(
-                "(metadata->>'turn_id' IS NULL OR NOT EXISTS ("
-                "SELECT 1 FROM messages other "
-                "WHERE other.metadata->>'turn_id' = messages.metadata->>'turn_id' "
-                "AND other.metadata->>'heartbeat' = 'true' "
-                "AND COALESCE(other.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'))"
-            )
         
         if start_date:
             where_conditions.append("created_at >= %s")
@@ -909,134 +885,6 @@ class ContinuumRepository:
         new_segment_id = str(uuid4())
         set_current_segment_id(new_segment_id)
         return IncrementSegmentTurnResult(1, new_segment_id)
-
-    def set_heartbeat_wake_at(self, continuum_id: str | UUID, user_id: str, wake_at: str) -> bool:
-        """
-        Stamp the next heartbeat wake time on the active segment sentinel.
-
-        The heartbeat service calls this after every confirm: keepsleeping
-        stamps ``now + requested delay`` (or the default interval), breakout
-        stamps ``now + default interval``. Two consumers read the stamp:
-        the heartbeat dispatcher skips users whose wake time is in the future,
-        and the segment timeout service defers collapse until wake_at plus a
-        grace window so a long sleep never collapses the session out from
-        under MIRA.
-
-        A stale stamp is inert: both consumers only honor a future timestamp,
-        so no cleanup pass is needed when MIRA breaks out or the heartbeat is
-        disabled.
-
-        Args:
-            continuum_id: Continuum ID
-            user_id: User ID
-            wake_at: UTC ISO timestamp (format_utc_iso) of the next wake
-
-        Returns:
-            True if an active segment sentinel was stamped, False if none exists
-        """
-        db = self.get_user_db_client(user_id)
-
-        query = """
-            UPDATE messages
-            SET metadata = jsonb_set(metadata, '{heartbeat_wake_at}', to_jsonb(%s::text))
-            WHERE continuum_id = %s
-                AND metadata->>'is_segment_boundary' = 'true'
-                AND metadata->>'status' = 'active'
-            RETURNING id
-        """
-        rows = db.execute_returning(query, (wake_at, str(continuum_id)))
-        return bool(rows)
-
-    def set_heartbeat_retry_at(self, continuum_id: str | UUID, user_id: str, retry_at: str) -> bool:
-        """Stamp the heartbeat retry backoff and bump the consecutive-failure
-        counter on the active segment sentinel.
-
-        Called after a FAILED heartbeat turn. The backoff deliberately lives on
-        its own metadata key, not heartbeat_wake_at: the dispatcher honors it
-        for retry pacing, but the segment timeout service defers collapse only
-        on heartbeat_wake_at — a real sleep commitment MIRA asked for — so a
-        persistently failing heartbeat cannot defer the sweep forever. The
-        counter bounds the pre-turn liveness stamp in heartbeat_service, which
-        is the sweep's other deferral leg.
-
-        Args:
-            continuum_id: Continuum ID
-            user_id: User ID
-            retry_at: UTC ISO timestamp (format_utc_iso) of the next retry
-
-        Returns:
-            True if an active segment sentinel was stamped, False if none exists
-        """
-        db = self.get_user_db_client(user_id)
-
-        query = """
-            UPDATE messages
-            SET metadata = jsonb_set(
-                    jsonb_set(metadata, '{heartbeat_retry_at}', to_jsonb(%s::text)),
-                    '{heartbeat_failures}',
-                    to_jsonb(COALESCE((metadata->>'heartbeat_failures')::int, 0) + 1)
-                )
-            WHERE continuum_id = %s
-                AND metadata->>'is_segment_boundary' = 'true'
-                AND metadata->>'status' = 'active'
-            RETURNING id
-        """
-        rows = db.execute_returning(query, (retry_at, str(continuum_id)))
-        return bool(rows)
-
-    def reset_heartbeat_failures(self, continuum_id: str | UUID, user_id: str) -> bool:
-        """Zero the consecutive-failure counter on the active segment sentinel.
-
-        Called after a successful heartbeat turn: re-arms the pre-turn
-        liveness stamp (hang protection) that a failure streak had suspended.
-
-        Args:
-            continuum_id: Continuum ID
-            user_id: User ID
-
-        Returns:
-            True if an active segment sentinel was stamped, False if none exists
-        """
-        db = self.get_user_db_client(user_id)
-
-        query = """
-            UPDATE messages
-            SET metadata = jsonb_set(metadata, '{heartbeat_failures}', to_jsonb(0))
-            WHERE continuum_id = %s
-                AND metadata->>'is_segment_boundary' = 'true'
-                AND metadata->>'status' = 'active'
-            RETURNING id
-        """
-        rows = db.execute_returning(query, (str(continuum_id),))
-        return bool(rows)
-
-    def stamp_segment_liveness(self, continuum_id: str | UUID, user_id: str) -> bool:
-        """
-        Stamp last_turn_at on the active segment sentinel at heartbeat wake-turn dispatch.
-
-        The segment timeout service's last_turn_at guard then covers the wake
-        turn for one threshold window: a hung heartbeat turn does not get
-        force-tombstoned as abandoned while it is still running.
-
-        Args:
-            continuum_id: Continuum ID
-            user_id: User ID
-
-        Returns:
-            True if an active segment sentinel was stamped, False if none exists
-        """
-        db = self.get_user_db_client(user_id)
-
-        query = """
-            UPDATE messages
-            SET metadata = jsonb_set(metadata, '{last_turn_at}', to_jsonb(%s::text))
-            WHERE continuum_id = %s
-                AND metadata->>'is_segment_boundary' = 'true'
-                AND metadata->>'status' = 'active'
-            RETURNING id
-        """
-        rows = db.execute_returning(query, (format_utc_iso(utc_now()), str(continuum_id)))
-        return bool(rows)
 
     def pause_segment(self, continuum_id: str | UUID, user_id: str) -> bool:
         """
@@ -1320,9 +1168,8 @@ class ContinuumRepository:
             sentinel_time: Creation time of segment sentinel
 
         Returns:
-            List of messages in chronological order (excludes boundaries,
-            system notifications, and keepsleeping heartbeat turns; breakout
-            heartbeat turns are real conversation and stay in context)
+            List of messages in chronological order (excludes boundaries
+            and system notifications)
         """
         db = self.get_user_db_client(user_id)
 
@@ -1332,23 +1179,6 @@ class ContinuumRepository:
                 AND created_at >= %s
                 AND COALESCE(metadata->>'is_segment_boundary', 'false') = 'false'
                 AND COALESCE(metadata->>'system_notification', 'false') = 'false'
-                AND NOT (
-                    COALESCE(metadata->>'heartbeat', 'false') = 'true'
-                    AND COALESCE(metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
-                )
-                AND (
-                    metadata->>'turn_id' IS NULL
-                    OR NOT EXISTS (
-                        -- turn_id is a per-turn UUID: equality alone identifies the
-                        -- turn, and avoiding the continuum_id correlation keeps this
-                        -- an index probe (idx_messages_keepsleeping_turn_id) instead
-                        -- of a per-row re-scan of messages.
-                        SELECT 1 FROM messages other
-                        WHERE other.metadata->>'turn_id' = messages.metadata->>'turn_id'
-                            AND other.metadata->>'heartbeat' = 'true'
-                            AND COALESCE(other.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
-                    )
-                )
             ORDER BY created_at ASC
         """
 
@@ -1401,10 +1231,6 @@ class ContinuumRepository:
 
         Called only during session cache loading after timeout, when all segments are collapsed.
         Provides conversational continuity by showing the tail end of the previous session.
-        Excludes keepsleeping heartbeat turns (and their same-turn rows) exactly
-        as load_segment_messages does, so they cannot displace genuine
-        continuity pairs in the row budget; breakout heartbeats are real
-        conversation and stay in context.
 
         Args:
             continuum_id: Continuum ID
@@ -1439,23 +1265,6 @@ class ContinuumRepository:
                 AND COALESCE(m.metadata->>'is_segment_boundary', 'false') = 'false'
                 AND COALESCE(m.metadata->>'system_notification', 'false') = 'false'
                 AND COALESCE(m.metadata->>'has_tool_calls', 'false') != 'true'
-                AND NOT (
-                    COALESCE(m.metadata->>'heartbeat', 'false') = 'true'
-                    AND COALESCE(m.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
-                )
-                AND (
-                    m.metadata->>'turn_id' IS NULL
-                    OR NOT EXISTS (
-                        -- turn_id is a per-turn UUID: equality alone identifies the
-                        -- turn, and avoiding the continuum_id correlation keeps this
-                        -- an index probe (idx_messages_keepsleeping_turn_id) instead
-                        -- of a per-row re-scan of messages.
-                        SELECT 1 FROM messages other
-                        WHERE other.metadata->>'turn_id' = m.metadata->>'turn_id'
-                            AND other.metadata->>'heartbeat' = 'true'
-                            AND COALESCE(other.metadata->>'heartbeat_decision', 'keepsleeping') != 'breakout'
-                    )
-                )
             ORDER BY m.created_at DESC
             LIMIT %s
         """

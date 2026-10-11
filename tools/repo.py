@@ -112,8 +112,8 @@ ESSENTIAL_TOOLS = [
     # Host-access: the guardrailed shell tool is always loaded rather than
     # invokeother-loaded.
     "bash_tool",
-    # Heartbeat wake cycle: the scheduler-initiated turn must always be able to
-    # record its keepsleeping/breakout decision.
+    # Heartbeat briefs: the tool that schedules wake-ups with missions; the
+    # model must be able to author briefs in any turn.
     "heartbeat_tool",
     # Skills: the skills_catalog prompt section always instructs the model to
     # call invoke_skill_tool — it must be in every user's baseline, not an

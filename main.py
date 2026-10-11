@@ -180,7 +180,7 @@ async def lifespan(app: FastAPI):
         valkey_client = get_valkey_client()
         flushed_count = valkey_client.flush_except_whitelist(
             preserve_prefixes=[
-                "session:", "csrf:", "rate_limit:", "heartbeat:",
+                "session:", "csrf:", "rate_limit:",
                 "pending_memories:", "pending_memories_done:", "pending_memories_attempts:",
             ]
         )
@@ -214,11 +214,6 @@ async def lifespan(app: FastAPI):
         register_sidebar_dispatcher_job(
             scheduler_service, orchestrator.tool_repo, orchestrator.event_bus
         )
-
-        # Register heartbeat wake cycle (double gate: registration skipped when
-        # disabled; the tick re-checks config every time it fires)
-        from cns.services.heartbeat_service import register_heartbeat_job
-        register_heartbeat_job(scheduler_service)
 
         # Register the daily release check (GitHub releases/latest -> VERSION)
         from utils.update_check import register_update_check_job
