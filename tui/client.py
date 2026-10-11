@@ -40,6 +40,9 @@ SEND_TIMEOUT = 10.0
 CLOSE_TIMEOUT = 5.0
 HTTP_PAGE_TIMEOUT = 30.0
 UPDATE_STATUS_TIMEOUT = 10.0  # advisory poll; a slow answer must not linger
+ACTIONS_TIMEOUT = 60.0  # a direct collapse runs the server-side summarization
+                        # inside the request; the call is a background task, so a
+                        # generous bound delays nothing else
 # Server tool frames carry the full, untruncated tool result; the websockets
 # default (1 MiB) would close the socket with 1009 on one large result mid-turn.
 MAX_FRAME_BYTES = 64 * 1024 * 1024
@@ -452,6 +455,56 @@ class MiraClient:
             return None
         return latest
 
+    async def post_action(self, domain: str, action: str, data: dict) -> dict:
+        """POST /v0/api/actions; return the success envelope's ``data`` dict.
+
+        Raises ClientError carrying the server's own code and message on any
+        non-2xx status, a 2xx body that is the standard error envelope
+        (``{"success": false, "error": {"code", "message"}}``), a transport
+        failure, or a body that is not the envelope. Treated leniently like
+        ``fetch_available_update``, not pinned like the WS frames: the data
+        payloads are server-owned and heterogeneous, so wording drift must
+        degrade a notice, never raise ProtocolError on an advisory surface.
+        """
+        url = self._config.base_url.rstrip("/") + "/v0/api/actions"
+        try:
+            async with httpx.AsyncClient(timeout=ACTIONS_TIMEOUT) as http:
+                response = await http.post(
+                    url,
+                    json={"domain": domain, "action": action, "data": data},
+                    headers={"Authorization": f"Bearer {self._config.api_key}"},
+                )
+        except httpx.HTTPError as error:
+            raise ClientError(
+                "ACTIONS_REQUEST_FAILED", f"Action request to {url} failed: {error}"
+            ) from error
+        try:
+            body = response.json()
+        except ValueError as error:
+            if response.status_code // 100 != 2:
+                code, message = _action_error(None, response)
+                raise ClientError(code, message) from error
+            raise ClientError(
+                "ACTIONS_BAD_ENVELOPE", f"Action response was not JSON: {error}"
+            ) from error
+        is_error_envelope = (
+            isinstance(body, dict)
+            and body.get("success") is False
+            and isinstance(body.get("error"), dict)
+        )
+        if response.status_code // 100 != 2 or is_error_envelope:
+            code, message = _action_error(body, response)
+            raise ClientError(code, message)
+        if (
+            not isinstance(body, dict)
+            or body.get("success") is not True
+            or not isinstance(body.get("data"), dict)
+        ):
+            raise ClientError(
+                "ACTIONS_BAD_ENVELOPE", "Action response was not a success envelope"
+            )
+        return body["data"]
+
     async def close(self) -> None:
         """Close the socket cleanly; run() then returns without Disconnected."""
         self._closing = True
@@ -705,3 +758,24 @@ class MiraClient:
             pass
         text = response.text.strip()
         return text[:500] if text else "(no body)"
+
+
+def _action_error(body: object, response: httpx.Response) -> tuple[str, str]:
+    """(code, message) from a parsed action error body, with fallbacks: the
+    standard envelope (``error.code``/``error.message`` — the PropagatingHandler
+    plus main.py handler contract), then FastAPI's ``{"detail": ...}`` (the auth
+    dependency and request-validation ladder), then the status line. ``body`` is
+    whatever ``response.json()`` produced or None when it was not JSON — never
+    re-parsed here. Never guesses a verdict."""
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            code = error.get("code")
+            message = error.get("message")
+            if isinstance(code, str) and isinstance(message, str) and code and message:
+                return code, message
+        detail = body.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return "ACTION_HTTP_ERROR", detail.strip()
+    reason = response.reason_phrase or "no reason"
+    return "ACTION_HTTP_ERROR", f"HTTP {response.status_code}: {reason}"

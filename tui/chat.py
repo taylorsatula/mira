@@ -11,7 +11,9 @@ at ``turn_started`` (the server accepted it); every path that cannot deliver it
 returns it, with its queued siblings, to the input box. Nothing is dropped.
 
 ``Live`` is derived on read by ``_live()`` from the state below, never kept in
-step by hand. Private inbox items (``ConnectFailed``, ``RetrySend``, ``AutoReconnectDue``, ``ScreenExited``) let background tasks report to the same single consumer.
+step by hand. Private inbox items (``ConnectFailed``, ``RetrySend``, ``AutoReconnectDue``,
+``UpdateChecked``, ``ActionDone``/``ActionFailed``, ``ScreenExited``) let background tasks
+report to the same single consumer.
 
 A lost connection reconnects automatically with bounded backoff, so a server restart
 comes back without the user pressing Enter and a message MIRA pushes after the
@@ -31,7 +33,7 @@ from typing import Literal
 from rich.console import Group, RenderableType
 from rich.text import Text
 
-from tui import transcript
+from tui import commands, transcript
 from tui.client import (
     AssistantDelta,
     AuthFailed,
@@ -149,7 +151,23 @@ class ScreenExited:
     error: BaseException
 
 
-Item = ClientEvent | Intent | ConnectFailed | RetrySend | AutoReconnectDue | UpdateChecked | ScreenExited
+@dataclass
+class ActionDone:
+    """A slash command's REST action returned a success envelope."""
+
+    command: commands.Command
+    data: dict
+
+
+@dataclass
+class ActionFailed:
+    """A slash command's REST action failed: server rejection or transport."""
+
+    command: commands.Command
+    error: ClientError
+
+
+Item = ClientEvent | Intent | ConnectFailed | RetrySend | AutoReconnectDue | UpdateChecked | ScreenExited | ActionDone | ActionFailed
 
 
 @dataclass
@@ -206,6 +224,7 @@ class ChatSession:
         self._conn_since = time.monotonic()
         self._auto_reconnect: _AutoReconnect | None = None  # set while reconnecting on its own
         self._available_update: str | None = None  # newest release the server knows of, if any
+        self._actions_in_flight: set[str] = set()  # command names with a REST action still running
 
         self._pump_task: asyncio.Task[None] | None = None
         self._connect_task: asyncio.Task[None] | None = None
@@ -424,6 +443,10 @@ class ChatSession:
                 await self._on_auto_reconnect_due(item)
             case UpdateChecked(latest=latest):
                 await self._on_update_checked(latest)
+            case ActionDone():
+                await self._on_action_done(item)
+            case ActionFailed():
+                await self._on_action_failed(item)
             case ContextReset():
                 await self._on_context_reset(item)
             case TurnComplete():
@@ -453,22 +476,92 @@ class ChatSession:
 
     async def _on_submit(self, raw: str) -> bool:
         text = raw.strip()
-        if text == "/exit":
-            return True
         if not text:
             if self._conn == "disconnected":
                 await self._reconnect()
             return False
-        if not self._screen.consume_input(raw):
-            return False  # duplicate Enter: the box no longer holds this text
-        self._outbox.append(text)
-        if self._conn == "disconnected":
-            await self._reconnect()
-        elif self._conn == "connected" and not self._busy():
-            await self._send_next()
-        else:
-            self._refresh()
+        match commands.parse(text):
+            case commands.UnknownCommand(word=word):
+                # Not sent to the model; the text stays in the box to fix.
+                await self._emit_command_result(
+                    transcript.notice(
+                        f"unknown command: {word} — commands: {commands.help_list()}"
+                    )
+                )
+                return False
+            case commands.CommandHit(command=command, args=args):
+                if args:
+                    await self._emit_command_result(
+                        transcript.notice(f"the /{command.name} command takes no arguments")
+                    )
+                    return False  # the text stays in the box
+                if command.kind == "quit":
+                    return True  # /exit: today's early return, before any effect
+                if not self._screen.consume_input(raw):
+                    return False  # duplicate Enter: the box no longer holds this text
+                self._actions_in_flight.add(command.name)
+                await self._emit_command_result(
+                    transcript.notice(f"running /{command.name}…")
+                )
+                self._spawn(self._run_action(command))
+                return False
+            case commands.PlainMessage(text=message):
+                if not self._screen.consume_input(raw):
+                    return False  # duplicate Enter: the box no longer holds this text
+                self._outbox.append(message)
+                if self._conn == "disconnected":
+                    await self._reconnect()
+                elif self._conn == "connected" and not self._busy():
+                    await self._send_next()
+                else:
+                    self._refresh()
         return False
+
+    # --- slash commands -------------------------------------------------------
+
+    async def _run_action(self, command: commands.Command) -> None:
+        """Background producer: one bounded REST action, reported to the single
+        consumer as a private item — the UpdateChecked pattern. Never renders,
+        never blocks the consumer: a mid-turn /collapse can hold this task
+        through a server-side summarization while turn frames keep flowing."""
+        try:
+            data = await self._client.post_action("continuum", command.action, {})
+        except ClientError as error:
+            await self._post_private(ActionFailed(command, error))
+            return
+        await self._post_private(ActionDone(command, data))
+
+    async def _on_action_done(self, item: ActionDone) -> None:
+        self._actions_in_flight.discard(item.command.name)
+        await self._emit_command_result(
+            transcript.notice(f"/{item.command.name} — {item.command.render(item.data)}")
+        )
+
+    async def _on_action_failed(self, item: ActionFailed) -> None:
+        self._actions_in_flight.discard(item.command.name)
+        error = item.error
+        await self._emit_command_result(
+            transcript.alert(f"/{item.command.name} failed: {error.message} [{error.code}]")
+        )
+
+    async def _emit_command_result(self, body: Text) -> None:
+        """A command's notice/alert, placed so it can never land inside a
+        paragraph still pending in the live region: idle it is a standalone
+        row; mid-turn the pending reply and thinking paragraphs flush first
+        (the _on_model_error discipline), then the row joins MIRA's open box."""
+        turn = self._turn
+        if turn is None:
+            await self._emit(self._meta(body))
+            return
+        bodies: list[Text] = []
+        thinking = turn.thinking.flush()  # the row must not land inside a paragraph
+        if thinking:
+            bodies.append(transcript.thinking_lines(thinking))
+        lines = turn.stream.flush()  # the row must not land inside a paragraph
+        if lines:
+            bodies.append(transcript.mira_lines(lines))
+        bodies.append(body)
+        await self._emit(*self._in_box(turn, *bodies))
 
     async def _on_interrupt(self) -> bool:
         turn = self._turn
@@ -974,5 +1067,10 @@ class ChatSession:
             self._in_flight = None
         blocks.extend(transcript.notice(f"not sent: {text}") for text in self._outbox)
         self._outbox.clear()
+        blocks.extend(
+            transcript.notice(f"/{name} was still running when you quit — its outcome is unknown")
+            for name in sorted(self._actions_in_flight)
+        )
+        self._actions_in_flight.clear()
         if blocks:
             await self._emit(*blocks)

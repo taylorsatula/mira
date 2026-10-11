@@ -249,7 +249,8 @@ multi-user) and stores it in the 0600 endpoint store
 python3 -m tui
 ```
 
-`/exit` quits.
+`/exit` quits. `/pause`, `/resume`, `/status` and `/collapse` manage the
+conversation segment (an unrecognized `/word` is an error, not a message).
 
 ## Trying MIRA without installing anything
 I run a hosted copy of MIRA on [miraos.org](https://miraos.org/). It has a macOS app that can be downloaded [here](https://miraos.org/assets/MIRA-for-Mac.dmg).
