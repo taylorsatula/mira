@@ -17,10 +17,6 @@ Storage split:
   with armed briefs (dormant users included) and the device-power binding
   can sleep the metal between wakes. State lives in SQLite; Postgres
   carries presence, not truth.
-
-History: this replaces the keepsleeping/breakout wake cycle. The old
-heartbeat_log table stays on disk, untouched; the wake semantics were
-removed at the root.
 """
 
 import inspect

@@ -969,20 +969,3 @@ _CURATOR_OP_PROPS["operation"]["description"] = (
     "2+ redundant memories into one (sources archived, links transferred). "
     "create_memory is intentionally unavailable."
 )
-
-# Create-only memory surface for the HeartbeatAgent: brief runs are
-# ephemeral, so a durable finding's only channel forward is a new memory.
-# Narrowed from the full schema exactly like CURATOR_MEMORY_SCHEMA above,
-# but inverse: create_memory only.
-HEARTBEAT_MEMORY_SCHEMA = copy.deepcopy(MemoryTool.tool_schema)
-HEARTBEAT_MEMORY_SCHEMA["description"] = (
-    "Memory creation for the HeartbeatAgent. Create a new memory when a "
-    "brief's mission produces a durable finding worth remembering; include "
-    "enough context to act on cold. No other operations - search, linking, "
-    "and curation belong to the conversation-side tool surface."
-)
-_HEARTBEAT_MEM_OP_PROPS = HEARTBEAT_MEMORY_SCHEMA["input_schema"]["properties"]
-_HEARTBEAT_MEM_OP_PROPS["operation"]["enum"] = ["create_memory"]
-_HEARTBEAT_MEM_OP_PROPS["operation"]["description"] = (
-    "Queue a new memory for processing at segment collapse."
-)

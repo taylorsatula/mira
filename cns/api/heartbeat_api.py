@@ -1,10 +1,10 @@
 """
 Heartbeat API -- inspect and manage briefs (wake-ups with missions).
 
-Taylor-facing surface over the per-user briefs store and the heartbeat
-control state: GET endpoints enumerate briefs and reminders for the future
-web frontend; POST cancel kills a brief by id. The old cancel/resume/status
-ops on the wake-cycle service are gone with it.
+Per-user briefs surface for the future web frontend: GET endpoints
+enumerate and fetch briefs; POST cancel kills a brief by id. Authenticated
+per-user like every other router (get_current_user); a user only ever sees
+their own briefs.
 """
 import logging
 from typing import Any, Optional
@@ -26,7 +26,7 @@ _VALID_STATES = ("armed", "done", "bailed", "failed_permanently", "cancelled")
 
 
 class BriefCancelBody(BaseModel):
-    note: Optional[str] = None
+    note: str
 
 
 class HeartbeatBriefsHandler(PropagatingHandler):
@@ -70,19 +70,6 @@ class HeartbeatBriefsHandler(PropagatingHandler):
         return {"briefs": [_brief_row_public(r) for r in rows], "count": len(rows)}
 
 
-class ReminderViewHandler(PropagatingHandler):
-    """Read-only reminder view: the sibling type (delivers to the human) on
-    the same per-user store, for one-frontend inspection of both."""
-
-    def process_request(self, *, user_id: str) -> dict[str, Any]:
-        set_current_user_id(user_id)
-        from tools.implementations.reminder_tool import ReminderTool
-
-        tool = ReminderTool()
-        result = tool.run("get_reminders", date_filter="all")
-        return {"reminders": result.get("reminders", []), "count": result.get("count", 0)}
-
-
 @router.get("/heartbeat/briefs")
 def list_briefs(
     state: Optional[str] = None,
@@ -110,23 +97,15 @@ def get_brief(
 @router.post("/heartbeat/briefs/{brief_id}/cancel")
 def cancel_brief(
     brief_id: str,
-    body: Optional[BriefCancelBody] = None,
+    body: BriefCancelBody,
     current_user: SessionData | APITokenContext = Depends(get_current_user),
 ):
+    if not body.note or not body.note.strip():
+        raise ValidationError("note is required on cancel")
     set_current_user_id(current_user.user_id)
     from tools.implementations.heartbeat_tool import HeartbeatTool
 
     tool = HeartbeatTool()
-    result = tool.run(
-        "cancel", brief_id=brief_id, note=body.note if body else None
-    )
+    result = tool.run("cancel", brief_id=brief_id, note=body.note.strip())
     return {"success": True, "data": result}
 
-
-@router.get("/reminders")
-def list_reminders(
-    current_user: SessionData | APITokenContext = Depends(get_current_user),
-):
-    handler = ReminderViewHandler()
-    response = handler.handle_request(user_id=current_user.user_id)
-    return response.to_dict()

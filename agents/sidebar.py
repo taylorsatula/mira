@@ -286,10 +286,8 @@ class SidebarDispatcher:
     # ------------------------------------------------------------------
 
     def _get_eligible_users(self) -> list[dict]:
-        """Users the dispatcher polls: recently active users, plus any user
-        with armed heartbeat briefs (heartbeat_armed_users presence). The
-        union keeps dormant users pollable so scheduled briefs fire on
-        calendar even during long absences."""
+        """Users the dispatcher polls: anyone active in the last two days,
+        plus anyone with an armed heartbeat brief."""
         from utils.database_session_manager import get_shared_session_manager
 
         session_manager = get_shared_session_manager()

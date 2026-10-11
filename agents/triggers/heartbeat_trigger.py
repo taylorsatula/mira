@@ -17,8 +17,8 @@ minute. A re-arm stamps a new next_wake_at, so the next due-window is a
 genuinely new work item; the same window never double-dispatches.
 
 Eligibility: users with armed briefs remain pollable by the dispatcher
-even when dormant (the brief_armed_users UNION in agents/sidebar.py), so
-the birdfeeder brief fires on day 40 of segment silence.
+even when dormant (the heartbeat_armed_users UNION in
+agents/sidebar.py:_get_eligible_users).
 """
 import logging
 from typing import Any
@@ -39,10 +39,8 @@ class HeartbeatTrigger:
     # payload); declared empty per the trigger-rules contract.
     FILTERABLE_FIELDS = ()
 
-    # agent_class resolves lazily at access time, mirroring memory_floor_trigger:
-    # the dispatcher reads trigger.agent_class per dispatch (sidebar.py
-    # _dispatch_decision + _spawn_agent), and a module-level import here would
-    # pull the agent (and heartbeat_tool's Postgres session machinery) into
+    # Lazily imported: a module-level import here would pull the agent (and
+    # heartbeat_tool's Postgres session machinery) into
     # utils/sidebar_jobs.py's registration import path.
     @property
     def agent_class(self) -> type:
@@ -130,17 +128,12 @@ class HeartbeatTrigger:
 
 
 def publish_device_wake_aggregate() -> None:
-    """Device-binding publisher: earliest armed-brief wake time, all users.
+    """Publish the earliest armed-brief wake time to the device binding.
 
-    Replaces the old heartbeat dispatcher's aggregation (died with
-    cns/services/heartbeat_service.py). Reads heartbeat_armed_users — the
-    thin Postgres coordination table the trigger/tool maintain — and
-    publishes the earliest next wake obligation to the optional device
-    binding shim via notify_heartbeat_sleep. No armed briefs anywhere →
-    publish nothing and leave the device at full power (the unbound
-    behavior); a single armed brief → that user's wake time wins the
-    aggregate. Failures are the binding's problem (notify never raises);
-    this function only owns the aggregation query.
+    Reads min(earliest_wake_at) from heartbeat_armed_users and hands it to
+    notify_heartbeat_sleep; an empty table publishes nothing (device stays
+    at full power). notify never raises, so this function owns only the
+    aggregation query.
     """
     from utils.database_session_manager import get_shared_session_manager
     from utils.device_binding import notify_heartbeat_sleep
