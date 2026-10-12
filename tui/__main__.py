@@ -24,8 +24,9 @@ CLI:
   transcript). First run with no usable endpoint prints setup guidance
   and exits 1.
 
-Exit codes: 0 on a user quit (``/exit``, Ctrl+D on an empty box, Ctrl+C on
-an idle empty box); 1 on fatal startup errors (unreadable or corrupt store,
+Exit codes: 0 on a user quit (``/exit``, Ctrl+D on an empty box, a second
+Ctrl+C within the quit window on an idle empty box); 1 on fatal startup
+errors (unreadable or corrupt store,
 no usable endpoint, not a terminal, connect or auth failure) with the real
 message — fail loud, no silent defaults; 130 on Ctrl+C while connecting.
 """

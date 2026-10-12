@@ -94,6 +94,12 @@ AUTO_RECONNECT_DELAYS = (2.0, 4.0, 8.0)
 AUTO_RECONNECT_POLL_SECONDS = 15.0
 AUTO_RECONNECT_MAX_WAIT_SECONDS = 600.0
 
+# Ctrl+C is conditional. Text in the box: clear it, nothing else. Empty
+# box: stop what is in flight (turn, TURN_BUSY wait, pending send, connect).
+# Only an idle empty box arms this window, and a second Ctrl+C inside it
+# quits; every non-idle Ctrl+C handling disarms it.
+QUIT_DOUBLE_TAP_SECONDS = 3.0
+
 # Release notice: one read at startup, then daily. The server runs its own
 # check on the same cadence and caches the verdict, so this only asks.
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
@@ -225,6 +231,7 @@ class ChatSession:
         self._auto_reconnect: _AutoReconnect | None = None  # set while reconnecting on its own
         self._available_update: str | None = None  # newest release the server knows of, if any
         self._actions_in_flight: set[str] = set()  # command names with a REST action still running
+        self._quit_armed_at: float | None = None  # monotonic time of the last idle Ctrl+C
 
         self._pump_task: asyncio.Task[None] | None = None
         self._connect_task: asyncio.Task[None] | None = None
@@ -311,9 +318,9 @@ class ChatSession:
             if turn.halt_requested:
                 return Status("stopping…", "busy", turn.started)
             text = {
-                "replying": "MIRA is replying… · Ctrl+C to stop",
-                "thinking": "MIRA is thinking… · Ctrl+C to stop",
-                "tool": f"running {turn.tool_name}… · Ctrl+C to stop",
+                "replying": "MIRA is replying… · Ctrl+C clears input / stops",
+                "thinking": "MIRA is thinking… · Ctrl+C clears input / stops",
+                "tool": f"running {turn.tool_name}… · Ctrl+C clears input / stops",
             }[turn.activity]
             return Status(text, "busy", turn.started)
         if flight is not None:
@@ -321,7 +328,7 @@ class ChatSession:
                 return Status("stopping…", "busy", flight.since)
             if flight.message_id is None and flight.retries:
                 return Status(
-                    "MIRA is busy with another turn — will send when free · Ctrl+C to cancel",
+                    "MIRA is busy with another turn — will send when free · Ctrl+C clears input / cancels",
                     "busy",
                     flight.first_bounce,
                 )
@@ -564,11 +571,22 @@ class ChatSession:
         await self._emit(*self._in_box(turn, *bodies))
 
     async def _on_interrupt(self) -> bool:
+        """One Ctrl+C, resolved against the box first, then the turn, then
+        the session: text in the box clears it and nothing else (a draft
+        never halts a turn); an empty box stops what is in flight; an idle
+        empty box arms the quit window, and a second Ctrl+C inside it quits."""
+        now = time.monotonic()
+        armed = (
+            self._quit_armed_at is not None
+            and now - self._quit_armed_at < QUIT_DOUBLE_TAP_SECONDS
+        )
+        self._quit_armed_at = None
+        if self._screen.clear_input():
+            return False
         turn = self._turn
         if turn is not None:
-            if turn.halt_requested:
-                return True
-            await self._halt(turn)
+            if not turn.halt_requested:
+                await self._halt(turn)
             return False
         flight = self._in_flight
         if flight is not None:
@@ -578,15 +596,22 @@ class ChatSession:
                 self._restore_unsent()
                 await self._emit(transcript.notice("send cancelled"))
                 return False
-            if self._halt_on_start:
-                return True
-            self._halt_on_start = True
-            self._refresh()
+            if not self._halt_on_start:
+                self._halt_on_start = True
+                self._refresh()
             return False
         if self._conn == "connecting":
             await self._cancel_connect()
             return False
-        return not self._screen.clear_input()
+        if armed:
+            return True
+        self._quit_armed_at = now
+        await self._emit(
+            transcript.notice(
+                f"press Ctrl+C again within {QUIT_DOUBLE_TAP_SECONDS:.0f}s to exit"
+            )
+        )
+        return False
 
     async def _halt(self, turn: _Turn) -> None:
         try:
