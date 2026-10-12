@@ -20,7 +20,7 @@ from the same tagged tree.
 ## Breaking releases and `mira update`
 
 Deployed installs update themselves with `mira update`: the TUI subcommand
-(`tui/update.py`) resolves the newest published release, fetches its tarball,
+(`ui/tui/update.py`) resolves the newest published release, fetches its tarball,
 and hands the machine work to that release's own `deploy/update.sh` (rebuild
 venvs, stop service, swap code with the state-preserve set, restart,
 health-poll on the new `VERSION`).

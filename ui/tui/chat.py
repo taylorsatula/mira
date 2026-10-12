@@ -19,7 +19,7 @@ A lost connection reconnects automatically with bounded backoff, so a server res
 comes back without the user pressing Enter and a message MIRA pushes after the
 restart reaches the open session.
 
-Contract: ``tui/FRONTEND_PLAN.md`` "### ``tui/chat.py``" and its event table.
+Contract: ``ui/tui/FRONTEND_PLAN.md`` "### ``tui/chat.py``" and its event table.
 """
 
 from __future__ import annotations
@@ -33,8 +33,8 @@ from typing import Literal
 from rich.console import Group, RenderableType
 from rich.text import Text
 
-from tui import commands, transcript
-from tui.client import (
+from . import commands, transcript
+from .client import (
     AssistantDelta,
     AuthFailed,
     AuthOk,
@@ -54,9 +54,9 @@ from tui.client import (
     TurnStarted,
     TurnStopped,
 )
-from tui.history import replay_blocks
-from tui.screen import Interrupt, Intent, Live, Quit, Screen, Status, Submit, ToggleThinking
-from tui.text import ReplyStream, display_lines
+from .history import replay_blocks
+from .screen import Interrupt, Intent, Live, Quit, Screen, Status, Submit, ToggleThinking
+from .text import ReplyStream, display_lines
 
 # --- Bounded-wait constants (the only unbounded await is the inbox read) -----
 
@@ -772,7 +772,7 @@ class ChatSession:
         self._auto_reconnect = None
         blocks = [transcript.alert(f"could not connect: {error.message} [{error.code}]")]
         if error.code == "AUTH_FAILED":
-            blocks.append(transcript.notice("re-mint the API token: python3 -m tui --login"))
+            blocks.append(transcript.notice("re-mint the API token: python3 -m ui.tui --login"))
         await self._emit(*blocks)
 
     async def _lost_connection(self, headline: Text) -> None:

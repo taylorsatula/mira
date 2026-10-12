@@ -1,4 +1,4 @@
-"""Entry point for ``python3 -m tui`` — the MIRA terminal chat client.
+"""Entry point for ``python3 -m ui.tui`` (the ``mira`` command on installs) — the MIRA terminal chat client.
 
 CLI:
 - ``update``            subcommand: update the deployed install in place
@@ -37,8 +37,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from tui.app import run as run_app
-from tui.endpoints import EndpointStore
+from .app import run as run_app
+from .endpoints import EndpointStore
 
 
 def _print_config_debug(store: EndpointStore) -> None:
@@ -67,13 +67,13 @@ def main(argv: list[str] | None = None) -> int:
     # its only flag: update to the OSS repo's main HEAD instead of the
     # newest published release.
     if args_list and args_list[0] == "update":
-        from tui.update import run_update
+        from .update import run_update
 
         nightly = len(args_list) > 1 and args_list[1] == "--nightly"
         return run_update(nightly=nightly)
 
     parser = argparse.ArgumentParser(
-        prog="tui",
+        prog="mira",
         description="MIRA terminal chat client (streaming WebSocket chat with a bottom-pinned input bar over native scrollback). "
         "Subcommand: `mira update` updates a deployed install in place.",
     )
@@ -128,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.config_debug:
             print("fatal: --login and --config-debug are mutually exclusive", file=sys.stderr)
             return 1
-        from tui.login import run_login
+        from .login import run_login
 
         rc = run_login(store, args.endpoint, args.base_url, args.save_as)
         if rc != 0 or not args.chat:

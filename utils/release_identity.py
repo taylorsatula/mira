@@ -4,7 +4,7 @@ the newest published release is resolved.
 
 Dependency-free on purpose — stdlib only — so both the server process (via
 ``utils/update_check.py``, which owns the 24 h check job and the cached
-verdict) and the TUI's ``mira update`` subcommand (``tui/update.py``, which
+verdict) and the TUI's ``mira update`` subcommand (``ui/tui/update.py``, which
 runs on the minimal TUI venv) share one implementation of each half. Neither
 duplicates the other; this module is the single owner.
 """

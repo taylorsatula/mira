@@ -49,6 +49,22 @@ logging.getLogger('apscheduler.scheduler').setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
+# The in-tree browser client. Resolved from this file, not the process cwd, so
+# the pages serve regardless of where the server is launched from.
+UI_BROWSER_DIR = Path(__file__).resolve().parent / "ui" / "browser"
+
+# Every file the page routes below serve by path. Checked at app construction
+# so a missing file fails the boot, not the first page request.
+UI_BROWSER_FILES = (
+    "chat/index.html",
+    "memories/index.html",
+    "domaindocs/index.html",
+    "settings/index.html",
+    "favicon.ico",
+    "apple-touch-icon.png",
+    "manifest.json",
+)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -501,8 +517,7 @@ def create_app() -> FastAPI:
     app.add_middleware(PerfMiddleware)
     # CSP posture is governed by MIRA_CSP=off|strict, parsed strictly when
     # this constructor runs (auth/security_middleware.py). It takes no
-    # importmap hash: the CRM workspace import-map exception has no
-    # counterpart in the retained web UI.
+    # importmap hash: the browser client (ui/browser/) loads no import map.
     app.add_middleware(SecurityHeadersMiddleware)
 
     if config.api_server.enable_cors:
@@ -548,55 +563,60 @@ def create_app() -> FastAPI:
     register_perf_routes(app)
     install_db_instrumentation()
 
-    # Full web UI — page routes, plus root meta files and the /assets
-    # static mount. App pages gate behind get_current_user_for_pages in
-    # every mode: under `single` an unauthenticated visit round-trips
-    # through /v0/auth/local/session and its cookie, and under `multi` it
-    # gets the standard 401 envelope until the deployment ships its own
-    # sign-in surface (mira-OSS has no /login/ page). Root meta files
-    # and /assets carry no user data and stay public so a gated page can
-    # still load its own JS/CSS.
+    # Browser client (ui/browser/) — page routes, root meta files, and the
+    # /assets static mount. It is a single-user-mode surface: pages gate
+    # behind get_current_user_for_pages, so under `single` an unauthenticated
+    # visit round-trips through /v0/auth/local/session and its cookie, and
+    # under `multi` a page request gets the standard 401 envelope (mira-OSS
+    # has no /login/ page). Root meta files and /assets carry no user data
+    # and stay public so a gated page can still load its own JS/CSS.
+    for relative_path in UI_BROWSER_FILES:
+        required_file = UI_BROWSER_DIR / relative_path
+        if not required_file.is_file():
+            raise RuntimeError(f"Browser client file missing: {required_file}")
+
     page_dependencies = [Depends(auth_api.get_current_user_for_pages)]
-    if Path("web").exists():
-        @app.get("/", include_in_schema=False)
-        async def serve_root():
-            return RedirectResponse(url="/chat")
 
-        @app.get("/chat", include_in_schema=False, dependencies=page_dependencies)
-        @app.get("/chat/", include_in_schema=False, dependencies=page_dependencies)
-        async def serve_chat():
-            return FileResponse("web/chat/index.html")
+    @app.get("/", include_in_schema=False)
+    async def serve_root():
+        return RedirectResponse(url="/chat")
 
-        @app.get("/memories", include_in_schema=False, dependencies=page_dependencies)
-        @app.get("/memories/", include_in_schema=False, dependencies=page_dependencies)
-        async def serve_memories():
-            return FileResponse("web/memories/index.html")
+    @app.get("/chat", include_in_schema=False, dependencies=page_dependencies)
+    @app.get("/chat/", include_in_schema=False, dependencies=page_dependencies)
+    async def serve_chat():
+        return FileResponse(UI_BROWSER_DIR / "chat" / "index.html")
 
-        @app.get("/domaindocs", include_in_schema=False, dependencies=page_dependencies)
-        @app.get("/domaindocs/", include_in_schema=False, dependencies=page_dependencies)
-        async def serve_domaindocs():
-            return FileResponse("web/domaindocs/index.html")
+    @app.get("/memories", include_in_schema=False, dependencies=page_dependencies)
+    @app.get("/memories/", include_in_schema=False, dependencies=page_dependencies)
+    async def serve_memories():
+        return FileResponse(UI_BROWSER_DIR / "memories" / "index.html")
 
-        @app.get("/settings", include_in_schema=False, dependencies=page_dependencies)
-        @app.get("/settings/", include_in_schema=False, dependencies=page_dependencies)
-        async def serve_settings():
-            return FileResponse("web/settings/index.html")
+    @app.get("/domaindocs", include_in_schema=False, dependencies=page_dependencies)
+    @app.get("/domaindocs/", include_in_schema=False, dependencies=page_dependencies)
+    async def serve_domaindocs():
+        return FileResponse(UI_BROWSER_DIR / "domaindocs" / "index.html")
 
-        # Browser-expected static files from root
-        @app.get("/apple-touch-icon.png", include_in_schema=False)
-        async def serve_apple_touch_icon():
-            return FileResponse("web/apple-touch-icon.png")
+    @app.get("/settings", include_in_schema=False, dependencies=page_dependencies)
+    @app.get("/settings/", include_in_schema=False, dependencies=page_dependencies)
+    async def serve_settings():
+        return FileResponse(UI_BROWSER_DIR / "settings" / "index.html")
 
-        @app.get("/favicon.ico", include_in_schema=False)
-        async def serve_favicon():
-            return FileResponse("web/favicon.ico")
+    # Browser-expected static files from root
+    @app.get("/apple-touch-icon.png", include_in_schema=False)
+    async def serve_apple_touch_icon():
+        return FileResponse(UI_BROWSER_DIR / "apple-touch-icon.png")
 
-        @app.get("/manifest.json", include_in_schema=False)
-        async def serve_manifest():
-            return FileResponse("web/manifest.json")
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def serve_favicon():
+        return FileResponse(UI_BROWSER_DIR / "favicon.ico")
 
-        # Static assets (JS/CSS/fonts/images) — mounted after page routes
-        app.mount("/assets", StaticFiles(directory="web/assets"), name="assets")
+    @app.get("/manifest.json", include_in_schema=False)
+    async def serve_manifest():
+        return FileResponse(UI_BROWSER_DIR / "manifest.json")
+
+    # Static assets (JS/CSS/fonts/images) — mounted after page routes.
+    # StaticFiles raises at construction when the directory is missing.
+    app.mount("/assets", StaticFiles(directory=UI_BROWSER_DIR / "assets"), name="assets")
 
     return app
 

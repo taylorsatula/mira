@@ -1,9 +1,9 @@
-"""Headless token bootstrap for the TUI — ``python3 -m tui --login``.
+"""Headless token bootstrap for the TUI — ``python3 -m ui.tui --login``.
 
 Mints a long-lived API token against a deployed MIRA instance over the same
 auth HTTP surface the web UI uses, and stores it in the 0600 endpoint store —
 no browser needed. This module is a pure client: it imports nothing from the
-server tree; it mirrors ``auth/api.py`` the way ``tui/protocol.py`` mirrors
+server tree; it mirrors ``auth/api.py`` the way ``ui/tui/protocol.py`` mirrors
 frames. Drift rule: any change to those routes changes this module in the same
 commit.
 
@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import httpx
 
-from tui.endpoints import EndpointConfig, EndpointStore
+from .endpoints import EndpointConfig, EndpointStore
 
 _TIMEOUT = httpx.Timeout(15.0)
 _TOKEN_NAME = "mira-tui"
@@ -323,5 +323,5 @@ def run_login(
         flush=True,
     )
     if base_url is not None:
-        print(f"endpoint {name!r} is now active. Start chatting: python3 -m tui", flush=True)
+        print(f"endpoint {name!r} is now active. Start chatting: python3 -m ui.tui", flush=True)
     return 0

@@ -13,13 +13,15 @@ hand-maintained table: what dispatches is exactly what is rule-addressable.
 
 Endpoints:
   GET    /triggers/rules              — list all rules (optional ?trigger_id= filter)
+                                        plus the registered triggers and their
+                                        filterable fields
   POST   /triggers/rules              — create a rule
   PUT    /triggers/rules/{rule_id}    — update a rule
   DELETE /triggers/rules/{rule_id}    — delete a rule
 """
 import logging
 import re
-from typing import Any
+from typing import Any, TypedDict
 
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, Field
@@ -64,6 +66,28 @@ class UpdateRuleRequest(BaseModel):
 
 
 # ------------------------------------------------------------------
+# Response shapes
+# ------------------------------------------------------------------
+
+class TriggerSpecPayload(TypedDict):
+    """One registered trigger as listed by GET /triggers/rules."""
+    trigger_id: str
+    filterable_fields: list[str]
+
+
+def _trigger_spec_payloads() -> list[TriggerSpecPayload]:
+    """Registered triggers and their rule-addressable fields, derived per call
+    from the same registry `_validate_trigger_field` checks against."""
+    return [
+        TriggerSpecPayload(
+            trigger_id=spec.trigger_id,
+            filterable_fields=list(spec.filterable_fields),
+        )
+        for spec in registered_trigger_specs()
+    ]
+
+
+# ------------------------------------------------------------------
 # Validation helpers
 # ------------------------------------------------------------------
 
@@ -104,7 +128,8 @@ def list_rules(
     trigger_id: str | None = None,
     current_user: SessionData | APITokenContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """List trigger rules, optionally filtered by trigger_id."""
+    """List trigger rules, optionally filtered by trigger_id, plus every
+    registered trigger with its filterable fields (unfiltered)."""
     set_current_user_id(current_user.user_id)
     request_id = generate_request_id()
 
@@ -138,7 +163,11 @@ def list_rules(
         ]
 
         return create_success_response(
-            data={"rules": rules, "count": len(rules)},
+            data={
+                "rules": rules,
+                "count": len(rules),
+                "triggers": _trigger_spec_payloads(),
+            },
             meta={"request_id": request_id, "timestamp": format_utc_iso(utc_now())},
         ).to_dict()
 

@@ -4,9 +4,10 @@ Security headers middleware for the FastAPI application.
 Adds defense-in-depth HTTP response headers to every response.
 
 The Content-Security-Policy header is gated behind `MIRA_CSP` and is off by default.
-`script-src 'self'` — the narrowing that makes this middleware worth having — has no
-in-tree client that satisfies it since the `web/` UI was removed, so it stays off by
-default. The other five headers carry no such cost and are always sent.
+`script-src 'self'` — the narrowing that makes this middleware worth having — rejects
+the in-tree browser client (`ui/browser/`), whose pages run inline `<script>` blocks and
+inline event handlers (`onclick="…"` and friends), so strict stays off by default. The
+other five headers carry no such cost and are always sent.
 
     MIRA_CSP unset or "off"   five core headers, plus HSTS on HTTPS
     MIRA_CSP=strict           the same, plus STRICT_CONTENT_SECURITY_POLICY
@@ -19,15 +20,20 @@ defense-in-depth posture, and a typo must not select a different one.
 
 The strict policy admits no third-party origin. `frame-src` is omitted rather than set
 to `'none'`, so same-origin frames fall back to `default-src 'self'`. `style-src
-'unsafe-inline'` stays for now: it was required by the removed `web/` UI's inline
-`<style>` block and inline `style="…"` attributes, and no replacement client has landed.
+'unsafe-inline'` covers the browser client's inline `<style>` block and inline
+`style="…"` attributes.
 
 What must change before strict can become the default
 -----------------------------------------------------
-1. The replacement browser client must keep scripts and handlers out of inline markup
-   (`script-src 'self'` rejects both) and serve its scripts and styles from assets.
+1. The browser client (`ui/browser/`) must move its inline `<script>` blocks and inline
+   event handlers into files under `ui/browser/assets/` (`script-src 'self'` rejects
+   both), and serve every script, style and font from `/assets`.
 2. A card-processor origin must never come back. mira-OSS has no payments subsystem, so
    nothing may widen `script-src`, `connect-src` or `frame-src` for one.
+
+`Permissions-Policy` allows `geolocation` for this origin only: the browser client's
+`location.js` asks for the user's position and POSTs it to `/v0/api/location`. Camera
+and microphone stay denied.
 """
 
 import os
@@ -107,7 +113,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(self)"
 
         # HSTS only for HTTPS
         if request.url.scheme == "https":

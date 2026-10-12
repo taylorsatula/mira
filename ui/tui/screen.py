@@ -16,7 +16,7 @@ prompt_toolkit's renderer measures and erases the bar.
 Callers hand over Rich renderables (``transcript`` elements), rendered at
 the live terminal width for scrollback and the live region alike;
 ``Intent`` objects (``Submit``, ``Interrupt``, ``Quit``, ``ToggleThinking``)
-are posted to the caller's inbox with ``put_nowait``. Contract: ``tui/FRONTEND_PLAN.md`` "### ``tui/screen.py``".
+are posted to the caller's inbox with ``put_nowait``. Contract: ``ui/tui/FRONTEND_PLAN.md`` "### ``tui/screen.py``".
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import TextArea
 from rich.console import Console, RenderableType
 
-from tui.transcript import spinner
+from .transcript import spinner
 
 # Redraw cadence for the busy spinner and the elapsed-seconds counter.
 REFRESH_INTERVAL = 0.5

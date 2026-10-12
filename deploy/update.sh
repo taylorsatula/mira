@@ -1,7 +1,7 @@
 #!/bin/bash
 # deploy/update.sh — the machine half of `mira update`: update a deployed
 # MIRA install in place. Executed (not sourced) by the TUI's `mira update`
-# subcommand (tui/update.py), which resolved and downloaded the release tree
+# subcommand (ui/tui/update.py), which resolved and downloaded the release tree
 # this script receives. It can also be run by hand:
 #
 #   bash <release-tree>/deploy/update.sh <release-tree> <tag>
@@ -47,7 +47,7 @@
 #                  as the installed tree; only the code differs) and, on a
 #                  successful update, NIGHTLY_SHA is recorded in
 #                  <APP_DIR>/data/nightly_stamp.
-#   NIGHTLY_SHA    the resolved OSS main-head SHA (passed by tui/update.py;
+#   NIGHTLY_SHA    the resolved OSS main-head SHA (passed by ui/tui/update.py;
 #                  written to the stamp after the health poll passes)
 #   LOUD_MODE      true for verbose output (deploy lib convention)
 #
@@ -82,7 +82,7 @@ print_header "MIRA in-place update → ${TAG}"
 # ---------------------------------------------------------------------------
 # 1. Preflight
 # ---------------------------------------------------------------------------
-for f in main.py requirements.txt VERSION deploy/_mira_log_levels.py tui/requirements.txt; do
+for f in main.py requirements.txt VERSION deploy/_mira_log_levels.py ui/tui/requirements.txt; do
     if [ ! -f "${TREE}/${f}" ]; then
         print_error "Release tree ${TREE} is missing ${f} — not a MIRA release tree."
         exit 1
@@ -217,7 +217,7 @@ echo "import _mira_log_levels" > "${SITE_PACKAGES}/mira-log-levels.pth"
 
 NEW_TUI_VENV="${TUI_VENV}.new"
 rm -rf "$NEW_TUI_VENV"
-build_venv "$NEW_TUI_VENV" "${TREE}/tui/requirements.txt" "TUI client"
+build_venv "$NEW_TUI_VENV" "${TREE}/ui/tui/requirements.txt" "TUI client"
 
 # ---------------------------------------------------------------------------
 # 4. Stop the service (canonical root only)
@@ -361,7 +361,7 @@ fi
 # Nightly mode: record the installed branch-head SHA. Written only now —
 # after the health poll passed — so a failed update does not advance the
 # stamp and `mira update --nightly` retries the same SHA. The SHA comes
-# from the environment (tui/update.py resolved it); it is never re-derived
+# from the environment (ui/tui/update.py resolved it); it is never re-derived
 # here.
 if [ "${NIGHTLY:-0}" = "1" ] && [ -n "${NIGHTLY_SHA:-}" ]; then
     mkdir -p "${APP_DIR}/data"

@@ -347,6 +347,7 @@ async def create_api_token(
 
 @router.get("/api-tokens")
 async def list_api_tokens(
+    response: Response,
     current_user: SessionData = Depends(get_current_session_user),
     auth_service: AuthService = Depends(get_auth_service)
 ):
@@ -365,10 +366,12 @@ async def list_api_tokens(
         # Handle auth-specific errors with appropriate status codes
         http_status = 400
         api_response = create_auth_error_response(e, http_status, request_id)
+        response.status_code = http_status
         return api_response.to_dict()
     except Exception as e:
         logger.error(f"[{request_id}] API token list error: {e}", exc_info=True)
         api_response = create_auth_error_response(e, 500, request_id)
+        response.status_code = 500
         return api_response.to_dict()
 
 

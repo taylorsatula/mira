@@ -10,8 +10,8 @@
  *
  * Credentials come from the MIRA TUI endpoint store
  * (~/.config/mira-tui/config.json, active endpoint's base_url + api_key —
- * minted by `python -m tui --login`). That store's format is owned by
- * tui/endpoints.py in the mira-OSS repo; any format change updates this file
+ * minted by `python3 -m ui.tui --login`). That store's format is owned by
+ * ui/tui/endpoints.py in the mira-OSS repo; any format change updates this file
  * in the same commit (twin contract).
  */
 
@@ -60,14 +60,14 @@ function resolveEndpoint(): { baseUrl: string; apiKey: string } {
     throw new Error(
       `Cannot read the MIRA TUI endpoint store at ${path} ` +
       `(${error instanceof Error ? error.message : String(error)}). ` +
-      "Run `python -m tui --login` against the instance to mint a token."
+      "Run `python3 -m ui.tui --login` against the instance to mint a token."
     );
   }
   const store = raw as EndpointStore;
   const name = store.active;
   if (!name || !store.endpoints?.[name]) {
     throw new Error(
-      `No active MIRA endpoint in ${path}. Run \`python -m tui --login\` and connect once, ` +
+      `No active MIRA endpoint in ${path}. Run \`python3 -m ui.tui --login\` and connect once, ` +
       "or point the store's active endpoint at the instance to use."
     );
   }
@@ -75,7 +75,7 @@ function resolveEndpoint(): { baseUrl: string; apiKey: string } {
   if (!endpoint.base_url || !endpoint.api_key) {
     throw new Error(
       `The active MIRA endpoint '${name}' in ${path} is missing base_url or api_key. ` +
-      "Re-run `python -m tui --login`."
+      "Re-run `python3 -m ui.tui --login`."
     );
   }
   return { baseUrl: endpoint.base_url, apiKey: endpoint.api_key };
@@ -212,7 +212,7 @@ export default function (pi: ExtensionAPI) {
       if (response.status === 401 || response.status === 403) {
         throw new Error(
           `talkto_mira: MIRA rejected the token (HTTP ${response.status}); re-run ` +
-          `\`python -m tui --login\`. ${detail}`
+          `\`python3 -m ui.tui --login\`. ${detail}`
         );
       }
       throw new Error(`talkto_mira: MIRA chat endpoint returned HTTP ${response.status}: ${detail}`);

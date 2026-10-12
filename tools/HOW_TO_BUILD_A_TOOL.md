@@ -560,7 +560,7 @@ def _get_api_client(self):
 
 #### User Storage
 
-Users store credentials via **Settings > API Credentials** in the web UI. The credentials are:
+Users store credentials via **Settings > API Credentials** in the browser client (`ui/browser/settings/index.html`, the `user` domain's `store_http_credential` action). The credentials are:
 - Encrypted at rest (Fernet encryption, key derived from user_id)
 - Stored in per-user SQLite databases
 - Never exposed to the LLM—only referenced by name

@@ -91,7 +91,7 @@ The LLM boundary is provider-neutral. Provider-specific request formats, capabil
 ## Beliefs on Open Source Software
 I have been a proponent of OSS since I was a child. My mischievous ass was shoulder surfing the computer lab teachers password so I could install Firefox 2 on every computer in the district. I transfer files using FileZilla. I edit photos with Gimp. I use the foundational technologies that make day-to-day internet usage possible. 
 
-I decided to release MIRA as open source technology because I believe that what I’ve built here has the potential to someday be something more than the sum of its parts and no one man should own that. The MIRA in this repository includes the local web chat interface and open-source authentication path used by the self-hosted build; the hosted version at [miraos.org](https://miraos.org) adds the managed service experience around it. I commit to maintaining an open-source version of MIRA for as long as I am in charge of it.
+I decided to release MIRA as open source technology because I believe that what I’ve built here has the potential to someday be something more than the sum of its parts and no one man should own that. The MIRA in this repository includes the browser and terminal chat clients and the open-source authentication path used by the self-hosted build; the hosted version at [miraos.org](https://miraos.org) adds the managed service experience around it. I commit to maintaining an open-source version of MIRA for as long as I am in charge of it.
 
 ---
 
@@ -230,14 +230,27 @@ docker run -e MIRA_PROVIDER_KEY=lr_xxx -v mira-data:/opt/vault -v mira-userdata:
 
 Vault data persists in the `mira-data` volume. User data (uploaded and generated files, per-user tool data) persists in the `mira-userdata` volume, conversations in the `mira-pgdata` volume, and Valkey state in the `mira-valkey` volume. Always re-create the container with the same named volumes — without them, recreating the container attaches fresh empty volumes and loses those files and every conversation.
 
+## Chatting with MIRA in your browser
+
+Once MIRA is running, open <http://localhost:1993/> in a web browser. On a
+single-user install (the default) there is no sign-in: the page signs you in
+automatically and drops you into the chat. From there the sidebar reaches your
+memories, your domain docs, and settings (profile, tool setup, API
+credentials, automations, and API tokens for other clients).
+
+The browser client works only in single-user mode. A multi-user install
+(`MIRA_AUTH_MODE=multi`) has no browser sign-in page; use the terminal client
+below.
+
 ## Chatting with MIRA in your terminal
 
-The terminal client (`tui/`) is the chat interface for a local install. Its
-dependencies are separate from the server's — install them once, then log in:
+The terminal client (`ui/tui/`) is the other chat interface for a local
+install. Its dependencies are separate from the server's — install them once,
+then log in:
 
 ```bash
-pip install -r tui/requirements.txt
-python3 -m tui --login
+pip install -r ui/tui/requirements.txt
+python3 -m ui.tui --login
 ```
 
 `--login` mints an API token against your MIRA instance over its auth API
@@ -246,7 +259,7 @@ multi-user) and stores it in the 0600 endpoint store
 (`~/.config/mira-tui/config.json`). Then start chatting:
 
 ```bash
-python3 -m tui
+python3 -m ui.tui
 ```
 
 `/exit` quits. `/pause`, `/resume`, `/status` and `/collapse` manage the

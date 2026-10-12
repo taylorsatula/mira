@@ -304,7 +304,7 @@ fi
 
 # The `mira` command: the deployed TUI chat client on its own venv
 # (python.sh Step 5b), runnable from any directory — PYTHONPATH puts the
-# tui/ package inside /opt/mira/app on sys.path so the user's cwd
+# ui/tui/ package inside /opt/mira/app on sys.path so the user's cwd
 # does not matter.
 print_header "Step 15d: Terminal Chat Command (/usr/local/bin/mira)"
 MIRA_BIN=/usr/local/bin/mira
@@ -317,9 +317,9 @@ sudo tee "$MIRA_BIN" >/dev/null <<'MIRA_CLI'
 export PYTHONPATH="/opt/mira/app${PYTHONPATH:+:$PYTHONPATH}"
 # -P: `python3 -m` prepends the CURRENT DIRECTORY to sys.path ahead of
 # PYTHONPATH, so `mira` run from inside a mira checkout silently resolved
-# tui/ and utils/ (and read the checkout's VERSION) instead of the installed
+# ui/tui/ and utils/ (and read the checkout's VERSION) instead of the installed
 # tree. -P suppresses that prepend; the install tree wins regardless of cwd.
-exec /opt/mira/tui-venv/bin/python3 -P -m tui "$@"
+exec /opt/mira/tui-venv/bin/python3 -P -m ui.tui "$@"
 MIRA_CLI
 sudo chmod 755 "$MIRA_BIN"
 echo -e "${CHECKMARK}"
@@ -516,7 +516,7 @@ echo -e "  ${CYAN}→${RESET} Chat from any terminal: ${BOLD}mira${RESET} (first
 if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ] && [ "$OS" = "linux" ]; then
     if [[ "${STATUS_MIRA_SERVICE}" == *"Running"* ]]; then
         echo -e "  ${CYAN}→${RESET} MIRA is running at: ${BOLD}http://localhost:1993${RESET}"
-        echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/chat${RESET}"
+        echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/${RESET}"
         echo -e "  ${CYAN}→${RESET} Check status: ${BOLD}systemctl status mira${RESET}"
         echo -e "  ${CYAN}→${RESET} View logs: ${BOLD}journalctl -u mira -f${RESET}"
         echo -e "  ${CYAN}→${RESET} Stop MIRA: ${BOLD}sudo systemctl stop mira${RESET}"
@@ -526,7 +526,7 @@ if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ] && [ "$OS" = "linux" ]; then
         echo -e "  ${CYAN}→${RESET} Try starting: ${BOLD}sudo systemctl start mira${RESET}"
     else
         echo -e "  ${CYAN}→${RESET} Start MIRA: ${BOLD}sudo systemctl start mira${RESET}"
-        echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/chat${RESET}"
+        echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/${RESET}"
         echo -e "  ${CYAN}→${RESET} View logs: ${BOLD}journalctl -u mira -f${RESET}"
     fi
     echo ""
@@ -536,11 +536,11 @@ else
         # No systemd unit exists (user opted out or install failed), so the
         # Step 15b launcher written above is the start path.
         echo -e "  ${CYAN}→${RESET} Start MIRA: ${BOLD}/opt/mira/app/run.sh${RESET}"
-        echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/chat${RESET}"
+        echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/${RESET}"
         echo -e "  ${CYAN}→${RESET} After a reboot, unseal Vault first: ${BOLD}/opt/vault/unseal.sh${RESET}"
     else
         echo -e "  ${CYAN}→${RESET} MIRA runs as a LaunchAgent: ${BOLD}com.mira.app${RESET} (starts at login)"
-        echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/chat${RESET}"
+        echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/${RESET}"
         echo -e "  ${CYAN}→${RESET} Status: ${BOLD}launchctl print gui/$(id -u)/com.mira.app${RESET}"
         echo -e "  ${CYAN}→${RESET} Logs: ${BOLD}tail -f /opt/mira/logs/mira-launchd.log${RESET}"
         echo -e "  ${CYAN}→${RESET} Stop: ${BOLD}launchctl bootout gui/$(id -u)/com.mira.app${RESET}"

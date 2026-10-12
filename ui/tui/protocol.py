@@ -5,7 +5,7 @@ frame schemas in ``cns/api/websocket_chat.py`` and the history response in
 ``cns/api/data.py`` (envelope from ``cns/api/base.py``). It is a pure client —
 it imports nothing from the server tree — but the two sides MUST change
 together: any frame-shape change on the server requires the identical change
-here in the same commit, and drift ownership is recorded in ``tui/AGENTS.md``.
+here in the same commit, and drift ownership is recorded in ``ui/tui/AGENTS.md``.
 Strictness is the point: an unknown or mistyped field fails loudly at this
 boundary instead of being half-applied by the UI.
 

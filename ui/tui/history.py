@@ -25,10 +25,10 @@ from dataclasses import dataclass, field
 from rich.console import RenderableType
 from rich.text import Text
 
-from tui import transcript
-from tui.client import _is_sentinel
-from tui.protocol import HistoryMessage
-from tui.text import display_lines
+from . import transcript
+from .client import _is_sentinel
+from .protocol import HistoryMessage
+from .text import display_lines
 
 
 def _display_text(content: object) -> str:

@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from rich.console import Console, ConsoleOptions, RenderableType, RenderResult
 from rich.text import Text
 
-from tui.text import sanitize
+from .text import sanitize
 
 MIRA_STYLE = "bright_green"
 ME_STYLE = "bright_magenta"

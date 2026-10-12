@@ -16,10 +16,10 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from tui.chat import ChatSession
-from tui.client import ClientError, MiraClient
-from tui.endpoints import EndpointConfig, EndpointStore
-from tui.screen import Screen
+from .chat import ChatSession
+from .client import ClientError, MiraClient
+from .endpoints import EndpointConfig, EndpointStore
+from .screen import Screen
 
 # Inbox capacity: keyboard intents and wire events share one queue. The client
 # awaits put (backpressure); the Screen rings the bell on QueueFull.
@@ -33,7 +33,7 @@ No endpoint is configured yet. Three ways to set up:
 
 1. Fastest — automatic login (recommended):
 
-  python3 -m tui --login
+  python3 -m ui.tui --login
 
   Mints an API token against your MIRA instance directly — zero prompts on
   single-user instances (email magic-link on multi-user) — and stores it
@@ -62,7 +62,7 @@ No endpoint is configured yet. Three ways to set up:
   log in (auto local session, or emailed magic-link on multi-user), then
   POST /v0/auth/csrf, then POST /v0/auth/api-tokens — the raw token is
   shown once at mint time.
-Then rerun: python3 -m tui"""
+Then rerun: python3 -m ui.tui"""
 
 
 def setup_guidance(store: EndpointStore) -> str:
@@ -75,7 +75,7 @@ def _connect_guidance(error: ClientError, config: EndpointConfig, store: Endpoin
     if error.code == "AUTH_FAILED":
         return (
             "the stored API key was rejected — it is missing, stale, or from a different instance.\n"
-            "  Re-mint it automatically:  python3 -m tui --login\n"
+            "  Re-mint it automatically:  python3 -m ui.tui --login\n"
             f"  Or paste a token into: {store.path}"
         )
     if error.code in ("AUTH_CONNECTION_FAILED", "AUTH_TIMEOUT"):

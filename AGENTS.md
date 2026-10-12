@@ -2,7 +2,7 @@
 
 **Complex problems require simple and clear solutions.**
 
-MIRA is a self-hosted personal AI assistant — persistent long-term memory, a user model and Persona that grow from conversation history, a terminal chat client. One operator's account per install by default (`auth/mode.py`, `MIRA_AUTH_MODE`); the server is a FastAPI app on Hypercorn with a streaming WebSocket chat protocol, plain HTTP chat, and opt-in federation and MCP mounts (`main.py`).
+MIRA is a self-hosted personal AI assistant — persistent long-term memory, a user model and Persona that grow from conversation history, a browser chat client the server itself serves and a terminal chat client (`ui/`). One operator's account per install by default (`auth/mode.py`, `MIRA_AUTH_MODE`); the server is a FastAPI app on Hypercorn with a streaming WebSocket chat protocol, plain HTTP chat, and opt-in federation and MCP mounts (`main.py`).
 
 **The spine — place every file against this flow.** A chat turn enters at `cns/api/` (HTTP or WS; auth installs the `user_id` contextvar; one turn per user via a Valkey lock) → the orchestrator composes the system prompt through an event-bus round-trip with `working_memory/` trinkets, surfaces memories from `lt_memory/`, and runs the LLM behind a DB-configured route name (`clients/llm/`) plus the tool loop (`tools/`) → `UnitOfWork.commit()` persists Postgres first, then the Valkey cache → events publish post-commit; subscribers react synchronously (`cns/core/events.py` taxonomy, `cns/integration/event_bus.py`): memory extraction on segment collapse, user-model/Persona/portrait pipelines, trinket refresh. Concurrently with turns: APScheduler jobs (segment-collapse sweep, memory scoring, entity merge, auth cleanup) and autonomous sidebar agents (`agents/` — including the Heartbeat brief system's dispatcher trigger) (`agents/`).
 
@@ -51,7 +51,10 @@ directory whose map is missing is a defect.
 | `tests/tmp/` | Display exhibit for the disposable-probe pattern: autodeleted-on-sight test policy, one exemplary probe |
 | `tools/` | Tool framework: base class, repository, config registry |
 | `tools/implementations/` | All concrete LLM-callable tools |
-| `tui/` | Streaming WebSocket terminal chat client: twin of the WS frame protocol (client side), single-writer screen and single-consumer `ChatSession` invariants, message-in-one-place rule, display sanitizing, endpoint store, headless token bootstrap |
+| `ui/` | The two chat clients: the rule that a server frame change updates both, and the cross-client twin code (reply display filter, backoff constants, history row grouping) |
+| `ui/browser/` | Browser client pages and assets: `main.py` serving contract and boot-time file check, single-user-mode auth, CSP-off reason, cache-bust tag, page controllers |
+| `ui/browser/assets/javascript/` | Browser client modules: the one HTTP path and CSRF retry, WS turn protocol (client side) with the frame-handling table, chat-page load order, listener ownership |
+| `ui/tui/` | Streaming WebSocket terminal chat client: twin of the WS frame protocol (client side), single-writer screen and single-consumer `ChatSession` invariants, message-in-one-place rule, display sanitizing, endpoint store, headless token bootstrap |
 | `utils/` | Cross-cutting infrastructure: identity, scheduling, storage, security, observability, power-on self-test |
 | `working_memory/` | Event-driven system-prompt composition via trinkets |
 | `working_memory/trinkets/` | Trinket implementations: one `variable_name` slot each |
@@ -89,9 +92,12 @@ unnecessary edit costs a line; a missed one misleads every session.
   shutdown; Valkey flush preserves the
   `pending_memories:`/`pending_memories_done:`/`pending_memories_attempts:`
   prefixes — the durable record of user-confirmed memories), the pre-server
-  POST gate before bind, and the conditional mounts: the federation router when
-  `config.lattice.enabled`, the MCP sub-app when `config.system.mcp_enabled`.
-  Per-directory contracts are owned by `cns/api/AGENTS.md`, `auth/AGENTS.md`,
+  POST gate before bind, the conditional mounts: the federation router when
+  `config.lattice.enabled`, the MCP sub-app when `config.system.mcp_enabled`,
+  and the unconditional browser-client page routes and `/assets` mount from
+  `UI_BROWSER_DIR` — `create_app` raises when a `UI_BROWSER_FILES` entry is
+  missing. Per-directory contracts are owned by `ui/browser/AGENTS.md`,
+  `cns/api/AGENTS.md`, `auth/AGENTS.md`,
   `cns/integration/AGENTS.md`, `agents/AGENTS.md`, `config/AGENTS.md`,
   `lt_memory/AGENTS.md`, `utils/AGENTS.md`.
 - `requirements.txt` — dependency pins; the optional block's visibility to

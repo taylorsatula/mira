@@ -5,7 +5,7 @@ connection (auth + frame pump) and the REST history pager, and surfaces
 everything to the app as typed ``ClientEvent`` dataclasses on an
 app-owned ``asyncio.Queue``. The UI never touches the wire.
 
-Frame shapes are owned by ``tui/protocol.py`` (strict mirror of the
+Frame shapes are owned by ``ui/tui/protocol.py`` (strict mirror of the
 server); this module only maps validated frames to events. A frame that
 fails validation is surfaced as ``ProtocolError`` — never silently
 dropped, never allowed to crash the pump.
@@ -21,8 +21,8 @@ from dataclasses import dataclass
 import httpx
 import websockets
 
-from tui.endpoints import EndpointConfig, HISTORY_FETCH_MODES
-from tui.protocol import (
+from .endpoints import EndpointConfig, HISTORY_FETCH_MODES
+from .protocol import (
     AuthFrame,
     HaltFrame,
     HistoryMessage,
