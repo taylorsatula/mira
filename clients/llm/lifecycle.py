@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -21,6 +22,12 @@ logger = logging.getLogger(__name__)
 
 class LLMLifecycle:
     """Run one provider request with stall detection and no model fallback."""
+
+    # Cancel polling: how often the watcher checks the cancel event while the
+    # worker sits blocked on the provider, and how long it waits for the
+    # aborted socket read to unwind before surfacing the cancellation.
+    _CANCEL_POLL_SECONDS = 0.5
+    _ABORT_JOIN_SECONDS = 5.0
 
     def __init__(self, *, response_timeout_seconds: int | None = None) -> None:
         self.response_timeout_seconds = (
@@ -155,16 +162,37 @@ class LLMLifecycle:
 
         worker = threading.Thread(target=invoke, daemon=True)
         worker.start()
-        worker.join(timeout=self.response_timeout_seconds)
-        if worker.is_alive():
-            # A user halt outranks the stall diagnosis.
-            check_cancelled()
-            # Unblock the worker's socket read before abandoning it, or the
-            # connection leaks with a daemon thread pinned to it forever.
-            abort = getattr(dialect, "abort_active_stream", None)
-            if abort is not None:
-                abort()
-            raise ProviderStallError(self._endpoint_label(endpoint), self.response_timeout_seconds, mode)
+        # Poll instead of one bounded join: a set cancel event must interrupt
+        # a stalled pull, not wait out the stall bound. A bare join blocks for
+        # up to provider_response_timeout, so a user halt during a stalled
+        # reply goes unnoticed for that whole window — a blocking call placed
+        # between cancellation checks makes cancellation unreachable for its
+        # duration. abort_active_stream() closes the in-flight transport (the
+        # only cross-thread unblock for a worker inside a socket read); raising
+        # GenerationCancelled hands the turn to the orchestrator's cancel
+        # guard (stopped-turn semantics) instead of diagnosing a stall the
+        # user already called off.
+        deadline = time.monotonic() + self.response_timeout_seconds
+        while True:
+            worker.join(timeout=self._CANCEL_POLL_SECONDS)
+            if not worker.is_alive():
+                break
+            cancel_event = get_cancel_event()
+            if cancel_event is not None and cancel_event.is_set():
+                abort = getattr(dialect, "abort_active_stream", None)
+                if abort is not None:
+                    abort()
+                worker.join(timeout=self._ABORT_JOIN_SECONDS)
+                raise GenerationCancelled("request cancelled while waiting for the provider")
+            if time.monotonic() >= deadline:
+                # A user halt outranks the stall diagnosis.
+                check_cancelled()
+                # Unblock the worker's socket read before abandoning it, or the
+                # connection leaks with a daemon thread pinned to it forever.
+                abort = getattr(dialect, "abort_active_stream", None)
+                if abort is not None:
+                    abort()
+                raise ProviderStallError(self._endpoint_label(endpoint), self.response_timeout_seconds, mode)
         if errors:
             raise errors[0]
         return result[0]
