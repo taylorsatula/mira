@@ -94,9 +94,13 @@ unnecessary edit costs a line; a missed one misleads every session.
   prefixes — the durable record of user-confirmed memories), the pre-server
   POST gate before bind, the conditional mounts: the federation router when
   `config.lattice.enabled`, the MCP sub-app when `config.system.mcp_enabled`,
-  and the unconditional browser-client page routes and `/assets` mount from
+  the unconditional browser-client page routes and `/assets` mount from
   `UI_BROWSER_DIR` — `create_app` raises when a `UI_BROWSER_FILES` entry is
-  missing. Per-directory contracts are owned by `ui/browser/AGENTS.md`,
+  missing — and the in-process restart exit: after hypercorn's graceful
+  shutdown returns, a pending restart request (bash_tool `restart_mira`, fired
+  at the requesting turn's end via `utils/self_restart.py`) exits with the
+  dedicated code 75 so the deployment supervisor respawns the process.
+  Per-directory contracts are owned by `ui/browser/AGENTS.md`,
   `cns/api/AGENTS.md`, `auth/AGENTS.md`,
   `cns/integration/AGENTS.md`, `agents/AGENTS.md`, `config/AGENTS.md`,
   `lt_memory/AGENTS.md`, `utils/AGENTS.md`.
@@ -214,6 +218,7 @@ Patterns that apply in every directory. Directory maps may restate these with lo
 - **RLS fails closed**: a query without user context returns zero rows, no error — "empty" is ambiguous. Only admin sessions (`BYPASSRLS`) may omit user context. (`clients/postgres_client.py` canary, `auth/database.py`)
 - **Model-supplied timestamps are the user's local wall time**, never UTC: parse with `parse_time_string(value, tz_name=...)` + `ensure_utc`; exact wall times are DST-strict via `normalize_exact_local_wall_time()`. (`utils/timezone_utils.py`)
 - **LLM calls route by name**: `model_config='<route>'` on the five fixed routes; never hardcode models, endpoints, or API keys. (`clients/llm/`)
+- **Restarting MIRA's own process goes through bash_tool's `restart_mira` parameter** (operation `run`, gated on the command exiting 0): it sets the `utils/self_restart.py` latch, and the restart fires by SIGTERM once every turn in flight has finished (the turn-end hooks at the two turn boundaries — WS, HTTP chat — call `trigger_restart_if_pending()`, which signals only at gauge zero), after which `main.py` exits `RESTART_EXIT_CODE` (75) so the supervisor respawns. Shell spellings (`systemctl restart mira`) stay refused by the guardrail in default mode; skip mode still permits them. (Mechanism owner: `utils/AGENTS.md`)
 - **LLM stalls propagate**: all live transports run through `clients.llm.lifecycle.LLMLifecycle`; no fallback route — stalls (`ProviderStallError`) and provider failures propagate. Policy owned by `clients/llm/AGENTS.md` and `utils/AGENTS.md` (reachability probes); add-a-dialect blast radius by `clients/llm/dialects/AGENTS.md`.
 - **Credentials**: system-level from Vault only; per-user via `UserCredentialService`. Missing credentials raise with setup guidance — no env-var or default fallbacks. (`clients/vault_client.py`, `utils/user_credentials.py`)
 - **User SQLite encryption**: the `encrypted__` column prefix drives transparent Fernet encryption; declare the columns in DDL and never double-decrypt. (`utils/userdata_manager.py`)

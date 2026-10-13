@@ -49,6 +49,7 @@ from cns.services.async_work_barrier import get_async_work_barrier
 from cns.services.orchestrator import get_orchestrator
 from config.config_manager import config as app_config
 from utils.distributed_lock import UserRequestLock
+from utils.self_restart import enter_turn, exit_turn, trigger_restart_if_pending
 # Same structural turn bound as the HTTP path (cns/api/chat.py): both
 # transports run the identical orchestrator tool loop, so the turn-lock TTL
 # must exceed the worst legal turn plus margin. Shared, not re-derived, so the
@@ -793,6 +794,7 @@ class WebSocketChatHandler:
         # and admit a concurrent second turn on the same segment. Mirrors
         # cns/api/chat.py.
         renewal_stop = self.user_request_lock.start_renewal(user_id, lock_token)
+        enter_turn()
 
         try:
             content = sanitize_message_content(message.content.strip())
@@ -961,6 +963,13 @@ class WebSocketChatHandler:
         finally:
             renewal_stop.set()
             await run_in_threadpool(self.user_request_lock.release, user_id, lock_token)
+            # A restart_mira request from this turn fires now, once no turn
+            # is in flight: the terminal frame above is already delivered,
+            # and the gauge holds the signal back while a concurrent
+            # other-user turn is still streaming (mechanism owner:
+            # utils/self_restart.py).
+            exit_turn()
+            trigger_restart_if_pending()
 
         # Not inside the try: the lock must already be free when this frame is
         # queued. A send failure here cannot be reported to the client (this

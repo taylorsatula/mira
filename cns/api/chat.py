@@ -22,6 +22,7 @@ from utils.distributed_lock import UserRequestLock
 
 from utils.document_processing import process_document, ProcessedDocument, SUPPORTED_DOCUMENT_FORMATS, MAX_DOCUMENT_SIZE_MB
 from utils.image_compression import compress_image, CompressedImage
+from utils.self_restart import enter_turn, exit_turn, trigger_restart_if_pending
 from utils.text_sanitizer import sanitize_message_content
 from utils.timezone_utils import utc_now, format_utc_iso
 
@@ -134,6 +135,7 @@ class ChatEndpoint(PropagatingHandler):
         # TTL — so a turn of any legal length cannot outlive its own lock
         # and admit a concurrent second turn on the same segment.
         renewal_stop = _user_request_lock.start_renewal(user_id, lock_token)
+        enter_turn()
 
         try:
             # Check message length - reject oversized messages with friendly assistant response
@@ -365,6 +367,7 @@ class ChatEndpoint(PropagatingHandler):
         finally:
             renewal_stop.set()
             _user_request_lock.release(user_id, lock_token)
+            exit_turn()
 
 
 @router.post("/chat")
@@ -390,4 +393,11 @@ def chat_endpoint(
         include_thinking=request.include_thinking,
         show_cost=request.show_cost,
     )
+    # A restart_mira request from this turn fires now, provided no other
+    # turn is in flight (the gauge holds it back until quiescence — mechanism
+    # owner: utils/self_restart.py). The response dict is built; hypercorn's
+    # graceful shutdown drains this in-flight request before the process
+    # exits. This is also the MCP check-in's turn end: /v0/mcp's check_in
+    # tool rides this endpoint.
+    trigger_restart_if_pending()
     return response.to_dict()

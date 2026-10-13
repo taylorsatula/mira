@@ -205,6 +205,14 @@ any per-user tool config; defaults ship safe and off):
   refusal names your own pattern, so it is always traceable to config, not
   code.
 
+The tool can also restart MIRA itself: pass `restart_mira: true` on a `run`
+call (with any command) and, when the command exits 0, the process restarts
+as soon as the current turn completes — connections drop and clients
+reconnect automatically. The restart only happens when the command succeeded,
+so a failed edit never bounces the service. This is the sanctioned path for
+applying changes that need a restart; shell spellings of the same act
+(`systemctl restart mira`) stay refused by the guardrail in default mode.
+
 For precise file edits, MIRA carries a built-in skill, `precise-file-editing`,
 teaching the fast shell one-liner patterns (perl/sed in-place substitution,
 heredoc writes, targeted line-range reads); the tool's own description points

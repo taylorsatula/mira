@@ -120,6 +120,8 @@ Environment="VAULT_ROLE_ID=$VAULT_ROLE_ID"
 Environment="VAULT_SECRET_ID=$VAULT_SECRET_ID"
 Environment="MIRA_LOG_DIR=/opt/mira/logs"
 ExecStart=/opt/mira/app/venv/bin/python3 /opt/mira/app/main.py
+# bash_tool restart_mira exits 75 after its graceful shutdown; on-failure
+# respawns it (contract owner: utils/self_restart.py)
 Restart=on-failure
 RestartSec=10
 TimeoutStartSec=60

@@ -46,6 +46,14 @@ container-emptying globs, persistence targets, the log trees, the bypass log
 itself, and this file and MIRA's config directory. Every bypass is appended
 to `guardrail_bypass.log` under the configured log_dir and marked in the
 result, so it is visible in-transcript and on disk.
+
+A dedicated parameter restarts MIRA's own process: `run` with
+`restart_mira=True` schedules a restart that fires the moment the current
+turn completes — the sanctioned path for changes that need a restart to take
+effect. The guardrail still refuses shell spellings of the same act
+(`systemctl restart mira`) in default mode; the parameter replaces them. The
+latch, the turn-end firing hooks, and the supervisor exit-code contract live
+in `utils/self_restart.py`.
 """
 
 import inspect
@@ -65,6 +73,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from tools.repo import Tool
 from tools.registry import registry
+from utils.self_restart import request_restart
 from utils.timezone_utils import utc_now
 from utils.user_context import get_cancel_event, get_cancel_reason
 
@@ -2020,7 +2029,8 @@ class BashTool(Tool):
             "refused. For fast, precise edits to files, invoke the "
             "'precise-file-editing' skill via invoke_skill_tool — it teaches the "
             "efficient one-liner patterns (perl/sed in-place edits, heredoc writes, "
-            "targeted reads)."
+            "targeted reads). Pass restart_mira: true on operation run to restart "
+            "MIRA's own process when the current turn completes."
         ),
         "input_schema": {
             "type": "object",
@@ -2100,6 +2110,23 @@ class BashTool(Tool):
                         "stated the command and its purpose. If you have not asked, ask and "
                         "wait. A refusal is still a stop signal; skip_permissions is the "
                         "human's override, never yours."
+                    ),
+                },
+                "restart_mira": {
+                    "type": "boolean",
+                    "description": (
+                        "Operation \"run\" only; refused with any other operation. "
+                        "When true AND the command exits 0, MIRA's own process "
+                        "restarts as soon as the current turn completes. The restart "
+                        "drops every connection; clients reconnect automatically, but "
+                        "in-process state is replaced — so after this tool result, "
+                        "finish your reply promptly and tell the user a restart is "
+                        "happening. Use it when the command changed something that "
+                        "takes effect only after a restart. The restart is NOT "
+                        "scheduled when the command fails or is refused; check the "
+                        "result and call again. Do not run restart commands yourself "
+                        "(the guardrail refuses them) — this parameter is the "
+                        "restart."
                     ),
                 },
             },
@@ -2304,7 +2331,8 @@ class BashTool(Tool):
         Args:
             operation: "run" to execute and wait, "run_background" to detach with nohup.
             command: Shell command run with bash -lc on the local machine.
-            **kwargs: cwd, timeout_seconds, log_name, skip_permissions as applicable.
+            **kwargs: cwd, timeout_seconds, log_name, skip_permissions,
+                restart_mira (run only) as applicable.
 
         Returns:
             Dict with exit code and captured output (run) or process ID and log path
@@ -2328,6 +2356,17 @@ class BashTool(Tool):
             raise ValueError(
                 f"Unknown operation: {operation}. Valid operations are: " + ", ".join(handlers)
             )
+        if kwargs.get("restart_mira") and operation != "run":
+            # Loud, not silent: invoke_tool passes schema-declared params to
+            # every operation, and the signature filter below would otherwise
+            # drop restart_mira without a trace for run_background or
+            # kill_background — the model would believe a restart was coming.
+            raise ValueError(
+                'restart_mira applies only to operation "run", where the '
+                "command must exit 0 before the restart is scheduled; "
+                "run_background returns before its command completes, so there "
+                'is no result to gate the restart on. Use operation "run".'
+            )
         accepted = set(inspect.signature(handler).parameters)
         filtered = {k: v for k, v in kwargs.items() if k in accepted}
         return handler(cfg, command, **filtered)
@@ -2341,6 +2380,7 @@ class BashTool(Tool):
         cwd: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
         skip_permissions: bool = False,
+        restart_mira: bool = False,
     ) -> Dict[str, Any]:
         # The working directory is resolved before validation so relative
         # operands in the command are checked against where they will really
@@ -2368,6 +2408,23 @@ class BashTool(Tool):
             outcome["context_files"] = context_files
         if skip_permissions:
             outcome["guardrail"] = "bypassed"
+        if restart_mira:
+            # The exit-0 gate: a failed command changed nothing, so the model
+            # gets the failure back with no restart scheduled and can fix the
+            # command and call again.
+            if result.returncode == 0:
+                request_restart(f"bash_tool run (command: {command[:200]!r})")
+                outcome["restart"] = (
+                    "scheduled: the process restarts when this turn completes. "
+                    "Finish your reply promptly and tell the user the restart is "
+                    "happening; connected clients reconnect automatically."
+                )
+            else:
+                outcome["restart"] = (
+                    "not scheduled: the command exited non-zero, so nothing was "
+                    "applied. Fix the command and call bash_tool again with "
+                    "restart_mira true."
+                )
         return outcome
 
     def _run_background(

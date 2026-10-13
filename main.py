@@ -668,6 +668,19 @@ def main():
         
         # Run the server — Hypercorn manages SIGTERM/SIGINT natively
         asyncio.run(hypercorn.asyncio.serve(create_app(), hypercorn_config))
+
+        # An in-process restart request (bash_tool restart_mira) SIGTERMed
+        # this process at the requesting turn's end; hypercorn's graceful
+        # shutdown has drained every connection and run the lifespan
+        # shutdown. Exit with the dedicated non-zero code so the supervisor
+        # starts a fresh process (contract owner: utils/self_restart.py).
+        from utils.self_restart import RESTART_EXIT_CODE, restart_pending
+        if restart_pending():
+            logger.warning(
+                "Exiting with code %d: in-process restart was requested",
+                RESTART_EXIT_CODE,
+            )
+            sys.exit(RESTART_EXIT_CODE)
         
     except Exception as e:
         logger.error(f"Failed to start: {e}")
