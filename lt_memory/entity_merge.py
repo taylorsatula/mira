@@ -105,11 +105,9 @@ def _build_groups_prompt(groups: List[List[Dict]]) -> Tuple[str, Dict[str, UUID]
 
 def _extract_json(text: str) -> Dict:
     """Robustly extract the first JSON object from an LLM response."""
-    # Strip markdown code fences if present
     fenced = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
     if fenced:
         return json.loads(fenced.group(1))
-    # Otherwise find the first {...} block
     match = re.search(r'\{.*\}', text, re.DOTALL)
     if match:
         return json.loads(match.group(0))
@@ -146,10 +144,9 @@ def _parse_merge_response(
             continue
         if not canonical_short:
             continue
-        # Case-fold the echoed id before lookup, matching every sanctioned
-        # short-ID resolver (utils/tag_parser.py, db_access, orchestrator):
-        # keys are lowercase hex from _format_entity_id, so drifted casing on
-        # an echoed id must not turn a real entity into an unknown one.
+        # Case-fold echoed ids before lookup: every sanctioned short-ID resolver
+        # (utils/tag_parser.py, db_access, orchestrator) keys lowercase hex, so
+        # drifted casing must not turn a real entity into an unknown one.
         canonical_uuid = short_to_full.get(canonical_short.lower())
         if canonical_uuid is None:
             logger.warning("Entity merge: unknown canonical id %r, skipping", canonical_short)

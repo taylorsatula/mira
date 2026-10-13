@@ -87,7 +87,6 @@ def increment_user_activity_day(user_id: str) -> int:
         current_days = current_user.get('cumulative_activity_days', 0) or 0
 
         if rowcount == 0:
-            # Already counted today - rapidpath for subsequent messages
             session.execute_update("""
                 INSERT INTO user_activity_days (user_id, activity_date, first_message_at, message_count)
                 VALUES (%(user_id)s, %(activity_date)s, %(timestamp)s, 1)
@@ -100,15 +99,10 @@ def increment_user_activity_day(user_id: str) -> int:
             })
 
         else:
-            # ========================================================================
-            # 🌅 FIRST MESSAGE OF USER'S DAY - Insert daily actions here
-            # ========================================================================
 
             logger.info(f"First message of day for user {user_id} (local date: {user_local_date})")
 
-            # ========================================================================
 
-            # Track in granular table
             session.execute_update("""
                 INSERT INTO user_activity_days (user_id, activity_date, first_message_at, message_count)
                 VALUES (%(user_id)s, %(activity_date)s, %(timestamp)s, 1)
@@ -120,13 +114,11 @@ def increment_user_activity_day(user_id: str) -> int:
                 'timestamp': utc_now()
             })
 
-    # Cache for rapidpath. Set only after the session exits: __exit__ commits
-    # the transaction and re-raises on commit failure, so the in-request cache
-    # can never claim an increment that did not persist.
-    # Same write refreshes the sibling cache: user_context's
-    # get_user_cumulative_activity_days serves 'cumulative_activity_days'
-    # from this same shared context dict. update_current_user mutates that
-    # dict in place, so every contextvar copy holding it observes both keys.
+    # Cache write ordered after session exit: __exit__ commits and re-raises on
+    # commit failure, so the cache cannot claim an unpersisted increment. Key
+    # 'cumulative_activity_days' is shared with user_context.
+    # get_user_cumulative_activity_days; update_current_user mutates the context
+    # dict in place, so every contextvar copy observes both keys.
     update_current_user({
         'cumulative_activity_days': current_days,
         '_activity_day_incremented_today': user_local_date

@@ -19,7 +19,6 @@ from pypdf import PdfReader
 
 logger = logging.getLogger(__name__)
 
-# Try importing optional libraries
 try:
     import docx
     HAS_DOCX = True
@@ -89,8 +88,7 @@ def process_document(
     Raises:
         ValueError: If document type unsupported or processing fails
     """
-    # Structured data is extracted locally. Provider-specific remote file IDs
-    # cannot cross MIRA's provider-neutral request boundary.
+    # Structured data is extracted locally; provider remote file IDs cannot cross the neutral boundary.
     if media_type in ("text/csv", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/json"):
         if media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
             validate_office_zip(doc_bytes)
@@ -107,7 +105,6 @@ def process_document(
             original_filename=filename,
         )
 
-    # PDF: extract text locally for the provider-neutral request.
     elif media_type == "application/pdf":
         return ProcessedDocument(
             content_type="text",
@@ -116,7 +113,6 @@ def process_document(
             original_filename=filename,
         )
 
-    # DOCX: Extract text locally.
     elif media_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
         text = extract_docx_text(doc_bytes)
         return ProcessedDocument(
@@ -125,7 +121,6 @@ def process_document(
             data=text
         )
 
-    # Plain text: Extract as UTF-8
     elif media_type == "text/plain":
         text = extract_text_file(doc_bytes)
         return ProcessedDocument(
@@ -321,8 +316,7 @@ def _extract_xlsx_stdlib(doc_bytes: bytes) -> str:
             if 'xl/sharedStrings.xml' in z.namelist():
                 ss_tree = ElementTree.fromstring(z.read('xl/sharedStrings.xml'))
                 # One entry per <si>, not per <t>: a rich-text <si> holds several
-                # <r><t> runs that concatenate into a single cell value. Counting
-                # <t> elements instead would shift every later index.
+                # <r><t> runs joined into one cell value; counting <t> shifts later indices.
                 for si in ss_tree.findall(f'{{{ns}}}si'):
                     shared_strings.append(
                         ''.join(t.text or '' for t in si.findall(f'.//{{{ns}}}t'))
@@ -337,9 +331,7 @@ def _extract_xlsx_stdlib(doc_bytes: bytes) -> str:
                     for cell in row.findall(f'{{{ns}}}c'):
                         cell_type = cell.get('t')
                         if cell_type == 'inlineStr':
-                            # Inline string: text lives in <is><t>; there is no
-                            # <v> and no sharedStrings entry. openpyxl writes
-                            # every text cell this way.
+                            # Inline string: text lives in <is><t>, no <v>/sharedStrings entry; openpyxl writes every text cell this way.
                             is_elem = cell.find(f'{{{ns}}}is')
                             cells.append(
                                 ''.join(t.text or '' for t in is_elem.findall(f'.//{{{ns}}}t'))

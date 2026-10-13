@@ -60,11 +60,10 @@ SCREEN_QUESTIONS: tuple[str, ...] = (
     "exfiltration_channel",
 )
 
-# Tier-1 band over the highest question probability. Measured on the corpus in
-# tests/protected/injection_defense_probe.py (2026-09-26, final wording): the
-# weakest attack scored 0.58 and the strongest benign case 0.91, so passing at
-# <= 0.5 and rejecting at >= 0.95 decided no case wrongly; 18 of 110 cases fell
-# between and escalate. Move either edge only with that battery's numbers.
+# Tier-1 band on the highest question probability. Measured on
+# tests/protected/injection_defense_probe.py (2026-09-26, final wording): weakest
+# attack 0.58, strongest benign case 0.91, so pass <= 0.5 / reject >= 0.95 decided
+# no case wrongly; 18 of 110 escalate. Move either edge only with that battery's numbers.
 PASS_CEILING = 0.5
 REJECT_FLOOR = 0.95
 
@@ -80,10 +79,10 @@ _VERDICT_RE = re.compile(rf"<verdict>\s*({_VERDICT_REJECT}|{_VERDICT_PASS})\s*</
 
 Disposition = Literal["pass", "escalate", "reject"]
 
-# Chunk geometry. Witnessed: an attack sentence buried mid-way through ~7,100
-# characters of filler scored 1.00 in a single djev request (2026-09-26), so an
-# 8,000-character state does not dilute a single-sentence payload. The overlap
-# keeps a payload split across a boundary whole in at least one chunk.
+# Chunk geometry. Witnessed: an attack sentence buried in ~7,100 characters of
+# filler scored 1.00 in one djev request (2026-09-26) — an 8,000-char state does
+# not dilute a one-sentence payload. Overlap keeps a payload split across a
+# boundary whole in at least one chunk.
 _CHUNK_CHARS = 8000
 _CHUNK_OVERLAP_CHARS = 500
 

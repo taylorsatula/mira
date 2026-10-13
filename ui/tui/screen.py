@@ -203,7 +203,6 @@ class Screen:
             output=create_output(stdout=self._real_out),
         )
 
-    # --- public API -------------------------------------------------------
 
     async def emit(self, *blocks: RenderableType, live: Live | None = None) -> None:
         """Print blocks to scrollback (and apply ``live``) in one print step."""
@@ -426,7 +425,6 @@ class Screen:
         if self._app.is_running and not self._app.is_done:
             self._app.exit()
 
-    # --- layout -----------------------------------------------------------
 
     def _rows(self) -> int:
         return self._app.output.get_size().rows
@@ -559,7 +557,6 @@ class Screen:
             out.bell()
             out.flush()
 
-    # --- printing ---------------------------------------------------------
 
     def _render(self, blocks: tuple[RenderableType, ...]) -> str:
         console = self._console

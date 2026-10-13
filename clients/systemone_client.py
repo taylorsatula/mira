@@ -34,11 +34,8 @@ from utils import http_client
 
 logger = logging.getLogger(__name__)
 
-# Per-request retries on 429/5xx (status) and connect errors via the shared
-# http_client policy. Its default verb guard never status-retries a POST; this
-# client opts in with retry_non_idempotent=True because its POSTs are pure
-# inference queries — no server-side writes — so a retryable status is
-# pre-execution and re-sending is safe. http_client caps each sleep at 30 s.
+# http_client's default verb guard never status-retries a POST; this client opts in
+# (retry_non_idempotent=True) because its POSTs are read-only inference — re-sending is safe.
 _MAX_RETRIES = 2
 _MAX_RETRY_SLEEP_SECONDS = 30
 
@@ -111,15 +108,11 @@ class SystemOneClient:
             )
         self.endpoint_url = endpoint_url
         self.model = model
-        # Keyed endpoints get a bearer token; a self-hosted (local) endpoint
-        # gets no Authorization header at all — same idiom as the embeddings
-        # provider, duplicated deliberately: no shared abstraction between
-        # the two clients.
+        # Keyed endpoints get a bearer token; self-hosted gets none — same idiom as the
+        # embeddings provider, duplicated deliberately (no shared abstraction).
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        # retry_non_idempotent=True: every request this client sends is a
-        # read-only inference POST (no server-side writes), so status retries
-        # on 429/5xx apply to it — the shared default verb guard stays in
-        # force for every other caller.
+        # retry_non_idempotent=True: every request is a read-only inference POST
+        # (no server-side writes), so status retries on 429/5xx apply to it.
         self._http = http_client.Client(
             timeout=timeout_seconds,
             max_retries=_MAX_RETRIES,
@@ -127,8 +120,7 @@ class SystemOneClient:
         )
         # The pool size is the in-flight cap: every request runs on a pool thread.
         self._pool = ThreadPoolExecutor(max_workers=max_concurrent_requests, thread_name_prefix="systemone")
-        # Longest one request can legitimately take: every attempt times out
-        # and every retry sleeps the maximum.
+        # Longest one request can legitimately take: every attempt times out and every retry sleeps the maximum.
         self._answer_wait_seconds = (
             (_MAX_RETRIES + 1) * timeout_seconds + _MAX_RETRIES * _MAX_RETRY_SLEEP_SECONDS
         )
@@ -204,8 +196,8 @@ def get_systemone_client() -> SystemOneClient:
     return _client
 
 
-# Probe bounds for the installer entry — defined locally, not imported from
-# the embeddings module (the two installer entries rhyme, they do not share).
+# Probe bounds for the installer entry — defined locally; the two installer entries
+# rhyme, they do not share.
 _PROBE_TIMEOUT_SECONDS = 15
 _PROBE_STATEMENT = "This is a System One reachability probe."
 _PROBE_QUESTION_NAME = "reachability"

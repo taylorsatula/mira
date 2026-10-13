@@ -151,7 +151,6 @@ class AsyncWorkBarrier:
         return completed
 
 
-# Global instance
 _barrier: AsyncWorkBarrier | None = None
 
 

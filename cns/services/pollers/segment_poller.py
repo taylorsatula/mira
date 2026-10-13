@@ -66,10 +66,6 @@ class SegmentPoller(ABC):
             f"trinket={self.target_trinket}"
         )
 
-    # ------------------------------------------------------------------
-    # Event handlers (run on event bus thread — synchronous)
-    # ------------------------------------------------------------------
-
     def _on_compose(self, event: ComposeSystemPromptEvent) -> None:
         """Start polling for this user if not already running."""
         user_id = event.user_id
@@ -128,10 +124,6 @@ class SegmentPoller(ABC):
                 f"{self.poller_name} poller stopped for user {user_id[:8]}"
             )
 
-    # ------------------------------------------------------------------
-    # Background polling loop (runs in per-user daemon thread)
-    # ------------------------------------------------------------------
-
     def _poll_loop(
         self,
         user_id: str,
@@ -170,10 +162,6 @@ class SegmentPoller(ABC):
         logger.debug(
             f"{self.poller_name} poll loop exiting for user {user_id[:8]}"
         )
-
-    # ------------------------------------------------------------------
-    # Abstract methods — subclass implements protocol-specific logic
-    # ------------------------------------------------------------------
 
     @abstractmethod
     def _try_load_config(self) -> dict | None:

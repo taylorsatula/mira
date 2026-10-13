@@ -66,8 +66,8 @@ class ReasoningBlock(TypedDict, total=False):
 
 ContentBlock = TextBlock | ImageBlock | DocumentBlock | FileRefBlock | ToolCallBlock | ReasoningBlock
 
-# --- Content block preprocessing (shared across extraction, summarization, peanut gallery) ---
 
+# --- Content block preprocessing (shared across extraction, summarization, peanut gallery) ---
 _MEDIA_BLOCK_TYPES = frozenset({"image", "document", "file_ref"})
 
 
@@ -123,7 +123,6 @@ def preprocess_content_blocks(content: str | list[ContentBlock]) -> Preprocessed
 
 class MessageMetadata(TypedDict, total=False):
     """All known metadata keys on Message.metadata."""
-    # Segment boundary fields
     is_segment_boundary: bool
     status: str  # "active" | "collapsing" (mid-claim; transient) | "collapsed"
     segment_id: str
@@ -139,7 +138,6 @@ class MessageMetadata(TypedDict, total=False):
     has_segment_embedding: bool
     collapse_attempts: int
     extraction_attempts: int
-    # Tool call fields
     has_tool_calls: bool
     tool_calls: list[dict[str, object]]
     tool_name: str
@@ -153,10 +151,8 @@ class MessageMetadata(TypedDict, total=False):
     # Reasoning round-trip fields (Anthropic dialect reads these)
     thinking_signatures: list[dict[str, object]]
     reasoning_details: list[dict[str, object]]
-    # System notification fields
     system_notification: bool | str
     notification_type: str
-    # LLM response fields
     emotion: str
     thinking: str
     model_error: bool
@@ -165,13 +161,10 @@ class MessageMetadata(TypedDict, total=False):
     partial_response: bool
     stop_reason: CancelReason
     provider_stop_reason: str
-    # Embedding fields
     embedding_value: list[float]
-    # Memory fields
     referenced_memories: list[str]
     surfaced_memories: list[str]
     pinned_memory_ids: list[str]
-    # Compaction fields
     is_compaction_synopsis: bool
     compacted_count: int
     original_start_time: str
@@ -197,9 +190,7 @@ class MessageMetadata(TypedDict, total=False):
     extraction_content_failures: int
     # API rejection marker (api/chat.py)
     type: str  # e.g. "size_limit_rejection"
-    # Same-hazard extension found by the fix-time probe (wider net than the
-    # ticket's sweep: Message(metadata={...}) literals): stamped on
-    # persisted bootstrap messages alongside system_notification (auth/database.py)
+    # Stamped on persisted bootstrap messages alongside system_notification (auth/database.py)
     system_generated: bool
 
 
@@ -224,7 +215,6 @@ class Message:
         if self.role not in ["user", "assistant", "tool"]:
             raise ValueError(f"Invalid role: {self.role}. Must be 'user', 'assistant', or 'tool'")
         
-        # Check for empty content - handle both None and empty strings
         # Allow assistant messages with tool calls but no content
         # Allow tool messages with tool_call_id (may have empty text with image content)
         if self.content is None or (isinstance(self.content, str) and self.content.strip() == ""):

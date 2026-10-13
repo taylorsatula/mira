@@ -52,14 +52,12 @@ def load_prompt(filename: str, *, required: bool = True) -> str:
         ValueError: If filename attempts path traversal or has a disallowed extension.
         FileNotFoundError: When required=True and the file does not exist or is empty.
     """
-    # --- filetype enforcement ---
     if not filename.endswith(_ALLOWED_SUFFIX):
         raise ValueError(
             f"Prompt filename must end in {_ALLOWED_SUFFIX!r}, "
             f"got {filename!r}"
         )
 
-    # --- path traversal protection ---
     resolved = (_PROMPTS_DIR / filename).resolve()
     if not resolved.is_relative_to(_PROMPTS_DIR):
         raise ValueError(
@@ -67,7 +65,6 @@ def load_prompt(filename: str, *, required: bool = True) -> str:
             f"(resolved to {resolved})"
         )
 
-    # --- existence check ---
     if not resolved.exists():
         if required:
             raise FileNotFoundError(
@@ -76,10 +73,8 @@ def load_prompt(filename: str, *, required: bool = True) -> str:
             )
         return ""
 
-    # --- read + strip ---
     content = resolved.read_text(encoding="utf-8").strip()
 
-    # --- empty-file detection ---
     if not content:
         if required:
             raise FileNotFoundError(

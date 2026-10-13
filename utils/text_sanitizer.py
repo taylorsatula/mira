@@ -9,8 +9,8 @@ from typing import Union, List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-# Note: Message length is enforced at the API layer (chat.py)
-# with user-friendly rejection. Sanitizer no longer truncates.
+# Length enforced at API layer (cns/api/chat.py MAX_TEXT_MESSAGE_LENGTH);
+# sanitizer deliberately does not truncate.
 
 
 def sanitize_message_content(content: Union[str, List[Dict[str, Any]]]) -> Union[str, List[Dict[str, Any]]]:
@@ -29,10 +29,8 @@ def sanitize_message_content(content: Union[str, List[Dict[str, Any]]]) -> Union
     if isinstance(content, str):
         return _sanitize_text(content)
     elif isinstance(content, list):
-        # Multimodal content - sanitize text portions only
         return _sanitize_multimodal(content)
     else:
-        # Convert to string and sanitize
         return _sanitize_text(str(content))
 
 
@@ -55,17 +53,14 @@ def _sanitize_text(text: str) -> str:
     if not isinstance(text, str):
         text = str(text)
     
-    # Remove null bytes - these legitimately break many systems
     if '\0' in text:
         text = text.replace('\0', '')
         logger.debug("Removed null bytes from message")
     
     # Ensure valid UTF-8 - critical for JSON encoding
     try:
-        # This will raise if there are encoding issues
         text.encode('utf-8')
     except UnicodeError:
-        # Fix encoding issues by replacing invalid sequences
         text = text.encode('utf-8', errors='replace').decode('utf-8')
         logger.warning("Fixed invalid UTF-8 sequences in message")
 
@@ -93,13 +88,10 @@ def _sanitize_multimodal(content: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         
         item_copy = item.copy()
         
-        # Sanitize text content
         if item_copy.get('type') == 'text' and 'text' in item_copy:
             item_copy['text'] = _sanitize_text(item_copy['text'])
         
-        # Basic validation for image format
         elif item_copy.get('type') == 'image_url':
-            # Just ensure the structure is correct
             if not isinstance(item_copy.get('image_url'), dict):
                 logger.warning("Invalid image_url structure")
                 continue

@@ -24,17 +24,15 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from cns.integration.event_bus import EventBus
 
-# Module-level cache for UserDataManager instances
 _manager_cache: Dict[str, "UserDataManager"] = {}
 
-# Guards every access to _manager_cache: get_user_data_manager's check-then-act
-# (create-and-cache runs entirely under the lock so two concurrent first
-# accesses can never overwrite each other's slot and orphan a live SQLite
-# connection) and clear_manager_cache's per-user close/delete and full-cache
-# iteration. A plain Lock is sufficient — no guarded path re-enters the cache.
+# Guards every _manager_cache access: get_user_data_manager's check-then-act —
+# create-and-cache under the lock, so concurrent first accesses cannot overwrite
+# a slot and orphan a live SQLite connection — plus clear_manager_cache's
+# per-user close/delete and full-cache iteration. Plain Lock suffices: no guarded
+# path re-enters the cache.
 _manager_cache_lock = threading.Lock()
 
-# Canonical CREATE statements for the domaindoc tables.
 # id columns use AUTOINCREMENT so a deleted doc's rowid is never reused
 # (plain INTEGER PRIMARY KEY reuses max(rowid)+1, which can graft deleted
 # content into a newly created document).
@@ -152,7 +150,7 @@ class UserDataManager:
             self._conn.row_factory = sqlite3.Row
             # Enable WAL mode for concurrent read/write support
             self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA busy_timeout=5000")  # Wait up to 5s for locks
+            self._conn.execute("PRAGMA busy_timeout=5000")
             # Enforce foreign keys (per-connection in SQLite). Without this, every
             # ON DELETE CASCADE in the schema is inert and deletes orphan child rows.
             self._conn.execute("PRAGMA foreign_keys=ON")
@@ -209,16 +207,12 @@ class UserDataManager:
         """
         logger.info(f"Initializing tool schemas for user {self.user_id}")
 
-        # Initialize PagerTool schema
         self._init_pager_schema()
 
-        # Initialize Domaindoc schema
         self._init_domaindoc_schema()
 
-        # Initialize ContactsTool schema
         self._init_contacts_schema()
 
-        # Initialize trigger rules schema (sidebar agent trigger filters)
         self._init_trigger_rules_schema()
 
         # Initialize the sidebar-activity schema so dispatcher dedup works
@@ -242,7 +236,6 @@ class UserDataManager:
         """Initialize PagerTool database schema."""
         cursor = self.connection.cursor()
 
-        # Pager devices table
         devices_sql = """
         CREATE TABLE IF NOT EXISTS pager_devices (
             id TEXT PRIMARY KEY,
@@ -257,7 +250,6 @@ class UserDataManager:
         )
         """
 
-        # Pager trust table
         trust_sql = """
         CREATE TABLE IF NOT EXISTS pager_trust (
             id TEXT PRIMARY KEY,
@@ -273,7 +265,6 @@ class UserDataManager:
         )
         """
 
-        # Pager messages table
         messages_sql = """
         CREATE TABLE IF NOT EXISTS pager_messages (
             id TEXT PRIMARY KEY,
@@ -296,7 +287,6 @@ class UserDataManager:
         )
         """
 
-        # Create indexes
         indexes_sql = [
             "CREATE INDEX IF NOT EXISTS idx_pager_devices_user_id ON pager_devices(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_pager_devices_active ON pager_devices(active)",
@@ -310,14 +300,12 @@ class UserDataManager:
             "ON pager_messages(user_id, external_message_id) WHERE external_message_id IS NOT NULL"
         ]
 
-        # Execute schema creation
         cursor.execute(devices_sql)
         cursor.execute(trust_sql)
         cursor.execute(messages_sql)
 
         self._migrate_pager_schema(cursor)
 
-        # Create indexes
         for index_sql in indexes_sql:
             cursor.execute(index_sql)
 
@@ -378,13 +366,11 @@ class UserDataManager:
         """Initialize Domaindoc database schema for section-aware storage."""
         cursor = self.connection.cursor()
 
-        # Domain metadata (replaces manifest.json)
         # Note: 'label' is the single identifier - used for both lookups and display
         # Section-level storage (supports one level of nesting via parent_section_id)
         # Version history (operation diffs)
         # DDL lives in _DOMAINDOC_DDL (module level) - shared with the rebuild migration.
 
-        # Create indexes
         indexes_sql = [
             "CREATE INDEX IF NOT EXISTS idx_domaindocs_label ON domaindocs(label)",
             "CREATE INDEX IF NOT EXISTS idx_domaindocs_enabled ON domaindocs(enabled)",
@@ -395,7 +381,6 @@ class UserDataManager:
             "CREATE INDEX IF NOT EXISTS idx_versions_domaindoc ON domaindoc_versions(domaindoc_id)",
         ]
 
-        # Execute schema creation
         for ddl in _DOMAINDOC_DDL.values():
             cursor.execute(ddl)
 
@@ -403,7 +388,6 @@ class UserDataManager:
         # since indexes may reference columns added by migrations)
         self._migrate_domaindoc_schema(cursor)
 
-        # Create indexes
         for index_sql in indexes_sql:
             cursor.execute(index_sql)
 
@@ -416,7 +400,6 @@ class UserDataManager:
         appropriate defaults for existing data. Must run BEFORE index
         creation since indexes may reference columns added here.
         """
-        # Migrate domaindocs table
         cursor.execute("PRAGMA table_info(domaindocs)")
         domaindoc_columns = {row[1] for row in cursor.fetchall()}
 
@@ -427,7 +410,6 @@ class UserDataManager:
             self.connection.commit()
             logger.info("Migrated domaindocs: added archived column")
 
-        # Migrate domaindoc_sections table
         cursor.execute("PRAGMA table_info(domaindoc_sections)")
         section_columns = {row[1] for row in cursor.fetchall()}
 
@@ -563,7 +545,7 @@ class UserDataManager:
         """Encrypt a value for storage."""
         json_str = json.dumps(value)
         encrypted_token = self.fernet.encrypt(json_str.encode())
-        return encrypted_token.decode()  # Fernet returns base64-encoded bytes
+        return encrypted_token.decode()
     
     def _decrypt_value(self, encrypted_str: str) -> Any:
         """Decrypt a value from storage. Raises on cipher or JSON failure."""
@@ -586,7 +568,6 @@ class UserDataManager:
                 # Keep numeric types as-is for proper SQL comparisons
                 result[key] = value
             else:
-                # Convert other types to string
                 result[key] = str(value)
         return result
     
@@ -606,13 +587,11 @@ class UserDataManager:
         cursor.execute(query, params or {})
 
         if cursor.description:
-            # SELECT query - return rows as dicts
             results = [dict(row) for row in cursor.fetchall()]
             # Close any implicit read transaction to ensure fresh reads
             self.connection.commit()
             return results
         else:
-            # INSERT/UPDATE/DELETE - commit and return empty list
             self.connection.commit()
             return []
 

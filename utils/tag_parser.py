@@ -9,9 +9,6 @@ from typing import Optional
 from typing_extensions import TypedDict
 
 
-# =============================================================================
-# Memory ID Formatting Utilities
-# =============================================================================
 
 MEMORY_ID_PREFIX = "mem_"
 MEMORY_ID_LENGTH = 8
@@ -78,9 +75,6 @@ def match_memory_id(full_uuid: str, short_id: str) -> bool:
     return uuid_prefix == parsed_short
 
 
-# =============================================================================
-# Tag Parser Class
-# =============================================================================
 
 
 class ParsedResponse(TypedDict):
@@ -103,9 +97,7 @@ class TagParser:
     Handles memory references and other semantic markup in LLM responses.
     """
 
-    # Tag patterns
     ERROR_ANALYSIS_PATTERN = re.compile(r'<error_analysis\s+error_id=["\']([^"\']+)["\']>(.*?)</error_analysis>', re.DOTALL | re.IGNORECASE)
-    # Pattern to extract individual memory IDs
     # UUIDs only contain hex chars (0-9, a-f)
     MEMORY_ID_PATTERN = re.compile(
         r'mem_([a-fA-F0-9]{8})',
@@ -147,9 +139,8 @@ class TagParser:
         r'<mira:internal_monologue>(.*?)</mira:internal_monologue>\s*',
         re.DOTALL | re.IGNORECASE
     )
-    # Pattern for check-in response feedback (behavioral debrief return path)
-    # Extracted via finditer + last-match-wins: if Mira revises the tag
-    # within the same response, the final version is what gets stored.
+    # finditer + last-match-wins: if Mira revises the tag within the same
+    # response, the final version is what gets stored.
     CHECKIN_RESPONSE_PATTERN = re.compile(
         r'<mira:checkin_response>(.*?)</mira:checkin_response>',
         re.DOTALL | re.IGNORECASE
@@ -166,7 +157,6 @@ class TagParser:
         Returns:
             Dictionary with parsed tag information
         """
-        # Extract error analysis
         error_analyses = []
         for match in self.ERROR_ANALYSIS_PATTERN.finditer(response_text):
             error_analyses.append({
@@ -174,7 +164,6 @@ class TagParser:
                 'analysis': match.group(2).strip()
             })
 
-        # Extract emotion emoji
         emotion = None
         emotion_match = self.EMOTION_PATTERN.search(response_text)
         if emotion_match:
@@ -182,7 +171,6 @@ class TagParser:
             if emotion_text:
                 emotion = emotion_text
 
-        # Extract display title
         display_title = None
         display_title_match = self.DISPLAY_TITLE_PATTERN.search(response_text)
         if display_title_match:
@@ -190,13 +178,11 @@ class TagParser:
             if display_title_text:
                 display_title = display_title_text
 
-        # Extract complexity score
         complexity = None
         complexity_match = self.COMPLEXITY_PATTERN.search(response_text)
         if complexity_match:
             complexity = float(complexity_match.group(1))
 
-        # Extract precis (2-sentence compressed summary)
         precis = None
         precis_match = self.PRECIS_PATTERN.search(response_text)
         if precis_match:
@@ -204,13 +190,11 @@ class TagParser:
             if precis_text:
                 precis = precis_text
 
-        # Extract internal monologue (cognitive anchoring block)
         internal_monologue = None
         monologue_match = self.INTERNAL_MONOLOGUE_PATTERN.search(response_text)
         if monologue_match:
             internal_monologue = monologue_match.group(1).strip()
 
-        # Extract check-in response (last-match-wins for iterative refinement)
         checkin_response = None
         for checkin_match in self.CHECKIN_RESPONSE_PATTERN.finditer(response_text):
             checkin_response = checkin_match.group(1).strip()
@@ -243,7 +227,6 @@ class TagParser:
         preserve_tags = preserve_tags or []
 
         if preserve_tags:
-            # Remove paired mira tags that are NOT in preserve list
             text = re.sub(
                 r'<mira:([^>\/\s]+)(?:\s[^>]*)?>[\s\S]*?</mira:\1>',
                 lambda m: m.group(0) if m.group(1).lower() in [t.lower() for t in preserve_tags] else '',
@@ -251,7 +234,6 @@ class TagParser:
                 flags=re.IGNORECASE
             )
 
-            # Remove self-closing mira tags that are NOT in preserve list
             text = re.sub(
                 r'<mira:([^>\s\/]+)[^>]*\/>',
                 lambda m: m.group(0) if m.group(1).lower() in [t.lower() for t in preserve_tags] else '',
@@ -259,7 +241,6 @@ class TagParser:
                 flags=re.IGNORECASE
             )
 
-            # Remove any remaining malformed mira tags (but not preserved ones)
             text = re.sub(
                 r'</?mira:([^>\s]+)[^>]*>',
                 lambda m: m.group(0) if m.group(1).lower() in [t.lower() for t in preserve_tags] else '',
@@ -267,27 +248,21 @@ class TagParser:
                 flags=re.IGNORECASE
             )
         else:
-            # Remove all paired mira tags with their content
             text = re.sub(r'<mira:([^>\/\s]+)(?:\s[^>]*)?>[\s\S]*?</mira:\1>', '', text, flags=re.IGNORECASE)
 
-            # Remove all self-closing mira tags
             text = re.sub(r'<mira:[^>]*\/>', '', text, flags=re.IGNORECASE)
 
-            # Remove any remaining malformed mira tags
             text = re.sub(r'</?mira:[^>]*>', '', text, flags=re.IGNORECASE)
 
-        # Remove specific error analysis patterns
         text = self.ERROR_ANALYSIS_PATTERN.sub('', text)
 
-        # Remove internal_monologue blocks (OODA cognitive anchor)
-        # Previously left for "autoregressive conditioning" but:
-        # 1. System prompt already instructs the pattern every turn
-        # 2. Frontend streaming can't reliably strip multi-paragraph blocks
-        # 3. Partial tags leak during block extraction
+        # Strip internal_monologue blocks. Rejected: leaving them for
+        # "autoregressive conditioning" — the system prompt reinstructs the pattern
+        # every turn, frontend streaming cannot reliably strip multi-paragraph
+        # blocks, and partial tags leak during block extraction.
         text = self.INTERNAL_MONOLOGUE_PATTERN.sub('', text)
 
-        # Clean up extra whitespace
-        text = re.sub(r'\n\s*\n', '\n\n', text)  # Remove blank lines
+        text = re.sub(r'\n\s*\n', '\n\n', text)
         text = text.strip()
 
         # Strip errant timestamps ONLY from absolute message start (after strip)

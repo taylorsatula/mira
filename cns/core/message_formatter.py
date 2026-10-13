@@ -21,7 +21,6 @@ def format_messages_for_api(messages: Sequence[Message]) -> list[dict[str, objec
     formatted_messages: list[dict[str, object]] = []
 
     for message in messages:
-        # --- Tool messages: emit directly with first-class fields ---
         if message.role == "tool":
             content: object = message.content
             if (
@@ -52,7 +51,6 @@ def format_messages_for_api(messages: Sequence[Message]) -> list[dict[str, objec
 
         content = message.content
 
-        # Collapsed segments -> synthetic tool_call/tool pair.
         # Tool result framing gives summaries higher attention weight than
         # plain assistant messages; the model treats them as retrieved data.
         if (
@@ -110,7 +108,6 @@ def format_messages_for_api(messages: Sequence[Message]) -> list[dict[str, objec
                         block["text"] = f"[{timestamp}] {block['text']}"
                         break
 
-        # Normalize string content to block list for assistant messages.
         if message.role == "assistant" and isinstance(content, str):
             content = [{"type": "text", "text": content}]
 

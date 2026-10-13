@@ -35,15 +35,7 @@ def _sqlite_now() -> str:
 logger = logging.getLogger(__name__)
 
 
-# -------------------- SCRATCHPAD PARSER --------------------
-# Scratchpad notes are model-authored free text (written via
-# sidebar_tool.write_note) with no documented structure, so they are
-# never returned to the main conversation as raw text. Each DB row is
-# parsed into a ScratchpadNoteRecord -- a strict, typed, known shape --
-# and any row that does not conform raises loudly with diagnostics
-# instead of leaking free-form content into the tool envelope.
 
-# Format used by the table's writers (SQLite datetime('now')).
 _SCRATCHPAD_TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # Control characters with no legitimate place in prose notes. Tab,
@@ -113,7 +105,6 @@ def _parse_scratchpad_note(
         ) from exc
 
 
-# -------------------- CONFIGURATION --------------------
 
 class SidebarAgentsToolConfig(BaseModel):
     """Configuration for sidebaragents_tool."""
@@ -126,7 +117,6 @@ class SidebarAgentsToolConfig(BaseModel):
 registry.register("sidebaragents_tool", SidebarAgentsToolConfig)
 
 
-# -------------------- TOOL --------------------
 
 class SidebarAgentsTool(Tool):
     """Review, inspect, and manage sidebar agent activity."""
@@ -238,7 +228,6 @@ class SidebarAgentsTool(Tool):
         if not thread_id:
             raise ValueError("get_details requires thread_id")
 
-        # Activity record
         activity_rows = self.db.select(
             "sidebar_activity",
             where="thread_id = :tid",
@@ -246,10 +235,6 @@ class SidebarAgentsTool(Tool):
         )
         activity = activity_rows[0] if activity_rows else None
 
-        # Scratchpad content is model-authored free text with no
-        # documented format: parse each row into a validated known shape
-        # (raising loudly on anything unparseable) rather than returning
-        # raw text with escaping applied.
         note_rows = self.db.select(
             "scratchpad",
             where="thread_id = :tid",

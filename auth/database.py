@@ -59,14 +59,12 @@ class AuthDatabase:
         Raises:
             AuthError: If user already exists
         """
-        # Check if user exists
         existing = self.get_user_by_email(email)
         if existing:
             from .exceptions import AuthError
             raise AuthError("user_already_exists", "User with this email already exists")
 
-        # Create user and initial memories in a single transaction
-        # This ensures atomic rollback if memory creation fails
+        # One transaction: atomic rollback if memory creation fails.
         with self.session_manager.get_admin_session() as session:
             import psycopg
             from .exceptions import AuthError
@@ -96,7 +94,6 @@ class AuthDatabase:
                 raise AuthError("user_already_exists", "User with this email already exists")
             user_id = str(result['id'])
 
-            # Create initial memories in same transaction
             memories = [
                 {'text': f"The user's name is {first_name}.", 'importance': 0.9},
                 {'text': f"The user is in {timezone} timezone.", 'importance': 0.8},
@@ -264,7 +261,6 @@ class AuthDatabase:
         from cns.infrastructure.continuum_pool import get_continuum_pool
         from uuid import uuid4
 
-        # Get continuum and create unit of work
         continuum_repo = get_continuum_repository()
         continuum = continuum_repo.get_continuum(user_id)
 
@@ -273,29 +269,25 @@ class AuthDatabase:
 
         pool = get_continuum_pool()
 
-        # Create messages using native methods with delays for sequential timestamps
         from cns.core.message import Message
         import time
         from utils.user_context import set_current_user_id
 
-        # Set user context for the prepopulation process
-        # This is needed because save_messages_batch tries to increment activity day
+        # User context is required: save_messages_batch increments the activity day.
         set_current_user_id(user_id)
 
-        # Message 1: Beginning marker
         msg1 = Message(
             content=".. this is the beginning of the conversation. there are no messages older than this one ..",
             role="user",
             metadata={'system_generated': True, 'system_notification': True}
         )
         continuum._message_cache.append(msg1)
-        # Create new UnitOfWork for each message to avoid duplicate key errors
+        # New UnitOfWork per message, deliberate: a single batch hits duplicate key errors.
         uow = pool.begin_work(continuum)
         uow.add_messages(msg1)
         uow.commit()
-        time.sleep(0.1)  # 100ms delay
+        time.sleep(0.1)  # sequential timestamps
 
-        # Message 2: Active segment sentinel
         segment_metadata = {
             'is_segment_boundary': True,
             'status': 'active',
@@ -313,10 +305,10 @@ class AuthDatabase:
             metadata=segment_metadata
         )
         continuum._message_cache.append(msg2)
-        uow = pool.begin_work(continuum)  # New UnitOfWork for msg2
+        uow = pool.begin_work(continuum)
         uow.add_messages(msg2)
         uow.commit()
-        time.sleep(0.1)  # 100ms delay
+        time.sleep(0.1)  # sequential timestamps
 
         # Message 3: System context message
         system_context = (
@@ -332,24 +324,22 @@ class AuthDatabase:
             metadata={'system_generated': True, 'system_notification': True}
         )
         continuum._message_cache.append(msg3)
-        uow = pool.begin_work(continuum)  # New UnitOfWork for msg3
+        uow = pool.begin_work(continuum)
         uow.add_messages(msg3)
         uow.commit()
-        time.sleep(0.1)  # 100ms delay
+        time.sleep(0.1)  # sequential timestamps
 
-        # Message 4: User introduction
         msg4 = Message(
             content=f"Hi, my name is {first_name}.",
             role="user",
             metadata={'system_generated': True}
         )
         continuum._message_cache.append(msg4)
-        uow = pool.begin_work(continuum)  # New UnitOfWork for msg4
+        uow = pool.begin_work(continuum)
         uow.add_messages(msg4)
         uow.commit()
-        time.sleep(0.1)  # 100ms delay
+        time.sleep(0.1)  # sequential timestamps
 
-        # Message 5: MIRA introduction
         mira_intro = f"""Hi {first_name}, nice to meet you. My name is MIRA and I'm a stateful AI assistant. That means that unlike AIs like ChatGPT or Claude, you and I will have one continuous conversation thread for as long as you have an account. Just log back into your MIRA instance and I'll be here ready to help. I extract and save facts & context automatically just like a person would. If you need to reference information from past sessions you can simply ask me about it and I'll be able to search our conversation history to bring myself up to speed. I look forward to working with you and I hope that you find value in our chats.
 
 So, now that that's out of the way: What do you want to chat about first? I can help you with a work project, we can brainstorm an idea, or just chitchat for a bit."""
@@ -360,12 +350,10 @@ So, now that that's out of the way: What do you want to chat about first? I can 
             metadata={'system_generated': True}
         )
         continuum._message_cache.append(msg5)
-        uow = pool.begin_work(continuum)  # New UnitOfWork for msg5
+        uow = pool.begin_work(continuum)
         uow.add_messages(msg5)
         uow.commit()
-        # No delay needed after last message
 
-        # Clear user context after prepopulation
         from utils.user_context import clear_user_context
         clear_user_context()
 
@@ -480,10 +468,6 @@ So, now that that's out of the way: What do you want to chat about first? I can 
                 'last_used_at': last_used_at
             })
             return rows_updated > 0
-
-    # =========================================================================
-    # API Token Operations (persistent, hashed storage)
-    # =========================================================================
 
     def create_api_token(
         self,

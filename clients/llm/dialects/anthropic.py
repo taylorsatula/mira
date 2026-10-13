@@ -88,7 +88,8 @@ class AnthropicDialect(Dialect):
         container_reuse=True,
         server_code_execution=True,
     )
-    # Anthropic accepts both effort (4.6+ adaptive) and budget_tokens (legacy)
+    # Anthropic accepts both effort (4.6+ adaptive, per Anthropic's docs) and
+    # budget_tokens (legacy).
     native_thinking_fields = ("effort", "budget")
     _accepted_round_trip_fields = frozenset({"thinking_signatures"})
 
@@ -134,8 +135,9 @@ class AnthropicDialect(Dialect):
         self.client = client or anthropic.Anthropic(
             api_key=api_key,
             # anthropic.Timeout is the SDK's own re-export of its vendored
-            # httpx Timeout class (httpx on SDK 0.x, httpx2 on SDK 1.x) - passing
-            # an externally-constructed httpx.Timeout is rejected by SDK 1.x.
+            # httpx Timeout class (httpx on SDK 0.x, httpx2 on SDK 1.x, per the
+            # SDK's own source) - passing an externally-constructed
+            # httpx.Timeout is rejected by SDK 1.x.
             timeout=anthropic.Timeout(connect=30.0, read=900.0, write=30.0, pool=30.0),
             # config.api.timeout is accepted-but-not-applied on the Anthropic
             # route by design (hrzs, declined): the hardcoded read window is
@@ -177,21 +179,17 @@ class AnthropicDialect(Dialect):
 
     def complete(self, request: Request) -> Result:
         params = self._build_params(request)
-        # Hold the transport on the abort handle before the blocking call
-        # (9d29): a non-streaming create() blocks inside the SDK client with
-        # no request/stream object exposed to the caller, so
-        # abort_active_stream() found nothing to close and a stalled
-        # non-streaming worker kept its connection open past the lifecycle's
-        # ProviderStallError until the SDK's read timeout. Closing the SDK
-        # client closes its connection pool including the checked-out
-        # connection, releasing the peer's socket at abort time. The handle
-        # here is the SDK client itself — the SDK (0.52.2) exposes no
-        # request/stream object for a non-streaming create() before it
-        # blocks — and the dialect (with its client) is per-request
-        # (llm_provider._dialect_for_selection), so closing it cannot
-        # disturb another request's connection. current_partial_usage()
-        # stays safe: it getattr-guards current_message_snapshot, which the
-        # client does not expose, and returns None as before.
+        # Hold the SDK client on the abort handle before the blocking call
+        # (9d29): a non-streaming create() blocks inside the SDK with no
+        # request/stream object exposed, so abort_active_stream() had nothing
+        # to close and a stalled worker held its connection past the
+        # lifecycle's ProviderStallError to the SDK read timeout; closing the
+        # client closes its pool including the checked-out connection,
+        # releasing the peer's socket at abort time. SDK 0.52.2 exposes no such
+        # object before create() blocks. Safe because the dialect and its
+        # client are per-request (llm_provider._dialect_for_selection), so
+        # closing cannot disturb another request, and current_partial_usage()
+        # getattr-guards current_message_snapshot, absent on the client.
         self._active_stream = self.client
         try:
             message = self._call_with_overload_retry(
@@ -266,17 +264,15 @@ class AnthropicDialect(Dialect):
         result = self._normalize_message(final_message, request)
         self._log_response(result, request.model)
 
-        # Download artifacts before emitting the code-execution summary so the
-        # summary can advertise what actually landed, not what the provider
-        # listed. Each artifact downloads inside its own generator resume
-        # (yield between files, ticket ejnp): the lifecycle's per-event stall
-        # watchdog bounds ONE files.download per resume, never the whole
-        # batch. The artifact events must therefore be yielded as each
-        # download lands, ahead of the summary below, so the summary still
-        # reads a fully populated landed_files — landed-vs-missing
-        # advertising and CompleteEvent-last are preserved. NOTE: this
-        # artifact-path change is UNTESTED against live infrastructure, and
-        # Anthropic's artifact support is known buggy (Taylor, census-20260930b).
+        # Artifact events must be yielded as each download lands, ahead of the
+        # code-execution summary below, so the summary reads a fully populated
+        # landed_files — it advertises what actually landed, not what the
+        # provider listed (ticket ejnp). Each download runs inside its own
+        # generator resume: the lifecycle's per-event stall watchdog
+        # (clients/llm/lifecycle.py:_run) bounds one files.download per resume,
+        # never the batch, and CompleteEvent stays last. NOTE: UNTESTED against
+        # live infrastructure; Anthropic's artifact support is known buggy
+        # (Taylor, census-20260930b).
         landed_files: set[str] = set()
         yield from self._file_artifact_events(
             final_message.content, landed_files=landed_files
@@ -353,8 +349,9 @@ class AnthropicDialect(Dialect):
         }
         params.update(thinking_params)
         # No temperature is sent: the Anthropic API has deprecated the
-        # parameter (all current models pin temperature=1) and SDK 1.x removed
-        # it from Messages.create() entirely - passing it raises TypeError.
+        # parameter (all current models pin temperature=1, per the API docs)
+        # and SDK 1.x removed it from Messages.create() entirely (per the
+        # SDK 1.x source) - passing it raises TypeError.
         # The openai-family dialects still honor request.temperature.
 
         system = self._system_param(request.system)
@@ -403,9 +400,7 @@ class AnthropicDialect(Dialect):
         budget = thinking.budget_tokens
 
         if adaptive:
-            # Native field is effort; legacy budget gets inverted to effort if needed.
             if effort is not None and budget is not None:
-                # Both set; effort wins on adaptive models. Note the discarded budget.
                 self._log_translation(TranslationNote(
                     field="budget_tokens",
                     requested=budget,
@@ -430,7 +425,6 @@ class AnthropicDialect(Dialect):
                 0,
             )
 
-        # Legacy thinking - native field is budget.
         if effort == "none":
             if budget is not None:
                 raise ValueError(
@@ -441,11 +435,9 @@ class AnthropicDialect(Dialect):
                 )
             return {"thinking": {"type": "disabled"}}, 0
         if budget is None:
-            # Caller provided only effort; translate canonically.
             clamped = self._clamp_effort(model, effort or "high", original=effort)
             budget = self._legacy_budget_for_effort(clamped, model)
         elif effort is not None:
-            # Both set; budget wins on legacy models. Note the discarded effort.
             self._log_translation(TranslationNote(
                 field="effort",
                 requested=effort,
@@ -513,7 +505,6 @@ class AnthropicDialect(Dialect):
 
     def _system_param(self, system: str | list[dict[str, Any]] | None) -> str | list[dict[str, Any]] | None:
         if isinstance(system, list):
-            # Translate cache TTL hints on system blocks to cache_control
             serialized: list[dict[str, Any]] = []
             for block in system:
                 if block.get("type") == "text" and block.get("cache"):
@@ -602,18 +593,16 @@ class AnthropicDialect(Dialect):
         if isinstance(content, str):
             content = [{"type": "text", "text": content}]
 
-        # Key-form tool_calls: an assistant message stored by the OpenAI
-        # family carries tool calls as a top-level "tool_calls" list instead
-        # of content blocks. A mid-session dialect switch replays stored
-        # messages through whichever dialect serves the next turn, so the
-        # key form is normalized to tool_use blocks here — never dropped.
+        # Key-form tool_calls: the OpenAI family stores calls as a top-level
+        # "tool_calls" list, not content blocks, and a mid-session dialect switch
+        # replays stored messages through whichever dialect serves the next turn
+        # — normalize here, never drop.
         key_form_calls = message.get("tool_calls") or []
         if not isinstance(content, list):
             if not key_form_calls:
                 return content
             content = []
 
-        # Reconstruct thinking blocks from ReasoningBlocks + thinking_signatures metadata
         thinking_signatures = message.get("thinking_signatures", [])
         sig_index = 0
 
@@ -642,19 +631,14 @@ class AnthropicDialect(Dialect):
                         thinking_blocks.append({"type": "redacted_thinking", "data": sig["data"]})
                 if not matched:
                     # Written-in-blood (z5g5, refuted as a defect,
-                    # census-20260930b): this hard-fail on unpaired/foreign
+                    # census-20260930b): the hard-fail on unpaired/foreign
                     # reasoning blocks is INTENDED protection for the
-                    # signed-blocks contract — OpenAI-family reasoning carries
-                    # no signatures and must not be silently replayed on a
-                    # deliberating Anthropic route. If it fires, recovery
-                    # requires rewinding stored history (SQL access) or waiting
-                    # for segment collapse. Do NOT soften the one-to-one
-                    # invariant (Taylor, 2026-09-30).
-                    # Co-occurrence invariant: every reasoning block must pair
-                    # with exactly one thinking signature, positionally. An
-                    # unmatched block means the stored metadata drifted from
-                    # the content (silent block loss, or a mispaired signature
-                    # the provider rejects next turn) — refuse at the boundary.
+                    # signed-blocks contract — pairing is positional and
+                    # one-to-one, OpenAI-family reasoning carries no
+                    # signatures, and it must not be replayed on a deliberating
+                    # Anthropic route. If it fires, recovery needs a
+                    # stored-history rewind (SQL access) or a segment collapse.
+                    # Do NOT soften the invariant (Taylor, 2026-09-30).
                     raise ProviderProtocolError(
                         "anthropic",
                         "message-conversion",
@@ -853,15 +837,13 @@ class AnthropicDialect(Dialect):
             elif block_type == "redacted_thinking":
                 redacted_data.append(block.data)
             elif block_type == "tool_use":
-                # Validate the block's input against the matching request tool's
-                # input_schema, mirroring openai_chat_base._coerce_tool_input's
-                # rejection semantics (fj8h): a schema-violating native-
-                # Anthropic tool call must be flagged via invalid_reason here,
-                # not executed and persisted. request is None on the no-request
-                # path — there are no schemas to validate against, so no-op;
-                # an unknown tool name likewise has no matching schema. This
-                # normalization is also the streaming final-message path, so
-                # validation cost lands once per turn there too.
+                # Mirror openai_chat_base._coerce_tool_input's rejection
+                # semantics (fj8h): a schema-violating native-Anthropic call must
+                # be flagged via invalid_reason here, never executed and
+                # persisted. request is None on the no-request path — no
+                # schemas, so no-op; an unknown tool name has no schema either.
+                # This is also the streaming final-message path, so cost lands
+                # once per turn there too.
                 invalid_reason = None
                 if request is not None:
                     tool = next(
@@ -954,16 +936,14 @@ class AnthropicDialect(Dialect):
             )
 
         # Unknown stop reasons are a provider contract violation, not a client
-        # message problem: a bare ValueError from coerce_stop_reason is
-        # classified as TURN_VALIDATION_FAILED on the WebSocket transport and
-        # bypasses overflow remediation (ticket 8cs3). The documented
-        # model_context_window_exceeded is an overflow condition and maps to
-        # ProviderContextOverflowError so llm_provider converts it to
-        # ContextOverflowError and the orchestrator's recovery fires; every
-        # other unknown value raises ProviderProtocolError (a RuntimeError),
-        # which the WS classifier emits as TURN_PROCESSING_FAILED. Whatever
-        # survives coercion is a StopReason member, so Result.__post_init__'s
-        # re-coercion cannot raise.
+        # message problem (ticket 8cs3): a bare ValueError from coerce_stop_reason
+        # classifies as TURN_VALIDATION_FAILED on the WS transport and bypasses
+        # overflow remediation. model_context_window_exceeded is an overflow:
+        # ProviderContextOverflowError → llm_provider's ContextOverflowError →
+        # orchestrator recovery. Every other unknown value raises
+        # ProviderProtocolError (a RuntimeError), which the WS classifier emits
+        # as TURN_PROCESSING_FAILED. Whatever survives coercion is a StopReason
+        # member, so Result.__post_init__'s re-coercion cannot raise.
         raw_stop_reason = getattr(message, "stop_reason", "end_turn") or "end_turn"
         if raw_stop_reason == "model_context_window_exceeded":
             raise ProviderContextOverflowError(

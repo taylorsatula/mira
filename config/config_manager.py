@@ -29,11 +29,9 @@ from config.config import (
     HeartbeatConfig,
 )
 
-# Import the registry from tools package
 from tools.registry import registry
 
 
-# Registry of cognitive feature switches: environment variable name -> SystemConfig field name.
 # Adding a flag is a one-line entry here plus the matching SystemConfig field and factory/init
 # omission point. Do not pre-register a flag for a subsystem that does not exist yet; add it with
 # the subsystem (MIRA_PERSONA_ENABLED landed with Persona in WP5).
@@ -45,7 +43,6 @@ SYSTEM_FEATURE_FLAG_ENVIRONMENT_FIELDS: dict[str, str] = {
     "MIRA_MCP_ENABLED": "mcp_enabled",
 }
 
-# Registry of string-valued SystemConfig overrides: environment variable name -> field name.
 # Deploy writes MIRA_TIMEZONE and MIRA_LOCAL_SESSION_FIRST_NAME into /opt/mira/systemone.env
 # (EnvironmentFile for the unit, sourced by the no-systemd launcher and the container) so an
 # install's timezone and the local account's first name are explicit operator choices rather
@@ -55,8 +52,7 @@ SYSTEM_STRING_ENVIRONMENT_FIELDS: dict[str, str] = {
     "MIRA_LOCAL_SESSION_FIRST_NAME": "local_session_first_name",
 }
 
-# Registry of string-valued SystemOneConfig overrides: environment variable name -> field
-# name. Deploy writes /opt/mira/systemone.env (EnvironmentFile for the unit, sourced by the
+# Deploy writes /opt/mira/systemone.env (EnvironmentFile for the unit, sourced by the
 # no-systemd launcher and the container) so an install's injection-screen model is an
 # explicit operator choice. No secret travels by env — the bearer token stays in Vault.
 SYSTEMONE_STRING_ENVIRONMENT_FIELDS: dict[str, str] = {
@@ -102,7 +98,6 @@ def _load_system_string_overrides() -> dict[str, str]:
     return overrides
 
 
-# Registry of integer-valued ApiConfig overrides: environment variable name -> field name.
 # Deploy resolves the chosen chat model's context window from its endpoint's models list at
 # install time and writes both values into /opt/mira/systemone.env (EnvironmentFile for the
 # unit, sourced by the no-systemd launcher and the container), so the window and the live
@@ -183,10 +178,8 @@ class AppConfig(BaseModel):
     memory_curator: MemoryCuratorConfig = Field(default_factory=MemoryCuratorConfig)
 
 
-    # System prompt loaded once at startup
     system_prompt_text: str = Field(default="", exclude=True)
     
-    # Cache for tool configs (non-model field, excluded from serialization)
     tool_configs: Dict[str, BaseModel] = Field(default_factory=dict, exclude=True)
 
     @classmethod
@@ -216,17 +209,14 @@ class AppConfig(BaseModel):
         parts = key.split(".")
         
         if len(parts) == 1:
-            # Top-level attribute
             return getattr(self, parts[0], default)
         
         if len(parts) == 2:
-            # Nested attribute
             section = getattr(self, parts[0], None)
             if section is None:
                 return default
             return getattr(section, parts[1], default)
         
-        # Unsupported nesting level
         return default
     
     def require(self, key: str) -> Any:
@@ -281,12 +271,9 @@ class AppConfig(BaseModel):
         
     def __getattr__(self, name: str) -> Any:
         """Dynamic tool configuration access via registry - enables config.tool_name syntax."""
-        # Check if this might be a tool configuration
         if name.endswith('_tool') or name in self.tool_configs:
-            # Get the tool configuration
             return self.get_tool_config(name)
             
-        # Not a tool config, raise normal attribute error
         raise AttributeError(f"'AppConfig' object has no attribute '{name}'")
     
     def get_tool_config(self, tool_name: str) -> BaseModel:
@@ -320,8 +307,6 @@ class AppConfig(BaseModel):
         config_class = type(default_config)
         return config_class(**{**default_config.model_dump(), **user_config})
     
-    # We don't need a discover_tools method anymore.
-    # Tools register themselves when they're imported naturally by the application.
             
     def list_available_tool_configs(self) -> List[str]:
         cached_configs = list(self.tool_configs.keys())
@@ -329,7 +314,6 @@ class AppConfig(BaseModel):
         return list(set(cached_configs + registry_configs))
 
 
-# Initialize configuration
 def initialize_config() -> AppConfig:
     """Initialize configuration and logging."""
     try:
@@ -354,5 +338,4 @@ def initialize_config() -> AppConfig:
         
         raise RuntimeError(error_msg)
 
-# Create the global configuration instance
 config = initialize_config()

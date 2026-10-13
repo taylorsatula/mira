@@ -33,7 +33,6 @@ from bs4 import BeautifulSoup, Comment
 import trafilatura
 
 
-# --- Configuration ---
 
 class WebToolConfig(BaseModel):
     """Configuration for web_tool."""
@@ -45,7 +44,6 @@ class WebToolConfig(BaseModel):
 registry.register("web_tool", WebToolConfig)
 
 
-# --- Input Models ---
 
 class SearchInput(BaseModel):
     """Input for web search operation."""
@@ -114,7 +112,6 @@ class ResolvedCredential:
     allowed_domains: List[str]
 
 
-# --- Tool Implementation ---
 
 class WebTool(Tool):
     """
@@ -188,11 +185,9 @@ class WebTool(Tool):
         else:
             raise ValueError(f"Unknown operation: {operation}. Must be: search, fetch, or http")
 
-    # --- Search Operation ---
 
     def _search(self, input: SearchInput) -> Dict[str, Any]:
         """Execute web search with Kagi primary, DuckDuckGo fallback."""
-        # Try Kagi first if available
         if self._kagi:
             try:
                 response = self._kagi.search(input.query, limit=input.max_results)
@@ -209,7 +204,6 @@ class WebTool(Tool):
             except Exception as e:
                 self.logger.warning(f"Kagi search failed: {e}, falling back to DuckDuckGo")
 
-        # Fall back to DuckDuckGo
         try:
             ddgs = DDGS()
             raw_results = ddgs.text(
@@ -236,9 +230,7 @@ class WebTool(Tool):
             self.logger.error(f"DuckDuckGo search error: {e}")
             raise ValueError(f"DuckDuckGo search failed: {e}")
 
-    # --- Fetch Operation ---
 
-    # Minimum extracted text length before escalating to Playwright.
     # Below this threshold, the page likely needs JS rendering (SPA shell, JS loader).
     _MIN_EXTRACT_LENGTH = 150
 
@@ -262,7 +254,6 @@ class WebTool(Tool):
         self._validate_url(input.url)
         timeout = self._get_timeout(input.timeout)
 
-        # Tier 1: HTTP GET + trafilatura
         html, response_info = self._fetch_http(input.url, timeout)
         tier1_content: Optional[str] = None
         if html is not None:
@@ -277,14 +268,12 @@ class WebTool(Tool):
             # on it, this is what we return instead of a fetch failure.
             tier1_content = extracted
 
-        # Tier 2: Playwright + trafilatura
         pw_html, pw_info = self._fetch_playwright(input.url, timeout)
         if pw_html is not None:
             extracted = self._extract_content(pw_html)
             if extracted:
                 return self._build_fetch_result(input, pw_html, extracted, pw_info)
 
-            # Tier 3: Playwright HTML + BeautifulSoup fallback
             extracted = self._fallback_text_extract(pw_html)
             if extracted:
                 return self._build_fetch_result(input, pw_html, extracted, pw_info)
@@ -338,7 +327,6 @@ class WebTool(Tool):
             if synthesized:
                 content = synthesized + "\n\n[Page content was condensed. Re-fetch with focus='...' to target specific content]"
             else:
-                # Synthesis failed — hard truncate as fallback
                 content = content[:self._MAX_FAITHFUL_LENGTH] + "\n\n[Truncated — full page at source]"
         result = {"success": True, "url": input.url,
                   "content": wrap_untrusted(content, "web_fetch")}
@@ -467,8 +455,7 @@ class WebTool(Tool):
         # overflow, and raw httpx transport errors that leak past the
         # OpenAI-family dialects' httpx.post. Anything else (TypeError, KeyError
         # for an unknown route, misconfiguration) is a programming or deployment
-        # error and propagates loudly; a broad handler here once swallowed a
-        # guaranteed TypeError on every call.
+        # error and propagates loudly.
         except (ProviderError, ContextOverflowError, httpx.TransportError) as e:
             self.logger.warning(f"Content synthesis failed: {e}")
             return None
@@ -478,7 +465,6 @@ class WebTool(Tool):
         match = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
         return match.group(1).strip() if match else ""
 
-    # --- HTTP Operation ---
 
     def _get_credential(self, credential_name: str, request_host: str) -> ResolvedCredential:
         """
@@ -528,7 +514,6 @@ class WebTool(Tool):
         injected_credential_header = None
         credential_allowed_domains = None
 
-        # Credential injection - LLM references by name, we inject actual value
         if input.credential_name:
             credential = self._get_credential(input.credential_name, validated.hostname)
             headers[input.credential_header] = f"{input.credential_prefix}{credential.value}"
@@ -536,7 +521,6 @@ class WebTool(Tool):
             credential_allowed_domains = credential.allowed_domains
             self.logger.info(f"Injected credential '{input.credential_name}' into '{input.credential_header}'")
 
-        # Build kwargs for the request
         kwargs = {
             "params": input.query_params,
             "headers": headers,
@@ -607,7 +591,6 @@ class WebTool(Tool):
 
         return result
 
-    # --- Helpers ---
 
     def _init_kagi(self) -> None:
         """Initialize Kagi client from Vault. DuckDuckGo is the search

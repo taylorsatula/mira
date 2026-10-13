@@ -79,7 +79,6 @@ class HubDiscoveryService:
             logger.debug("No extracted entities, skipping hub discovery")
             return []
 
-        # Step 1: Match entity names to database entities via pg_trgm fuzzy matching
         matched_entity_ids = self._match_entities(
             extracted_entities,
             similarity_threshold=entity_similarity_threshold
@@ -96,7 +95,6 @@ class HubDiscoveryService:
 
         logger.debug(f"Matched {len(matched_entity_ids)} entities from {len(extracted_entities)} extracted")
 
-        # Step 2: Get memories linked to matched entities (capped per entity)
         candidate_memories = self._get_entity_linked_memories(
             matched_entity_ids,
             limit_per_entity=limit_per_entity
@@ -108,7 +106,6 @@ class HubDiscoveryService:
 
         logger.debug(f"Found {len(candidate_memories)} candidate memories from matched entities")
 
-        # Step 3: Score memories by expansion similarity and return top N
         ranked_memories = self._rank_memories(
             candidate_memories,
             expansion_embedding,
@@ -148,8 +145,7 @@ class HubDiscoveryService:
         # names were extracted — the per-name loop cost a pool checkout plus a
         # set_config RLS round-trip per name.
         with self.db.session_manager.get_session(get_current_user_id()) as session:
-            # Exact matches in one statement. DISTINCT ON mirrors the old
-            # LIMIT 1: one row per name when duplicate names exist.
+            # DISTINCT ON keeps one row per name when duplicate names exist.
             exact_rows = session.execute_query("""
                 SELECT DISTINCT ON (name) id, name
                 FROM entities
@@ -214,9 +210,7 @@ class HubDiscoveryService:
         if not entity_ids:
             return memories
 
-        # One batched statement: per-entity top-N via a lateral join. The
-        # previous loop fetched every memory linked to each entity (including
-        # full embeddings) and sliced in Python.
+        # One batched statement: per-entity top-N via a lateral join.
         with self.db.session_manager.get_session(get_current_user_id()) as session:
             rows = session.execute_query("""
                 SELECT m.*
@@ -274,17 +268,14 @@ class HubDiscoveryService:
                 logger.debug(f"Memory {memory.id} has no embedding, skipping")
                 continue
 
-            # Cosine similarity between memory and expansion
             mem_embedding = np.array(memory.embedding)
             dot_product = np.dot(expansion_embedding, mem_embedding)
             norm_product = expansion_norm * np.linalg.norm(mem_embedding)
             similarity = float(dot_product / (norm_product + 1e-9))
 
-            # Store similarity for debugging/tracing
             memory._hub_similarity = similarity
             scored_memories.append((memory, similarity))
 
-        # Sort by similarity descending, take top N
         scored_memories.sort(key=lambda x: x[1], reverse=True)
         top_memories = [m for m, _ in scored_memories[:top_n]]
 

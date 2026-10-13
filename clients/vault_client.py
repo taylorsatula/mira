@@ -18,7 +18,6 @@ from hvac.exceptions import VaultError, InvalidPath, Unauthorized, Forbidden
 
 logger = logging.getLogger(__name__)
 
-# Global singleton instance and cache
 _vault_client_instance: Optional['VaultClient'] = None
 _secret_cache: Dict[str, str] = {}
 _vertex_credentials = None  # google.oauth2.service_account.Credentials singleton
@@ -39,11 +38,9 @@ class VaultClient:
         """Initializes with env vars, validates config, authenticates via AppRole, fails fast on errors."""
         try:
 
-            # Get configuration from environment
             self.vault_addr = vault_addr or os.getenv('VAULT_ADDR')
             self.vault_namespace = vault_namespace or os.getenv('VAULT_NAMESPACE')
             
-            # AppRole credentials
             self.vault_role_id = os.getenv('VAULT_ROLE_ID')
             self.vault_secret_id = os.getenv('VAULT_SECRET_ID')
             
@@ -121,7 +118,6 @@ class VaultClient:
             logger.error(f"Vault API error for {path}/{field}: {e}", exc_info=True)
             raise RuntimeError(f"Vault API error retrieving '{path}/{field}': {str(e)}")
 
-# Individual secret retrieval functions
 def get_database_url(service: str, admin: bool = False) -> str:
     """
     Get database URL from Vault for mira_service.
@@ -252,7 +248,6 @@ class VaultHealthCheck(TypedDict, total=False):
     message: str
 
 
-# Health check function
 def test_vault_connection() -> VaultHealthCheck:
     try:
         vault_client = _ensure_vault_client()

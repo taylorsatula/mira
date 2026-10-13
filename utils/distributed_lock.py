@@ -75,13 +75,11 @@ class DistributedLock:
         ttl = ttl or self.default_ttl
         token = str(uuid.uuid4())
 
-        # SET NX (set if not exists) with EX (expiration)
-        # This is atomic - either we get the lock or we don't
         success = self.valkey.set(
             key,
             token,
-            nx=True,  # Only set if key doesn't exist
-            ex=ttl    # Set expiration time
+            nx=True,
+            ex=ttl
         )
 
         if success:
@@ -198,9 +196,8 @@ class DistributedLock:
                         # nothing left to renew.
                         break
                 except Exception:
-                    # Transient infrastructure failure: the key is not
-                    # deleted by Valkey being down, so retry at the next
-                    # cadence tick while cover remains.
+                    # Transient infra failure: a Valkey outage does not delete
+                    # the key, so retry at the next cadence tick while cover remains
                     logger.warning(
                         "Background lock renewal for %s failed; retrying next interval",
                         resource_id, exc_info=True,

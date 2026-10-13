@@ -27,21 +27,17 @@ logger = logging.getLogger(__name__)
 
 NOMINATIM_BASE_URL = "https://nominatim.openstreetmap.org"
 # Public Overpass instances. Reliability varies per instance and over time,
-# so nearby's retry loop rotates through the list — but only for the two
-# failure modes it handles itself: read timeouts and HTTP-200 responses
-# carrying an error "remark" skip to the next instance rather than hammering
-# the current one. HTTP-error responses (e.g. 5xx) do NOT rotate: http_client
-# retries them in place on the same instance, and once its retries are
-# exhausted the error surfaces to the caller without falling back to the
-# remaining instances.
+# so nearby's retry loop rotates through them - only for the two failure modes
+# it handles itself: read timeouts, and HTTP-200 responses carrying an error
+# "remark". HTTP errors (e.g. 5xx) do NOT rotate: http_client retries in place
+# on the same instance, then surfaces the error without falling back.
 OVERPASS_URLS = (
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
 )
 
-# Nominatim usage policy requires an identifying User-Agent; generic
-# library defaults get throttled or blocked.
+# Nominatim usage policy requires an identifying User-Agent.
 USER_AGENT = "MIRA-Assistant/1.0 (OpenStreetMap Nominatim client)"
 
 REQUEST_TIMEOUT = 30

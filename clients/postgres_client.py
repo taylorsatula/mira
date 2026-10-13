@@ -81,9 +81,8 @@ class PostgresPoolError(RuntimeError):
 class PostgresClient:
     """Raw SQL client with connection pooling, user isolation via RLS, and automatic JSON serialization."""
 
-    # Class-level connection pools shared across all instances
     _connection_pools: Dict[str, ConnectionPool] = {}
-    _pools_lock = threading.RLock()  # Thread safety for pool creation
+    _pools_lock = threading.RLock()
 
     @classmethod
     def reset_all_pools(cls):
@@ -94,7 +93,6 @@ class PostgresClient:
         leaving dangling database connections.
         """
         with cls._pools_lock:
-            # Close sync pools
             for pool in cls._connection_pools.values():
                 try:
                     pool.close(timeout=0)  # Workers are daemon threads — no need to wait
@@ -165,8 +163,8 @@ class PostgresClient:
                         min_size=config.database.pool_min,
                         max_size=config.database.pool_max,
                         timeout=30,
-                        max_lifetime=3600,  # Recycle connections after 1 hour
-                        max_idle=300,       # Close idle connections after 5 minutes
+                        max_lifetime=3600,
+                        max_idle=300,
                         # Register pgvector types once per physical connection
                         # (pool calls this at connection creation, not per checkout)
                         configure=register_vector if self._needs_vector() else None,
@@ -194,12 +192,10 @@ class PostgresClient:
         generic one. Callers that take the contextless path are the ones being
         diagnosed, so the extra scan costs nothing on healthy connections.
         """
-        # Resolve the pool under _pools_lock so a concurrent close_all_pools /
-        # reset_all_pools clear cannot land between the membership check and
-        # the lookup (KeyError) or during the lookup. _pools_lock is an RLock,
-        # so re-entering it through _ensure_connection_pool is safe. The lock
-        # is released before pool.getconn() below — getconn can block up to
-        # the pool's 30s timeout and must not run under the lock.
+        # Resolve under _pools_lock: a concurrent close_all_pools/reset_all_pools
+        # clear must not land between the membership check and the lookup
+        # (KeyError). RLock, so _ensure_connection_pool may re-enter. Release
+        # before pool.getconn() — it can block the pool's 30s timeout.
         with self._pools_lock:
             if self._pool_key not in self._connection_pools:
                 self._ensure_connection_pool()
@@ -212,7 +208,6 @@ class PostgresClient:
 
             conn.autocommit = True
 
-            # Admin connections bypass RLS via role — no user context needed
             if not self._admin:
                 # ALWAYS set or clear the user context to prevent inheriting from pooled connections
                 with conn.cursor() as cur:
@@ -337,13 +332,6 @@ class PostgresClient:
 
     @classmethod
     def close_all_pools(cls):
-        # Snapshot and clear under _pools_lock so get_connection's locked
-        # lookup can never observe a dict that is mid-iteration or mid-clear
-        # (RuntimeError 'dictionary changed size during iteration' at the old
-        # live-dict loop). The clear happens before any pool.close() so the
-        # snapshot is exactly the set of pools that existed when the lock was
-        # taken. Closing runs OUTSIDE the lock: pool.close() must not run
-        # under _pools_lock for the same reason as pool.getconn().
         with cls._pools_lock:
             pools = list(cls._connection_pools.items())
             cls._connection_pools.clear()

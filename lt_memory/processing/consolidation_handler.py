@@ -67,10 +67,8 @@ class ConsolidationHandler:
             ValueError: If old memories cannot be loaded
             RuntimeError: If consolidated memory storage fails
         """
-        # Step 1: Load old memories
         old_memories = self.db.get_memories_by_ids(old_memory_ids, user_id=user_id)
 
-        # Validate ALL requested memories were found (not just some)
         if len(old_memories) != len(old_memory_ids):
             found_ids = {m.id for m in old_memories}
             missing_ids = set(old_memory_ids) - found_ids
@@ -79,7 +77,6 @@ class ConsolidationHandler:
                 f"Missing IDs: {missing_ids}. Cannot consolidate with incomplete memory set."
             )
 
-        # Step 2: Calculate median importance from old memories
         importance_scores = [m.importance_score for m in old_memories if m.importance_score]
         median_importance = statistics.median(importance_scores) if importance_scores else 0.5
 
@@ -87,7 +84,6 @@ class ConsolidationHandler:
             f"Consolidating {len(old_memories)} memories with median importance {median_importance:.3f}"
         )
 
-        # Step 3: Collect all unique links from old memories
         all_inbound_links = []
         all_outbound_links = []
         all_entity_links = []
@@ -97,23 +93,19 @@ class ConsolidationHandler:
             all_outbound_links.extend(memory.outbound_links)
             all_entity_links.extend(memory.entity_links)
 
-        # Step 4: Deduplicate links (exclude self-references, keep most recent)
         old_memory_id_strs = {str(mid) for mid in old_memory_ids}
 
-        # Deduplicate inbound links by UUID, keeping most recent link
         unique_inbound = {}
         for link in all_inbound_links:
             uuid = link['uuid']
             if uuid in old_memory_id_strs:
-                continue  # Skip self-references to old memories
+                continue
             if uuid not in unique_inbound:
                 unique_inbound[uuid] = link
             else:
-                # Keep most recent link
                 if link.get('created_at', '') > unique_inbound[uuid].get('created_at', ''):
                     unique_inbound[uuid] = link
 
-        # Deduplicate outbound links by UUID, keeping most recent link
         unique_outbound = {}
         for link in all_outbound_links:
             uuid = link['uuid']
@@ -122,11 +114,9 @@ class ConsolidationHandler:
             if uuid not in unique_outbound:
                 unique_outbound[uuid] = link
             else:
-                # Keep most recent link
                 if link.get('created_at', '') > unique_outbound[uuid].get('created_at', ''):
                     unique_outbound[uuid] = link
 
-        # Deduplicate entity links by UUID
         unique_entities = {
             link['uuid']: link for link in all_entity_links
         }
@@ -136,7 +126,6 @@ class ConsolidationHandler:
             f"{len(unique_outbound)} outbound, {len(unique_entities)} entities"
         )
 
-        # Step 5: Preserve segment provenance from source memories
         # Pick earliest source segment for primary tracing column;
         # full set is recorded in the consolidation annotation.
         source_segment_ids = [
@@ -153,14 +142,12 @@ class ConsolidationHandler:
             )
             earliest_segment_id = segment_by_created[0][1]
 
-        # Step 5b: Create consolidated memory with median importance
         consolidated_memory = ExtractedMemory(
             text=consolidated_text,
             importance_score=median_importance,
             source_segment_id=earliest_segment_id,
         )
 
-        # Step 6: Store consolidated memory with embeddings
         new_ids = self.vector_ops.store_memories_with_embeddings(
             [consolidated_memory]
         )
@@ -171,7 +158,6 @@ class ConsolidationHandler:
         new_memory_id = new_ids[0]
         new_memory_id_str = str(new_memory_id)
 
-        # Step 7: Transfer link bundles to new consolidated memory
         if unique_inbound or unique_outbound or unique_entities:
             self.db.update_memory(new_memory_id, {
                 'inbound_links': list(unique_inbound.values()),
@@ -185,8 +171,7 @@ class ConsolidationHandler:
                 f"{len(unique_entities)} entities"
             )
 
-        # Step 7b: Carry access stats from merged memories (min activity-days
-        # is the most conservative decay position)
+        # Min activity-days is the most conservative decay position
         last_accessed = max(
             (m.last_accessed for m in old_memories if m.last_accessed),
             default=None
@@ -203,7 +188,6 @@ class ConsolidationHandler:
             'activity_days_at_last_access': activity_days,
         }, user_id=user_id)
 
-        # Step 7c: Store merge note as annotation (includes segment provenance)
         if merge_note:
             source_uuids = [str(mid) for mid in old_memory_ids]
             annotation: Dict[str, Any] = {
@@ -219,8 +203,7 @@ class ConsolidationHandler:
                 'annotations': [annotation]
             }, user_id=user_id)
 
-        # Step 8: Rewrite links in affected memories to point at the new
-        # memory. Outbound side: memories that linked TO old memories.
+        # Outbound side: memories that linked TO old memories.
         # Inbound side: targets of the old memories' outbound links still
         # record the old (soon-archived) ids in their inbound_links.
         affected_ids = {
@@ -247,9 +230,8 @@ class ConsolidationHandler:
                 else:
                     rewritten_outbound.append(link)
             if rewritten_outbound != affected.outbound_links:
-                # Links to multiple consolidated sources collapse onto the
-                # single new target; write the (memory, link) pair once.
-                # Keep the most recent link, mirroring the Step 4 dedupe.
+                # Links to multiple consolidated sources collapse onto the single
+                # new target; keep the most recent link (mirrors the Step 4 dedupe).
                 deduped_outbound = []
                 for link in rewritten_outbound:
                     if link['uuid'] == new_memory_id_str:
@@ -297,7 +279,6 @@ class ConsolidationHandler:
         if affected_ids:
             logger.debug(f"Rewrote links for {len(affected_ids)} affected memories")
 
-        # Step 9: Archive the old memories
         for old_id in old_memory_ids:
             self.db.archive_memory(old_id, user_id=user_id)
 

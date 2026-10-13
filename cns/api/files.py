@@ -22,9 +22,7 @@ router = APIRouter()
 
 FILE_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
 
-# MIME types safe to render inline on MIRA's authenticated origin. Anything
-# outside this set (e.g. a provider-supplied text/html artifact) is forced to
-# a download as application/octet-stream so it cannot execute as stored XSS.
+# Anything outside this set is forced to application/octet-stream so a provider text/html cannot execute as stored XSS.
 INLINE_IMAGE_MIME_TYPES = frozenset({
     "image/png",
     "image/jpeg",
@@ -32,8 +30,7 @@ INLINE_IMAGE_MIME_TYPES = frozenset({
     "image/webp",
 })
 
-# Characters permitted in the Content-Disposition filename parameter; strips
-# quotes/newlines from the provider-supplied filename to prevent header injection.
+# Strips quotes/newlines from the provider-supplied filename to prevent header injection.
 FILENAME_SAFE_PATTERN = re.compile(r'[^\w.()\- ]')
 
 
@@ -55,7 +52,6 @@ def download_file(
     if not base_dir.is_dir():
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Find the .bin (content) and .meta (metadata) files
     bin_files = list(base_dir.glob("*.bin"))
     meta_files = list(base_dir.glob("*.meta"))
     if not bin_files or not meta_files:
@@ -65,7 +61,6 @@ def download_file(
     # Path traversal guard — resolved path must be within base_dir
     file_path.relative_to(base_dir)
 
-    # Read original filename from metadata sidecar
     meta: dict[str, str] = json.loads(meta_files[0].read_text())
     original_filename = meta.get("filename", "download")
 
@@ -110,8 +105,7 @@ def view_image(
 
     meta: dict[str, str] = json.loads(meta_files[0].read_text())
     mime_type = (meta.get("mime_type") or "").strip().lower()
-    # Never trust the stored MIME for inline rendering: only whitelisted image
-    # types keep inline disposition; everything else is a forced download.
+    # Never trust the stored MIME for inline rendering: only whitelisted image types stay inline; everything else is a forced download.
     safe_filename = FILENAME_SAFE_PATTERN.sub("_", meta.get("filename", "image"))
     if mime_type in INLINE_IMAGE_MIME_TYPES:
         disposition = f'inline; filename="{safe_filename}"'

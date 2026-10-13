@@ -134,7 +134,6 @@ class OpenAIDialect(OpenAIChatBase):
             ))
             effort = applied
         elif effort is not None and thinking.budget_tokens is not None:
-            # Both set; effort wins. Note the discarded budget so operators see it.
             self._log_translation(TranslationNote(
                 field="budget_tokens",
                 requested=thinking.budget_tokens,

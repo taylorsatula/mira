@@ -60,7 +60,6 @@ def sanitize_entity_list(entities: Any) -> List[Dict[str, str]]:
             continue
         if not isinstance(entity['name'], str) or not isinstance(entity['type'], str):
             continue
-        # Normalize entity name (strip whitespace)
         entity['name'] = entity['name'].strip()
         if len(entity['name']) < 2:
             continue
@@ -209,27 +208,21 @@ class MemoryProcessor:
                 ValueError subclass) — the segment must NOT be marked extracted
             ValueError: If response parsing fails catastrophically
         """
-        # Step 1: Parse JSON response
         memories_data = self._parse_extraction_response(response_text)
 
-        # Step 2: Remap shortened UUIDs to full UUIDs
         memories_data = self._remap_short_ids_to_full(memories_data, short_to_uuid)
 
-        # Step 3: Validate and deduplicate memories
         # Timezone resolved once for the whole response, before the loop, so a
         # preferences outage degrades to UTC here instead of failing each memory.
         extraction_tz = _resolve_extraction_timezone()
 
-        # Track index mapping: original LLM response index → filtered list index
         extracted_memories = []
         original_to_filtered_idx = {}
 
         for original_idx, memory_dict in enumerate(memories_data):
-            # Validate structure
             if not self._validate_extracted_memory(memory_dict):
                 continue
 
-            # Check for duplicates
             is_duplicate, similarity, duplicate_id = self._is_duplicate_memory(
                 memory_dict,
                 memory_context
@@ -270,7 +263,6 @@ class MemoryProcessor:
                 source_segment_id=UUID(segment_id) if segment_id else None,
             )
 
-            # Track mapping from original index to filtered index
             filtered_idx = len(extracted_memories)
             original_to_filtered_idx[original_idx] = filtered_idx
             extracted_memories.append(extracted_memory)
@@ -323,17 +315,14 @@ class MemoryProcessor:
                 "response (e.g. []) is required to mark a segment extracted"
             )
 
-        # Try parsing as-is first (handles compliant responses)
         try:
             parsed = json.loads(response_text)
 
-            # Handle different response formats
             if isinstance(parsed, list):
                 if not self._validate_memory_list_structure(parsed):
                     raise LLMResponseFormatError("Parsed list contains invalid memory structures")
                 return parsed
             elif isinstance(parsed, dict):
-                # Single memory object or {"memories": [...]} wrapper
                 if "memories" in parsed:
                     memories = parsed["memories"]
                     if isinstance(memories, list):
@@ -351,7 +340,6 @@ class MemoryProcessor:
                             "{\"memories\": []}"
                         )
                     else:
-                        # Genuine empty (null, "", 0, {})
                         return []
                 else:
                     # Single memory object — must be a well-formed memory dict,
@@ -377,7 +365,6 @@ class MemoryProcessor:
                     "LLM extraction response contained only whitespace"
                 )
 
-            # Log the actual error with the first part of the response for debugging
             logger.warning(f"JSON parsing failed: {e}")
             logger.debug(f"Response text (first 200 chars): {response_text[:200]!r}")
 
@@ -385,7 +372,6 @@ class MemoryProcessor:
             try:
                 repaired = repair_json(response_text)
 
-                # Check if repair actually changed something
                 if repaired == response_text:
                     logger.error(
                         f"json_repair could not repair response (returned unchanged). "
@@ -399,7 +385,6 @@ class MemoryProcessor:
                 parsed = json.loads(repaired)
                 logger.debug("Successfully repaired malformed JSON")
 
-                # Handle repaired response formats
                 if isinstance(parsed, list):
                     if not self._validate_memory_list_structure(parsed):
                         logger.debug(f"Repaired JSON has invalid structure: {parsed}")
@@ -422,10 +407,8 @@ class MemoryProcessor:
                                 "response is {\"memories\": []}"
                             )
                         else:
-                            # Genuine empty (null, "", 0, {})
                             return []
                     else:
-                        # Single memory object — must be well-formed
                         if not self._validate_memory_list_structure([parsed]):
                             logger.debug(f"Repaired JSON object not a memory dict: {parsed}")
                             raise LLMResponseFormatError(
@@ -439,7 +422,6 @@ class MemoryProcessor:
                     )
 
             except json.JSONDecodeError as e:
-                # Even after repair, still not valid JSON - this is an error
                 logger.error(
                     f"Repaired response still not valid JSON: {e}. "
                     f"Repaired text (first 200 chars): {repaired[:200]!r}"
@@ -448,7 +430,6 @@ class MemoryProcessor:
                     f"LLM response invalid even after json_repair attempt: {e}"
                 ) from e
             except Exception as repair_error:
-                # Unexpected error during repair - propagate it
                 logger.error(f"Unexpected error during JSON repair: {repair_error}")
                 raise LLMResponseFormatError(
                     f"JSON repair failed with unexpected error: {repair_error}"
@@ -526,7 +507,6 @@ class MemoryProcessor:
             for key, full in short_to_full.items()
         }
         for memory_dict in memories_data:
-            # Remap related_memory_ids: remap id field inside dicts, drop unresolved
             if "related_memory_ids" in memory_dict:
                 related_ids = memory_dict["related_memory_ids"]
                 if isinstance(related_ids, list):
@@ -565,12 +545,10 @@ class MemoryProcessor:
         Returns:
             True if valid (possibly after fixes), False if unrecoverable
         """
-        # REJECT: Not a dictionary (defensive type guard)
         if not isinstance(memory_dict, dict):
             logger.warning(f"Rejecting memory: expected dict, got {type(memory_dict).__name__}")
             return False
 
-        # REJECT: Missing or invalid text (unrecoverable)
         if not memory_dict.get("text"):
             logger.warning("Rejecting memory: no text field")
             return False
@@ -579,17 +557,15 @@ class MemoryProcessor:
             logger.warning(f"Rejecting memory: text is {type(memory_dict['text'])}, not string")
             return False
 
-        # REJECT: Text too short (unrecoverable)
         text = memory_dict["text"].strip()
         if len(text) < 10:
             logger.warning(f"Rejecting memory: text too short ({len(text)} chars): {text}")
             return False
 
-        # FIX (drop-malformed): related_memory_ids are optional links; the
-        # segment is already collapsed, so rejecting the memory here loses it
-        # permanently. Drop the malformed entry with a WARNING and keep the
-        # rest of the memory — same tolerate-and-filter shape as the
-        # entities block below.
+        # related_memory_ids are optional links; the segment is already
+        # collapsed, so rejecting the memory here loses it permanently.
+        # Drop the malformed entry with a WARNING and keep the rest of the
+        # memory — same tolerate-and-filter shape as the entities block below.
         if "related_memory_ids" in memory_dict:
             refs = memory_dict["related_memory_ids"]
             if not isinstance(refs, list):
@@ -610,7 +586,6 @@ class MemoryProcessor:
                         )
                 memory_dict["related_memory_ids"] = valid_refs
 
-        # FIX: Validate numeric fields with fallbacks
         if "importance_score" in memory_dict:
             importance = memory_dict["importance_score"]
             if not isinstance(importance, (int, float)) or not (0.0 <= importance <= 1.0):
@@ -648,7 +623,7 @@ class MemoryProcessor:
         if not memory_text:
             return DuplicateCheckResult(False, None, None)
 
-        # Stage 1: Fuzzy text matching (wider net than exact, cheaper than vector)
+        # Fuzzy text matching (wider net than exact, cheaper than vector)
         if memory_context:
             context_texts = memory_context.get("memory_texts", [])
 
@@ -658,7 +633,6 @@ class MemoryProcessor:
                     if not existing_text:
                         continue
 
-                    # Use rapidfuzz for fuzzy matching
                     similarity = fuzz.ratio(existing_text.strip(), memory_text) / 100.0
                     if similarity >= 0.95:  # High fuzzy threshold for near-duplicates
                         logger.debug(
@@ -667,7 +641,6 @@ class MemoryProcessor:
                         )
                         return DuplicateCheckResult(True, similarity, memory_id)
 
-        # Stage 2: Vector similarity search
         similar_memories = self.vector_ops.find_similar_for_dedup(
             query_text=memory_text,
             limit=5,
@@ -678,7 +651,6 @@ class MemoryProcessor:
         if not similar_memories:
             return DuplicateCheckResult(False, None, None)
 
-        # Extract best match score and ID
         best_score = None
         best_memory_id = None
 
@@ -688,7 +660,6 @@ class MemoryProcessor:
                 best_score = score
                 best_memory_id = memory.id
 
-        # Fallback if no scores extracted
         if best_score is None:
             best_score = DEDUP_SIMILARITY_THRESHOLD
             if similar_memories:

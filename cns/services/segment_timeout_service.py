@@ -68,10 +68,8 @@ class SegmentTimeoutService:
         try:
             logger.debug("Starting segment timeout check")
 
-            # Clear timezone cache for fresh data
             self._user_timezone_cache.clear()
 
-            # Find all active segment sentinels (raises on database failure)
             active_segments = self._get_active_segments()
 
             if not active_segments:
@@ -84,7 +82,6 @@ class SegmentTimeoutService:
             current_time = utc_now()
 
             for segment in active_segments:
-                # Check if segment has timed out
                 if self._is_timed_out(segment, current_time):
                     # Held lock means a turn is in flight: turn persistence is
                     # atomic, so an uncommitted turn is invisible to the
@@ -105,7 +102,6 @@ class SegmentTimeoutService:
                         )
                         continue
 
-                    # Publish timeout event
                     self._publish_timeout_event(segment, current_time)
                     timeouts_published += 1
 
@@ -121,7 +117,7 @@ class SegmentTimeoutService:
 
         except Exception as e:
             # Explicitly log full exception details before re-raising
-            # (journalctl may suppress APScheduler's traceback)
+            # (Observed: journalctl suppressed APScheduler's traceback)
             logger.error(
                 f"Segment timeout check failed: {type(e).__name__}: {e}",
                 exc_info=True
@@ -138,7 +134,6 @@ class SegmentTimeoutService:
         Raises:
             RuntimeError: If database query fails
         """
-        # Admin query - need to see all users' segments
         return self.continuum_repository.find_all_active_segments_admin()
 
     def _get_user_timezone(self, user_id: str) -> str:
@@ -154,24 +149,20 @@ class SegmentTimeoutService:
         Raises:
             Exception: If database query fails (infrastructure issue)
         """
-        # Check cache first
         if user_id in self._user_timezone_cache:
             return self._user_timezone_cache[user_id]
 
-        # Query from database - raises on infrastructure failure
         with self.session_manager.get_admin_session() as session:
             row = session.execute_single(
                 "SELECT timezone FROM users WHERE id = %s",
                 (user_id,)
             )
 
-            # User has configured timezone
             if row and row.get('timezone'):
                 timezone = row['timezone']
                 self._user_timezone_cache[user_id] = timezone
                 return timezone
 
-        # User has no timezone configured - system default is correct fallback
         default_tz = config.system.timezone
         self._user_timezone_cache[user_id] = default_tz
         logger.debug(f"User {user_id} has no timezone configured, using system default: {default_tz}")
@@ -190,13 +181,10 @@ class SegmentTimeoutService:
         """
         end_time = self._segment_activity_anchor(segment)
 
-        # Calculate inactive duration
         inactive_duration = current_time - end_time
         inactive_minutes = inactive_duration.total_seconds() / 60
 
-        # Time-of-day aware staleness threshold, evaluated in the segment
-        # owner's local time. Optional per-window overrides fall back to the
-        # base segment_timeout when unset.
+        # Optional per-window overrides fall back to the base segment_timeout when unset.
         threshold = config.system.segment_timeout
         user_tz = self._get_user_timezone(segment['user_id'])
         local_hour = convert_from_utc(current_time, user_tz).hour
@@ -205,7 +193,6 @@ class SegmentTimeoutService:
         elif 23 <= local_hour or local_hour <= 6:
             threshold = config.system.segment_timeout_late_night or threshold
 
-        # Check if timeout exceeded
         timed_out = inactive_minutes >= threshold
 
         if timed_out:
@@ -226,12 +213,10 @@ class SegmentTimeoutService:
         Single source for the timeout decision and the published event's
         inactive_duration_minutes: the two must agree by construction.
         """
-        # Query for last message in segment, keyed on the segment's own
-        # identity. Messages of OTHER segments are not this segment's
-        # activity and must not feed its timeout decision (a stranded
-        # mid-collapse sentinel whose recovery re-match computed end_time
-        # from a successor's fresh messages never looked timed out, so the
-        # stale claim was never re-claimed).
+        # Keyed on the segment's own identity (see _get_last_message_time):
+        # a stranded sentinel whose end_time once came from a successor's
+        # messages never looked timed out, so the stale claim was never
+        # re-claimed.
         end_time = self._get_last_message_time(
             segment['continuum_id'],
             segment['user_id'],
@@ -239,19 +224,16 @@ class SegmentTimeoutService:
         )
 
         if not end_time:
-            # No messages found — use sentinel creation time as last activity.
-            # Lets orphaned segments (empty, lost messages, race conditions)
-            # reach the collapse handler's tombstone circuit breaker naturally.
+            # Sentinel creation time lets orphaned segments (empty, lost
+            # messages, race conditions) reach the collapse handler's
+            # tombstone circuit breaker naturally.
             end_time = segment['created_at']
 
         # last_turn_at is a bounded crash grace, not the live-turn guard (the
         # lock probe in check_timeouts owns that): a turn that died without
-        # committing (process death, failed commit) leaves the arrival stamp
-        # (increment_segment_turn) as the only fresher-than-committed signal
-        # once its lock expires; without this read such a segment collapses
-        # on stale committed messages alone. A malformed stamp is a
-        # per-segment fault and must not abort the whole sweep cycle for
-        # every user; warn and treat as absent.
+        # committing leaves the arrival stamp (increment_segment_turn) as the
+        # only fresher-than-committed signal once its lock expires; without
+        # this read such a segment collapses on stale committed messages alone.
         last_turn_at_str = segment['metadata'].get('last_turn_at')
         if last_turn_at_str:
             try:
@@ -307,7 +289,6 @@ class SegmentTimeoutService:
                 LIMIT 1
             """, (continuum_id, user_id, segment_id))
 
-            # Database returns datetime objects directly (no normalization to strings)
             if row and row.get('created_at'):
                 return row['created_at']
             return None
@@ -323,21 +304,20 @@ class SegmentTimeoutService:
         metadata = segment['metadata']
         segment_id = metadata.get('segment_id')
 
-        # Same anchor helper as the timeout decision, so the reported
-        # inactive_duration_minutes agrees with the decision basis exactly.
+        # Same anchor helper as the timeout decision (agreement invariant: see
+        # its docstring).
         end_time = self._segment_activity_anchor(segment)
 
-        # Calculate inactive duration
         inactive_duration = current_time - end_time
         inactive_minutes = int(inactive_duration.total_seconds() / 60)
 
-        # Get local hour for event metadata (even though not used for threshold)
         user_id = segment['user_id']
         user_tz = self._get_user_timezone(user_id)
         local_time = convert_from_utc(current_time, user_tz)
         local_hour = local_time.hour
 
-        # Publish event
+        # Get local hour for event metadata (even though not used for threshold)
+
         event = SegmentTimeoutEvent.create(
             continuum_id=segment['continuum_id'],
             user_id=user_id,
@@ -354,7 +334,6 @@ class SegmentTimeoutService:
         )
 
 
-# Singleton instance
 _timeout_service = None
 
 
@@ -384,9 +363,7 @@ def register_timeout_job(scheduler_service, event_bus: EventBus) -> None:
 
     timeout_service = get_timeout_service(event_bus)
 
-    # Wrap with monitoring and timeout. The ceiling comes from
-    # config.scheduled_jobs.job_timeout_seconds so operators can tune it per
-    # deployment; keep it below the 5-minute interval to avoid overlapping runs.
+    # Keep the ceiling below the 5-minute interval to avoid overlapping runs.
     monitored_check_timeouts = ScheduledTaskMonitor.wrap_scheduled_job(
         job_id="segment_timeout_detection",
         func=timeout_service.check_timeouts,

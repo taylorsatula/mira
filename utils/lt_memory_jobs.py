@@ -31,11 +31,7 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> None:
     extraction_orchestrator = lt_memory_factory.extraction_orchestrator
     jobs_config = config.scheduled_jobs
 
-    # ================================================================
-    # Calendar-based jobs (not use-day gated)
-    # ================================================================
 
-    # Extraction retry sweep (6-hour intervals)
     scheduler_service.register_job(
         job_id="lt_memory_extract_unprocessed_segments",
         func=extraction_orchestrator.extract_unprocessed_segments,
@@ -45,11 +41,7 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> None:
     )
     logger.info("Registered extraction retry sweep (%dh interval)", jobs_config.extraction_retry_hours)
 
-    # ================================================================
     # Use-day-gated jobs (daily tick, filtered by modular arithmetic)
-    # ================================================================
-
-    # Temporal score recalculation
     def run_temporal_score_recalculation():
         from utils.user_context import set_current_user_id, clear_user_context
         from utils.scheduled_tasks import get_users_due_for_job
@@ -80,7 +72,6 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> None:
     )
     logger.info("Registered temporal score recalculation (every %d use-days)", jobs_config.temporal_score_recalc_use_days)
 
-    # Bulk score recalculation
     def run_bulk_score_recalculation():
         from utils.user_context import set_current_user_id, clear_user_context
         from utils.scheduled_tasks import get_users_due_for_job
@@ -111,7 +102,6 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> None:
     )
     logger.info("Registered bulk score recalculation (every %d use-days)", jobs_config.bulk_score_recalc_use_days)
 
-    # Entity merge — background LLM-driven dedup of similar entity rows
     def run_entity_merge_for_due_users():
         from utils.user_context import set_current_user_id, clear_user_context
         from utils.scheduled_tasks import get_users_due_for_job

@@ -36,7 +36,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from clients.lattice_client import LatticeIdentity
 
-# Define configuration class for PagerTool
 class PagerToolConfig(BaseModel):
     """Configuration for the pager_tool."""
     enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
@@ -44,7 +43,6 @@ class PagerToolConfig(BaseModel):
     max_message_length: int = Field(default=300, description="Maximum message length")
     ai_distillation_enabled: bool = Field(default=True, description="Whether to use AI for message distillation")
 
-# Register with registry
 registry.register("pager_tool", PagerToolConfig)
 
 
@@ -285,10 +283,8 @@ class PagerTool(Tool):
         super().__init__()
         self.llm = get_llm_provider()
         
-        # Initialize logger
         self.logger = logging.getLogger(__name__)
         
-        # Get config
         tool_config = config.get_tool_config(self.name)
         self.default_expiry_hours = tool_config.default_expiry_hours
         self.max_message_length = tool_config.max_message_length
@@ -343,7 +339,6 @@ class PagerTool(Tool):
                         'duplicate': True
                     }
 
-            # Look up the user's single active pager device
             pager_devices = self.db.select(
                 'pager_devices',
                 'user_id = :user_id AND active = :active',
@@ -355,10 +350,8 @@ class PagerTool(Tool):
 
             pager_id = pager_devices[0]['id']
 
-            # Generate message ID
             message_id = f"msg_{uuid.uuid4().hex[:8]}"
 
-            # Create federated message record
             message_data = {
                 'id': message_id,
                 'user_id': self.user_id,
@@ -373,7 +366,7 @@ class PagerTool(Tool):
                 'expires_at': (utc_now() + timedelta(hours=24)).isoformat(),
                 'delivered': 1,
                 'read': 0,
-                'sender_fingerprint': 'FEDERATED',  # Mark as federated source
+                'sender_fingerprint': 'FEDERATED',
                 'message_signature': '',  # No signature for federated messages
                 'external_message_id': external_message_id
             }
@@ -552,7 +545,6 @@ class PagerTool(Tool):
            - Returns: Dict with cleanup stats
         """
         try:
-            # Route to the appropriate operation
             if operation == "register_device":
                 return self._register_device(**kwargs)
             elif operation == "send_message":
@@ -609,22 +601,18 @@ class PagerTool(Tool):
             ValueError: If required fields are missing
         """
 
-        # Validate required parameters
         if not device_name:
             self.logger.error("Name is required for registering a pager device")
             raise ValueError("Name is required for registering a pager device")
 
-        # Generate a unique pager ID
         pager_id = f"dev_{uuid.uuid4().hex[:8]}"
 
-        # Generate device secret and fingerprint
         device_secret = f"SECRET-{uuid.uuid4().hex[:32].upper()}"
-        # Fingerprint is hash of device ID + secret (like SSH host key fingerprint)
+        # Like an SSH host key fingerprint: identifies the device by its credential
         device_fingerprint = hashlib.sha256(
             f"{pager_id}{device_secret}".encode()
         ).hexdigest()[:16].upper()
 
-        # Insert device into database
         try:
             device_data = {
                 "id": pager_id,
@@ -639,7 +627,6 @@ class PagerTool(Tool):
             }
 
             _ = self.db.insert('pager_devices', device_data)
-            # Get the inserted row
             result = self.db.select('pager_devices', 'id = :pager_id', {'pager_id': pager_id})[0]
 
         except Exception as e:
@@ -696,7 +683,6 @@ class PagerTool(Tool):
         Raises:
             ValueError: If username invalid or already taken
         """
-        # Validate username format
         if not username:
             raise ValueError("Username is required")
 
@@ -711,7 +697,6 @@ class PagerTool(Tool):
         if len(username) > 20:
             raise ValueError("Username must be at most 20 characters")
 
-        # Check if user already has a username (MIRA's user registry)
         from clients.postgres_client import PostgresClient
         postgres_db = PostgresClient("mira_service")
 
@@ -731,7 +716,6 @@ class PagerTool(Tool):
                 f"Each user can only have one username."
             )
 
-        # Check if username is available
         availability = postgres_db.execute_single(
             """
             SELECT user_id
@@ -745,7 +729,6 @@ class PagerTool(Tool):
         if availability:
             raise ValueError(f"Username '{username}' is already taken")
 
-        # Register the username
         try:
             postgres_db.execute_insert(
                 """
@@ -755,7 +738,6 @@ class PagerTool(Tool):
                 {'username': username, 'user_id': self.user_id}
             )
 
-            # Get our server's domain from Lattice
             try:
                 identity = self._get_lattice_identity()
                 federated_address = f"{username}@{identity['server_id']}"
@@ -791,7 +773,6 @@ class PagerTool(Tool):
         from clients.postgres_client import PostgresClient
         postgres_db = PostgresClient("mira_service")
 
-        # Resolve username to user_id via global_usernames
         username_result = postgres_db.execute_single(
             """
             SELECT user_id
@@ -843,7 +824,6 @@ class PagerTool(Tool):
         Returns:
             Dict with message delivery status
         """
-        # Verify sender device
         sender = self.db.select(
             'pager_devices',
             'id = :sender_id',
@@ -853,11 +833,9 @@ class PagerTool(Tool):
             raise ValueError("Sender device not found or inactive")
         sender = sender[0]
 
-        # Get our server's domain from Lattice
         identity = self._get_lattice_identity()
         our_domain = identity['server_id']
 
-        # Get username for this user (from MIRA's user registry)
         from clients.postgres_client import PostgresClient
         postgres_db = PostgresClient("mira_service")
 
@@ -876,7 +854,6 @@ class PagerTool(Tool):
 
         from_address = f"{username_result['username']}@{our_domain}"
 
-        # Convert location string to dict if provided
         location_dict = None
         if location:
             try:
@@ -884,7 +861,6 @@ class PagerTool(Tool):
             except Exception:
                 location_dict = {'raw': location}
 
-        # Send via Lattice HTTP client
         from clients.lattice_client import get_lattice_client
 
         client = get_lattice_client()
@@ -947,7 +923,6 @@ class PagerTool(Tool):
             ValueError: If recipient not found or parameters invalid
         """
 
-        # Route federated messages through federation adapter
         if '@' in recipient:
             return self._send_federated_message(
                 sender_pager_id=sender_id,
@@ -961,17 +936,14 @@ class PagerTool(Tool):
         # (resolved against the recipient's per-user store, not ours)
         recipient_pager_id, recipient_db = self._resolve_recipient_to_pager_id(recipient)
 
-        # Validate required parameters
         if not all([sender_id, recipient_pager_id, content]):
             self.logger.error("sender_id, recipient, and content are required for send_message")
             raise ValueError("sender_id, recipient, and content are required")
 
-        # Validate priority
         if priority not in [0, 1, 2]:
             self.logger.error(f"Invalid priority: {priority}. Must be 0, 1, or 2")
             raise ValueError("Priority must be 0 (normal), 1 (high), or 2 (urgent)")
 
-        # Get sender and recipient devices
         sender = self.db.select(
             'pager_devices',
             'id = :sender_id',
@@ -992,7 +964,6 @@ class PagerTool(Tool):
             raise ValueError("Recipient pager not found or inactive")
         recipient_device = recipient_device[0]
             
-        # Update sender's last active time
         self.db.update(
             'pager_devices',
             {'last_active': utc_now().isoformat()},
@@ -1000,7 +971,6 @@ class PagerTool(Tool):
             {'sender_id': sender_id}
         )
         
-        # Check if content needs distillation
         original_content = None
         ai_distilled = False
         
@@ -1012,21 +982,16 @@ class PagerTool(Tool):
                 content = self._distill_message(content, max_length)
                 ai_distilled = True
             else:
-                # Enforce character limit for human messages without AI
                 raise ValueError(f"Message too long: {len(content)} characters (max {max_length})")
             
-        # Calculate expiry time
         expires_at = utc_now() + timedelta(hours=expiry_hours)
         
-        # Generate message ID
         message_id = f"msg_{uuid.uuid4().hex[:8]}"
         
-        # Create message signature using device secret
         message_signature = hashlib.sha256(
             f"{message_id}{sender['device_secret']}{content}{recipient_pager_id}".encode()
         ).hexdigest()[:16].upper()
         
-        # Create the message data
         message_data = {
             "id": message_id,
             "user_id": self.user_id,
@@ -1045,10 +1010,8 @@ class PagerTool(Tool):
             "sender_fingerprint": sender['device_fingerprint']
         }
         
-        # Save message to database
         try:
             _ = self.db.insert('pager_messages', message_data)
-            # Get the inserted message
             message_result = self.db.select('pager_messages', 'id = :message_id', {'message_id': message_id})[0]
             self.logger.info(f"Sent message with ID: {message_id}")
         except Exception as e:
@@ -1089,7 +1052,6 @@ class PagerTool(Tool):
         """
         self.logger.info(f"Getting received messages for pager {pager_id}")
         
-        # Validate device exists
         device = self.db.select(
             'pager_devices',
             'id = :pager_id',
@@ -1099,7 +1061,6 @@ class PagerTool(Tool):
             raise ValueError(f"Pager device '{pager_id}' not found")
         device = device[0]
             
-        # Update last active time
         self.db.update(
             'pager_devices',
             {'last_active': utc_now().isoformat()},
@@ -1107,7 +1068,6 @@ class PagerTool(Tool):
             {'pager_id': pager_id}
         )
         
-        # Query messages
         query = """
         SELECT m.*,
                s.encrypted__name as encrypted__sender_name,
@@ -1129,17 +1089,14 @@ class PagerTool(Tool):
         query += " AND m.expires_at > :current_time"
         params['current_time'] = utc_now().isoformat()
             
-        # Sort by sent time descending (newest first)
         query += " ORDER BY m.sent_at DESC"
         
         messages = self.db.execute(query, params)
         
-        # Check trust status for each message
         message_list = []
         for msg in messages:
             msg_dict = self._message_to_dict(msg)
             
-            # Check if we trust this sender
             trust_status = self._check_trust_status(
                 pager_id, 
                 msg['sender_id'], 
@@ -1197,7 +1154,6 @@ class PagerTool(Tool):
         """
         self.logger.info(f"Getting sent messages for pager {pager_id}")
         
-        # Validate device exists
         device = self.db.select(
             'pager_devices',
             'id = :pager_id',
@@ -1207,7 +1163,6 @@ class PagerTool(Tool):
             raise ValueError(f"Pager device '{pager_id}' not found")
         device = device[0]
             
-        # Query messages
         query = """
         SELECT m.*,
                s.encrypted__name as encrypted__sender_name,
@@ -1223,7 +1178,6 @@ class PagerTool(Tool):
             query += " AND m.expires_at > :current_time"
             params['current_time'] = utc_now().isoformat()
             
-        # Sort by sent time descending (newest first)
         query += " ORDER BY m.sent_at DESC"
         
         messages = self.db.execute(query, params)
@@ -1254,7 +1208,6 @@ class PagerTool(Tool):
         """
         self.logger.info(f"Marking message {message_id} as read")
         
-        # Get the message
         messages = self.db.select(
             'pager_messages',
             'id = :message_id',
@@ -1264,7 +1217,6 @@ class PagerTool(Tool):
             raise ValueError(f"Message with ID '{message_id}' not found")
         message = messages[0]
             
-        # Update message
         read_at = utc_now().isoformat()
         _ = self.db.update(
             'pager_messages',
@@ -1273,7 +1225,6 @@ class PagerTool(Tool):
             {'message_id': message_id}
         )
         
-        # Update recipient device's last active time
         self.db.update(
             'pager_devices',
             {'last_active': utc_now().isoformat()},
@@ -1281,7 +1232,6 @@ class PagerTool(Tool):
             {'recipient_id': message['recipient_id']}
         )
         
-        # Get updated message for response
         updated_messages = self.db.select(
             'pager_messages',
             'id = :message_id',
@@ -1310,7 +1260,6 @@ class PagerTool(Tool):
         """
         self.logger.info(f"Getting pager devices (active_only={active_only})")
         
-        # Query devices
         if active_only:
             devices = self.db.select(
                 'pager_devices',
@@ -1321,7 +1270,6 @@ class PagerTool(Tool):
             devices = self.db.select('pager_devices')
         device_list = [self._device_to_dict(device) for device in devices]
         
-        # Sort by last active descending
         device_list.sort(key=lambda x: x.get('last_active', ''), reverse=True)
         
         return {
@@ -1347,7 +1295,6 @@ class PagerTool(Tool):
         """
         self.logger.info(f"Deactivating pager device {pager_id}")
         
-        # Get the device
         devices = self.db.select(
             'pager_devices',
             'id = :pager_id',
@@ -1356,7 +1303,6 @@ class PagerTool(Tool):
         if not devices:
             raise ValueError(f"Pager device '{pager_id}' not found")
             
-        # Update device
         self.db.update(
             'pager_devices',
             {'active': 0},
@@ -1366,7 +1312,6 @@ class PagerTool(Tool):
         
         self.logger.info(f"Deactivated pager device {pager_id}")
         
-        # Get updated device for response
         updated_devices = self.db.select(
             'pager_devices',
             'id = :pager_id',
@@ -1395,7 +1340,6 @@ class PagerTool(Tool):
         """
         self.logger.info("Cleaning up expired messages")
         
-        # Count expired messages first
         current_time = utc_now().isoformat()
         expired_messages = self.db.select(
             'pager_messages',
@@ -1404,7 +1348,6 @@ class PagerTool(Tool):
         )
         expired_count = len(expired_messages)
         
-        # Delete expired messages
         if expired_count > 0:
             self.db.execute(
                 'DELETE FROM pager_messages WHERE expires_at < :current_time',
@@ -1445,7 +1388,6 @@ Provide ONLY the distilled message, no explanations or meta-text."""
 
             distilled = self.llm.extract_text_content(response).strip()
             
-            # Ensure it fits within max_length
             if len(distilled) > max_length:
                 distilled = distilled[:max_length-3] + "..."
                 
@@ -1453,7 +1395,6 @@ Provide ONLY the distilled message, no explanations or meta-text."""
             
         except Exception as e:
             self.logger.warning(f"AI distillation failed: {e}, truncating instead")
-            # Fallback to simple truncation
             return content[:max_length-3] + "..."
     
     def _check_trust_status(self, trusting_device_id: str, sender_id: str, sender_fingerprint: str) -> str:
@@ -1468,7 +1409,6 @@ Provide ONLY the distilled message, no explanations or meta-text."""
         Returns:
             Trust status: "trusted", "untrusted", "conflicted", or "first_contact"
         """
-        # Query for existing trust relationship
         trusts = self.db.select(
             'pager_trust',
             'trusting_device_id = :trusting_device_id AND trusted_device_id = :trusted_device_id',
@@ -1476,7 +1416,6 @@ Provide ONLY the distilled message, no explanations or meta-text."""
         )
         
         if not trusts or len(trusts) == 0:
-            # First contact - add to trust store
             self._add_trust_relationship(trusting_device_id, sender_id, sender_fingerprint)
             return "first_contact"
         
@@ -1504,7 +1443,6 @@ Provide ONLY the distilled message, no explanations or meta-text."""
                 f"and then you can send a new message to re-establish trust."
             )
         
-        # Update last verified time
         self.db.update(
             'pager_trust',
             {'last_verified': utc_now().isoformat()},
@@ -1523,7 +1461,6 @@ Provide ONLY the distilled message, no explanations or meta-text."""
             trusted_device_id: The device being trusted
             trusted_fingerprint: The fingerprint to trust
         """
-        # Get sender device info if available
         senders = self.db.select(
             'pager_devices',
             'id = :trusted_device_id',
@@ -1617,7 +1554,6 @@ Provide ONLY the distilled message, no explanations or meta-text."""
         
         trust = trusts[0]
         
-        # Delete the trust relationship entirely to allow fresh start
         self.db.execute(
             'DELETE FROM pager_trust WHERE id = :trust_id',
             {'trust_id': trust['id']}
@@ -1657,17 +1593,13 @@ Provide ONLY the distilled message, no explanations or meta-text."""
         # never present invented data as a measured location.
         location_marker = "simulated - no real location available"
 
-        # Create location message content
         content = f"📍 Location Pin: {location_marker}"
 
-        # Add optional note if provided
         if note:
-            # Enforce brief note limit for location pins
             if len(note) > 50:
                 raise ValueError(f"Location pin note too long: {len(note)} characters (max 50)")
             content += f"\nNote: {note}"
 
-        # Use the existing send_message method with the simulation marker
         return self._send_message(
             sender_id=sender_id,
             recipient=recipient,

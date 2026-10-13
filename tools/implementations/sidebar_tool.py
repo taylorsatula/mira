@@ -20,7 +20,6 @@ from tools.registry import registry
 logger = logging.getLogger(__name__)
 
 
-# -------------------- CONFIGURATION --------------------
 
 class SidebarToolConfig(BaseModel):
     """Configuration for sidebar_tool."""
@@ -33,7 +32,7 @@ class SidebarToolConfig(BaseModel):
 registry.register("sidebar_tool", SidebarToolConfig)
 
 
-# -------------------- SCHEMAS --------------------
+
 # Scratchpad + activity DDL live in utils/userdata_manager.py; tables are
 # created via agents.base.ensure_activity_schema()
 
@@ -49,7 +48,6 @@ CREATE TABLE IF NOT EXISTS sidebar_audit (
 )"""
 
 
-# -------------------- TOOL --------------------
 
 class SidebarTool(Tool):
     """Agent lifecycle management: scratchpad and task completion."""
@@ -141,9 +139,6 @@ class SidebarTool(Tool):
         else:
             raise ValueError(f"Unknown operation: {operation}")
 
-    # ------------------------------------------------------------------
-    # Scratchpad operations
-    # ------------------------------------------------------------------
 
     def _write_note(self, params: Dict[str, Any]) -> Dict[str, Any]:
         thread_id = params.get("thread_id")
@@ -186,9 +181,6 @@ class SidebarTool(Tool):
         )
         return {"success": True, "message": "Notes cleared."}
 
-    # ------------------------------------------------------------------
-    # Task completion
-    # ------------------------------------------------------------------
 
     def _complete_task(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Write activity record to SQLite via UPSERT.

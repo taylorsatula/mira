@@ -113,11 +113,8 @@ class OpenAIChatBase(Dialect):
         timeout: int,
         artifact_sink: FileArtifactSink | None,
     ) -> "OpenAIChatBase":
-        # Shared construction for OpenAI-family dialects: pull endpoint from
-        # the selection, source API key from the argument or Vault. A selection
-        # with no api_key_name requires no credential, so the lookup is skipped
-        # and the request goes out without an Authorization header — this is the
-        # offline install's local llama-server route.
+        # A selection with no api_key_name requires no credential: the request
+        # goes out without an Authorization header — the offline local llama-server route.
         if not selection.endpoint_url:
             raise ValueError(
                 f"{cls.__name__} requires endpoint_url on the ModelSelection"
@@ -149,10 +146,6 @@ class OpenAIChatBase(Dialect):
                 response_data=result,
                 endpoint=self.endpoint_url,
             )
-
-    # ------------------------------------------------------------------
-    # Hooks: subclasses override these for dialect-specific behavior.
-    # ------------------------------------------------------------------
 
     def _serialize_thinking(self, payload: dict[str, Any], thinking: ThinkingConfig) -> None:
         """Encode the caller's ThinkingConfig into the request payload.
@@ -190,30 +183,17 @@ class OpenAIChatBase(Dialect):
             return "low"
         return "high"
 
-    # ------------------------------------------------------------------
-    # Transport: non-streaming completion.
-    # ------------------------------------------------------------------
-
     def complete(self, request: Request) -> Result:
         payload = self._build_payload(request, stream=False)
         headers = self._headers()
         self._log_request(request, payload)
 
         try:
-            # Hold the per-call transport on the abort handle for the whole
-            # in-flight window (9d29): httpx.post keeps the only closeable
-            # handle inside the blocking call, so abort_active_stream() found
-            # nothing to close and a stalled non-streaming worker kept its
-            # connection open past the lifecycle's ProviderStallError until
-            # this dialect's own timeout. Closing the client closes the
-            # pool's checked-out connection, releasing the peer's socket at
-            # abort time. The handle here is the httpx.Client, not the
-            # httpx.Response stream() registers: a non-streaming response
-            # object exists only after the blocked read completes, so the
-            # client is the only handle available before the block. The
-            # dialect instance is per-request (llm_provider
-            # ._dialect_for_selection), so this client has no other
-            # in-flight request to disturb.
+            # Register the client, not the response (9d29): a non-streaming
+            # httpx.Response exists only after the blocked read returns, so the client
+            # is the only closeable handle abort_active_stream() can close to
+            # unblock a stalled worker. Dialect instance is per-request
+            # (llm_provider._dialect_for_selection) — no other in-flight request shares it.
             with httpx.Client(timeout=self.timeout) as client:
                 self._active_response = client
                 try:
@@ -250,10 +230,6 @@ class OpenAIChatBase(Dialect):
         )
         self._log_response(request, result)
         return result
-
-    # ------------------------------------------------------------------
-    # Transport: streaming SSE framework.
-    # ------------------------------------------------------------------
 
     def stream(self, request: Request) -> Iterator[StreamEvent]:
         payload = self._build_payload(request, stream=True)
@@ -399,17 +375,8 @@ class OpenAIChatBase(Dialect):
                         accumulated_text += text
                         yield TextEvent(content=text)
 
-                    # Provider refusal signal, parsed upstream of
-                    # finish-reason normalization (ticket d554). Streaming
-                    # refusals arrive as delta.refusal (SDK: ChoiceDelta.refusal,
-                    # openai/types/chat/chat_completion_chunk.py:77) and can
-                    # co-exist with finish_reason "stop", so the field itself
-                    # drives the typed refusal. Terminality contract (d554,
-                    # full statement at _parse_response's refusal parse): the
-                    # refusal is terminal for the turn; already-streamed
-                    # partial text stays in Result.text — the refusal payload
-                    # is streamed to the user as text and accumulated into
-                    # Result.text rather than discarded.
+                    # Refusal parsed upstream of finish-reason normalization (d554);
+                    # contract at _parse_response's refusal parse.
                     if delta.get("refusal") is not None:
                         refusal_delta = delta["refusal"]
                         if not isinstance(refusal_delta, str):
@@ -573,10 +540,6 @@ class OpenAIChatBase(Dialect):
 
         yield CompleteEvent(response=result)
 
-    # ------------------------------------------------------------------
-    # Live-stream hooks: cross-thread abort and partial-usage snapshot.
-    # ------------------------------------------------------------------
-
     def abort_active_stream(self) -> None:
         """Close the in-flight streaming response from another thread.
 
@@ -590,10 +553,6 @@ class OpenAIChatBase(Dialect):
 
     def current_partial_usage(self) -> Usage | None:
         return self._partial_usage
-
-    # ------------------------------------------------------------------
-    # Payload construction.
-    # ------------------------------------------------------------------
 
     def _build_payload(self, request: Request, *, stream: bool) -> dict[str, Any]:
         max_tokens = request.max_tokens
@@ -637,10 +596,6 @@ class OpenAIChatBase(Dialect):
             )
             return {"role": "system", "content": text}
         return {"role": "system", "content": system}
-
-    # ------------------------------------------------------------------
-    # Message conversion.
-    # ------------------------------------------------------------------
 
     def _convert_messages(
         self,
@@ -790,11 +745,8 @@ class OpenAIChatBase(Dialect):
                 if block.get("type") == "text":
                     text_parts.append(block["text"])
                 elif block.get("type") == "tool_call":
-                    # Historical assistant tool call: serialize the stored input
-                    # verbatim. Replay-time validation against the current
-                    # request's tools would raise ToolNotLoadedError every turn
-                    # for the rest of a conversation that used an ephemeral tool;
-                    # argument validation belongs in the response-parse path.
+                    # No replay-time validation against current tools: a prior turn's
+                    # ephemeral tool would raise ToolNotLoadedError every turn.
                     tool_calls.append({
                         "id": block["id"],
                         "type": "function",
@@ -812,11 +764,8 @@ class OpenAIChatBase(Dialect):
             for tool_call in message["tool_calls"]:
                 function = tool_call["function"]
                 arguments = function.get("arguments") if "arguments" in function else None
-                # Historical assistant tool call: a stored JSON-arguments string
-                # is replayed verbatim; any other stored value is serialized as-is.
-                # No validation against the current request's tools — replay-time
-                # validation would raise ToolNotLoadedError every turn for the
-                # rest of a conversation that used an ephemeral tool.
+                # No replay-time validation against current tools: a prior turn's
+                # ephemeral tool would raise ToolNotLoadedError every turn.
                 if not isinstance(arguments, str):
                     arguments = json.dumps(arguments if arguments is not None else {})
                 tool_calls.append({
@@ -867,10 +816,6 @@ class OpenAIChatBase(Dialect):
             result.append(tool_dict)
         return result
 
-    # ------------------------------------------------------------------
-    # Response parsing.
-    # ------------------------------------------------------------------
-
     def _parse_response(self, response: dict[str, Any], request: Request) -> Result:
         if (
             "choices" not in response
@@ -911,17 +856,10 @@ class OpenAIChatBase(Dialect):
                 "Response message content must be a string, list, or null",
             )
 
-        # Provider refusal signal, parsed upstream of finish-reason
-        # normalization (ticket d554). OpenAI structured-output refusals
-        # populate message.refusal (SDK: ChatCompletionMessage.refusal,
-        # openai/types/chat/chat_completion_message.py:63) and can arrive
-        # with finish_reason "stop", so the field itself — not the finish
-        # reason alone — must drive the typed refusal. Terminality contract
-        # (d554): a refusal is TERMINAL for the turn — no tool loop, no
-        # retry at this layer — and the already-produced partial text is
-        # preserved: Result.text carries the content plus the surfaced
-        # refusal payload; a filter that stops output mid-generation must
-        # not discard what was generated before it.
+        # Refusal field, not finish_reason, drives stop_reason (d554): structured-
+        # output refusals carry finish_reason "stop". Refusal is terminal for the
+        # turn — no tool loop, no retry at this layer — and already-produced partial
+        # text stays in Result.text: a filter that stops output must not discard it.
         refusal = message.get("refusal")
         if refusal is not None:
             if not isinstance(refusal, str):
@@ -948,11 +886,11 @@ class OpenAIChatBase(Dialect):
                 reasoning_details=reasoning_details,
             ),
             usage=self._parse_usage(response["usage"]),
-            # Refusal field beats the finish reason: a structured-output
-            # refusal can carry finish_reason "stop" (see the contract
-            # comment above); content_filter reaches "refusal" through
-            # _normalize_finish_reason's mapping.
             stop_reason=(
+                # Refusal field beats the finish reason: a structured-output
+                # refusal can carry finish_reason "stop" (see the contract
+                # comment above); content_filter reaches "refusal" through
+                # _normalize_finish_reason's mapping.
                 "refusal" if refusal else self._normalize_finish_reason(choice.get("finish_reason"))
             ),
             provider_metadata=ProviderMetadata(
@@ -1021,13 +959,10 @@ class OpenAIChatBase(Dialect):
             return ""
         if accumulated_reasoning and candidate.startswith(accumulated_reasoning):
             return candidate[len(accumulated_reasoning):]
-        # Dedup is aimed at provider/transport-level duplicate deltas
-        # (reconnection/replay artifacts), not model behavior. A model
-        # emitting the same reasoning fragment repeatedly was assessed by
-        # the human as an impossible situation, so any
-        # "legitimate repetition" concern is out of scope by decision. If
-        # genuine model-level repetition ever shows up in evidence, revisit
-        # this decision rather than widening the predicate.
+        # Dedup targets transport-level duplicate deltas (reconnect/replay), not
+        # model behavior: repeated model-level fragments were assessed impossible by
+        # decision. Revisit on evidence of genuine model-level repetition rather than
+        # widening the predicate.
         if accumulated_reasoning.endswith(candidate):
             return ""
         return candidate
@@ -1055,10 +990,6 @@ class OpenAIChatBase(Dialect):
         if not isinstance(parsed, dict):
             raise ProviderProtocolError(self.endpoint_url, mode, "Provider response JSON must be an object")
         return parsed
-
-    # ------------------------------------------------------------------
-    # Tool-call parsing.
-    # ------------------------------------------------------------------
 
     def _parse_tool_arguments(
         self,
@@ -1200,8 +1131,8 @@ class OpenAIChatBase(Dialect):
                 mode="non-streaming",
             )
         except ToolNotLoadedError:
-            # Subclasses ProviderProtocolError: must escape the broad schema-repair
-            # catch below so the lifecycle's invokeother_tool recovery runs.
+            # Re-raise past the schema-repair catch: lifecycle invokeother_tool
+            # recovery depends on seeing it.
             raise
         except ProviderProtocolError as error:
             invalid_reason = str(error)
@@ -1237,8 +1168,8 @@ class OpenAIChatBase(Dialect):
                     mode="streaming",
                 )
             except ToolNotLoadedError:
-                # Subclasses ProviderProtocolError: must escape the broad schema-repair
-                # catch below so the lifecycle's invokeother_tool recovery runs.
+                # Re-raise past the schema-repair catch: lifecycle invokeother_tool
+                # recovery depends on seeing it.
                 raise
             except ProviderProtocolError as error:
                 invalid_reason = str(error)
@@ -1252,10 +1183,6 @@ class OpenAIChatBase(Dialect):
                 )
             )
         return tuple(calls)
-
-    # ------------------------------------------------------------------
-    # Usage parsing.
-    # ------------------------------------------------------------------
 
     def _parse_usage(self, usage: dict[str, Any]) -> Usage:
         if not isinstance(usage, MappingABC):
@@ -1298,57 +1225,17 @@ class OpenAIChatBase(Dialect):
         return value
 
     def _normalize_finish_reason(self, finish_reason: str | None) -> StopReason:
-        # Every documented value maps deliberately (ticket d554); no known
-        # value falls to the end_turn default. Unknown values still fall
-        # through with the unmapped warning below.
-        #
-        # Documented sources:
-        #   - OpenAI SDK Choice.finish_reason literal set — installed openai
-        #     package, types/chat/chat_completion.py:25 (Choice.finish_reason)
-        #     and types/chat/chat_completion_chunk.py:100 (ChoiceDelta-bearing
-        #     chunk): "stop", "length", "tool_calls", "content_filter",
-        #     "function_call".
-        #   - OpenRouter normalizes every provider to (OpenRouter API
-        #     reference, openrouter.ai/docs/api_reference/overview): "stop",
-        #     "length", "tool_calls", "content_filter", "error"; the raw
-        #     provider value rides along in native_finish_reason.
-        #
-        # Per-value decisions:
-        #   stop           -> end_turn   (SDK literal; normal completion)
-        #   length         -> max_tokens (SDK literal; output hit the token
-        #                                limit)
-        #   tool_calls     -> tool_use   (SDK literal; the model invoked tools)
-        #   content_filter -> refusal    (SDK literal + OpenRouter normalized;
-        #                                a provider filter stopped output —
-        #                                typed refusal, partial text kept;
-        #                                see the terminality contract at
-        #                                _parse_response's refusal parse)
-        #   function_call  -> end_turn   (SDK literal; legacy function
-        #                                calling. This transport parses only
-        #                                message.tool_calls, so no ToolCall
-        #                                exists to justify tool_use — end_turn
-        #                                is the honest terminal state.)
-        #   error          -> error      (OpenRouter normalized value; a
-        #                                provider error reported in-band on a
-        #                                200. Consumers verified to tolerate
-        #                                StopReason "error": coerce_stop_reason
-        #                                (STOP_REASONS member, clients/llm/
-        #                                types.py:24-32), orchestrator metadata
-        #                                (opaque str, cns/services/
-        #                                orchestrator.py:1363), actions debug
-        #                                log (cns/api/actions.py:2120), POST
-        #                                probe dict output
-        #                                (utils/power_on_self_test.py:1347) —
-        #                                nothing branches on the value.)
-        #   max_tokens     -> max_tokens (non-SDK spelling some OpenAI-family
-        #                                providers emit instead of "length")
-        #   safety         -> refusal    (native filter stop, e.g. Gemini
-        #                                "SAFETY" — same hazard as
-        #                                content_filter: a filter stopped
-        #                                output)
-        #   recitation     -> refusal    (native filter stop, e.g. Gemini
-        #                                "RECITATION" — same hazard as
-        #                                content_filter)
+        # Every known value maps deliberately (d554); unknown values fall through to
+        # the end_turn default with the warning below. Non-obvious rows:
+        #   content_filter/safety/recitation -> refusal: a provider filter stopped
+        #     output; partial text kept.
+        #   function_call -> end_turn: this transport parses only message.tool_calls,
+        #     so no ToolCall exists to justify tool_use.
+        #   error -> error: OpenRouter normalized in-band error on a 200. Consumers
+        #     verified to tolerate StopReason "error" downstream (coerce_stop_reason's
+        #     STOP_REASONS, orchestrator metadata, actions debug log, POST probe dict
+        #     output) — nothing branches on the value.
+        #   max_tokens -> max_tokens: non-SDK spelling some providers emit for "length".
         mapping: dict[str, StopReason] = {
             "stop": "end_turn",
             "tool_calls": "tool_use",
@@ -1364,10 +1251,6 @@ class OpenAIChatBase(Dialect):
         if normalized not in mapping and normalized is not None:
             logger.warning("Unmapped finish_reason='%s', defaulting to end_turn", finish_reason)
         return mapping.get(normalized, "end_turn")
-
-    # ------------------------------------------------------------------
-    # Error normalization.
-    # ------------------------------------------------------------------
 
     def _handle_http_error(self, error: httpx.HTTPStatusError, *, mode: str) -> NoReturn:
         response = error.response

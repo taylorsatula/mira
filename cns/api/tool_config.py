@@ -39,13 +39,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# All handlers below are deliberately sync (not async def) so Starlette runs
-# them in its threadpool; each performs blocking Postgres/Valkey round-trips
-# (and, for validate, potentially blocking network connection tests) that
-# would otherwise freeze the shared event loop. Same discipline as chat_endpoint.
+# Handlers are deliberately sync (not async def) so Starlette threads them; blocking Postgres/Valkey round-trips would otherwise freeze the shared event loop.
 
 
-# Helper functions
 def _get_configurable_tools() -> dict[str, type]:
     """Get all tools with registered config classes."""
     return {name: config_class for name, config_class in registry._registry.items()}
@@ -61,7 +57,6 @@ def _delete_user_tool_config(tool_name: str) -> bool:
     return delete_user_tool_config(tool_name)
 
 
-# Endpoints
 @router.get("/actions/tools")
 def list_configurable_tools(
     response: Response,
@@ -88,7 +83,6 @@ def list_configurable_tools(
                 "has_user_config": name in tool_configs
             })
 
-        # Sort by name for consistent ordering
         tool_list.sort(key=lambda x: x["name"])
 
         api_response = create_success_response(
@@ -122,19 +116,15 @@ def get_tool_config(
     request_id = generate_request_id()
 
     try:
-        # Check if tool exists in registry
         config_class = registry.get(tool_name)
         if config_class is None:
             raise NotFoundError("tool", tool_name)
 
-        # Get defaults from config class
         defaults = config_class().model_dump()
 
-        # Get user's saved config
         user_config = _get_user_tool_config(tool_name)
         has_user_config = user_config is not None
 
-        # Merge user config over defaults
         if user_config:
             config = {**defaults, **user_config}
         else:
@@ -182,12 +172,10 @@ def get_tool_schema(
     request_id = generate_request_id()
 
     try:
-        # Check if tool exists in registry
         config_class = registry.get(tool_name)
         if config_class is None:
             raise NotFoundError("tool", tool_name)
 
-        # Generate JSON Schema from Pydantic model
         schema = config_class.model_json_schema()
 
         api_response = create_success_response(
@@ -233,7 +221,6 @@ def update_tool_config(
     request_id = generate_request_id()
 
     try:
-        # Check if tool exists in registry
         config_class = registry.get(tool_name)
         if config_class is None:
             raise NotFoundError("tool", tool_name)
@@ -243,9 +230,7 @@ def update_tool_config(
             request_body.config,
         )
 
-        # Validate config through the registry's strictness seam: unknown
-        # fields are rejected (a typo'd field name must not silently no-op
-        # while the request looks accepted).
+        # Registry strictness seam: unknown fields are rejected so a typo'd field cannot silently no-op while the request looks accepted.
         try:
             validated_config = registry.validate_config_data(tool_name, prepared.config)
         except UnknownToolConfigFields as e:
@@ -257,7 +242,6 @@ def update_tool_config(
                 }
             )
         except PydanticValidationError as e:
-            # Convert Pydantic validation errors to our format
             errors = []
             for err in e.errors():
                 field = ".".join(str(loc) for loc in err["loc"])
@@ -271,9 +255,7 @@ def update_tool_config(
                 details={"validation_errors": errors}
             )
 
-        # Essential tools are force-enabled at startup, so an enabled=false
-        # setting would store but never take effect. Reject it up front
-        # instead of saving a setting that silently does nothing.
+        # Essential tools are force-enabled at startup, so enabled=false would store but never take effect.
         if tool_name in ESSENTIAL_TOOLS and getattr(validated_config, "enabled", True) is False:
             raise ValidationError(
                 f"{tool_name} is an essential tool and cannot be disabled",
@@ -284,9 +266,7 @@ def update_tool_config(
                 },
             )
 
-        # Save the validated config: secret updates and public config go
-        # through one SQLite transaction so a config-write failure rolls the
-        # secret change back instead of stranding it.
+        # Secret and public config share one SQLite transaction so a config-write failure rolls the secret back.
         config_dict = validated_config.model_dump()
         save_tool_config_update(
             tool_name,
@@ -342,7 +322,6 @@ def validate_tool_config(
     request_id = generate_request_id()
 
     try:
-        # Check if tool exists in registry
         config_class = registry.get(tool_name)
         if config_class is None:
             raise NotFoundError("tool", tool_name)
@@ -380,7 +359,6 @@ def validate_tool_config(
 
         config_dict = validated_config.model_dump()
 
-        # Call tool-specific validation if the tool implements it
         validation_result = _call_tool_validation(tool_name, config_dict)
         redacted_config = redact_tool_config(tool_name, config_dict)
 
@@ -449,18 +427,14 @@ def _call_tool_validation(tool_name: str, config: dict[str, Any]) -> ToolValidat
     import inspect
     from tools.repo import Tool
 
-    # Import the tool module directly - avoids ToolRepository.discover_tools()
-    # which has expensive side effects and requires working_memory for some tools
+    # Import the tool module directly — avoids ToolRepository.discover_tools()'s expensive side effects and working_memory requirement.
     try:
         module = importlib.import_module(f"tools.implementations.{tool_name}")
     except ImportError as e:
-        # Tools register loudly at boot; here empty config correctly answers
-        # "no such tool" for bad names. Log at this seam too so a genuinely
-        # broken module stays visible instead of silently indistinguishable.
+        # Empty config correctly answers "no such tool" for bad names; the log keeps a genuinely broken module visible.
         logger.warning(f"Tool module tools.implementations.{tool_name} failed to import: {e}")
         return ToolValidationResult(discovered={}, live_validation=False)
 
-    # Find the Tool subclass matching this tool_name
     tool_class: type[Tool] | None = None
     for attr_name in dir(module):
         attr = getattr(module, attr_name)
@@ -475,9 +449,7 @@ def _call_tool_validation(tool_name: str, config: dict[str, Any]) -> ToolValidat
     if not tool_class:
         return ToolValidationResult(discovered={}, live_validation=False)
 
-    # The base class's no-op default is not a live check; only an override is.
-    # classmethod attribute access binds per class, so compare the underlying
-    # functions, not the bound methods.
+    # Only an override is a live check; __func__ because classmethod attribute access binds per class.
     if tool_class.validate_config.__func__ is Tool.validate_config.__func__:
         return ToolValidationResult(discovered={}, live_validation=False)
 
@@ -504,15 +476,12 @@ def reset_tool_config(
     request_id = generate_request_id()
 
     try:
-        # Check if tool exists in registry
         config_class = registry.get(tool_name)
         if config_class is None:
             raise NotFoundError("tool", tool_name)
 
-        # Delete user's config
         deleted = _delete_user_tool_config(tool_name)
 
-        # Get defaults for response
         defaults = config_class().model_dump()
         redacted_defaults = redact_tool_config(tool_name, defaults)
 

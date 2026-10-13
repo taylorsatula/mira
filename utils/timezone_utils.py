@@ -36,7 +36,6 @@ _INVALID_TZ_CACHE: set[str] = set()
 # pytz.all_timezones as a set for O(1) membership
 _PYTZ_TIMEZONES: frozenset[str] = frozenset(pytz.all_timezones)
 
-# Dictionary mapping common abbreviations to IANA timezone names
 COMMON_TIMEZONE_ALIASES = {
     "EST": "America/New_York",
     "CST": "America/Chicago",
@@ -50,7 +49,6 @@ COMMON_TIMEZONE_ALIASES = {
     "UTC": "UTC",
 }
 
-# Time format patterns
 TIME_FORMATS = {
     "standard": "%H:%M:%S",
     "short": "%H:%M",
@@ -82,11 +80,9 @@ def validate_timezone(tz_name: str) -> str:
     if not tz_name:
         return get_default_timezone()
 
-    # Check if it's a common abbreviation
     if tz_name in COMMON_TIMEZONE_ALIASES:
         return COMMON_TIMEZONE_ALIASES[tz_name]
 
-    # Check if it's a valid IANA timezone
     try:
         # Memoized check: available_timezones() walks the whole TZ database
         # directory, and this validation runs per message during prompt
@@ -99,14 +95,12 @@ def validate_timezone(tz_name: str) -> str:
                 return tz_name
             _INVALID_TZ_CACHE.add(tz_name)
     except (pytz.exceptions.UnknownTimeZoneError, LookupError):
-        # Strict validation - if not in our alias list and not a valid IANA name, error
         logger.error(f"Timezone validation failed for '{tz_name}' - pytz lookup raised exception")
         raise ValueError(
             f"Invalid timezone: '{tz_name}'. Please use a valid IANA timezone name like "
             "'America/New_York' or 'Europe/London'."
         )
     
-    # If we get here, the timezone was not found
     logger.error(f"Invalid timezone validation failed for '{tz_name}' - not found in IANA or pytz databases")
     raise ValueError(
         f"Invalid timezone: '{tz_name}'. Please use a valid IANA timezone name like "
@@ -199,13 +193,10 @@ def ensure_utc(dt: datetime) -> datetime:
         UTC timezone-aware datetime
     """
     if dt.tzinfo is None:
-        # Naive datetime, assume UTC
         return dt.replace(tzinfo=UTC_TIMEZONE)
     elif dt.tzinfo != UTC_TIMEZONE:
-        # Aware but not UTC, convert
         return dt.astimezone(UTC_TIMEZONE)
     
-    # Already UTC aware
     return dt
 
 
@@ -237,13 +228,11 @@ def convert_to_timezone(
     Returns:
         Timezone-aware datetime in the target timezone
     """
-    # Handle naive datetime objects
     if dt.tzinfo is None:
         from_timezone = get_timezone_instance(from_tz or "UTC")
         # Attach the timezone without adjusting the time
         dt = dt.replace(tzinfo=from_timezone)
     
-    # Convert to target timezone
     target_timezone = get_timezone_instance(target_tz or get_default_timezone())
     return dt.astimezone(target_timezone)
 
@@ -277,10 +266,8 @@ def convert_from_utc(dt: datetime, to_tz: Optional[str] = None) -> datetime:
     Returns:
         Timezone-aware datetime in the target timezone
     """
-    # First ensure dt is in UTC
     dt = ensure_utc(dt)
     
-    # Then convert to target timezone
     return convert_to_timezone(dt, to_tz or get_default_timezone())
 
 
@@ -305,21 +292,16 @@ def format_datetime(
     Returns:
         Formatted datetime string
     """
-    # Only convert if a target timezone is explicitly specified
     if tz_name:
         tz_dt = convert_to_timezone(dt, tz_name)
     else:
         tz_dt = dt
     
-    # Get format pattern
     format_pattern = TIME_FORMATS.get(format_type, TIME_FORMATS["standard"])
     
-    # Format the datetime
     formatted = tz_dt.strftime(format_pattern)
     
-    # Add timezone name if requested
     if include_timezone:
-        # Get the timezone name from the datetime object or use the provided one
         if hasattr(tz_dt, 'tzinfo') and tz_dt.tzinfo:
             tz_name = str(tz_dt.tzinfo)
         else:
@@ -368,16 +350,13 @@ def format_relative_time(dt: datetime, reference_time: Optional[datetime] = None
     Raises:
         ValueError: If dt cannot be converted to UTC datetime
     """
-    # Ensure both datetimes are UTC-aware
     dt_utc = ensure_utc(dt)
     ref_time = reference_time if reference_time else utc_now()
     ref_time_utc = ensure_utc(ref_time)
 
-    # Calculate time delta
     delta = ref_time_utc - dt_utc
     total_seconds = delta.total_seconds()
 
-    # Handle future times
     if total_seconds < 0:
         delta = dt_utc - ref_time_utc
         total_seconds = delta.total_seconds()
@@ -385,7 +364,6 @@ def format_relative_time(dt: datetime, reference_time: Optional[datetime] = None
     else:
         future = False
 
-    # Calculate time units
     seconds = int(total_seconds)
     minutes = seconds // 60
     hours = minutes // 60
@@ -394,7 +372,6 @@ def format_relative_time(dt: datetime, reference_time: Optional[datetime] = None
     months = days // 30  # Approximate
     years = days // 365  # Approximate
 
-    # Format based on granularity
     if seconds < 60:
         return "just now"
     elif minutes < 60:
@@ -416,7 +393,6 @@ def format_relative_time(dt: datetime, reference_time: Optional[datetime] = None
         unit = "year" if years == 1 else "years"
         time_str = f"{years} {unit}"
 
-    # Add direction
     if future:
         return f"in {time_str}"
     else:
@@ -493,8 +469,8 @@ def format_relationship_duration(created_at: datetime) -> str:
 
 
 # Mirrors the strptime mask accepted by local_datetime_to_utc_iso: a full local
-# wall time carrying no UTC designator and no offset. Seconds are optional because
-# that is how the model-facing tool schemas advertise the format ('2025-01-02T09:00').
+# wall time, no UTC designator, no offset. Seconds optional — punchclock_tool's
+# schema advertises '2025-01-02T09:00'.
 _EXACT_LOCAL_WALL_TIME = re.compile(
     r"^(?P<date>\d{4}-\d{2}-\d{2})[tT](?P<hour>\d{2}):(?P<minute>\d{2})(?::(?P<second>\d{2}))?$"
 )
@@ -594,23 +570,18 @@ def parse_time_string(
     """
     tz = get_timezone_instance(tz_name)
     
-    # Get reference date in the target timezone
     if reference_date is None:
         reference_date = utc_now()
     
     reference_date = convert_to_timezone(reference_date, tz_name)
     
-    # Try parsing ISO format
     try:
         dt = datetime.fromisoformat(time_str)
-        # Add timezone if naive
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=tz)
         return dt
     except ValueError:
         pass
-    
-    # Try different formats
     
     # Time-only format with an am/pm marker, e.g. "7:48pm", "7:48 pm",
     # "7PM". Resolve the calendar date exactly like the 24-hour form
@@ -632,7 +603,6 @@ def parse_time_string(
             if ampm_match.group(4).lower() == "p":
                 hour += 12
 
-            # Create datetime using reference date's year, month, day
             dt = reference_date.replace(
                 hour=hour,
                 minute=minute,
@@ -640,7 +610,6 @@ def parse_time_string(
                 microsecond=0
             )
 
-            # If time has already passed today, use tomorrow
             if dt < reference_date:
                 dt = dt + timedelta(days=1)
 
@@ -648,16 +617,13 @@ def parse_time_string(
         except ValueError:
             pass
 
-    # Time-only format (HH:MM:SS or HH:MM)
     if ":" in time_str and "T" not in time_str:
-        # Split into hours, minutes, seconds
         time_parts = time_str.split(":")
         try:
             hour = int(time_parts[0])
             minute = int(time_parts[1]) if len(time_parts) > 1 else 0
             second = int(time_parts[2]) if len(time_parts) > 2 else 0
             
-            # Create datetime using reference date's year, month, day
             dt = reference_date.replace(
                 hour=hour,
                 minute=minute,
@@ -665,7 +631,6 @@ def parse_time_string(
                 microsecond=0
             )
             
-            # If time has already passed today, use tomorrow
             if dt < reference_date:
                 dt = dt + timedelta(days=1)
                 
@@ -673,12 +638,9 @@ def parse_time_string(
         except (ValueError, IndexError):
             pass
     
-    # Try dateutil parser as a fallback for natural language and various formats
     try:
-        # Parse with dateutil - it can handle many formats
         dt = parser.parse(time_str)
         
-        # Add timezone if naive
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=tz)
             
@@ -686,7 +648,6 @@ def parse_time_string(
     except (ValueError, parser.ParserError):
         pass
     
-    # If we get here, the format is not recognized
     logger.error(f"Time string parsing failed for '{time_str}' - no valid format match found")
     raise ValueError(
         f"Invalid time format: '{time_str}'. Please use ISO format (YYYY-MM-DDTHH:MM:SS) "

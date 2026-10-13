@@ -33,10 +33,6 @@ from utils.timezone_utils import format_utc_iso, parse_utc_time_string, utc_now
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Per-user SQLite: briefs table
-# ---------------------------------------------------------------------------
-
 BRIEFS_DDL = """
     id TEXT PRIMARY KEY,
     type TEXT NOT NULL CHECK (type IN ('one-off', 'scheduled')),
@@ -62,8 +58,7 @@ BRIEFS_STATE_INDEX_DDL = (
 )
 
 _MIN_INTERVAL_SECONDS = 60
-# Decay/backoff both use base * 2^count capped at this exponent, then the
-# max_interval_seconds config ceiling applies on top.
+# Decay/backoff both use base * 2^count capped at this exponent, then the max_interval_seconds config ceiling applies on top.
 _MAX_DECAY_EXPONENT = 3
 _NOTE_MAX_CHARS = 2000
 _MISSION_MAX_CHARS = 4000
@@ -95,10 +90,6 @@ def _brief_row_public(row: Dict[str, Any]) -> Dict[str, Any]:
         "created_at": row.get("created_at"),
     }
 
-
-# ---------------------------------------------------------------------------
-# Postgres coordination: armed-user presence
-# ---------------------------------------------------------------------------
 
 
 def upsert_armed_user(user_id: str, wake_at_utc: str) -> None:
@@ -147,10 +138,6 @@ def refresh_armed_marker(db, user_id: str) -> None:
     else:
         remove_armed_user(user_id)
 
-
-# ---------------------------------------------------------------------------
-# Scheduling helpers
-# ---------------------------------------------------------------------------
 
 
 def _parse_wake_at(wake_at: str, daily_at: Optional[str]) -> datetime:
@@ -226,10 +213,6 @@ def _max_rearm_seconds() -> int:
     return int(config.heartbeat.max_interval_seconds)
 
 
-# ---------------------------------------------------------------------------
-# Tool config and registration
-# ---------------------------------------------------------------------------
-
 
 class HeartbeatToolConfig(BaseModel):
     """Configuration for heartbeat_tool."""
@@ -240,8 +223,8 @@ class HeartbeatToolConfig(BaseModel):
 registry.register("heartbeat_tool", HeartbeatToolConfig)
 
 
-# The schema the HeartbeatAgent sees: report only. The agent must never
-# schedule, cancel, or inspect other briefs mid-run.
+# Deliberate narrowing: HeartbeatAgent sees report only — never schedule, cancel,
+# or inspect other briefs mid-run.
 HEARTBEAT_AGENT_SCHEMA = {
     "name": "heartbeat_tool",
     "description": (
@@ -435,10 +418,6 @@ class HeartbeatTool(Tool):
             self.logger.error(f"Error in {operation}: {e}")
             raise
 
-    # ------------------------------------------------------------------
-    # schedule
-    # ------------------------------------------------------------------
-
     def _schedule(
         self,
         type: Optional[str] = None,
@@ -480,11 +459,9 @@ class HeartbeatTool(Tool):
                 f"interval_seconds must be an integer >= {_MIN_INTERVAL_SECONDS}, got: {base_interval!r}"
             )
 
-        # Per-type schedule inputs, enforced before _parse_wake_at can
-        # AttributeError on None: one-off requires wake_at, scheduled
-        # requires daily_at. The cross-pairing (one-off + daily_at) is
-        # rejected too — a one-off must name its one wake moment, not borrow
-        # the daily-occurrence machinery.
+        # Enforce per-type inputs before _parse_wake_at can AttributeError on
+        # None; the one-off + daily_at cross-pairing is rejected too — a
+        # one-off must name its one wake moment, not borrow the daily machinery.
         if type == "one-off" and not wake_at:
             raise ValueError("one-off briefs require wake_at (ISO 8601 or 'in N seconds')")
         if type == "one-off" and daily_at:
@@ -537,10 +514,6 @@ class HeartbeatTool(Tool):
             ),
         }
 
-    # ------------------------------------------------------------------
-    # list / status
-    # ------------------------------------------------------------------
-
     def _list(self, state_filter: Optional[str] = None) -> Dict[str, Any]:
         valid_states = ("armed", "done", "bailed", "failed_permanently", "cancelled")
         if state_filter is not None and state_filter not in valid_states:
@@ -579,10 +552,6 @@ class HeartbeatTool(Tool):
             "count": len(rows),
         }
 
-    # ------------------------------------------------------------------
-    # cancel
-    # ------------------------------------------------------------------
-
     def _cancel(self, brief_id: Optional[str] = None, note: Optional[str] = None) -> Dict[str, Any]:
         from utils.user_context import get_current_user_id
 
@@ -604,10 +573,6 @@ class HeartbeatTool(Tool):
             "state": "cancelled",
             "message": f"Brief {brief_id} cancelled. It will not wake again.",
         }
-
-    # ------------------------------------------------------------------
-    # report (the agent's outcome channel)
-    # ------------------------------------------------------------------
 
     def _report(
         self,
@@ -683,7 +648,6 @@ class HeartbeatTool(Tool):
                 "message": f"Brief {brief_id} fired; re-armed for {next_wake}.",
             }
 
-        # outcome == 'false': re-arm, decayed, unless the agent requested sooner
         false_count = int(row.get("consecutive_false") or 0) + 1
         if wake_in_seconds is not None:
             if not isinstance(wake_in_seconds, int) or wake_in_seconds < _MIN_INTERVAL_SECONDS:
@@ -723,10 +687,6 @@ class HeartbeatTool(Tool):
             ),
         }
 
-
-# ---------------------------------------------------------------------------
-# Failure accounting (agent death paths, no report received)
-# ---------------------------------------------------------------------------
 
 
 def apply_run_failure(brief_ids: List[str], failure_note: str) -> List[Dict[str, Any]]:

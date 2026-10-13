@@ -30,7 +30,6 @@ class ReminderToolConfig(BaseModel):
     enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
 
 
-# Register with registry
 registry.register("reminder_tool", ReminderToolConfig)
 
 
@@ -58,7 +57,6 @@ class ReminderTool(Tool):
 
     name = "reminder_tool"
 
-    # Operations without ordering dependencies — safe for concurrent execution
     _parallel_safe_operations = frozenset({"get_reminders"})
 
     @classmethod
@@ -176,13 +174,11 @@ class ReminderTool(Tool):
         """
         self.db.create_table('reminders', schema)
 
-        # Create indexes for faster queries
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_reminders_date ON reminders(reminder_date)")
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_reminders_completed ON reminders(completed)")
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_reminders_contact ON reminders(contact_uuid)")
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_reminders_category ON reminders(category)")
 
-        # Migrate: add resolution_note column for existing databases
         try:
             self.db.execute("ALTER TABLE reminders ADD COLUMN encrypted__resolution_note TEXT")
         except Exception:
@@ -191,15 +187,12 @@ class ReminderTool(Tool):
     def _load_reminders(self, include_completed: bool = False) -> List[Dict[str, Any]]:
         """Load reminders from SQLite database."""
         if include_completed:
-            # Load all reminders
             return self.db.select('reminders')
         else:
-            # Load only active (not completed) reminders
             return self.db.select('reminders', 'completed = 0')
 
     def _save_reminder(self, reminder: Dict[str, Any]) -> str:
         """Save a reminder to SQLite database."""
-        # Insert new reminder
         return self.db.insert('reminders', reminder)
 
     def _check_duplicate_reminder(self, title: str, reminder_date: datetime, window_seconds: int = 60) -> Optional[Dict[str, Any]]:
@@ -217,18 +210,15 @@ class ReminderTool(Tool):
             Existing reminder dict if duplicate found, None otherwise
         """
         try:
-            # Get all reminders and check for recent duplicates
             all_reminders = self.db.select('reminders')
             now = utc_now()
             window_start = now - timedelta(seconds=window_seconds)
 
             for existing in all_reminders:
-                # Check if title matches (case-insensitive)
                 existing_title = existing.get('encrypted__title', '')
                 if existing_title.lower() != title.lower():
                     continue
 
-                # Check if reminder_date matches (within 1 minute tolerance)
                 existing_date_str = existing.get('reminder_date')
                 if not existing_date_str:
                     continue
@@ -239,7 +229,6 @@ class ReminderTool(Tool):
                 except Exception:
                     continue
 
-                # Check if created recently (within window)
                 created_at_str = existing.get('created_at')
                 if not created_at_str:
                     continue
@@ -320,7 +309,6 @@ class ReminderTool(Tool):
            - Returns: Dict with snoozed reminder(s) and new times
         """
         try:
-            # Ensure reminders table exists on first use
             self._ensure_reminders_table()
 
             # Route to the appropriate operation, filtering kwargs to params
@@ -379,7 +367,6 @@ class ReminderTool(Tool):
             ValueError: If required fields are missing or date parsing fails
         """
         
-        # Validate required parameters
         if not title:
             self.logger.error("Title is required for adding a reminder")
             raise ValueError("Title is required for adding a reminder")
@@ -388,22 +375,18 @@ class ReminderTool(Tool):
             self.logger.error("Date is required for adding a reminder")
             raise ValueError("Date is required for adding a reminder")
             
-        # Validate category
         if category not in ["user", "internal"]:
             self.logger.error(f"Invalid category '{category}'. Must be 'user' or 'internal'")
             raise ValueError(f"Invalid category '{category}'. Must be 'user' or 'internal'")
             
-        # Parse the date from natural language
         try:
             reminder_date = self._parse_date(date)
         except Exception as e:
             self.logger.error(f"Failed to parse date '{date}': {str(e)}")
             raise ValueError(f"Failed to parse date '{date}': {str(e)}")
             
-        # Generate a unique ID for the reminder
         reminder_id = f"rem_{uuid.uuid4().hex[:8]}"
         
-        # Check if contact name exists in user's contacts
         contact_info = None
         contact_uuid = None
         contact_lookup_failed = False
@@ -434,7 +417,6 @@ class ReminderTool(Tool):
                 "duplicate_detected": True
             }
 
-        # Create the reminder object
         reminder = {
             "id": reminder_id,
             "encrypted__title": title,
@@ -449,13 +431,10 @@ class ReminderTool(Tool):
             "category": category
         }
 
-        # Save reminder
         self._save_reminder(reminder)
             
-        # Prepare response with contact details if linked
         response_reminder = self._format_reminder_for_display(reminder)
         
-        # Convert reminder time to user's local timezone for the message
         user_tz = get_user_preferences().timezone
         local_reminder_time = convert_from_utc(reminder_date, user_tz)
         formatted_local_time = format_datetime(local_reminder_time, 'date_time', include_timezone=True)
@@ -465,7 +444,6 @@ class ReminderTool(Tool):
             "message": f"Reminder added for {formatted_local_time}"
         }
         
-        # Add contact details to response if found
         if contact_info:
             result["contact_found"] = True
             result["contact_info"] = contact_info.get("contact", {})
@@ -509,7 +487,6 @@ class ReminderTool(Tool):
             ValueError: If parameters are invalid or missing required fields
         """
         
-        # Validate date_filter
         valid_date_filters = ["today", "tomorrow", "upcoming", "past", "all", "date", "range", "overdue"]
         if date_filter not in valid_date_filters:
             self.logger.error(f"Invalid date_filter: {date_filter}. Must be one of {valid_date_filters}")
@@ -520,32 +497,26 @@ class ReminderTool(Tool):
         today_local = convert_to_timezone(utc_now(), user_tz).replace(hour=0, minute=0, second=0, microsecond=0)
         today = convert_to_timezone(today_local, "UTC")
         
-        # Load reminders (include completed for "all" and "past")
         include_completed = date_filter in ["all", "past"]
         reminders = self._load_reminders(include_completed)
         
-        # Validate category parameter
         valid_categories = ["user", "internal", "all"]
         if category not in valid_categories:
             self.logger.error(f"Invalid category: {category}. Must be one of {valid_categories}")
             raise ValueError(f"Invalid category: {category}. Must be one of {valid_categories}")
         
-        # Filter by category first
         if category != "all":
             reminders = [r for r in reminders if r.get("category", "user") == category]
         
-        # Filter based on date_filter
         filtered_reminders = []
         date_description = ""
         
         for reminder in reminders:
             try:
-                # Parse stored UTC timestamp
                 reminder_date = parse_utc_time_string(reminder["reminder_date"])
             except (ValueError, KeyError):
-                continue  # Skip invalid reminders
+                continue
             
-            # Apply date filters based on date_filter
             if date_filter == "today":
                 tomorrow = today + timedelta(days=1)
                 if today <= reminder_date < tomorrow:
@@ -565,7 +536,6 @@ class ReminderTool(Tool):
                 date_description = "upcoming"
                 
             elif date_filter == "overdue":
-                # Overdue reminders: past due date and not completed
                 if reminder_date < today and not reminder.get("completed", False):
                     filtered_reminders.append(reminder)
                 date_description = "overdue"
@@ -576,7 +546,6 @@ class ReminderTool(Tool):
                 date_description = "past"
 
             elif date_filter == "all":
-                # No filter needed
                 filtered_reminders.append(reminder)
                 date_description = "all"
                 
@@ -586,12 +555,10 @@ class ReminderTool(Tool):
                     raise ValueError("specific_date is required when date_filter is 'date'")
                 
                 try:
-                    # Use our timezone-aware date parser
                     parsed_date = self._parse_date(specific_date)
                     next_date = parsed_date + timedelta(days=1)
                     if parsed_date <= reminder_date < next_date:
                         filtered_reminders.append(reminder)
-                    # Format the date in UTC ISO
                     date_description = f"on {format_utc_iso(parsed_date)}"
                 except Exception as e:
                     self.logger.error(f"Failed to parse specific_date '{specific_date}': {str(e)}")
@@ -603,22 +570,18 @@ class ReminderTool(Tool):
                     raise ValueError("start_date and end_date are required when date_filter is 'range'")
                 
                 try:
-                    # Use our timezone-aware date parser for both dates
                     parsed_start = self._parse_date(start_date)
                     # Include end date fully
                     parsed_end = self._parse_date(end_date) + timedelta(days=1)
                     if parsed_start <= reminder_date < parsed_end:
                         filtered_reminders.append(reminder)
-                    # Format the dates in UTC ISO
                     date_description = f"from {format_utc_iso(parsed_start)} to {format_utc_iso(parsed_end - timedelta(days=1))}"
                 except Exception as e:
                     self.logger.error(f"Failed to parse date range: {str(e)}")
                     raise ValueError(f"Failed to parse date range: {str(e)}")
         
-        # Sort by reminder date
         filtered_reminders.sort(key=lambda r: r["reminder_date"])
         
-        # Format for display with contact information
         reminder_list = [self._format_reminder_for_display(r) for r in filtered_reminders]
         
         return {
@@ -638,7 +601,6 @@ class ReminderTool(Tool):
         Returns:
             Error message string with available reminder IDs
         """
-        # Get active reminders
         active_reminders = self.db.select('reminders', 'completed = 0')
 
         error_msg = f"Reminder with ID '{reminder_id}' not found."
@@ -646,9 +608,8 @@ class ReminderTool(Tool):
         if not active_reminders:
             error_msg += " No active reminders available."
         else:
-            # Format available reminders
             available = []
-            for r in active_reminders[:5]:  # Show first 5
+            for r in active_reminders[:5]:
                 title = r.get('encrypted__title', 'Untitled')
                 available.append(f"  - {r['id']}: {title}")
 
@@ -676,7 +637,6 @@ class ReminderTool(Tool):
             ValueError: if persistence verification fails
         """
 
-        # Find the reminder
         reminders = self.db.select('reminders', 'id = :id', {'id': reminder_id})
 
         if not reminders:
@@ -698,7 +658,6 @@ class ReminderTool(Tool):
             {'id': reminder_id}
         )
 
-        # Verify the update actually happened
         if rows_updated == 0:
             self.logger.error(
                 f"UPDATE affected 0 rows for reminder '{reminder_id}' - "
@@ -706,12 +665,10 @@ class ReminderTool(Tool):
             )
             raise ValueError(f"Failed to update reminder '{reminder_id}' - no rows affected")
 
-        # Get updated reminder and verify completion state
         updated_reminders = self.db.select('reminders', 'id = :id', {'id': reminder_id})
         if updated_reminders:
             updated_reminder = updated_reminders[0]
 
-            # Verify the completed flag is actually set
             completed_value = updated_reminder.get('completed')
             if not completed_value or str(completed_value) == '0':
                 self.logger.error(
@@ -759,14 +716,12 @@ class ReminderTool(Tool):
             ValueError: if a date fails to parse or persistence fails
         """
 
-        # Find the reminder
         reminders = self.db.select('reminders', 'id = :id', {'id': reminder_id})
 
         if not reminders:
             self.logger.error(f"Reminder with ID '{reminder_id}' not found")
             raise ReminderNotFoundError(self._get_reminder_not_found_error(reminder_id))
 
-        # Build update data
         update_data = {}
         changes = []
 
@@ -792,14 +747,12 @@ class ReminderTool(Tool):
             update_data['encrypted__description'] = description
             changes.append("description")
 
-        # Contact linkage update
         if contact_name is not None:
             contact_info = self._lookup_contact(contact_name)
             if contact_info:
                 update_data['contact_uuid'] = contact_info["contact"]["id"]
                 changes.append("contact_uuid")
             else:
-                # Clear contact if name provided but not found
                 update_data['contact_uuid'] = None
                 changes.append("contact_uuid (cleared)")
 
@@ -807,12 +760,10 @@ class ReminderTool(Tool):
             update_data['encrypted__additional_notes'] = additional_notes
             changes.append("additional_notes")
         
-        # Always bump updated_at to reflect modification
         update_data['updated_at'] = format_utc_iso(utc_now())
         if 'updated_at' not in changes:
             changes.append('updated_at')
 
-        # Update if there are changes
         if update_data:
             rows_updated = self.db.update(
                 'reminders',
@@ -823,7 +774,6 @@ class ReminderTool(Tool):
             if rows_updated == 0:
                 raise ValueError(f"Reminder not found: {reminder_id}")
         
-        # Get updated reminder
         updated_reminders = self.db.select('reminders', 'id = :id', {'id': reminder_id})
         if updated_reminders:
             updated_reminder = updated_reminders[0]
@@ -852,7 +802,6 @@ class ReminderTool(Tool):
             ReminderNotFoundError (a ValueError): if the reminder does not exist
         """
 
-        # Find the reminder first to get its title for confirmation
         reminders = self.db.select('reminders', 'id = :id', {'id': reminder_id})
 
         if not reminders:
@@ -861,7 +810,6 @@ class ReminderTool(Tool):
 
         reminder = reminders[0]
 
-        # Delete from database
         rows_deleted = self.db.delete(
             'reminders',
             'id = :id',
@@ -896,7 +844,6 @@ class ReminderTool(Tool):
         Raises:
             ValueError: If no reminder IDs provided or reminders not found
         """
-        # Normalize to list of IDs
         ids_to_snooze: List[str] = []
         if reminder_ids:
             ids_to_snooze.extend(reminder_ids)
@@ -906,10 +853,8 @@ class ReminderTool(Tool):
         if not ids_to_snooze:
             raise ValueError("Either reminder_id or reminder_ids must be provided for snooze_reminder")
 
-        # Remove duplicates while preserving order
         ids_to_snooze = list(dict.fromkeys(ids_to_snooze))
 
-        # Parse snooze duration (default: 1 hour)
         snooze_delta = self._parse_snooze_duration(snooze_duration)
         duration_label = snooze_duration or "1 hour"
 
@@ -925,7 +870,6 @@ class ReminderTool(Tool):
 
             new_date = utc_now() + snooze_delta
 
-            # Update the reminder
             update_data = {
                 'reminder_date': format_utc_iso(new_date),
                 'updated_at': format_utc_iso(utc_now())
@@ -944,12 +888,10 @@ class ReminderTool(Tool):
                 {'id': rid}
             )
 
-            # Get updated reminder for response
             updated_reminders = self.db.select('reminders', 'id = :id', {'id': rid})
             if updated_reminders:
                 snoozed.append(self._format_reminder_for_display(updated_reminders[0]))
 
-        # Build response
         user_tz = get_user_preferences().timezone
 
         result: Dict[str, Any] = {
@@ -1028,12 +970,10 @@ class ReminderTool(Tool):
         Returns:
             Dict representation of the reminder with UTC timestamps
         """
-        # Function to ensure UTC ISO format
         def format_dt(dt_str: Optional[str]) -> Optional[str]:
             if not dt_str:
                 return None
             try:
-                # Parse and ensure UTC
                 dt = parse_utc_time_string(dt_str)
                 return format_utc_iso(dt)
             except Exception:
@@ -1053,7 +993,6 @@ class ReminderTool(Tool):
             "encrypted__resolution_note": reminder.get("encrypted__resolution_note")
         }
         
-        # Add contact information if linked
         if reminder.get("contact_uuid"):
             contact = self._get_contact_by_uuid(reminder["contact_uuid"])
             if contact:
@@ -1085,7 +1024,6 @@ class ReminderTool(Tool):
         import re
         ds = duration_str.strip().lower()
 
-        # Match "N unit" pattern
         m = re.match(r"^(\d+)\s*(hour|hours|minute|minutes|min|mins|day|days|week|weeks)$", ds)
         if m:
             qty = int(m.group(1))
@@ -1099,7 +1037,6 @@ class ReminderTool(Tool):
             elif unit.startswith("week"):
                 return timedelta(weeks=qty)
 
-        # Plain number → hours
         try:
             return timedelta(hours=int(ds))
         except ValueError:
@@ -1137,7 +1074,6 @@ class ReminderTool(Tool):
         if wall_time is not None:
             return parse_utc_time_string(local_datetime_to_utc_iso(wall_time, user_tz))
 
-        # Handle simple natural language
         try:
             base_local = convert_to_timezone(utc_now(), user_tz)
             if ds in ("today",):
@@ -1173,15 +1109,12 @@ class ReminderTool(Tool):
             if ds in ("next month",):
                 return ensure_utc(base_local + relativedelta(months=1))
         except Exception:
-            # Fall through to structured parsing
             pass
 
-        # Try structured parsing with timezone_utils (handles ISO, date-only, time-only)
         try:
             dt = parse_time_string(date_str, tz_name=user_tz)
             return ensure_utc(dt)
         except Exception:
-            # Final attempt: strict ISO parsing
             try:
                 return parse_utc_time_string(date_str)
             except Exception:
@@ -1203,7 +1136,6 @@ class ReminderTool(Tool):
         try:
             contacts = self._load_contacts()
             
-            # Search for contact by name (case-insensitive)
             name_lower = name.lower()
             for contact in contacts:
                 contact_name = (contact.get("encrypted__name") or "").lower()

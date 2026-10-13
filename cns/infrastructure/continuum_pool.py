@@ -50,7 +50,6 @@ def _trim_content_blocks(content: list, limit: int) -> int:
         total = len(json.dumps(content))
         if total <= limit:
             break
-        # Largest trimmable string field across all blocks.
         candidates = [
             (len(value), block, key)
             for block in content
@@ -114,9 +113,7 @@ class UnitOfWork:
         Args:
             *messages: One or more Message objects to persist
         """
-        # Hard cap on any single message content before DB persistence.
-        # Larger than tool result truncation (100k) since assistant messages
-        # can legitimately be long.
+        # Hard cap on single-message content, above tool result truncation (100k) — assistant messages can legitimately run long.
         limit = 150_000
 
         for msg in messages:
@@ -164,10 +161,8 @@ class UnitOfWork:
         Segment creation now happens automatically in repository.save_message().
         """
         if self.pending_messages:
-            # Batch save to database. The batch lands in a single transaction,
-            # so a mid-batch failure rolls back atomically — but the cached
-            # copy must not survive the failure either: invalidate it so no
-            # stale-cache/stale-disk divergence keeps serving the old whole.
+            # One transaction so a mid-batch failure rolls back atomically — and the
+            # cached copy must be invalidated too, or stale cache diverges from disk.
             try:
                 self.pool.repository.save_messages_batch(
                     self.pending_messages,
@@ -221,7 +216,6 @@ class UnitOfWork:
 
             logger.debug(f"Committed {len(self.pending_messages)} messages for continuum {self.continuum.id}")
 
-        # Update metadata if needed
         if self.metadata_updated:
             self.pool.repository.update_continuum_metadata(self.continuum)
             logger.debug(f"Updated metadata for continuum {self.continuum.id}")
@@ -265,9 +259,9 @@ class ContinuumPool:
         self.repository = repository
         self.session_loader = session_loader
         self.valkey_cache = ValkeyMessageCache()
-        # Per-user locks keyed by user_id: same-user get_or_create calls stay
-        # serialized, while cross-user IO (Valkey/Postgres) does not block on
-        # one another. The epoch compare-and-set remains the collapse guard.
+        # Per-user locks keyed by user_id: same-user get_or_create calls
+        # serialize, cross-user IO (Valkey/Postgres) never contends. The
+        # collapse guard is the epoch compare-and-set, not this lock.
         self._user_locks: dict[str, threading.Lock] = {}
         self._user_locks_guard = threading.Lock()
         # Collapse epoch captured at load, per user — consumed by begin_work()
@@ -286,48 +280,38 @@ class ContinuumPool:
         """
         user_id = get_current_user_id()
 
-        # Serialize only same-user get_or_create calls; cross-user turns no
-        # longer contend on one process-global lock.
         user_key = str(user_id)
         with self._user_locks_guard:
             user_lock = self._user_locks.setdefault(user_key, threading.Lock())
 
         with user_lock:
-            # Check Valkey cache first. The epoch is captured BEFORE the message
-            # read: any collapse that invalidates the messages we are about to
-            # read also bumps the epoch past what we capture, so the commit's
-            # compare-and-set skips the stale write.
+            # The epoch is captured BEFORE the message read: any collapse that
+            # invalidates the messages we are about to read also bumps the epoch
+            # past what we capture, so the commit's compare-and-set skips the stale write.
             epoch = self.valkey_cache.get_epoch()
             cached_messages = self.valkey_cache.get_continuum()
             self._loaded_epochs[str(user_id)] = epoch
 
-            # Get continuum structure from DB (must exist from signup)
             continuum = self.repository.get_continuum(user_id)
             if not continuum:
                 raise RuntimeError(f"Continuum not found for user {user_id}. Continuum should be created during signup.")
 
-            # No callback needed - using Unit of Work pattern
 
             if cached_messages is None:
-                # NEW SESSION - continuum expired from Valkey
                 logger.info(f"New session detected for user {user_id} - loading with session boundary")
 
-                # Load session context (segment summaries + boundary)
                 messages = self.session_loader.load_session_cache(
                     str(continuum.id), user_id
                 )
                 continuum.apply_cache(messages)
 
-                # Epoch captured before the DB read — a collapse in between
-                # means a newer cache entry exists; don't clobber it.
+                # Epoch captured before the DB read — a collapse in between means a newer cache entry exists; don't clobber it.
                 if messages:
                     self.valkey_cache.set_continuum_if_epoch(messages, epoch)
 
             else:
-                # CONTINUING SESSION - cache hit
                 logger.debug(f"Continuing session for user {user_id}")
 
-                # Apply cached messages to continuum
                 continuum.apply_cache(cached_messages)
 
             return continuum
@@ -363,7 +347,6 @@ class ContinuumPool:
         else:
             logger.debug(f"No cached continuum to invalidate for user {user_id}")
     
-# Global continuum pool instance
 _continuum_pool: ContinuumPool | None = None
 
 

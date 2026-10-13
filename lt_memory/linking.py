@@ -22,7 +22,6 @@ from utils.user_context import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
-# Link discovery thresholds
 SIMILARITY_THRESHOLD_FOR_LINKING = 0.75
 MAX_CANDIDATES_PER_MEMORY = 20
 MAX_LINK_TRAVERSAL_DEPTH = 3
@@ -180,7 +179,7 @@ class LinkingService:
         if not source_embedding:
             return []
 
-        seen_ids = {memory_id}  # Exclude source
+        seen_ids = {memory_id}
         candidates = []
         floor = ENTITY_SIMILARITY_FLOOR
 
@@ -201,7 +200,7 @@ class LinkingService:
                 if mem.id in seen_ids:
                     continue
                 if mem.importance_score is not None and mem.importance_score <= 0.0:
-                    continue  # Skip cold storage
+                    continue
                 # Similarity floor: suppress noise from common entities
                 if floor > 0 and mem.embedding:
                     if _cosine_similarity(source_embedding, mem.embedding) < floor:
@@ -246,7 +245,7 @@ class LinkingService:
             and len(active) == state.memory_count
             and freshness_stamp == state.freshness_stamp
         ):
-            return state  # still fresh
+            return state
 
         memory_ids = [m.id for m in active]
         texts = [m.text for m in active]
@@ -337,13 +336,11 @@ class LinkingService:
         if state.vectorizer is None or state.matrix is None:
             return []
 
-        # Transform source text against fitted vocabulary
         source_vector = state.vectorizer.transform([source_memory.text])
 
         from sklearn.metrics.pairwise import cosine_similarity
         similarities = cosine_similarity(source_vector, state.matrix).flatten()
 
-        # Collect candidates above threshold, excluding source
         threshold = TFIDF_SIMILARITY_THRESHOLD
         max_candidates = TFIDF_MAX_CANDIDATES
         scored = []
@@ -355,7 +352,6 @@ class LinkingService:
             if sim >= threshold:
                 scored.append((sim, mid))
 
-        # Sort by similarity descending, cap at max
         scored.sort(key=lambda x: x[0], reverse=True)
         top_ids = [mid for _, mid in scored[:max_candidates]]
 
@@ -408,7 +404,6 @@ class LinkingService:
             if not current_level:
                 break
 
-            # Get UUIDs for this level
             level_uuids = [item[0] for item in current_level]
             current_memories = self.db.get_memories_by_ids(level_uuids)
 
@@ -424,17 +419,14 @@ class LinkingService:
                         f"for {len(dead_links)} UUIDs during traversal"
                     )
 
-            # Build memory lookup
             memory_lookup = {m.id: m for m in current_memories}
 
-            # Process current level and extract next level
             next_level = []
             for uuid, link_meta, depth_level in current_level:
                 memory = memory_lookup.get(uuid)
                 if not memory:
                     continue
 
-                # Add to results (skip starting memory)
                 if uuid != memory_id:
                     all_related.append({
                         "memory": memory,
@@ -445,7 +437,6 @@ class LinkingService:
                         "linked_from_id": link_meta.get("source_id") if link_meta else None
                     })
 
-                # Extract outbound links for next level
                 for link in memory.outbound_links:
                     target_uuid = UUID(link["uuid"])
 

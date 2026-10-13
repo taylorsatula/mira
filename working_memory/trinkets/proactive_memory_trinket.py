@@ -53,7 +53,6 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
         """
         user_id = get_current_user_id()
 
-        # Update cache if memories are provided
         if 'memories' in context:
             self._user_memories[user_id] = context['memories']
 
@@ -61,7 +60,6 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
         if not memories:
             return ""
 
-        # Format memories for prompt
         memory_content = self._format_memories_for_prompt(memories)
 
         logger.debug(f"Formatted {len(memories)} memories for display")
@@ -94,10 +92,9 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
         formatted_id = format_memory_id(raw_id) if raw_id else 'unknown'
         text = memory.get('text', '')
 
-        # Build attributes
         attrs = [f'id="{formatted_id}"']
 
-        # Mark global memories for clear identification
+        # Mark global memories for clear identification — Mira must be able to recognize them as global.
         if memory.get('source') == 'global':
             attrs.append('source="global"')
 
@@ -108,13 +105,11 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
         parts = [f"<memory {' '.join(attrs)}>"]
         parts.append(f"<text>{html.escape(text)}</text>")
 
-        # Created time
         if memory.get('created_at'):
             created_dt = parse_time_string(memory['created_at'])
             relative_time = format_relative_time(created_dt)
             parts.append(f"<created>{relative_time}</created>")
 
-        # Temporal info
         temporal_attrs = []
         if memory.get('expires_at'):
             expires_dt = parse_time_string(memory['expires_at'])
@@ -127,7 +122,6 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
         if temporal_attrs:
             parts.append(f"<temporal {' '.join(temporal_attrs)}/>")
 
-        # Annotations (contextual notes)
         annotations = memory.get('annotations', [])
         if annotations:
             parts.append("<annotations>")
@@ -143,7 +137,6 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
                     parts.append(f'<note>{escaped_text}</note>')
             parts.append("</annotations>")
 
-        # Linked memories as compact inline context
         linked_memories = memory.get('linked_memories', [])
         if linked_memories:
             linked_context = self._format_linked_context(linked_memories, seen_linked_ids)

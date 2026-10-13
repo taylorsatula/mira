@@ -72,7 +72,7 @@ class GroqDialect(OpenAIChatBase):
 
         payload["reasoning_effort"] = effort
         # Ask Groq to return reasoning as a separate field rather than wrapping
-        # it inline in the assistant message with <think> tags.
+        # it inline in the assistant message with `<think>` tags.
         payload["reasoning_format"] = "parsed"
 
     def _extract_reasoning_message(self, message: MappingABC[str, Any]) -> str:

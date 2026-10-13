@@ -145,13 +145,9 @@ class LLMLifecycle:
         result: list[Any] = []
         errors: list[BaseException] = []
 
-        # The watcher thread starts with an empty contextvars context, but the
-        # dialect's stream code driven from it reads ambient state (the
-        # file-artifact sink resolves the current user from context) - so a
-        # stalled-path pull would otherwise drop artifacts the response
-        # summary still advertises. Run the invocation inside a copy of the
-        # caller's context so the watcher path behaves identically to the
-        # direct path.
+        # Watcher thread lacks the caller's contextvars; UserArtifactStore.save_file_artifact
+        # resolves the user from context, so a stalled-path pull would silently drop
+        # artifacts the response summary advertises — copy_context() restores it.
         context = contextvars.copy_context()
 
         def invoke() -> None:
@@ -165,13 +161,9 @@ class LLMLifecycle:
         # Poll instead of one bounded join: a set cancel event must interrupt
         # a stalled pull, not wait out the stall bound. A bare join blocks for
         # up to provider_response_timeout, so a user halt during a stalled
-        # reply goes unnoticed for that whole window — a blocking call placed
-        # between cancellation checks makes cancellation unreachable for its
-        # duration. abort_active_stream() closes the in-flight transport (the
-        # only cross-thread unblock for a worker inside a socket read); raising
-        # GenerationCancelled hands the turn to the orchestrator's cancel
-        # guard (stopped-turn semantics) instead of diagnosing a stall the
-        # user already called off.
+        # reply goes unnoticed for that whole window. abort_active_stream()
+        # closes the in-flight transport, the only cross-thread unblock for a
+        # worker inside a socket read.
         deadline = time.monotonic() + self.response_timeout_seconds
         while True:
             worker.join(timeout=self._CANCEL_POLL_SECONDS)

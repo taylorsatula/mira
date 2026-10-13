@@ -65,7 +65,7 @@ class SummaryGenerator:
         """
         self.repository = repository
 
-        # Use provided LLM or create default (routing via model_config= per-call)
+        # Routing is per-call via model_config= on each generate_response invocation.
         self.llm_provider = llm_provider or get_llm_provider()
         self.tag_parser = TagParser()
         self._load_prompts()
@@ -74,11 +74,9 @@ class SummaryGenerator:
         """Load prompts from files."""
         from config.prompts.loader import load_prompt
 
-        # Load segment summary prompts
         segment_system_prompt = load_prompt("segment_summary_system.txt")
         segment_user_template = load_prompt("segment_summary_user.txt")
 
-        # Store prompts in a dictionary
         self.PROMPTS = {
             SummaryType.SEGMENT: SummaryPrompt(
                 system_prompt=segment_system_prompt,
@@ -116,28 +114,23 @@ class SummaryGenerator:
         Raises:
             ValueError: If summary generation fails
         """
-        # Get prompt configuration
         if summary_type in self.PROMPTS:
             prompt_config = self.PROMPTS[summary_type]
         else:
             raise ValueError(f"No prompt defined for {summary_type}")
 
-        # Prepare prompt based on summary type
         if content_override:
-            # Use pre-formatted content (e.g., chunked synthesis)
             prompt_text = prompt_config.format(conversation_text=content_override)
         else:
             prompt_text = self._prepare_prompt(
                 messages, summary_type, prompt_config, tools_used, previous_summaries
             )
 
-        # Format system prompt with segment timestamp
         segment_time = self._get_segment_time(messages)
         formatted_system_prompt = prompt_config.system_prompt.format(
             current_time=segment_time
         )
 
-        # Generate summary via LLM with system/user messages
         llm_messages = [
             {"role": "system", "content": formatted_system_prompt},
             {"role": "user", "content": prompt_text}
@@ -151,7 +144,6 @@ class SummaryGenerator:
 
             raw_summary_output = self.llm_provider.extract_text_content(response)
 
-            # Extract synopsis, display title, and complexity from output
             result = self._extract_summary_components(raw_summary_output)
 
             logger.info(
@@ -162,7 +154,6 @@ class SummaryGenerator:
             return result
 
         except ContextOverflowError:
-            # Segment too large for single pass - use hierarchical summarization
             if messages and summary_type == SummaryType.SEGMENT:
                 logger.info("Segment exceeded context limit, falling back to chunked summarization")
                 try:
@@ -173,7 +164,6 @@ class SummaryGenerator:
                     logger.error(f"Chunked summarization also failed: {e}")
                     raise ValueError(f"Chunked summary generation failed: {e}") from e
             else:
-                # Non-segment summaries can't be chunked
                 raise
 
         except Exception as e:
@@ -192,13 +182,10 @@ class SummaryGenerator:
         For segment summaries, includes previous summaries for narrative continuity.
         The LLM can then use connective phrases like "Building on Tuesday's work..."
         """
-        # Format messages for summarization
         conversation_text = self._format_messages_for_llm(messages)
 
-        # Format previous summaries for continuity (if provided)
         previous_context = self._format_previous_summaries(previous_summaries)
 
-        # For SEGMENT summaries, include tools_used and previous_summaries
         if summary_type == SummaryType.SEGMENT:
             tools_text = "None" if not tools_used else ", ".join(tools_used)
             return prompt_config.format(
@@ -207,7 +194,6 @@ class SummaryGenerator:
                 previous_summaries=previous_context
             )
 
-        # For other summary types, just use conversation text
         return prompt_config.format(conversation_text=conversation_text)
 
     def _format_previous_summaries(self, previous_summaries: Optional[List[Message]]) -> str:
@@ -226,7 +212,7 @@ class SummaryGenerator:
             end_time = segment.metadata.get('segment_end_time', '')
             summary_text = segment.content if isinstance(segment.content, str) else str(segment.content)
 
-            # Format as: **Title** (timestamp): summary
+            # LLM wire contract: previous summaries are fed as **Title** (timestamp): summary lines.
             formatted_parts.append(f"**{title}** ({end_time}):\n{summary_text}")
 
         return "\n\n".join(formatted_parts)
@@ -236,14 +222,12 @@ class SummaryGenerator:
         formatted_lines = []
 
         for msg in messages:
-            # Skip system notifications
             if msg.metadata.get('system_notification', False):
                 continue
 
             role_label = msg.role.upper()
             content = msg.content
 
-            # Preprocess structured content (strips media, truncates tool results)
             if isinstance(content, list):
                 preprocessed = preprocess_content_blocks(content)
                 content = ' '.join(preprocessed.text_parts)
@@ -275,7 +259,6 @@ class SummaryGenerator:
         Raises:
             ValueError: If display_title tag is missing (instruction-following failure)
         """
-        # Parse tags using tag_parser
         parsed = self.tag_parser.parse_response(summary_output)
 
         display_title = parsed.get('display_title')
@@ -299,7 +282,6 @@ class SummaryGenerator:
                 f"(empty or budget-exhausted response; first 200 chars: {summary_output[:200]!r})"
             )
 
-        # Default complexity to 2 (moderate) if missing or invalid
         if complexity is None or complexity not in [0.5, 1, 2, 3]:
             logger.warning(
                 f"LLM did not provide valid complexity score (got {complexity}), "
@@ -342,16 +324,13 @@ class SummaryGenerator:
             user_tz = "UTC"
 
         if messages and len(messages) > 0:
-            # Use first message timestamp as segment time, converted from UTC
             first_msg_time = messages[0].created_at
             return convert_from_utc(first_msg_time, user_tz).strftime("%B %d, %Y")
         else:
-            # Fallback to current time if no messages
             return convert_from_utc(utc_now(), user_tz).strftime("%B %d, %Y")
 
-    # --- Hierarchical summarization for oversized segments ---
 
-    # Target ~50k tokens per chunk, estimate 4 chars/token
+    # Target ~50k tokens per chunk; 4 chars/token per the standard tokenization rule of thumb.
     _CHUNK_TARGET_CHARS = 200000
 
     def _chunk_messages(self, messages: List[Message]) -> List[List[Message]]:
@@ -446,10 +425,8 @@ class SummaryGenerator:
         chunk_summaries = []
         for i, chunk in enumerate(chunks):
             logger.debug(f"Summarizing chunk {i+1}/{len(chunks)}")
-            # Only first chunk gets previous summaries for continuity
             chunk_context = previous_summaries if i == 0 else None
             chunk_result = self._summarize_chunk(chunk, tools_used, chunk_context)
-            # Use just the synopsis text for synthesis (ignore per-chunk title/complexity)
             chunk_summaries.append(chunk_result.synopsis)
 
         return self._synthesize_chunk_summaries(chunk_summaries, tools_used)

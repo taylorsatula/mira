@@ -25,13 +25,11 @@ PREVIEW_TTL_SECONDS = 600
 
 _LORA_PREVIEW_PREFIX = "lora_preview"
 
-# Module-level state — loaded once per process
 _refinement_system_prompt: Optional[str] = None
 _critic_system_prompt: Optional[str] = None
 _critic_user_template: Optional[str] = None
 _llm_provider: Optional[LLMProvider] = None
 
-# Section list for critic context (populated on first use)
 _section_list: Optional[str] = None
 
 CRITIC_MAX_ATTEMPTS = 3
@@ -128,7 +126,6 @@ def refine_lora(user_id: str, instructions: str) -> dict[str, str]:
     if not instructions or not instructions.strip():
         raise ValueError("Refinement instructions cannot be empty.")
 
-    # Run refinement with critic validation loop
     candidate_xml = _run_refinement(current, instructions)
 
     # Critic validation loop (mirrors UserModelSynthesizer.synthesize)
@@ -175,7 +172,6 @@ def refine_lora(user_id: str, instructions: str) -> dict[str, str]:
     from config import config
     validate_section_anchors(candidate_xml, config.system_prompt)
 
-    # Store preview in Valkey with TTL
     preview_id = str(uuid4())
     valkey_key = f"{_LORA_PREVIEW_PREFIX}:{user_id}:{preview_id}"
 
@@ -262,7 +258,6 @@ def _pop_preview(user_id: str, preview_id: str, required: bool = True) -> Option
             "Please generate a new preview."
         )
 
-    # Valkey returns bytes
     if isinstance(proposed, bytes):
         proposed = proposed.decode("utf-8")
 

@@ -100,9 +100,6 @@ MAX_CONTENT_LENGTH = 100_000
 STREAM_SEND_TIMEOUT_SECONDS = 30.0
 
 
-# --- Inbound frames -------------------------------------------------------
-
-
 class ProtocolModel(BaseModel):
     """Strict base for every WebSocket frame."""
 
@@ -162,9 +159,6 @@ class PingFrame(ProtocolModel):
 
 ClientFrame = Annotated[AuthFrame | MessageFrame | HaltFrame | PingFrame, Field(discriminator="type")]
 CLIENT_FRAME_ADAPTER = TypeAdapter(ClientFrame)
-
-
-# --- Outbound frames ------------------------------------------------------
 
 
 class AuthSuccessFrame(ProtocolModel):
@@ -396,8 +390,7 @@ class ChatConnection:
         try:
             self.outbound.put_nowait(validated)
         except asyncio.QueueFull:
-            # A full queue means a dead client; a dropped terminal frame would
-            # leave a client promise pending forever, so kill the connection.
+            # A full queue means a dead client; a dropped terminal frame would strand a client promise forever.
             logger.warning("Outbound queue full; dropping frame and closing connection")
             self.accepts_output = False
             if self.writer_task is not None:
@@ -533,9 +526,8 @@ async def push_proactive_message(
     return delivered
 
 
-# The event loop that owns every ChatConnection's outbound queue. Captured on
-# the loop itself when a connection is accepted; off-loop callers cross to it
-# through push_proactive_message_sync.
+# The event loop owning every ChatConnection's outbound queue: captured when a
+# connection is accepted; off-loop callers cross to it via push_proactive_message_sync.
 _main_event_loop: asyncio.AbstractEventLoop | None = None
 
 
@@ -559,11 +551,7 @@ def push_proactive_message_sync(
     """
     loop = _main_event_loop
     if loop is None or loop.is_closed() or not loop.is_running():
-        # No live loop to cross to: no client ever connected, or the owning
-        # server's loop is gone (closed, or stopped mid-teardown before
-        # close). Either way nothing can be delivered — 0, and the message
-        # remains visible via history — instead of pinning the caller's
-        # thread on a loop that will never turn.
+        # No live loop — nothing can be delivered: 0 keeps the message visible via history instead of pinning the caller's thread.
         return 0
     future = asyncio.run_coroutine_threadsafe(
         push_proactive_message(
@@ -578,10 +566,7 @@ def push_proactive_message_sync(
     try:
         return future.result(timeout=STREAM_SEND_TIMEOUT_SECONDS)
     except concurrent.futures.TimeoutError:
-        # The loop did not run the push within the bound — it is wedged. Pull
-        # the loop-side future so a late send cannot deliver a stale frame,
-        # then return 0: the message is still visible via history. Never hang
-        # the caller's thread on a loop that is not turning.
+        # Pull the loop-side future so a late send cannot deliver a stale frame; 0 keeps the message visible via history.
         future.cancel()
         logger.warning(
             "Proactive push bridge for user %s timed out after %.1fs; "
@@ -601,9 +586,7 @@ class WebSocketChatHandler:
         self.continuum_repo = get_continuum_repository()
         self.auth_service = get_auth_service()
         self.session_manager = SessionManager()
-        # TTL derived from the structural max turn length (see chat.py);
-        # background renewal per turn keeps it refreshed, so it is a crash
-        # backstop, not a turn-length estimate.
+        # TTL is a crash backstop derived from the structural max turn length (see chat.py); per-turn renewal keeps it refreshed.
         self.user_request_lock = UserRequestLock(ttl=_TURN_LOCK_TTL_SECONDS)
 
     async def authenticate(self, websocket: WebSocket, token: str | None) -> str:
@@ -679,9 +662,7 @@ class WebSocketChatHandler:
             })
             return
         except Exception:
-            # Authentication infrastructure failed (e.g. Valkey unreachable
-            # inside validate_session). Framing the failure keeps the client
-            # from seeing a silent socket close; no internal detail is leaked.
+            # Auth infrastructure failed; a framed failure avoids the silent socket close, leaking no internal detail.
             await connection.send({
                 "type": "protocol_error",
                 "code": "AUTH_UNAVAILABLE",
@@ -788,11 +769,7 @@ class WebSocketChatHandler:
             })
             return
 
-        # Background renewal: one renewal every TTL/3 — safely inside the
-        # TTL — so a turn of any legal length (including a silent provider
-        # or tool stall with no streamed frame) cannot outlive its own lock
-        # and admit a concurrent second turn on the same segment. Mirrors
-        # cns/api/chat.py.
+        # Renewal every TTL/3 keeps a legal turn safely inside its own lock; mirrors cns/api/chat.py.
         renewal_stop = self.user_request_lock.start_renewal(user_id, lock_token)
         enter_turn()
 
@@ -801,8 +778,7 @@ class WebSocketChatHandler:
             if not content:
                 raise ValueError("Message cannot be empty")
             set_cancel_event(cancel_event)
-            # Attachments decode and compress off the event loop, inside the
-            # copied context so RLS user scoping rides along.
+            # Attachments decode and compress off the event loop, inside the copied context so RLS user scoping rides along.
             context = contextvars.copy_context()
             compressed = await run_in_threadpool(context.run, self._prepare_image, message)
             processed_document = await run_in_threadpool(context.run, self._prepare_document, message)
@@ -837,41 +813,25 @@ class WebSocketChatHandler:
                 frame = self._server_frame_for_event(event, turn_id, segment_id)
                 if frame is None:
                     return
-                # R5's other half: include_thinking must select the reasoning
-                # stream. A field the transport accepts and never reads is a lie
-                # about what the client asked for.
+                # include_thinking must select the reasoning stream: a field the transport accepts and never reads lies to the client.
                 if frame["type"] == "thinking" and not message.include_thinking:
                     return
 
                 async def send_frame() -> None:
-                    # Loop-side half of the abort path. A wedged loop may not
-                    # run this coroutine until after the turn has been aborted
-                    # below — concurrent.futures cancellation cannot stop a
-                    # queued await-free send on this interpreter — so check the
-                    # halt signal on wake and drop the frame instead of
-                    # delivering a stale delta after turn_stopped.
+                    # Check the halt signal on wake, or a stale delta lands after turn_stopped.
                     if cancel_event.is_set():
                         return
                     await connection.send(frame)
 
                 future = asyncio.run_coroutine_threadsafe(send_frame(), loop)
                 try:
-                    # Bounded bridge wait: an unbounded result() would pin this
-                    # worker thread forever if the loop wedges, and a user halt
-                    # (read on the loop) could never reach the turn.
+                    # Bounded wait: an unbounded result() would pin this thread and make a user halt unreachable.
                     future.result(timeout=STREAM_SEND_TIMEOUT_SECONDS)
                 except concurrent.futures.TimeoutError:
-                    # The loop did not run the send within the bound — it is
-                    # wedged. Pull the loop-side future so the send cannot
-                    # linger, then abort the turn through the same cancellation
-                    # path a user halt takes: check_cancelled() at the next
-                    # stream/tool boundary raises GenerationCancelled and the
-                    # turn ends as turn_stopped(stall). "stall", not "halt":
-                    # the user asked for nothing — the server failed to turn
-                    # its event loop, and every streaming turn in the process
-                    # trips this same expiry. The reason must say so, and the
-                    # error below is the alarm: a wedged loop otherwise
-                    # self-heals at 30s and reads in the logs as users
+                    # The loop is wedged: pull the loop-side future so the send
+                    # cannot linger, then abort via the halt path — the turn ends
+                    # turn_stopped(stall). "stall", not "halt": the user asked for
+                    # nothing; a wedged loop otherwise reads in the logs as users
                     # changing their minds.
                     future.cancel()
                     set_cancel_reason("stall")
@@ -888,10 +848,7 @@ class WebSocketChatHandler:
                     )
                     return
                 except concurrent.futures.CancelledError:
-                    # Cancellation reached the loop-side future while this
-                    # thread was blocked (connection/loop teardown). Route it
-                    # into the turn's halt signal instead of letting a bare
-                    # cancellation leak out of a worker thread.
+                    # Loop-side cancellation (connection/loop teardown): route it into the turn's halt signal instead of leaking a bare cancellation.
                     set_cancel_reason("halt")
                     cancel_event.set()
                     return
@@ -971,12 +928,9 @@ class WebSocketChatHandler:
             exit_turn()
             trigger_restart_if_pending()
 
-        # Not inside the try: the lock must already be free when this frame is
-        # queued. A send failure here cannot be reported to the client (this
-        # frame was the report) and the lock is already released, so it is
-        # logged and the turn task ends. terminal_frame is None only if the
-        # task was cancelled (BaseException bypasses the except clauses) — the
-        # cancellation then continues past this point on its own.
+        # Outside the try: the lock must already be free when this frame is
+        # queued; a send failure is logged only — this frame was the report.
+        # terminal_frame is None only on task cancellation, which continues past here.
         if terminal_frame is not None:
             try:
                 await connection.send(terminal_frame)
@@ -1123,10 +1077,8 @@ class WebSocketChatHandler:
                 turn_id=turn_id,
             )
         except Exception:
-            # process_message stages the accepted user message before model
-            # work begins, so a failure after acceptance must still commit what
-            # the user was told was received. Commit the staged rows, then let
-            # the exception propagate to the turn_error path.
+            # A failure after acceptance must still commit what the user was told
+            # was received: commit the staged rows, then let the exception propagate.
             if unit_of_work.pending_messages:
                 unit_of_work.commit()
             raise

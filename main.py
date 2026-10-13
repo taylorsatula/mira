@@ -42,10 +42,8 @@ from cns.api.base import APIError, create_error_response, generate_request_id
 from utils.scheduler_service import scheduler_service
 from utils.scheduled_tasks import initialize_all_scheduled_tasks
 
-# Suppress routine APScheduler job execution logs (running/success/debug chatter)
 logging.getLogger('apscheduler.executors.default').setLevel(logging.WARNING)
 logging.getLogger('apscheduler.scheduler').setLevel(logging.WARNING)
-# logging.getLogger('tools.implementations.imagegen_tool').setLevel(logging.DEBUG)
 
 logger = logging.getLogger(__name__)
 
@@ -70,24 +68,21 @@ UI_BROWSER_FILES = (
 async def lifespan(app: FastAPI):
     """Application lifecycle management."""
     
-    # Startup
     logger.info("  Starting MIRA...\n\n\n")
     logger.info("====================")
 
     # Two-mode identity bootstrap: `single` auto-provisions its local account
     # lazily through GET /v0/auth/local/session on first visit; `multi`
-    # bootstraps through public signup and magic links. Neither seeds anything
-    # at boot.
+    # bootstraps through public signup and magic links. Neither mode seeds
+    # anything at boot.
     logger.info(f"Auth mode: {auth_mode()}")
 
 
-    # Configure FastAPI thread pool for synchronous endpoints (per-worker)
     from anyio import to_thread
     thread_limit = config.api_server.sync_endpoint_thread_limit
     to_thread.current_default_thread_limiter().total_tokens = thread_limit
     logger.info(f"FastAPI thread pool configured for {thread_limit} concurrent threads")
 
-    # Pre-initialize expensive singleton resources at startup
     logger.info("Pre-initializing singleton resources...")
 
     # Preload all Vault secrets into memory cache (prevents token expiration issues)
@@ -98,7 +93,6 @@ async def lifespan(app: FastAPI):
         logger.critical(f"Failed to preload Vault secrets: {e}")
         raise RuntimeError(f"vault initialization failed - cannot start MIRA: {e}") from e
 
-    # Load announcement config (cached for lifetime of process)
     try:
         load_announcement()
     except Exception as e:
@@ -114,7 +108,6 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"embeddings initialization failed - cannot start MIRA: {e}") from e
     logger.info(f"Embeddings provider initialized: {type(embeddings_provider).__name__}")
     
-    # Initialize continuum repository (creates DB connection pool)
     from cns.infrastructure.continuum_repository import get_continuum_repository
     try:
         continuum_repo = get_continuum_repository()
@@ -145,12 +138,11 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"llm_provider initialization failed - cannot start MIRA: {e}") from e
 
     # Warm the dialect registry: importing every dialect module (including the
-    # anthropic SDK) costs hundreds of milliseconds; doing it lazily would land
-    # on the first LLM request of every fresh process instead of here at boot.
+    # anthropic SDK) is slow enough that doing it lazily would land on the
+    # first LLM request of every fresh process instead of here at boot.
     from clients.llm.dialect_registry import get_registry
     get_registry().discover()
 
-    # Initialize lt_memory factory following MIRA's singleton pattern
     logger.info("Initializing lt_memory factory...")
     try:
         from utils.database_session_manager import get_shared_session_manager
@@ -167,7 +159,6 @@ async def lifespan(app: FastAPI):
         logger.critical(f"Failed to initialize lt_memory factory: {e}")
         raise RuntimeError(f"lt_memory initialization failed - cannot start MIRA: {e}") from e
 
-    # Initialize orchestrator as singleton
     logger.info("Initializing continuum orchestrator...")
     from cns.integration.factory import create_cns_orchestrator
     from cns.services.orchestrator import initialize_orchestrator
@@ -180,16 +171,10 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"cns_orchestrator initialization failed - cannot start MIRA: {e}") from e
     logger.info("CNS Orchestrator initialized as global singleton")
 
-    # Flush Valkey caches on startup except auth sessions, CSRF tokens paired
-    # with them, and rate limiting. `csrf:` must be listed because
-    # auth/session.py writes `csrf:<digest>` alongside `session:<digest>` and
-    # the session revocation helpers delete both together — flushing CSRF
-    # while preserving sessions (O-10) would 403 the first
-    # cookie-authenticated write after every restart.
-    # The `pending_memories*` prefixes preserve the durable queue of
-    # user-confirmed manual memories (memory_tool.create_memory) plus its
-    # `pending_memories_done:` / `pending_memories_attempts:` idempotency
-    # markers — these exist nowhere else, so a restart must not destroy them.
+    # Preserve-prefix list tracks its writers: auth/session.py writes `csrf:<digest>`
+    # beside `session:<digest>` and revoke deletes both, so flushing CSRF while keeping
+    # sessions 403s the first cookie-authenticated write after restart (O-10).
+    # `pending_memories*` (queue + `_done:`/`_attempts:` markers) exists nowhere else.
     logger.info("Flushing Valkey caches (preserving sessions, CSRF tokens, rate limits and pending memories)...")
     from clients.valkey_client import get_valkey_client
     try:
@@ -215,23 +200,18 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Playwright not available: {e}")
         logger.warning("web_tool will not be able to render JavaScript-heavy pages")
 
-    # Event bus is synchronous
     logger.info("Event bus initialized (synchronous)")
 
     try:
-        # Initialize all scheduled tasks through central registry
         initialize_all_scheduled_tasks(scheduler_service)
 
-        # Register segment timeout detection job (needs event_bus from orchestrator)
         from utils.scheduled_tasks import register_segment_timeout_job, register_sidebar_dispatcher_job
         register_segment_timeout_job(scheduler_service, orchestrator.event_bus)
 
-        # Register sidebar dispatcher (needs tool_repo + event_bus)
         register_sidebar_dispatcher_job(
             scheduler_service, orchestrator.tool_repo, orchestrator.event_bus
         )
 
-        # Register the daily release check (GitHub releases/latest -> VERSION)
         from utils.update_check import register_update_check_job
         register_update_check_job(scheduler_service)
 
@@ -267,7 +247,6 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"segment_timeout_check failed - cannot start MIRA: {e}") from e
     logger.info("Startup timeout check complete (stale segments will collapse via event pipeline)")
 
-    # Verify Vault connection (non-blocking)
     from clients.vault_client import test_vault_connection
     vault_status = test_vault_connection()
     if vault_status["status"] != "success":
@@ -319,42 +298,32 @@ async def lifespan(app: FastAPI):
     
     
     
-    ###
-    #
     
     yield
     
-    #
-    ###
     
     
     
     
     
-    # Shutdown
     logger.info("Shutting down MIRA...")
     scheduler_service.stop()
 
-    # Close all active WebSocket connections
     from cns.api.websocket_chat import close_all_connections
     await close_all_connections()
     logger.info("WebSocket connections closed")
     
-    # Shutdown event bus
     if orchestrator.event_bus:
         orchestrator.event_bus.shutdown()
         logger.info("Event bus shutdown complete")
     
-    # Shutdown Valkey client
     from clients.valkey_client import get_valkey_client
     valkey = get_valkey_client()
     if valkey:
         await valkey.shutdown()
     
-    # Clean up singleton resources
     logger.info("Cleaning up singleton resources...")
 
-    # Clean up lt_memory factory
     try:
         lt_memory_factory = get_lt_memory_factory()
         if lt_memory_factory:
@@ -363,7 +332,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Error cleaning up LT_Memory factory: {e}")
 
-    # Shutdown PlaywrightService
     try:
         from utils.playwright_service import PlaywrightService
         if PlaywrightService._instance:
@@ -372,12 +340,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Error shutting down PlaywrightService: {e}")
 
-    # Clean up UserDataManager SQLite connections
     from utils.userdata_manager import clear_manager_cache
     clear_manager_cache()
     logger.info("UserDataManager cache cleared (SQLite connections closed)")
 
-    # Clean up database connections
     from clients.postgres_client import PostgresClient as ShutdownPostgresClient
     ShutdownPostgresClient.close_all_pools()
     logger.info("PostgreSQL connection pools closed")
@@ -400,14 +366,12 @@ def create_app() -> FastAPI:
         lifespan=lifespan
     )
     
-    # Global exception handlers for consistent error responses
     @app.exception_handler(ValidationError)
     async def validation_error_handler(request: Request, exc: ValidationError):
         """Handle Pydantic validation errors."""
         request_id = generate_request_id()
         errors = exc.errors()
         
-        # Format validation errors consistently
         formatted_errors = []
         for error in errors:
             formatted_errors.append({
@@ -431,7 +395,6 @@ def create_app() -> FastAPI:
         request_id = generate_request_id()
         errors = exc.errors()
         
-        # Format validation errors with field details
         formatted_errors = []
         for error in errors:
             formatted_errors.append({
@@ -444,7 +407,6 @@ def create_app() -> FastAPI:
             APIError("REQUEST_VALIDATION_ERROR", "Invalid request format", {"detail": formatted_errors}),
             request_id
         )
-        # Keep FastAPI's standard validation error format for compatibility
         return JSONResponse(
             status_code=422,
             content={"detail": formatted_errors}
@@ -499,10 +461,8 @@ def create_app() -> FastAPI:
         """Handle all unhandled exceptions."""
         request_id = generate_request_id()
         
-        # Log the actual error for debugging
         logger.error(f"Unhandled exception (request_id: {request_id}): {exc}", exc_info=True)
         
-        # Return safe error message to client
         response = create_error_response(
             APIError("INTERNAL_ERROR", "An unexpected error occurred", {"request_id": request_id}),
             request_id
@@ -529,7 +489,6 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
     
-    # API routes - v0 versioning (beta signal)
     app.include_router(health.router, prefix="/v0/api", tags=["health"])
     app.include_router(update.router, prefix="/v0/api", tags=["update"])  # Public update check
     # The auth surface mounts unconditionally in both modes; every caller
@@ -601,7 +560,6 @@ def create_app() -> FastAPI:
     async def serve_settings():
         return FileResponse(UI_BROWSER_DIR / "settings" / "index.html")
 
-    # Browser-expected static files from root
     @app.get("/apple-touch-icon.png", include_in_schema=False)
     async def serve_apple_touch_icon():
         return FileResponse(UI_BROWSER_DIR / "apple-touch-icon.png")
@@ -624,7 +582,6 @@ def create_app() -> FastAPI:
 def main():
     """Main entry point."""
 
-    # Parse command-line arguments
     parser = argparse.ArgumentParser(description='MIRA - AI Assistant with persistent memory')
     parser.add_argument('--firehose', action='store_true',
                        help='Enable firehose mode: log all LLM API calls to firehose_output.json for debugging')
@@ -636,7 +593,6 @@ def main():
         _toggle_traffic_tap(None, None)
 
     try:
-        # Set logging level
         logging.getLogger().setLevel(getattr(logging, config.system.log_level.upper(), logging.INFO))
         
         logger.info(f"Starting MIRA on {config.api_server.host}:{config.api_server.port}")
@@ -666,7 +622,6 @@ def main():
         from utils.power_on_self_test import run_pre_server_post_gate
         run_pre_server_post_gate()
         
-        # Run the server — Hypercorn manages SIGTERM/SIGINT natively
         asyncio.run(hypercorn.asyncio.serve(create_app(), hypercorn_config))
 
         # An in-process restart request (bash_tool restart_mira) SIGTERMed

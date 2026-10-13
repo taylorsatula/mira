@@ -75,11 +75,9 @@ class AuthService:
         # inject any structural MailSender without touching this module.
         self.mailer = mailer
 
-        # Initialize required services immediately
         from .rate_limiter import RateLimiter
         self.rate_limiter = RateLimiter()
 
-        # Configurable timeouts (for testing)
         self.SESSION_IDLE_TIMEOUT = config.SESSION_IDLE_TIMEOUT
         self.SESSION_MAX_LIFETIME = config.SESSION_MAX_LIFETIME
 
@@ -138,7 +136,6 @@ class AuthService:
         except (ZoneInfoNotFoundError, ValueError) as error:
             raise AuthError("invalid_timezone", "timezone must be a valid IANA timezone") from error
 
-        # Check rate limit to prevent signup spam
         allowed, retry_after = self.rate_limiter.is_allowed(email, ip_address or None)
         if not allowed:
             self.security_logger.log_event(
@@ -199,12 +196,10 @@ class AuthService:
             email=email
         )
 
-        # Send magic link to new user. The account row has already committed:
-        # a delivery failure is not a creation failure, and the row is never
-        # torn down for it. Surface the distinct delivery-failed outcome with
-        # a resend cue — the user already owns the account and can sign in
-        # by requesting a magic link. Rate-limit refusals still propagate
-        # unchanged.
+        # Row already committed: a delivery failure is not a creation
+        # failure, so the row is never torn down for it. Surface the distinct
+        # delivery-failed outcome with a resend cue. Rate-limit refusals still
+        # propagate unchanged.
         try:
             self.request_magic_link(email, ip_address, user_agent)
         except AuthError as error:
@@ -368,7 +363,6 @@ class AuthService:
         # Same canonical form as signup: the rate-limit key and the
         # WHERE-email lookup see the lowercased address.
         email = normalize_email(email)
-        # Check rate limit (both email and IP-based)
         allowed, retry_after = self.rate_limiter.is_allowed(email, ip_address or None)
         if not allowed:
             self.security_logger.log_event(
@@ -388,7 +382,7 @@ class AuthService:
         # Get user (but don't reveal whether they exist)
         user = self.db.get_user_by_email(email)
         if not user:
-            # SECURITY FIX: Log internally but return success to prevent user enumeration
+            # Log internally but return success to prevent user enumeration
             self.security_logger.log_event(
                 "auth.magic_link_request",
                 success=False,
@@ -397,11 +391,9 @@ class AuthService:
                 user_agent=user_agent,
                 details={"reason": "user_not_found"}
             )
-            # Add randomized delay to prevent timing attacks (simulate email send time)
-            # Uses normal distribution: mean=0.5s, 85% within ±0.1s, total spread 0.3s
+            # Randomized delay to prevent timing attacks (simulate email send time)
             delay = max(0.35, min(0.65, random.gauss(0.5, 0.07)))
             time.sleep(delay)
-            # Return success - don't reveal that user doesn't exist
             return True
 
         if user.subject_kind == "demo":
@@ -418,13 +410,11 @@ class AuthService:
             time.sleep(delay)
             return True
 
-        # User exists - proceed with magic link generation
         token = self._generate_secure_token()
         token_hash = self._hash_token(token)
         expires_at = utc_now() + timedelta(seconds=config.MAGIC_LINK_EXPIRY)
 
-        # Try to send email first (before storing in DB)
-        # This ensures we don't store magic links if email fails
+        # Send before storing: a failed send stores no magic link.
         try:
             mailer = self._resolve_mailer()
         except AuthError:
@@ -447,7 +437,6 @@ class AuthService:
         try:
             self._send_magic_link_email(mailer, email, token)
         except Exception:
-            # Log failure but don't expose error details
             self.security_logger.log_event(
                 "auth.magic_link_request",
                 success=False,
@@ -457,14 +446,12 @@ class AuthService:
                 user_agent=user_agent,
                 details={"reason": "email_send_failed"}
             )
-            # Generic error message (don't reveal email-specific failure)
             raise AuthError(
                 "service_error",
                 "Unable to send magic link. Please try again.",
                 {}
             )
 
-        # Store magic link only if email was sent successfully
         self.db.create_magic_link(
             user_id=str(user.id),
             email=email,
@@ -514,7 +501,6 @@ class AuthService:
             )
             raise AuthError("invalid_token", "Invalid or expired magic link")
 
-        # Get user
         user = self.db.get_user_by_id(magic_link.user_id)
         if not user or not user.is_active:
             raise AuthError("user_not_found", "User not found or inactive")
@@ -523,7 +509,6 @@ class AuthService:
         if not self.db.update_user_login(str(user.id)):
             raise AuthError("user_not_found", "User not found or inactive")
 
-        # Create session
         session_token = self.session_manager.create_session(
             user,
             idle_timeout=self.SESSION_IDLE_TIMEOUT,
@@ -537,7 +522,6 @@ class AuthService:
             email=user.email
         )
 
-        # Return user profile and session token
         user_profile = UserProfile(
             id=str(user.id),
             email=user.email,
@@ -549,7 +533,6 @@ class AuthService:
 
         return user_profile, session_token
 
-    # === API Token Support (PostgreSQL-backed, hashed storage) ===
     def create_api_token(self, name: str, expires_in_days: Optional[int] = None) -> str:
         """Create a long-lived API token for programmatic access.
 
@@ -568,23 +551,19 @@ class AuthService:
         if not user or not user.is_active:
             raise AuthError("user_not_found", "User not found or inactive")
 
-        # Enforce per-user token cap
         from config import config
         token_cap = config.auth.max_api_tokens_per_user
         existing_count = self.db.count_user_api_tokens(user_id)
         if existing_count >= token_cap:
             raise AuthError("too_many_tokens", "Token limit reached", {"limit": token_cap})
 
-        # Generate cryptographically secure token
         raw_token = secrets.token_urlsafe(32)
         token_hash = self._hash_token(raw_token)
 
-        # Calculate expiration
         expires_at = None
         if expires_in_days is not None:
             expires_at = utc_now() + timedelta(days=max(1, min(365, expires_in_days)))
 
-        # Store hashed token in PostgreSQL
         token_id = self.db.create_api_token(
             user_id=user_id,
             token_hash=token_hash,
@@ -750,18 +729,16 @@ class AuthService:
         from apscheduler.triggers.cron import CronTrigger
         from auth.account_gc import register_account_gc_job
 
-        # Register magic link cleanup (hourly)
         scheduler_service.register_job(
             job_id="auth_cleanup",
             func=self.cleanup_expired_tokens,
-            trigger=CronTrigger.from_crontab("15 * * * *"),  # Run at :15 every hour
+            trigger=CronTrigger.from_crontab("15 * * * *"),
             component="auth",
             description="Clean up expired magic links from database"
         )
 
         logger.info("Auth cleanup job registered (hourly at :15)")
 
-        # Register account garbage collection (daily at 3am)
         register_account_gc_job(scheduler_service)
 
 

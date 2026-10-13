@@ -76,11 +76,9 @@ class MemoryRelevanceService:
             ValueError: If expansion embedding validation fails
             RuntimeError: If memory service infrastructure fails
         """
-        # Validate embedding
         if expansion_embedding is None:
             raise ValueError("expansion_embedding is required")
 
-        # Delegate to ProactiveService with extracted entities for hub discovery
         memories = self.proactive.search_with_embedding(
             embedding=expansion_embedding,
             query_expansion=query_expansion,

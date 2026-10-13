@@ -34,8 +34,7 @@ from utils.timezone_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
-# Matches all <mira:*> internal tags — both paired (<mira:my_emotion>…</mira:my_emotion>)
-# and self-closing (<mira:memory_ref="…" />). Stripped from conversation turns before
+# All <mira:*> internal tags (paired and self-closing) — stripped before
 # subcortical processing to avoid rare-token attention sinks.
 _MIRA_TAG_PATTERN = re.compile(r'<mira:[^>]*>.*?</mira:[^>]*>|<mira:[^/]*/\s*>', re.DOTALL)
 
@@ -108,7 +107,6 @@ class SubcorticalLayer:
         self.llm_provider = llm_provider
         self.prefill_warmup_enabled = prefill_warmup_enabled
 
-        # Load prompt templates
         from config.prompts.loader import load_prompt
         self.system_prompt = load_prompt("subcortical_system.txt")
         self.user_prompt_template = load_prompt("subcortical_user.txt")
@@ -147,7 +145,6 @@ class SubcorticalLayer:
             continuum, current_user_message, previous_memories
         )
 
-        # Piggyback: extract memory IDs mentioned in conversation (regex on already-built string)
         conversation_pinned_ids = set(
             m.lower() for m in TagParser.MEMORY_ID_PATTERN.findall(conversation_turns)
         )
@@ -167,9 +164,9 @@ class SubcorticalLayer:
         if not response_text:
             raise RuntimeError("Subcortical returned empty response")
 
-        # Attempt to repair malformed response structure before parsing
         try:
-            # json_repair can fix common structural issues even in XML-like responses
+            # json_repair can fix common structural issues even in XML-like
+            # responses (documented json_repair capability)
             repaired_text = json_repair.repair_json(response_text, return_objects=False, skip_json_loads=True)
             if isinstance(repaired_text, str) and repaired_text.strip():
                 response_text = repaired_text
@@ -177,7 +174,6 @@ class SubcorticalLayer:
         except Exception as repair_error:
             logger.debug(f"Repair attempt skipped: {repair_error}, using original response")
 
-        # Parse query expansion, pinned IDs, and entities from response
         result = self._parse_response(response_text, previous_memories)
 
         # Guarantee retention for conversation-pinned memories (union with LLM's picks)
@@ -266,9 +262,7 @@ class SubcorticalLayer:
         byte-exact-same tokens here for warmup and real calls is what makes the
         vLLM prefix cache hit — any divergence breaks the optimization silently.
         """
-        # Under memory pressure, narrow the conversation window so the model
-        # scopes retention decisions to the most recent exchange — makes it
-        # easier to identify and drop memories irrelevant to the immediate context
+        # Under memory pressure, narrow the window so retention decisions scope to the recent exchange.
         from lt_memory.proactive import MAX_PINNED_MEMORIES
         under_pressure = (
             previous_memories is not None
@@ -388,9 +382,7 @@ class SubcorticalLayer:
 
         lines = []
 
-        # Graduated pressure alerts for the curated window. MAX_PINNED_MEMORIES
-        # is the warning trigger and hard cap for retained previous memories;
-        # MAX_SURFACED_MEMORIES is the critical/full-cache threshold.
+        # MAX_PINNED_MEMORIES is both the warning trigger and a hard cap for retained previous memories.
         from lt_memory.proactive import MAX_PINNED_MEMORIES, MAX_SURFACED_MEMORIES
         max_pinned = MAX_PINNED_MEMORIES
         critical_threshold = MAX_SURFACED_MEMORIES
@@ -398,7 +390,7 @@ class SubcorticalLayer:
         count = len(memories)
 
         if count >= critical_threshold:
-            # Critical: surfaced cache is full; retained pins beyond max_pinned will be truncated.
+            # Retained pins beyond max_pinned will be truncated.
             prune_count = max(1, count - max_pinned)
             lines.append(
                 f'<mira:system_alert>\U0001f6a8 SURFACED MEMORY CACHE FULL ({count}/{critical_threshold}). '
@@ -411,7 +403,6 @@ class SubcorticalLayer:
                 f'\U0001f6a8</mira:system_alert>'
             )
         elif count >= warning_threshold:
-            # Warning: budget tightening
             lines.append(
                 f'<mira:system_alert>\u26a0\ufe0f {count} surfaced memories are available for retention. '
                 f'Only {max_pinned} previous memories can be retained, and retaining too many reduces '
@@ -463,7 +454,6 @@ class SubcorticalLayer:
         Raises:
             RuntimeError: If <query_expansion> tag missing or empty
         """
-        # Extract query expansion from <query_expansion> tags
         expansion_match = re.search(
             r'<query_expansion>(.*?)</query_expansion>',
             response_text,
@@ -477,19 +467,15 @@ class SubcorticalLayer:
         if not query_expansion:
             raise RuntimeError("Failed to extract query expansion from response - empty <query_expansion>")
 
-        # Extract entities from <entities> block
         entities = SubcorticalLayer._parse_entities(response_text)
 
         # Extract complexity from <complexity> tag (default to "complex" if missing/invalid)
         complexity = SubcorticalLayer._parse_complexity(response_text)
 
-        # Extract pinned memory IDs from <relevant_passages> tags
         pinned_ids: Set[str] = set()
 
         if previous_memories:
-            # Extract 8-char IDs from <passage id="mem_xxx"> elements
-            # Format: <passage id="mem_a1B2c3D4">passage text</passage>
-            # UUIDs only contain hex chars (0-9, a-f)
+            # UUIDs only contain hex chars (0-9, a-f), which the ID regex depends on.
             id_matches = re.findall(
                 r'<passage\s+id="mem_([a-fA-F0-9]{8})"',
                 response_text,
@@ -539,11 +525,9 @@ class SubcorticalLayer:
 
         entities_block = entities_match.group(1).strip()
 
-        # Handle "None" case (no entities)
         if entities_block.lower() == "none":
             return entities
 
-        # Parse <ne> tags
         entity_matches = re.findall(
             r'<ne[^>]*>(.*?)</ne>',
             entities_block,
@@ -616,17 +600,15 @@ class SubcorticalLayer:
         i = len(continuum.messages) - 1
 
         # Resolve the user's timezone from the user-context contextvar — the same
-        # source the message_formatter idiom (message_formatter.py:102) reads —
-        # so the model-facing <turn time=...> attributes render the user's local
+        # source message_formatter's format_messages_for_api reads — so
+        # the model-facing <turn time=...> attributes render the user's local
         # wall clock instead of raw UTC. warm_cache() copies contextvars before
         # spawning its background thread, so this resolves on that path too.
         from utils.timezone_utils import convert_from_utc
         from utils.user_context import get_user_preferences
         user_tz = get_user_preferences().timezone
 
-        # Walk backwards to extract user/assistant pairs
         while i >= 0 and pairs_found < max_pairs:
-            # Find assistant message (skip segment summaries)
             while i >= 0:
                 msg = continuum.messages[i]
                 if msg.role == "assistant" and not self._is_segment_summary(msg):
@@ -637,7 +619,6 @@ class SubcorticalLayer:
             assistant_msg = continuum.messages[i]
             i -= 1
 
-            # Find preceding user message
             while i >= 0 and continuum.messages[i].role != "user":
                 i -= 1
             if i < 0:
@@ -645,20 +626,19 @@ class SubcorticalLayer:
             user_msg = continuum.messages[i]
             i -= 1
 
-            # Format timestamps as HH:MM in the user's local timezone
             user_time = convert_from_utc(user_msg.created_at, user_tz).strftime("%H:%M")
             assistant_time = convert_from_utc(assistant_msg.created_at, user_tz).strftime("%H:%M")
 
             # Prepend pair (we're walking backwards), truncating long messages.
-            # Strip all <mira:*> internal tags (emotion emojis, memory refs, etc.)
-            # — rare-token attention sinks that waste budget without contributing
-            # to entity/expansion/passage tasks.
             user_content = html.escape(
                 self._extract_text_content(user_msg.content)[:2000], quote=False
             )
-            # Strip mira tags BEFORE escaping so legitimate <mira:memory …/> tags in
-            # assistant content still match the pattern; then escape whatever remains.
-            # Structured content (tool calls, reasoning blocks, lists) is rendered to
+            # Strip all <mira:*> internal tags (emotion emojis, memory refs,
+            # etc.) — rare-token attention sinks that waste budget without
+            # contributing to entity/expansion/passage tasks. Strip BEFORE
+            # escaping so legitimate <mira:memory …/> tags in assistant content
+            # still match the pattern; then escape whatever remains. Structured
+            # content (tool calls, reasoning blocks, lists) is rendered to
             # natural labeled text first — never str() of a raw structure.
             assistant_content = html.escape(
                 _MIRA_TAG_PATTERN.sub(

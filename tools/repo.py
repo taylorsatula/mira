@@ -85,7 +85,6 @@ def _coerce_to_schema_type(param_name: str, value: Any, prop_spec: Dict[str, Any
                     coerced, mutated = [coerced], True
                 else:
                     raise ValueError(coerced)
-        # Any other declared type ('object', custom formats) passes through.
     except (ValueError, TypeError):
         raise ParameterError(
             f"Tool '{tool_name}' parameter '{param_name}' cannot be coerced to declared type "
@@ -190,7 +189,6 @@ class Tool(ABC):
             
             class_name = f"{self.name.capitalize()}Config"
             if self.name.endswith('_tool'):
-                # Generate CamelCase class name: reminder_tool -> ReminderToolConfig
                 parts = self.name.split('_')
                 class_name = ''.join(part.capitalize() for part in parts[:-1]) + 'ToolConfig'
             
@@ -220,7 +218,6 @@ class Tool(ABC):
             self._db = get_user_data_manager(current_user_id)
         return self._db
     
-    # User-aware file operations - tools can use these without knowing about user scoping
     
     def make_dir(self, path: str) -> Path:
         full_path = self.user_data_path / path
@@ -250,7 +247,6 @@ class Tool(ABC):
         raise NotImplementedError("Tool subclasses must implement the run method")
     
     def get_metadata(self) -> Dict[str, Any]:
-        # Extract parameter metadata from run method signature
         sig = inspect.signature(self.run)
         parameters = {}
         required_parameters = []
@@ -272,13 +268,11 @@ class Tool(ABC):
             
             parameters[name] = param_info
         
-        # Parse docstring for parameter descriptions using state machine
         if self.run.__doc__:
             doc_content = inspect.getdoc(self.run)
             if doc_content is not None:
                 doc_lines = doc_content.split('\n')
             
-            # State machine to parse Google-style docstring Args section
             param_section = False
             current_param = None
             
@@ -351,27 +345,20 @@ class ToolRepository:
         tool_classes (Dict[str, Type[Tool]]): Dictionary mapping tool names to tool classes.
         _enabled_tools (Dict[str, Set[str]]): Per-user sets of enabled tool names, keyed by
             user id (startup enablement under _BOOT_ENABLED_KEY); read as a name set via the
-            `enabled_tools` property.
+            `enabled_tools` property. Never a bare set shared across users: the repository
+            is a process-global singleton.
         gated_tools (Set[str]): Set of gated tools that self-determine availability via is_available().
         working_memory (Optional[WorkingMemory]): WorkingMemory instance for tool DI.
     """
 
     def __init__(self, working_memory=None):
         self.logger = logging.getLogger("tool_repository")
-        self.tool_classes: Dict[str, Type[Tool]] = {}  # Store tool classes for lazy instantiation
-        # Tools enabled for a user's session, keyed by the user id resolved
-        # from the contextvar at read/write time — the same per-user keying
-        # pattern used for _pinned_tools below and for stateful trinket state.
-        # Never a bare set shared across users: the repository is a
-        # process-global singleton. Enablement performed before any user
-        # context exists (startup) lands under _BOOT_ENABLED_KEY instead.
+        self.tool_classes: Dict[str, Type[Tool]] = {}
         self._enabled_tools: Dict[str, Set[str]] = {}
-        self.gated_tools: Set[str] = set()  # Tools that self-determine availability
+        self.gated_tools: Set[str] = set()
         self.working_memory = working_memory
-        # Tools pinned via load_for_rest_of_session, keyed by the user id
-        # resolved from the contextvar at read/write time — the same per-user
-        # keying pattern used for stateful trinket state. Never a bare set
-        # shared across users: the repository is a process-global singleton.
+        # Pinned tools are keyed per-user via the contextvar — never a bare set:
+        # the repository is a process-global singleton.
         self._pinned_tools: Dict[str, Set[str]] = {}
 
         # Removal boundary: clear the current user's pins on segment collapse,
@@ -434,13 +421,11 @@ class ToolRepository:
             self.logger.error(f"Cannot enable tool '{name}': Tool not found")
             raise KeyError(f"Cannot enable tool '{name}': Tool not found")
 
-        # Gated tools use is_available(), not enable_tool()
         if name in self.gated_tools:
             raise ValueError(f"Cannot enable gated tool '{name}' - availability controlled by is_available()")
 
         user_id = get_current_user_id() if has_user_context() else _BOOT_ENABLED_KEY
 
-        # Auto-enable dependencies recursively
         dependencies = self.resolve_dependencies(name)
         for dep_name in dependencies:
             if dep_name not in self._enabled_tools.get(user_id, set()):
@@ -481,8 +466,8 @@ class ToolRepository:
         user_id = get_current_user_id()
         if self._pinned_tools.pop(user_id, None):
             self.logger.info(f"Cleared pinned tools on segment collapse for user {user_id}")
-        # Same per-user scope for the enabled set: the collapse tears down the
-        # user's session-scoped enablement along with their pins.
+        # Same per-user scope: the collapse tears down the user's session-scoped
+        # enablement along with their pins.
         self._enabled_tools.pop(user_id, None)
 
     def cleanup_ephemeral_tools(self, essential_tools: Set[str]) -> None:
@@ -495,8 +480,7 @@ class ToolRepository:
             return
 
         self.logger.info(f"Cleaning up {len(ephemeral)} ephemeral tools")
-        # Subtract only from the completing user's own set — never from
-        # another user's enabled tools.
+        # Subtract only from the completing user's own set, never another user's.
         user_enabled -= ephemeral
 
     def get_tool(self, name: str) -> Tool:
@@ -509,7 +493,6 @@ class ToolRepository:
         try:
             tool_class = self.tool_classes[name]
             
-            # Dependency injection: check constructor signature for known types
             dependencies = {}
             sig = inspect.signature(tool_class.__init__)
             
@@ -517,7 +500,6 @@ class ToolRepository:
                 if param_name != 'self' and param.default is inspect.Parameter.empty:
                     param_type = param.annotation
 
-                    # Resolve forward references and Optional[...] annotations
                     annotation_name = None
                     if isinstance(param_type, str):
                         annotation_name = param_type
@@ -535,7 +517,6 @@ class ToolRepository:
                                     else:
                                         annotation_name = getattr(candidate, '__name__', None)
 
-                    # Inject known dependency types
                     if annotation_name in ('LLMBridge', 'LLMProvider'):
                         from clients.llm_provider import get_llm_provider
                         dependencies[param_name] = get_llm_provider()
@@ -563,8 +544,6 @@ class ToolRepository:
             self.logger.error(f"Cannot invoke tool '{name}': Tool not found")
             raise KeyError(f"Cannot invoke tool '{name}': Tool not found")
 
-        # Check if tool is invocable: enabled for the current user OR a gated
-        # tool that's available
         user_id = get_current_user_id() if has_user_context() else _BOOT_ENABLED_KEY
         # Per-user config gate, applied before the enabled-set check: a tool
         # whose config.<name>.enabled is falsy is refused even when it sits in
@@ -578,12 +557,10 @@ class ToolRepository:
             raise RuntimeError(f"Cannot invoke tool '{name}': Tool is disabled in config")
         if name not in self._enabled_tools.get(user_id, set()):
             if name in self.gated_tools:
-                # Gated tool - check is_available() at invocation time
                 tool = self.get_tool(name)
                 if not (hasattr(tool, 'is_available') and tool.is_available()):
                     self.logger.error(f"Cannot invoke gated tool '{name}': Tool is not available")
                     raise RuntimeError(f"Cannot invoke gated tool '{name}': Tool is not available")
-                # Gated tool is available - allow invocation to proceed
             else:
                 # A tool absent from the enabled set is usually one that
                 # ephemeral cleanup removed at the last turn boundary —
@@ -591,7 +568,6 @@ class ToolRepository:
                 # path. Config-disabled tools never reach here: the gate above
                 # already refused them, preserving the disable contract
                 # invokeother_tool enforces on load.
-                # Auto-enable the tool on first invocation
                 self.logger.info(f"Auto-enabling tool '{name}' on first invocation")
                 self.enable_tool(name)
 
@@ -636,10 +612,8 @@ class ToolRepository:
         )
 
         # Coerce LLM-supplied arguments to each parameter's declared schema
-        # type. LLMs emit repairable garbage ("10" for 10, [10] for 10);
-        # coercion happens here, once, and every mutation logs a warning so
-        # repairable garbage stays visible instead of being silently repaired
-        # at N tool sites. Properly formed values pass through untouched.
+        # type. Coercion happens here, once, and every mutation logs a
+        # warning so repairable garbage stays visible.
         if hasattr(tool, 'tool_schema'):
             properties = tool.tool_schema.get('input_schema', {}).get('properties', {})
             params = {
@@ -677,7 +651,6 @@ class ToolRepository:
             self.logger.error(f"Cannot get metadata for tool '{name}': Tool not found")
             raise KeyError(f"Cannot get metadata for tool '{name}': Tool not found")
             
-        # Create temporary instance to get metadata
         tool = self.get_tool(name)
         return tool.get_metadata()
     
@@ -714,7 +687,6 @@ class ToolRepository:
         """
         definitions: List[ToolDefinition] = []
 
-        # Boot-enabled tools (essentials) plus the CURRENT user's enabled set
         user_id = get_current_user_id() if has_user_context() else _BOOT_ENABLED_KEY
         enabled = (self._enabled_tools.get(_BOOT_ENABLED_KEY, set())
                    | self._enabled_tools.get(user_id, set()))
@@ -730,11 +702,9 @@ class ToolRepository:
             if getattr(getattr(get_config(), name, None), 'enabled', True)
         }
 
-        # Standard enabled tools (explicit enable/disable)
         for name in sorted(enabled):
             definitions.append(self.get_tool_definition(name))
 
-        # Gated tools - check is_available() at runtime
         for name in sorted(self.gated_tools):
             tool = self.get_tool(name)
             if hasattr(tool, 'is_available') and tool.is_available():
@@ -757,7 +727,6 @@ class ToolRepository:
         result = []
         
         def dfs(name):
-            # Detect cycles - if we're revisiting a node, we have a circular dependency
             if name in visited:
                 raise ValueError(f"Circular dependency detected involving tool '{name}'")
                 
@@ -769,7 +738,6 @@ class ToolRepository:
             tool = self.get_tool(name)
             dependencies = tool.get_dependencies()
             
-            # Recursively resolve dependencies depth-first
             for dep_name in dependencies:
                 if dep_name not in visited:
                     dfs(dep_name)
@@ -783,11 +751,9 @@ class ToolRepository:
 
         package = importlib.import_module(package_path)
 
-        # Iterate through all modules in the package
         for module_info in pkgutil.iter_modules(package.__path__, package.__name__ + '.'):
             module_name = module_info.name.split('.')[-1]
 
-            # Skip private modules and avoid processing this file
             if module_name.startswith('_') or module_name == 'repo':
                 continue
 
@@ -797,11 +763,9 @@ class ToolRepository:
         self.logger.debug(f"Importing module: {module_path}")
         module = importlib.import_module(module_path)
 
-        # Scan module for concrete Tool subclasses
         for attr_name in dir(module):
             attr = getattr(module, attr_name)
 
-            # Filter for valid Tool subclasses defined in this module
             if (inspect.isclass(attr) and
                 issubclass(attr, Tool) and
                 attr is not Tool and
@@ -814,7 +778,6 @@ class ToolRepository:
                     self.logger.warning(f"Skipping Tool class without name: {attr_name}")
                     continue
 
-                # Register tool class for lazy instantiation
                 # Actual dependency injection happens in get_tool() when instantiating
                 self.register_tool_class(attr, attr.name)
     
@@ -825,7 +788,6 @@ class ToolRepository:
         self.logger.info(f"Enabling essential tools at startup: {ESSENTIAL_TOOLS}")
 
         for name in ESSENTIAL_TOOLS:
-            # Check if tool is actually enabled in its config
             tool_config = getattr(config, name, None)
             if tool_config is None:
                 self.logger.warning(f"No config found for essential tool {name}, enabling anyway")

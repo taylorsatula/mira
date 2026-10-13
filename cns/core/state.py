@@ -29,7 +29,6 @@ class ContinuumState:
     id: UUID
     user_id: str
 
-    # Continuum metadata - flexible dict for extensible state
     metadata: dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> ContinuumStateDict:

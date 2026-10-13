@@ -62,7 +62,6 @@ class LocationTrinket(EventAwareTrinket):
                     f"{entry['precip_pct']}% chance of rain"
                 )
 
-        # Recent daily weather since last conversation (up to 3 days)
         recent_weather = data.get("recent_weather")
         if recent_weather:
             lines.append("Recent weather (since last conversation):")

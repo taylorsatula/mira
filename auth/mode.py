@@ -38,10 +38,8 @@ from typing import Literal, get_args
 
 AuthMode = Literal["single", "multi"]
 
-#: Environment variable naming the mode.
 AUTH_MODE_ENVIRONMENT_FIELD = "MIRA_AUTH_MODE"
 
-#: The mode assumed when the variable is unset.
 DEFAULT_AUTH_MODE: AuthMode = "single"
 
 #: The complete set of accepted values, derived from the annotation so the type and

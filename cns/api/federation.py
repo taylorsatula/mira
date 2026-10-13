@@ -94,7 +94,6 @@ def receive_federation_delivery(
             set_current_user_id(str(payload.to_user_id))
             pager = PagerTool()
 
-            # Deliver the message
             result = pager.deliver_federated_message(
                 from_address=payload.from_address,
                 content=payload.content,

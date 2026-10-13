@@ -84,7 +84,6 @@ class Continuum:
         Returns:
             Tuple of (created Message, list of domain events)
         """
-        # Create message with original content for processing
         message = Message(
             content=content,
             role="user",
@@ -92,7 +91,6 @@ class Continuum:
             metadata=metadata or {},
         )
 
-        # Add to cache only - persistence will be handled by orchestrator
         self._message_cache.append(message)
 
         return message, []
@@ -123,14 +121,11 @@ class Continuum:
         Returns:
             Tuple of (created Message, list of domain events)
         """
-        # Validate content is not blank
         if not content or not content.strip():
             raise ValueError("Assistant message content cannot be blank or empty")
 
-        # Create message
         message = Message(content=content, role="assistant", metadata=metadata or {})
 
-        # Add to cache only - persistence will be handled by orchestrator
         self._message_cache.append(message)
 
         return message, []
@@ -142,7 +137,6 @@ class Continuum:
         Returns:
             List of domain events (empty for tool messages)
         """
-        # Create message
         message = Message(
             content=content,
             role="tool",
@@ -150,10 +144,8 @@ class Continuum:
             is_error=is_error,
         )
 
-        # Add to cache only - persistence will be handled by orchestrator
         self._message_cache.append(message)
 
-        # Tool messages don't generate events by themselves
         return []
 
     def add_tool_history(self, messages: list[Message]) -> None:

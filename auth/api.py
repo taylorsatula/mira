@@ -31,10 +31,9 @@ from cns.api.base import (
 
 logger = logging.getLogger(__name__)
 
-# Create router
 router = APIRouter(tags=["auth"])
 
-# Security scheme for bearer tokens (auto_error=False so we can handle missing auth properly)
+# auto_error=False so missing credentials are handled below (None), not auto-rejected by FastAPI
 security = HTTPBearer(auto_error=False)
 
 
@@ -45,7 +44,6 @@ CSRF_EXEMPT_PATH_SUFFIXES = {
 
 
 
-# Request/Response models
 class SignupRequest(BaseModel):
     """User signup request."""
     email: EmailStr = Field(..., description="User email address")
@@ -75,7 +73,6 @@ class MagicLinkVerifyRequest(BaseModel):
     token: str = Field(..., min_length=32, max_length=128, description="Magic link token")
 
 
-# Auth-specific error types
 class AuthenticationError(APIError):
     """Authentication-specific error."""
 
@@ -90,7 +87,6 @@ class RateLimitError(APIError):
         super().__init__("RATE_LIMIT_EXCEEDED", message, details)
 
 
-# Helper functions for auth responses
 def create_auth_success_response(
     data: dict[str, Any],
     http_status: int = 200,
@@ -119,7 +115,6 @@ def create_auth_error_response(
     if request_id is None:
         request_id = generate_request_id()
 
-    # Convert AuthError to appropriate APIError
     if isinstance(error, AuthError):
         if error.code == "rate_limit_exceeded":
             api_error: APIError | Exception = RateLimitError(error.message, error.details)
@@ -128,10 +123,8 @@ def create_auth_error_response(
     else:
         api_error = error
 
-    # Create the base error response (frozen)
     response = create_error_response(api_error, request_id)
 
-    # Add HTTP status via replace (frozen dataclass)
     return replace(
         response,
         error={**response.error, "http_status": http_status},
@@ -139,7 +132,6 @@ def create_auth_error_response(
     )
 
 
-# Dependencies
 def _requires_cookie_csrf(request: Request, token_source: Optional[str]) -> bool:
     """Return True when a cookie-authenticated write must provide a CSRF token."""
     path = request.url.path
@@ -209,12 +201,10 @@ async def get_current_user(
         token: Optional[str] = None
         token_source: Optional[str] = None
 
-        # Prefer Authorization header when provided
         if credentials and credentials.credentials:
             token = credentials.credentials
             token_source = "header"
         else:
-            # Fall back to cookie-based session for browser requests
             token = request.cookies.get("session")
             if token:
                 token_source = "cookie"
@@ -231,16 +221,13 @@ async def get_current_user(
         if _requires_cookie_csrf(request, token_source):
             await run_in_threadpool(_validate_cookie_csrf, request, token, auth_service)
 
-        # Try session validation first
         session_data: SessionData | APITokenContext | None = await run_in_threadpool(
             auth_service.validate_session, token, extend_activity
         )
 
-        # If session validation fails and token came from header, try API token
         if not session_data and token_source == "header":
             api_token_data = await run_in_threadpool(auth_service.validate_api_token, token)
             if api_token_data:
-                # Build typed context from API token
                 session_data = APITokenContext(
                     user_id=api_token_data["user_id"],
                     token_type="api_token",
@@ -256,14 +243,12 @@ async def get_current_user(
         if not session_data:
             raise AuthError("INVALID_TOKEN", "Invalid or expired token")
 
-        # Set user context for downstream services
         set_current_user_id(session_data.user_id)
         set_current_user_data(session_data.model_dump())
 
         return session_data
 
     except AuthError as e:
-        # Convert AuthError to HTTPException with our standard format
         status_code = 401
         if e.code in {"CSRF_REQUIRED", "CSRF_INVALID"}:
             status_code = 403
@@ -295,7 +280,6 @@ async def get_current_session_user(
 
 
 
-# === API Token Endpoints ===
 class APITokenCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Friendly name for the token")
     expires_in_days: Optional[int] = Field(None, ge=1, le=365, description="Days until expiration, or null for no expiration")
@@ -355,7 +339,6 @@ async def list_api_tokens(
     request_id = generate_request_id()
     try:
         items = await run_in_threadpool(auth_service.list_api_tokens)
-        # Validate shape via Pydantic model for consistency
         validated: list[APITokenListItem] = [APITokenListItem(**i) for i in items]
         api_response: SuccessResponse | ErrorResponse = create_auth_success_response(
             data={"tokens": [v.model_dump() for v in validated]},
@@ -363,7 +346,6 @@ async def list_api_tokens(
         )
         return api_response.to_dict()
     except AuthError as e:
-        # Handle auth-specific errors with appropriate status codes
         http_status = 400
         api_response = create_auth_error_response(e, http_status, request_id)
         response.status_code = http_status
@@ -407,7 +389,6 @@ async def revoke_api_token(
         return api_response.to_dict()
 
 
-# Endpoints
 @router.get("/local/session", include_in_schema=False)
 def create_local_session(
     auth_service: AuthService = Depends(get_auth_service),
@@ -456,7 +437,6 @@ def signup(
         raise HTTPException(status_code=404, detail="Not found")
     request_id = generate_request_id()
     try:
-        # Get client info for security logging
         ip_address = http_request.client.host if http_request.client else ""
         user_agent = http_request.headers.get("user-agent", "")
 
@@ -481,9 +461,6 @@ def signup(
         response.status_code = 201
         return api_response.to_dict()
     except AuthError as e:
-        # A committed account with a failed link delivery is not a creation
-        # failure: answer with a distinct delivery-failed outcome carrying a
-        # resend cue, never the bare creation-error envelope.
         if e.code == "magic_link_delivery_failed":
             api_response = create_auth_success_response(
                 data={
@@ -499,7 +476,6 @@ def signup(
             )
             response.status_code = 201
             return api_response.to_dict()
-        # Determine HTTP status code based on error
         http_status = 400
         if e.code == "user_already_exists":
             http_status = 400
@@ -540,7 +516,6 @@ def request_magic_link(
             user_agent
         )
 
-        # Generic success message that doesn't reveal if user exists
         api_response: SuccessResponse | ErrorResponse = create_auth_success_response(
             data={"message": "If that email is registered, a magic link has been sent. Please check your inbox."},
             request_id=request_id
@@ -583,8 +558,6 @@ def verify_magic_link(
             request.token
         )
 
-        # Create response with session cookie
-        # Use model_dump(mode='json') to convert datetime to strings
         api_response: SuccessResponse | ErrorResponse = create_auth_success_response(
             data={
                 "user": user_data.model_dump(mode='json'),
@@ -593,7 +566,6 @@ def verify_magic_link(
             request_id=request_id
         )
 
-        # Set session cookie
         cookie_settings = auth_service.get_cookie_settings()
         response.set_cookie(
             key="session",
@@ -602,7 +574,7 @@ def verify_magic_link(
             httponly=cookie_settings.httponly,
             secure=cookie_settings.secure,
             samesite=cookie_settings.samesite,
-            path="/"  # Ensure cookie is available for all paths
+            path="/"
         )
 
         return api_response.to_dict()
@@ -662,11 +634,10 @@ def logout(
             )
             response.status_code = 404
 
-        # Clear session cookie. Attributes come from the same CookieSettings
-        # source as every set path (`get_cookie_settings`), so the deletion
-        # cannot drift from the set path: under single-mode plain HTTP a
-        # deletion carrying `Secure` is dropped by the browser (RFC 6265) and
-        # the stale revoked cookie would survive logout.
+        # Attributes mirror every set path (`get_cookie_settings`) so the
+        # deletion cannot drift from it: under single-mode plain HTTP the
+        # browser drops a deletion carrying `Secure` (RFC 6265), leaving the
+        # revoked cookie alive through logout.
         cookie_settings = auth_service.get_cookie_settings()
         response.delete_cookie(
             key="session",
@@ -775,7 +746,6 @@ async def get_csrf_token(
     """Generate CSRF token for session."""
     request_id = generate_request_id()
     try:
-        # Determine session token source (header takes precedence if present)
         session_token = None
         if credentials and getattr(credentials, 'credentials', None):
             session_token = credentials.credentials
@@ -784,7 +754,6 @@ async def get_csrf_token(
         if not session_token:
             raise AuthError("UNAUTHORIZED", "Authentication required")
 
-        # User is already validated by get_current_user; generate CSRF for this session
         csrf_token = await run_in_threadpool(
             auth_service.generate_csrf_token, session_token
         )
@@ -804,9 +773,7 @@ async def get_csrf_token(
         return api_response.to_dict()
 
 
-# WebAuthn endpoints
 
-# Request/Response models for WebAuthn
 class WebAuthnLoginBeginRequest(BaseModel):
     """WebAuthn login begin request.
 
@@ -832,7 +799,6 @@ class WebAuthnRegisterCompleteRequest(BaseModel):
     credential: dict[str, Any] = Field(..., description="WebAuthn credential response")
 
 
-# Helper function for WebAuthn service
 def get_webauthn_service() -> WebAuthnService:
     """Get WebAuthn service instance."""
     return WebAuthnService()
@@ -993,7 +959,6 @@ def webauthn_login_complete(
                 {"retry_after": retry_after}
             )
 
-        # Verify WebAuthn authentication
         if request.email:
             result = webauthn_service.verify_authentication(
                 request.email,
@@ -1010,12 +975,10 @@ def webauthn_login_complete(
         if not result["verified"]:
             raise AuthError("authentication_failed", "Authentication failed")
 
-        # Get user data
         user = auth_service.db.get_user_by_id(result["user_id"])
         if not user:
             raise AuthError("user_not_found", "User not found")
 
-        # Create session
         user_profile = UserProfile(
             id=str(user.id),
             email=user.email,
@@ -1027,7 +990,6 @@ def webauthn_login_complete(
 
         session_token = auth_service.session_manager.create_session(user)
 
-        # Create response
         api_response: SuccessResponse | ErrorResponse = create_auth_success_response(
             data={
                 "user": user_profile.model_dump(mode='json'),
@@ -1037,7 +999,6 @@ def webauthn_login_complete(
             request_id=request_id
         )
 
-        # Set session cookie
         cookie_settings = auth_service.get_cookie_settings()
         response.set_cookie(
             key="session",
@@ -1046,7 +1007,7 @@ def webauthn_login_complete(
             httponly=cookie_settings.httponly,
             secure=cookie_settings.secure,
             samesite=cookie_settings.samesite,
-            path="/"  # Ensure cookie is available for all paths
+            path="/"
         )
 
         return api_response.to_dict()
@@ -1054,7 +1015,6 @@ def webauthn_login_complete(
         if e.code == "rate_limit_exceeded":
             http_status = 429
         elif e.code == "internal_error":
-            # Genuine server fault, not a client-input problem
             http_status = 500
         else:
             http_status = 400
@@ -1136,7 +1096,6 @@ async def webauthn_list_credentials(
         return api_response.to_dict()
 
 
-# Dependency for HTML page authentication (checks cookies)
 def _page_auth_failure() -> HTTPException:
     """Where an unauthenticated page request goes, by mode.
 
@@ -1163,32 +1122,26 @@ def get_current_user_for_pages(
     For unauthenticated requests, redirects under `single` (local bootstrap)
     or fails 401 under `multi` — see `_page_auth_failure`.
     """
-    # Try Authorization header first
     auth_header = request.headers.get("Authorization", "")
     token = None
 
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
 
-    # Try cookie if no header token
     if not token:
         token = request.cookies.get("session")
 
-    # No token found at all
     if not token:
         raise _page_auth_failure()
-    # Validate the token
     try:
         session_data = auth_service.validate_session(token, True)
         if not session_data:
             raise _page_auth_failure()
 
-        # Set user context for downstream services
         set_current_user_id(session_data.user_id)
         set_current_user_data(session_data.model_dump())
 
         return session_data
 
     except AuthError:
-        # Invalid token - redirect/fail per mode
         raise _page_auth_failure()

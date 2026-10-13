@@ -21,10 +21,8 @@ logger = logging.getLogger(__name__)
 # Threshold for "large section" warning
 LARGE_SECTION_CHARS = 5000
 
-# Depth-specific XML tag names
 TAG_NAMES = {0: "section", 1: "subsection", 2: "sub-subsection"}
 
-# Depth-specific child count attribute names
 CHILD_COUNT_ATTR = {0: "subsections", 1: "children"}
 
 
@@ -134,7 +132,6 @@ class DomaindocTrinket(EventAwareTrinket):
         label = label_override or doc["label"]
         description = doc.get("encrypted__description", "")
 
-        # Get ALL sections ordered by sort_order
         section_rows = db.fetchall(
             "SELECT * FROM domaindoc_sections WHERE domaindoc_id = :doc_id ORDER BY parent_section_id NULLS FIRST, sort_order",
             {"doc_id": doc["id"]}
@@ -144,7 +141,6 @@ class DomaindocTrinket(EventAwareTrinket):
         if not all_sections:
             return ""
 
-        # Separate top-level and group subsections by parent
         top_level = [s for s in all_sections if s.get("parent_section_id") is None]
         subsections_by_parent: Dict[int, List[Dict]] = defaultdict(list)
         for s in all_sections:
@@ -152,7 +148,6 @@ class DomaindocTrinket(EventAwareTrinket):
             if parent_id is not None:
                 subsections_by_parent[parent_id].append(s)
 
-        # Single tree walk, three output buffers
         section_states_text, section_index_text, document_text = self._format_sections(
             top_level, subsections_by_parent
         )
@@ -220,7 +215,6 @@ class DomaindocTrinket(EventAwareTrinket):
             content_length = len(sec_content)
             is_large = child_count == 0 and content_length > LARGE_SECTION_CHARS
 
-            # ── States (only if visible) ──────────────────────────
             if visible:
                 s_attrs = [f'header="{html.escape(header, quote=True)}"']
                 if pinned:
@@ -245,7 +239,6 @@ class DomaindocTrinket(EventAwareTrinket):
                 else:
                     states.append(f"<{tag} {' '.join(s_attrs)}/>")
 
-            # ── Index (unconditional TOC) ─────────────────────────
             if summary:
                 escaped_summary = html.escape(summary)
                 escaped_header = html.escape(header, quote=True)
@@ -261,7 +254,6 @@ class DomaindocTrinket(EventAwareTrinket):
                         f'<entry section="{escaped_header}" parent="{html.escape(parent_header, quote=True)}" '
                         f'grandparent="{html.escape(grandparent_header, quote=True)}">{escaped_summary}</entry>')
 
-            # ── Content (only if visible) ─────────────────────────
             if visible:
                 if effective_collapsed:
                     c_attrs = [f'header="{html.escape(header, quote=True)}"', 'state="collapsed"']
@@ -271,7 +263,6 @@ class DomaindocTrinket(EventAwareTrinket):
                         c_attrs.append('size="large"')
                     content.append(f"<{tag} {' '.join(c_attrs)}/>")
                 elif depth == 2:
-                    # Sub-subsections: self-closing when empty
                     if sec_content.strip():
                         content.append(f'<{tag} header="{html.escape(header, quote=True)}">')
                         content.append(html.escape(sec_content))
@@ -279,18 +270,15 @@ class DomaindocTrinket(EventAwareTrinket):
                     else:
                         content.append(f'<{tag} header="{html.escape(header, quote=True)}"/>')
                 else:
-                    # Depth 0/1 expanded: open tag, optional content
                     content.append(f'<{tag} header="{html.escape(header, quote=True)}">')
                     if sec_content.strip():
                         content.append(html.escape(sec_content))
 
-            # ── Recurse into children ─────────────────────────────
             for child in child_dicts:
                 visit(child, depth + 1,
                       ancestor_collapsed or effective_collapsed,
                       header, parent_header)
 
-            # ── Close tags (depth 0/1 expanded, visible) ─────────
             if visible and not effective_collapsed and depth < 2:
                 if child_dicts:
                     states.append(f"</{tag}>")

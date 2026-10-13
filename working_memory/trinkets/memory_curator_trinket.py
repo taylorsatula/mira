@@ -98,7 +98,6 @@ class MemoryCuratorTrinket(StatefulTrinket):
                 'display_until_turn': self.current_turn + ERROR_TTL_TURNS,
             }
         else:
-            # Unknown status — ignore
             return
 
         super().handle_update_request(event)

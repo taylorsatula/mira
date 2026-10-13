@@ -13,7 +13,6 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Global cache for SQLiteClient instances per database path
 _client_cache: Dict[str, 'SQLiteClient'] = {}
 
 class SQLiteClient:

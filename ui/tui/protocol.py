@@ -46,9 +46,6 @@ class ProtocolModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-# --- Outbound frames (client -> server) ----------------------------------
-
-
 class AuthFrame(ProtocolModel):
     """First frame within 10 s. The TUI always sends a token; the server
     also accepts a browser-session cookie, hence the optional type here."""
@@ -100,9 +97,6 @@ OutboundFrame = Annotated[
     Field(discriminator="type"),
 ]
 OUTBOUND_FRAME_ADAPTER = TypeAdapter(OutboundFrame)
-
-
-# --- Inbound frames (server -> client) -----------------------------------
 
 
 class AuthSuccessFrame(ProtocolModel):
@@ -276,9 +270,6 @@ def dump_outbound_frame(frame: OutboundFrame) -> dict[str, Any]:
     """Serialize one outbound frame to a JSON-ready dict (exclude_none parity
     with the server's writer)."""
     return TypeAdapter(OutboundFrame).dump_python(frame, mode="json", exclude_none=True)
-
-
-# --- REST history models (GET /v0/api/data?type=history) -----------------
 
 
 class HistoryMessage(BaseModel):

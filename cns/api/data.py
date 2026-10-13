@@ -85,7 +85,6 @@ class DataEndpoint(PropagatingHandler):
     
     def process_request(self, **params) -> dict[str, Any]:
         """Route request to appropriate handler."""
-        # Set user context from params (provided by endpoint)
         from utils.user_context import set_current_user_id
         user_id = params.get('user_id')
         if user_id:
@@ -140,9 +139,8 @@ class DataEndpoint(PropagatingHandler):
         before = _decode_history_cursor(params.get('before'))
         from cns.infrastructure.continuum_repository import get_continuum_repository
 
-        repo = get_continuum_repository()  # Use singleton
+        repo = get_continuum_repository()
 
-        # Parse dates if provided
         start_dt = None
         end_dt = None
         if start_date:
@@ -215,9 +213,7 @@ class DataEndpoint(PropagatingHandler):
         db = PostgresClient("mira_service", user_id=user_id)
         db.execute_single("SELECT 1")
 
-        # Context usage metrics are managed by Anthropic's prompt caching
-        # Token tracking is stateless - cache markers are applied unconditionally
-        # and Anthropic handles threshold logic server-side
+        # Context usage is Anthropic-side prompt caching; token tracking is stateless — cache markers applied unconditionally, thresholds handled server-side.
         return {
             "system_health": "healthy",
             "context_usage": {
@@ -236,7 +232,6 @@ class DataEndpoint(PropagatingHandler):
 
         user_id = get_current_user_id()
 
-        # Fetch real user data from database
         db = PostgresClient("mira_service", user_id=user_id)
         user = db.execute_single(
             """SELECT id, email, first_name, last_name, created_at, last_login_at, timezone
@@ -247,7 +242,6 @@ class DataEndpoint(PropagatingHandler):
         if not user:
             raise NotFoundError("user", str(user_id))
 
-        # Compose the display name from the non-empty parts only
         name = _compose_display_name(user.get('first_name'), user.get('last_name'))
 
         return {
@@ -259,7 +253,7 @@ class DataEndpoint(PropagatingHandler):
                 "last_login": format_utc_iso(user["last_login_at"]) if user.get("last_login_at") else None
             },
             "preferences": {
-                # Note: Preferences system not implemented yet - only timezone stored in users table
+                # Preferences system not implemented — only timezone stored in users table
                 "theme": None,
                 "timezone": user.get("timezone", "UTC"),
                 "display_preferences": None,
@@ -312,7 +306,6 @@ class DataEndpoint(PropagatingHandler):
                 "shared": resolved.is_shared
             }
             if resolved.is_shared:
-                # Look up owner display name from the share records
                 shares = get_accepted_shares(user_id)
                 for s in shares:
                     if s.collaborator_label == label:
@@ -320,8 +313,7 @@ class DataEndpoint(PropagatingHandler):
                         break
             return result
 
-        # List domaindocs — own docs + shared docs. db.select decrypts rows
-        # (fetchall would return raw encrypted__* columns, leaking ciphertext).
+        # List domaindocs (own + shared): db.select decrypts rows — fetchall would return raw encrypted__* columns, leaking ciphertext.
         show_archived = params.get('archived', False)
         if show_archived:
             all_docs = db.select("domaindocs", "archived = TRUE", order_by="label")
@@ -342,7 +334,6 @@ class DataEndpoint(PropagatingHandler):
             for doc in all_docs
         ]
 
-        # Add shared docs (only for non-archived view)
         if not show_archived:
             shares = get_accepted_shares(user_id)
             for share in shares:
@@ -413,7 +404,6 @@ class DataEndpoint(PropagatingHandler):
         needs_checkin = lora_content['needs_checkin']
         tracking_status = tracker.get_tracking_status(user_id)
 
-        # Parse observations from user model XML
         observations = []
         checkin_topics = []
         if synthesis_xml:
@@ -577,7 +567,6 @@ def data_endpoint(
     """
     handler = get_data_handler()
 
-    # Build request parameters
     request_params: dict[str, object] = {}
     if limit is not None:
         request_params['limit'] = limit

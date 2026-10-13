@@ -41,7 +41,7 @@ class LoginError(Exception):
     """Bootstrap failed — carries the real server or transport error text."""
 
 
-# --- pure request builders (server-shape mirrors; verified by dry probe) ---
+# Pure request builders (server-shape mirrors; verified by dry probe).
 
 
 def magic_link_payload(email: str) -> dict[str, str]:
@@ -66,9 +66,6 @@ def bearer_headers(session_token: str) -> dict[str, str]:
 
 def csrf_headers(csrf_token: str) -> dict[str, str]:
     return {"x-csrf-token": csrf_token}
-
-
-# --- envelope handling -----------------------------------------------------
 
 
 def _envelope(response: httpx.Response, step: str) -> dict:
@@ -98,9 +95,6 @@ def _request(client: httpx.Client, method: str, url: str, step: str, **kwargs: o
         raise LoginError(f"{step}: malformed base URL ({url!r}): {error}") from error
     except httpx.HTTPError as error:
         raise LoginError(f"{step}: {error}") from error
-
-
-# --- session acquisition ----------------------------------------------------
 
 
 def _local_session_token(client: httpx.Client, base_url: str) -> str | None:
@@ -170,9 +164,6 @@ def _is_json(response: httpx.Response) -> bool:
     return "json" in response.headers.get("content-type", "")
 
 
-# --- the mint chain ----------------------------------------------------------
-
-
 def mint_api_token(base_url: str, token_name: str = _TOKEN_NAME) -> str:
     """Run the full bootstrap chain and return the raw API token.
 
@@ -218,9 +209,6 @@ def mint_api_token(base_url: str, token_name: str = _TOKEN_NAME) -> str:
                 f"api-tokens: expected 201, got HTTP {response.status_code}: {response.text.strip()}"
             )
         raise LoginError("api-tokens: unreachable")
-
-
-# --- CLI entry ----------------------------------------------------------------
 
 
 def run_login(

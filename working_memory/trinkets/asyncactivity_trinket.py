@@ -50,7 +50,6 @@ class AsyncActivityTrinket(EventAwareTrinket):
 
     def _render_items(self, rows: list[dict]) -> list[str]:
         """Group items by interface and render one line per thread."""
-        # Group by interface_name
         interfaces: dict[str, list[dict]] = {}
         for row in rows:
             iface = row['interface_name']

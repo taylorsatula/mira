@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Search defaults
 HYBRID_DEFAULT_LIMIT = 20
 HYBRID_DEFAULT_SIMILARITY_THRESHOLD = 0.5
 HYBRID_DEFAULT_MIN_IMPORTANCE = 0.1
@@ -35,7 +34,6 @@ INTENT_EXACT_VECTOR = 0.2
 INTENT_GENERAL_BM25 = 0.4
 INTENT_GENERAL_VECTOR = 0.6
 
-# Reciprocal Rank Fusion
 RRF_K = 60
 
 
@@ -118,7 +116,6 @@ class HybridSearcher:
 
         bm25_weight, vector_weight = weights.get(search_intent, weights["general"])
 
-        # Combine using Reciprocal Rank Fusion
         fused_results = self._reciprocal_rank_fusion(
             bm25_results,
             vector_results,
@@ -198,7 +195,6 @@ class HybridSearcher:
                 'min_importance': min_importance
             })
 
-            # Convert to Memory objects with scores, preserving source
             from lt_memory.models import Memory  # Runtime import to avoid circular
             tuples = []
             for row in results:
@@ -220,7 +216,6 @@ class HybridSearcher:
 
         Returns list of (Memory, score) tuples.
         """
-        # Reuse existing vector search
         memories = self.db.search_similar(
             query_embedding=query_embedding,
             limit=limit,
@@ -228,7 +223,6 @@ class HybridSearcher:
             min_importance=min_importance
         )
 
-        # Use similarity scores calculated by database
         results = []
         for memory in memories:
             if memory.similarity_score is None:
@@ -260,33 +254,27 @@ class HybridSearcher:
         """
         k = RRF_K
 
-        # Calculate raw RRF scores
         rrf_scores = defaultdict(float)
         memory_map = {}
 
-        # Process BM25 results
         for rank, (memory, _) in enumerate(bm25_results, 1):
             rrf_scores[memory.id] += bm25_weight * (1.0 / (k + rank))
             memory_map[memory.id] = memory
 
-        # Process vector results - preserve original cosine similarity
         for rank, (memory, cosine_sim) in enumerate(vector_results, 1):
             rrf_scores[memory.id] += vector_weight * (1.0 / (k + rank))
             memory._vector_similarity = cosine_sim  # Preserve for logging
             memory_map[memory.id] = memory
 
-        # Sort by combined RRF score
         sorted_ids = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
 
         # Apply sigmoid transformation to spread scores into useful 0-1 range
         # Raw RRF scores cluster around 0.007-0.016; sigmoid with k=1000 and
         # midpoint=0.009 spreads this to ~0.1-0.85 for meaningful discrimination
         def sigmoid_normalize(raw_score: float) -> float:
-            # Sigmoid: 1 / (1 + exp(-k * (x - midpoint)))
             # k=1000 provides good spread, midpoint=0.009 centers on typical RRF range
             return 1.0 / (1.0 + math.exp(-1000 * (raw_score - 0.009)))
 
-        # Return top memories with normalized scores
         results = []
         for memory_id, raw_rrf_score in sorted_ids[:limit]:
             memory = memory_map[memory_id]

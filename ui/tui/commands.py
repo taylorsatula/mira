@@ -16,8 +16,7 @@ from typing import Any, Callable, Literal
 
 # A command word: "/" then letters, digits, underscores, dashes, and nothing
 # else. Only word-shaped first tokens are command attempts; any other
-# leading-slash text ("/etc/hosts is the path", "/pause.") is a message to
-# MIRA, exactly as it was before commands existed.
+# leading-slash text ("/etc/hosts is the path", "/pause.") is a message to MIRA.
 _WORD_RE = re.compile(r"/[A-Za-z][A-Za-z0-9_-]*\Z")
 
 
@@ -57,7 +56,6 @@ class PlainMessage:
 ParseResult = CommandHit | UnknownCommand | PlainMessage
 
 
-# --- renderers (success data payload -> notice text) -------------------------
 # Every renderer tolerates field drift: isinstance checks, never data["k"] —
 # the endpoint also injects a "meta" dict into every payload, and a wording
 # change on the server must degrade the notice, never crash the session.

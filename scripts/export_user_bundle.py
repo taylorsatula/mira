@@ -45,7 +45,6 @@ uid = str(user["id"])
 user["id"] = uid
 print("exporting", EMAIL, uid)
 
-# ---- messagesmemories.json (Postgres side) ----
 mm = {"format_version": "1.0", "exported_at": EXPORTED_AT, "source_user_id": uid,
       "user_profile": dict(user)}
 
@@ -67,7 +66,6 @@ for t, spec in PG_TABLES.items():
     mm[t] = [dict(r) for r in rows]
     print("PG %-20s %d rows" % (t, len(mm[t])))
 
-# ---- userdb.json (per-user sqlite side, decrypted) ----
 master = get_service_config("userdata_encryption_key").encode()
 session_key = hmac.new(master, uid.encode(), hashlib.sha256).digest()
 f = Fernet(base64.urlsafe_b64encode(session_key[:32]))
@@ -103,7 +101,6 @@ if os.path.exists(db_path):
         print("SQLITE %-22s %d rows" % (t, len(out_rows)))
     c.close()
 
-# ---- write files, checksum, zip ----
 TMP = "/tmp/bundle_%s" % uid.replace("-", "")
 os.makedirs(TMP, exist_ok=True)
 

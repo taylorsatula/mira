@@ -92,7 +92,6 @@ class DomaindocTool(Tool):
                 "persistent structured reference."
             )
 
-        # Build label property — constrain to valid labels when catalog is available
         label_prop: Dict[str, Any] = {
             "type": "string",
             "description": "The domaindoc's label. Required for all operations except 'search' and 'create' — 'create' takes new_label instead"
@@ -210,10 +209,6 @@ class DomaindocTool(Tool):
         labels = self._build_domaindoc_catalog()
         return self._build_schema(labels)
 
-    # =========================================================================
-    # Database Helpers
-    # =========================================================================
-
     def _normalize_section_name(self, name: str) -> str:
         """Strip ` | alert` suffix that may be included from trinket display."""
         if ' | ' in name:
@@ -253,7 +248,6 @@ class DomaindocTool(Tool):
         normalized = self._normalize_section_name(header)
 
         if parent_header:
-            # Get parent first, then find child under it
             parent = self._resolve_section_by_header(db, domaindoc_id, parent_header)
             results = db.fetchall(
                 "SELECT * FROM domaindoc_sections WHERE domaindoc_id = :doc_id AND header = :header AND parent_section_id = :parent_id",
@@ -262,7 +256,6 @@ class DomaindocTool(Tool):
             if not results:
                 raise ValueError(f"Subsection '{header}' not found under '{parent_header}'")
         else:
-            # Top-level section (no parent)
             results = db.fetchall(
                 "SELECT * FROM domaindoc_sections WHERE domaindoc_id = :doc_id AND header = :header AND parent_section_id IS NULL",
                 {"doc_id": domaindoc_id, "header": normalized}
@@ -349,7 +342,6 @@ class DomaindocTool(Tool):
                 {"doc_id": domaindoc_id, "parent_id": parent_id}
             )
         else:
-            # Get top-level sections only (parent_section_id IS NULL)
             results = db.fetchall(
                 "SELECT * FROM domaindoc_sections WHERE domaindoc_id = :doc_id AND parent_section_id IS NULL ORDER BY sort_order",
                 {"doc_id": domaindoc_id}
@@ -452,10 +444,6 @@ class DomaindocTool(Tool):
             return {}
         return {"actor": "collaborator", "actor_user_id": self.user_id}
 
-    # =========================================================================
-    # Tool Interface
-    # =========================================================================
-
     def run(
         self,
         operation: str,
@@ -547,10 +535,6 @@ class DomaindocTool(Tool):
 
         return result
 
-    # =========================================================================
-    # Document Management Operations
-    # =========================================================================
-
     def _op_search(
         self,
         db: UserDataManager,
@@ -571,7 +555,6 @@ class DomaindocTool(Tool):
 
         # Each entry: (db, decrypted doc, AcceptedShare or None)
         docs_to_search: List[tuple] = []
-        # Collaborator labels of shared domaindocs whose owner store could not be read
         skipped_shared: List[str] = []
 
         if label:
@@ -580,27 +563,24 @@ class DomaindocTool(Tool):
             resolved = resolve_domaindoc(self.user_id, label)
             share = None
             if resolved.is_shared:
-                # Share lookup is required infrastructure (PostgreSQL): a
-                # failure propagates rather than mislabeling the results.
+                # Share lookup is required infrastructure (PostgreSQL): failure propagates —
+                # never a silent own-docs-only search reported as complete.
                 for s in get_accepted_shares(self.user_id):
                     if s.collaborator_label == label:
                         share = s
                         break
             docs_to_search.append((resolved.db, resolved.doc, share))
         else:
-            # Search all enabled, non-archived domaindocs (own + accepted shares)
             own_docs = db.fetchall(
                 "SELECT * FROM domaindocs WHERE enabled = TRUE AND archived = FALSE"
             )
             docs_to_search = [(db, db._decrypt_dict(d), None) for d in own_docs]
 
-            # Required infrastructure: a failed share lookup propagates — never
-            # a silent own-docs-only search reported as complete.
             shares = get_accepted_shares(self.user_id)
 
             for share in shares:
-                # One owner's unreadable store must not sink the whole search,
-                # but the skip is reported in the result, never silent.
+                # One owner's unreadable store must not sink the whole search; the skip is
+                # reported in the result, never silent.
                 try:
                     owner_db = get_user_data_manager(share.owner_user_id)
                     owner_docs = owner_db.fetchall(
@@ -620,14 +600,12 @@ class DomaindocTool(Tool):
             domaindoc_id = doc["id"]
             doc_label = share.collaborator_label if share else doc["label"]
 
-            # Get all sections for this domaindoc (top-level and subsections)
             all_sections = doc_db.fetchall(
                 "SELECT * FROM domaindoc_sections WHERE domaindoc_id = :doc_id ORDER BY parent_section_id NULLS FIRST, sort_order",
                 {"doc_id": domaindoc_id}
             )
             all_sections = [doc_db._decrypt_dict(s) for s in all_sections]
 
-            # Build parent lookup for subsection context
             section_by_id = {s["id"]: s for s in all_sections}
 
             for sec in all_sections:
@@ -636,9 +614,7 @@ class DomaindocTool(Tool):
                 content_lower = content.lower()
                 header_lower = header.lower()
 
-                # Check header match
                 header_match = query_lower in header_lower
-                # Check content match
                 content_match = query_lower in content_lower
 
                 if header_match or content_match:
@@ -665,7 +641,6 @@ class DomaindocTool(Tool):
 
                     if content_match:
                         match_entry["match_in"].append("content")
-                        # Extract snippet around the match
                         idx = content_lower.find(query_lower)
                         start = max(0, idx - 50)
                         end = min(len(content), idx + len(query) + 50)
@@ -757,10 +732,6 @@ class DomaindocTool(Tool):
             "message": f"Domaindoc '{label}' is now disabled"
         }
 
-    # =========================================================================
-    # Browsing & Lifecycle Guidance Operations
-    # =========================================================================
-
     def _op_overview(self, label: str) -> Dict[str, Any]:
         """Return domaindoc description + section tree (headers and summaries, no full content).
 
@@ -772,14 +743,12 @@ class DomaindocTool(Tool):
         doc = resolved.doc
         domaindoc_id = doc["id"]
 
-        # Get all sections with parent relationships
         all_sections = db.fetchall(
             "SELECT * FROM domaindoc_sections WHERE domaindoc_id = :doc_id ORDER BY parent_section_id NULLS FIRST, sort_order",
             {"doc_id": domaindoc_id}
         )
         all_sections = [db._decrypt_dict(s) for s in all_sections]
 
-        # Build section tree: top-level sections with nested subsections
         section_tree: List[Dict[str, Any]] = []
 
         for sec in all_sections:
@@ -793,8 +762,7 @@ class DomaindocTool(Tool):
                 "pinned": sec.get("pinned", False),
             }
 
-            # Find subsections (depth 1), each with its sub-subsections (depth 2)
-            # — the trinket renders all three levels, so the overview must too
+            # The trinket renders all three levels, so the overview must too.
             subsections: List[Dict[str, Any]] = []
             for sub in all_sections:
                 if sub.get("parent_section_id") != sec["id"]:
@@ -911,10 +879,6 @@ class DomaindocTool(Tool):
             "error": "You called request_delete, but the operation description says not to. Re-read the 'operation' parameter description and relay the directions to the user directly instead of calling this tool."
         }
 
-    # =========================================================================
-    # Section Management Operations
-    # =========================================================================
-
     def _op_expand(
         self,
         db: UserDataManager,
@@ -957,7 +921,6 @@ class DomaindocTool(Tool):
         skipped = []
         for header in targets:
             sec = self._get_section(db, domaindoc_id, header, parent)
-            # Pinned sections cannot be collapsed
             if sec.get("pinned"):
                 skipped.append(sec["header"])
                 continue
@@ -994,17 +957,15 @@ class DomaindocTool(Tool):
         skipped = []
         for header in targets:
             sec = self._get_section(db, domaindoc_id, header, parent)
-            # Pinned sections are always expanded - skip setting flag
             if sec.get("pinned"):
                 skipped.append(sec["header"])
                 continue
 
-            # Update flag and also set collapsed state to match
             db.execute(
                 "UPDATE domaindoc_sections SET expanded_by_default = :flag, collapsed = :collapsed, updated_at = :now WHERE id = :id",
                 {
                     "flag": expanded_by_default,
-                    "collapsed": not expanded_by_default,  # expanded_by_default=True means collapsed=False
+                    "collapsed": not expanded_by_default,
                     "now": format_utc_iso(utc_now()),
                     "id": sec["id"]
                 }
@@ -1031,7 +992,6 @@ class DomaindocTool(Tool):
 
         sec = self._get_section(db, domaindoc_id, section, parent)
 
-        # Only top-level sections can be pinned
         if sec.get("parent_section_id") is not None:
             raise ValueError("Only top-level sections can be pinned, not subsections")
 
@@ -1095,8 +1055,7 @@ class DomaindocTool(Tool):
         parent_section_id = None
 
         if parent:
-            # Creating a nested section — resolve the parent at any depth and
-            # enforce the nesting bound. Unified contract (owner:
+            # Nesting contract (owner:
             # cns/api/actions.py:DomainKnowledgeDomainHandler, cited in
             # cns/api/AGENTS.md): depths 0/1/2 are supported on every surface
             # and the trinket renders all three levels (TAG_NAMES[0..2] in
@@ -1110,10 +1069,8 @@ class DomaindocTool(Tool):
                     "Maximum nesting depth is 2. Cannot add children to a sub-subsection."
                 )
             parent_section_id = parent_sec["id"]
-            # Get siblings for ordering
             all_sections = self._get_all_sections(db, domaindoc_id, parent_id=parent_section_id)
         else:
-            # Creating top-level section
             all_sections = self._get_all_sections(db, domaindoc_id)
 
         if insert_after:
@@ -1128,7 +1085,6 @@ class DomaindocTool(Tool):
         else:
             new_order = max((s["sort_order"] for s in all_sections), default=-1) + 1
 
-        # Check if section already exists (same header at same level)
         existing = db.fetchone(
             """SELECT id FROM domaindoc_sections
                WHERE domaindoc_id = :doc_id AND header = :header
@@ -1141,7 +1097,6 @@ class DomaindocTool(Tool):
                 f"'sed' to edit content, or 'rename_section' to change the header."
             )
 
-        # expanded_by_default sections start expanded; others start collapsed
         start_expanded = expanded_by_default is True
         section_id = db.insert("domaindoc_sections", {
             "domaindoc_id": domaindoc_id,
@@ -1166,7 +1121,6 @@ class DomaindocTool(Tool):
 
         self._update_domaindoc_timestamp(db, domaindoc_id)
 
-        # Generate section summary
         from cns.services.domaindoc_summary_service import update_section_summary
         update_section_summary(db, int(section_id), header, content)
 
@@ -1228,11 +1182,9 @@ class DomaindocTool(Tool):
                 f"Please expand '{sec['header']}' before deleting to confirm you've reviewed its contents"
             )
 
-        # Pinned sections cannot be deleted
         if sec.get("pinned"):
             raise ValueError(f"Cannot delete pinned section '{sec['header']}'. Unpin it first.")
 
-        # If this is a parent with subsections, all subsections must be expanded
         subsections = self._get_subsections(db, sec["id"])
         if subsections:
             collapsed_subs = [s["header"] for s in subsections if s.get("collapsed")]
@@ -1267,7 +1219,6 @@ class DomaindocTool(Tool):
             {"id": sec["id"]}
         )
 
-        # Renumber siblings
         parent_id = sec.get("parent_section_id")
         siblings = self._get_all_sections(db, domaindoc_id, parent_id=parent_id) if parent_id else self._get_all_sections(db, domaindoc_id)
         for i, s in enumerate(siblings):
@@ -1334,10 +1285,6 @@ class DomaindocTool(Tool):
         self._update_domaindoc_timestamp(db, domaindoc_id)
         return {"success": True, "new_order": normalized_order, "parent": parent}
 
-    # =========================================================================
-    # Content Editing Operations
-    # =========================================================================
-
     def _op_append(
         self,
         db: UserDataManager,
@@ -1377,7 +1324,6 @@ class DomaindocTool(Tool):
 
         self._update_domaindoc_timestamp(db, domaindoc_id)
 
-        # Update section summary
         from cns.services.domaindoc_summary_service import update_section_summary
         update_section_summary(db, sec["id"], sec["header"], new_content)
 
@@ -1445,7 +1391,6 @@ class DomaindocTool(Tool):
 
         self._update_domaindoc_timestamp(db, domaindoc_id)
 
-        # Update section summary
         from cns.services.domaindoc_summary_service import update_section_summary
         update_section_summary(db, sec["id"], sec["header"], new_content)
 
@@ -1493,7 +1438,6 @@ class DomaindocTool(Tool):
 
         self._update_domaindoc_timestamp(db, domaindoc_id)
 
-        # Update section summary
         from cns.services.domaindoc_summary_service import update_section_summary
         update_section_summary(db, sec["id"], sec["header"], content)
 
@@ -1504,10 +1448,6 @@ class DomaindocTool(Tool):
             "new_chars": len(content),
             "parent": parent
         }
-
-    # =========================================================================
-    # Helpers
-    # =========================================================================
 
     def _resolve_section_targets(
         self,

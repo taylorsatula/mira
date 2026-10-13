@@ -20,7 +20,6 @@ from config import config
 
 logger = logging.getLogger(__name__)
 
-# Peanut Gallery tuning
 PG_TRIGGER_INTERVAL = 5      # Run observer every N turns (broad periodic correction)
 PG_GUIDANCE_TTL_TURNS = 2    # Short-lived directive: repair now or let it disappear
 

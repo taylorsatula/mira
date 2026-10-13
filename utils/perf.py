@@ -45,17 +45,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("mira.perf")
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 N_PLUS_ONE_THRESHOLD = 4
 SLOW_METHOD_THRESHOLD_MS = 500
 HIGH_FREQ_THRESHOLD = 50
 HIGH_FREQ_WINDOW_S = 60
 ROLLING_WINDOW_MAX = 500
-ROLLING_WINDOW_TTL_S = 600  # 10 minutes
+ROLLING_WINDOW_TTL_S = 600
 
-# Frames to skip when extracting the business-logic caller.
 # Use os.sep-normalized paths for cross-platform correctness.
 _INFRA_FILES = frozenset({
     os.path.join("utils", "perf.py"),
@@ -63,9 +59,6 @@ _INFRA_FILES = frozenset({
     os.path.join("utils", "database_session_manager.py"),
 })
 
-# ---------------------------------------------------------------------------
-# Query normalization
-# ---------------------------------------------------------------------------
 _RE_SINGLE_QUOTED = re.compile(r"'[^']*'")
 _RE_NUMERIC = re.compile(r"\b\d+\.?\d*\b")
 _RE_IN_LIST = re.compile(r"IN\s*\([^)]+\)", re.IGNORECASE)
@@ -76,14 +69,10 @@ def _normalize_query(sql: str) -> str:
     result = _RE_SINGLE_QUOTED.sub("?", sql)
     result = _RE_NUMERIC.sub("?", result)
     result = _RE_IN_LIST.sub("IN (?)", result)
-    # Collapse whitespace
     result = " ".join(result.split())
     return result
 
 
-# ---------------------------------------------------------------------------
-# Caller extraction
-# ---------------------------------------------------------------------------
 
 def _extract_caller() -> str:
     """Return 'relative/path:line' of the first business-logic frame in the stack.
@@ -94,25 +83,19 @@ def _extract_caller() -> str:
     stack = traceback.extract_stack()
     for frame in reversed(stack):
         filename = frame.filename
-        # Convert to relative path for readability
         rel = filename
         for prefix in (os.getcwd() + os.sep, ):
             if filename.startswith(prefix):
                 rel = filename[len(prefix):]
                 break
-        # Skip infrastructure frames
         if any(rel.endswith(inf) for inf in _INFRA_FILES):
             continue
-        # Skip stdlib / site-packages
         if "site-packages" in filename or "/lib/python" in filename:
             continue
         return f"{rel}:{frame.lineno}"
     return "unknown"
 
 
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
 
 @dataclass
 class QueryRecord:
@@ -153,9 +136,6 @@ _perf_context: contextvars.ContextVar[Optional[RequestPerfContext]] = contextvar
 )
 
 
-# ---------------------------------------------------------------------------
-# Rolling stats window (for diagnostic endpoint)
-# ---------------------------------------------------------------------------
 
 @dataclass
 class RequestStats:
@@ -198,13 +178,11 @@ def _get_rolling_summary() -> Dict[str, Any]:
             "pool_stats": _collect_pool_stats(),
         }
 
-    # Aggregate by endpoint
     endpoint_data: Dict[str, List[RequestStats]] = defaultdict(list)
     for s in recent:
         key = f"{s.method} {s.endpoint}"
         endpoint_data[key].append(s)
 
-    # Top by avg query count
     by_query_count = sorted(
         [
             {"endpoint": ep, "avg_queries": sum(s.query_count for s in stats) / len(stats),
@@ -215,7 +193,6 @@ def _get_rolling_summary() -> Dict[str, Any]:
         reverse=True,
     )[:10]
 
-    # Top by avg response time
     by_response_time = sorted(
         [
             {"endpoint": ep, "avg_ms": round(sum(s.total_ms for s in stats) / len(stats), 1),
@@ -226,13 +203,11 @@ def _get_rolling_summary() -> Dict[str, Any]:
         reverse=True,
     )[:10]
 
-    # Top query patterns (populated at DEBUG level only)
     all_patterns: List[str] = []
     for s in recent:
         all_patterns.extend(s.query_patterns)
     top_patterns = Counter(all_patterns).most_common(10)
 
-    # N+1 detections
     all_n_plus_one: List[str] = []
     for s in recent:
         all_n_plus_one.extend(s.n_plus_one_patterns)
@@ -273,9 +248,6 @@ def _collect_pool_stats() -> Dict[str, Any]:
     return stats
 
 
-# ---------------------------------------------------------------------------
-# Middleware
-# ---------------------------------------------------------------------------
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -316,7 +288,6 @@ class PerfMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         db_pct = (ctx.total_db_ms / duration_ms * 100) if duration_ms > 0 else 0
 
-        # Summary line (both INFO and DEBUG)
         logger.info(
             "%s %s | %d | %.0fms total | %d queries | %.0fms db (%.0f%%)",
             method, path, status_code, duration_ms,
@@ -326,10 +297,8 @@ class PerfMiddleware(BaseHTTPMiddleware):
         n_plus_one_patterns: List[str] = []
         query_patterns: List[str] = []
 
-        # Detailed breakdown (DEBUG only)
         if logger.isEnabledFor(logging.DEBUG) and ctx.records:
             query_patterns = [rec.normalized_pattern for rec in ctx.records]
-            # Group queries by caller
             caller_groups: Dict[str, List[QueryRecord]] = defaultdict(list)
             for rec in ctx.records:
                 caller_groups[rec.caller].append(rec)
@@ -342,7 +311,6 @@ class PerfMiddleware(BaseHTTPMiddleware):
                     caller, len(recs), total_ms, preview,
                 )
 
-            # N+1 detection
             for pattern, count, total_ms, caller in ctx.detect_n_plus_one():
                 n_plus_one_patterns.append(f"{pattern[:80]} ({caller})")
                 logger.warning(
@@ -350,7 +318,6 @@ class PerfMiddleware(BaseHTTPMiddleware):
                     count, total_ms, pattern[:80], caller,
                 )
 
-        # Append to rolling window
         _append_rolling_stat(RequestStats(
             endpoint=path,
             method=method,
@@ -364,22 +331,16 @@ class PerfMiddleware(BaseHTTPMiddleware):
         ))
 
 
-# ---------------------------------------------------------------------------
-# Database instrumentation (monkey-patch installer)
-# ---------------------------------------------------------------------------
 
 def _make_instrumented_wrapper(original: Callable, method_name: str) -> Callable:
     """Create an instrumented wrapper for a database execute_* method."""
 
     @functools.wraps(original)
     def wrapper(self, *args, **kwargs):
-        # Fast path: if logging is at WARNING+, call original directly.
-        # This check is ~50ns. The wrapper itself only exists because
-        # install_db_instrumentation() was called at INFO/DEBUG level.
+        # Fast path only because install_db_instrumentation() ran at INFO/DEBUG level.
         if not logger.isEnabledFor(logging.INFO):
             return original(self, *args, **kwargs)
 
-        # Extract query string for logging
         if method_name == "execute_transaction":
             # execute_transaction takes List[Tuple[query, params]]
             operations = args[0] if args else kwargs.get("operations", [])
@@ -454,11 +415,7 @@ def install_db_instrumentation() -> None:
     logger.info("DB instrumentation installed: %d methods wrapped", wrapped_count)
 
 
-# ---------------------------------------------------------------------------
-# @perf_profile decorator
-# ---------------------------------------------------------------------------
 
-# Track high-frequency calls per function
 _freq_tracker: Dict[str, Tuple[int, float]] = {}
 _freq_lock = threading.Lock()
 
@@ -478,13 +435,11 @@ def perf_profile(fn: Callable) -> Callable:
 
         qualname = fn.__qualname__
 
-        # High-frequency tracking
         _track_call_frequency(qualname)
 
         if logger.isEnabledFor(logging.DEBUG):
             return _profile_debug(fn, qualname, args, kwargs)
 
-        # INFO: time-only, log slow calls
         start = time.perf_counter()
         result = fn(*args, **kwargs)
         ms = (time.perf_counter() - start) * 1000
@@ -501,7 +456,6 @@ def _track_call_frequency(qualname: str) -> None:
     with _freq_lock:
         count, window_start = _freq_tracker.get(qualname, (0, now))
         if now - window_start > HIGH_FREQ_WINDOW_S:
-            # Start new window
             _freq_tracker[qualname] = (1, now)
             return
         count += 1
@@ -522,16 +476,13 @@ def _profile_debug(fn: Callable, qualname: str, args: tuple, kwargs: dict) -> An
     finally:
         profiler.disable()
 
-    # Extract stats
     stream = io.StringIO()
     stats = pstats.Stats(profiler, stream=stream)
     stats.sort_stats("cumulative")
 
-    # Get top 5 entries
     stats.print_stats(5)
     stats_output = stream.getvalue()
 
-    # Log total time + top calls
     total_ms = sum(
         entry[3] for entry in stats.stats.values()  # entry[3] = cumtime
     ) * 1000 if stats.stats else 0
@@ -540,9 +491,6 @@ def _profile_debug(fn: Callable, qualname: str, args: tuple, kwargs: dict) -> An
     return result
 
 
-# ---------------------------------------------------------------------------
-# Diagnostic endpoint
-# ---------------------------------------------------------------------------
 
 def register_perf_routes(app: 'FastAPI') -> None:
     """Register GET /dev/perf/summary. Only creates the route at DEBUG/INFO level.

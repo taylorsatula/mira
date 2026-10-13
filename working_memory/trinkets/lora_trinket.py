@@ -107,7 +107,6 @@ class LoraTrinket(EventAwareTrinket):
 
             body = match.group(2)
 
-            # Strip changelog from display text
             obs_text = re.sub(r'<changelog>.*?</changelog>', '', body, flags=re.DOTALL).strip()
 
             observations.append({
@@ -116,7 +115,6 @@ class LoraTrinket(EventAwareTrinket):
                 'text': obs_text
             })
 
-        # Parse check-in topics, likewise keyed on named attributes.
         topic_pattern = r'<mira:topic\b([^>]*?)\s*(?:/>|>(?:.*?)</mira:topic\s*>)'
 
         for match in re.finditer(topic_pattern, xml_output, re.DOTALL):
@@ -135,9 +133,7 @@ class LoraTrinket(EventAwareTrinket):
                 'reason': reason_match.group(1).strip()
             })
 
-        # Loud failure, not silence: zero parsed observations from a non-empty
-        # document means the whole user model vanishes from the composed
-        # prompt — say so instead of returning empty without a trace.
+        # Loud failure, not silence: zero parsed observations from a non-empty document means the whole user model vanishes from the composed prompt — say so.
         if not observations and xml_output.strip():
             logger.warning(
                 "LoRA trinket: user model omitted from prompt this compose — "
@@ -150,10 +146,10 @@ class LoraTrinket(EventAwareTrinket):
 
     def _format_user_model(self, observations: list[_Observation]) -> str:
         """Format observations as user model XML for system prompt injection."""
-        # Observation text is intentionally NOT escaped: it is internal second-order
-        # content — synthesized by the user-model pipeline from conversation, not
-        # verbatim user or external text — so it sits downstream of the ingestion
-        # boundary where untrusted content is already wrapped. Escaping here would
+        # Observation text deliberately NOT escaped: internal second-order content,
+        # synthesized by the user-model pipeline from conversation — not verbatim
+        # user or external text — so it sits downstream of the ingestion boundary,
+        # where untrusted content is already wrapped. Escaping here would
         # double-defend internal content and muddy the boundary rule.
         prefs = get_user_preferences()
         first_name = (prefs.first_name or '').strip() or "this user"

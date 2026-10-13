@@ -18,7 +18,6 @@ from cns.infrastructure.continuum_repository import ContinuumRepository, get_con
 
 logger = logging.getLogger(__name__)
 
-# Manifest display settings
 MANIFEST_DEPTH = 15       # Recent segments in manifest display
 MANIFEST_CACHE_TTL = 3600  # Valkey cache TTL in seconds (1 hour)
 
@@ -33,7 +32,6 @@ class ManifestSegment(TypedDict):
     created_at: str | None
 
 
-# Module-level singleton instance
 _manifest_service_instance: ManifestQueryService | None = None
 
 
@@ -91,7 +89,6 @@ class ManifestQueryService:
         self.cache_ttl = MANIFEST_CACHE_TTL
         self.continuum_repository = continuum_repository or get_continuum_repository()
 
-        # Subscribe to manifest update events for cache invalidation
         event_bus.subscribe('ManifestUpdatedEvent', self._handle_manifest_updated)
         logger.info("ManifestQueryService subscribed to ManifestUpdatedEvent")
 
@@ -129,7 +126,6 @@ class ManifestQueryService:
             - end_time: ISO format end time
             - created_at: ISO format creation time
         """
-        # Try cache first
         cache_key = f"manifest_segments:{user_id}"
         try:
             import json
@@ -141,10 +137,8 @@ class ManifestQueryService:
         except (ValkeyConnectionError, ValkeyTimeoutError) as e:
             logger.warning(f"Valkey unavailable for manifest cache read: {e}")
 
-        # Query segments from database
         segments = self._query_segments(user_id, limit)
 
-        # Cache the result
         if segments:
             try:
                 import json
@@ -175,12 +169,9 @@ class ManifestQueryService:
         for msg in segment_messages:
             metadata = msg.metadata
 
-            # Use display_title from metadata for manifest tree, fallback to content for in-progress segments
             display_title = metadata.get('display_title')
             if not display_title:
-                # Fallback for active segments or segments without display_title
                 display_title = msg.content if msg.content else '[Segment in progress]'
-                # Truncate if using full content as fallback
                 if len(display_title) > 50:
                     display_title = display_title[:47] + "..."
 
@@ -199,7 +190,6 @@ class ManifestQueryService:
                 'created_at': msg.created_at.isoformat() if msg.created_at else None
             })
 
-        # Reverse to chronological order (oldest first)
         segments.reverse()
 
         logger.debug(f"Queried {len(segments)} segments for user {user_id}")

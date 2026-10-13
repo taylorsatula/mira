@@ -22,20 +22,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# -----------------------------------------------------------------------
-# Data types
-# -----------------------------------------------------------------------
-
 class WorkItem(BaseModel):
     """A unit of work detected by a trigger."""
     item_id: str         # Unique ID for dedup (e.g. IMAP folder:uid)
     interface_name: str  # Key for AsyncActivityTrinket (e.g. "email_watcher")
     context: dict[str, Any]  # Trigger-specific payload passed to the agent
 
-
-# -----------------------------------------------------------------------
-# Trigger protocol
-# -----------------------------------------------------------------------
 
 @runtime_checkable
 class SidebarTrigger(Protocol):
@@ -56,22 +48,16 @@ class SidebarTrigger(Protocol):
         ...
 
 
-# -----------------------------------------------------------------------
-# Dispatcher
-# -----------------------------------------------------------------------
-
 # Per-user-per-poll cap to prevent runaway cost from misconfigured triggers
 MAX_ITEMS_PER_USER_PER_POLL = 5
 
-# Statuses that indicate a fully-processed item (no retry).
 _TERMINAL_STATUSES = frozenset({'handled', 'escalated', 'resolved', 'dismissed'})
 
 # Records older than this are deleted during cleanup. Not tied to any
 # trigger's discovery window -- purely a retention hygiene bound.
 _CLEANUP_RETENTION_DAYS = 30
 
-# Minimum seconds between cleanup runs for a given user.
-_CLEANUP_INTERVAL_SECONDS = 86400  # 24 hours
+_CLEANUP_INTERVAL_SECONDS = 86400
 
 
 class SidebarDispatcher:
@@ -92,9 +78,7 @@ class SidebarDispatcher:
         self.event_bus = event_bus
         self.max_concurrent_agents = max_concurrent_agents
         self._triggers: list[SidebarTrigger] = []
-        # Key: "interface_name:item_id", Value: Thread
         self._active_agents: dict[str, threading.Thread] = {}
-        # Rate limiter for per-user cleanup (user_id → last cleanup timestamp)
         self._last_cleanup: dict[str, float] = {}
 
     def register_trigger(self, trigger: SidebarTrigger) -> None:
@@ -105,7 +89,6 @@ class SidebarDispatcher:
         """Single poll cycle. Called by APScheduler on each tick."""
         from utils.user_context import set_current_user_id, clear_user_context
 
-        # Prune finished agents
         self._active_agents = {
             key: t for key, t in self._active_agents.items() if t.is_alive()
         }
@@ -126,10 +109,6 @@ class SidebarDispatcher:
                 )
             finally:
                 clear_user_context()
-
-    # ------------------------------------------------------------------
-    # Per-user poll logic
-    # ------------------------------------------------------------------
 
     def _poll_user(self, user_id: str) -> None:
         """Check all triggers for a single user, with SQLite-backed dedup."""
@@ -155,7 +134,6 @@ class SidebarDispatcher:
                 if dispatch_key in self._active_agents:
                     continue
 
-                # Prior-run lookup + dispatch decision
                 prior_run = self._get_prior_run(db, item)
                 decision = self._dispatch_decision(
                     prior_run, trigger.agent_class,
@@ -163,7 +141,6 @@ class SidebarDispatcher:
                 if decision == 'skip':
                     continue
 
-                # Set run context
                 if decision == 'retry' and prior_run:
                     item.context['run_count'] = prior_run.get('run_count', 1) + 1
                     item.context['prior_run'] = dict(prior_run)
@@ -174,10 +151,6 @@ class SidebarDispatcher:
                     continue
                 trigger.on_dispatched(user_id, item.item_id)
                 dispatched += 1
-
-    # ------------------------------------------------------------------
-    # Dedup helpers
-    # ------------------------------------------------------------------
 
     def _get_prior_run(self, db, item: WorkItem) -> dict | None:
         """Look up existing activity record for this item."""
@@ -208,10 +181,6 @@ class SidebarDispatcher:
                 return 'retry'
 
         return 'skip'
-
-    # ------------------------------------------------------------------
-    # Agent spawning
-    # ------------------------------------------------------------------
 
     def _spawn_agent(
         self,
@@ -248,10 +217,6 @@ class SidebarDispatcher:
         )
         return True
 
-    # ------------------------------------------------------------------
-    # Cleanup
-    # ------------------------------------------------------------------
-
     def _maybe_cleanup(self, db, user_id: str) -> None:
         """Delete old activity + scratchpad records, rate-limited per user."""
         from datetime import timedelta
@@ -266,7 +231,6 @@ class SidebarDispatcher:
         )
 
         try:
-            # Cascade: delete scratchpad notes for expiring activity records
             db.execute(
                 "DELETE FROM scratchpad WHERE thread_id IN ("
                 "  SELECT thread_id FROM sidebar_activity"
@@ -280,10 +244,6 @@ class SidebarDispatcher:
             )
         except Exception as e:
             logger.warning(f"Sidebar cleanup failed for user {user_id}: {e}")
-
-    # ------------------------------------------------------------------
-    # User discovery
-    # ------------------------------------------------------------------
 
     def _get_eligible_users(self) -> list[dict]:
         """Users the dispatcher polls: anyone active in the last two days,

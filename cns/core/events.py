@@ -60,7 +60,6 @@ class ContinuumCheckpointEvent(ContinuumEvent):
     pass
 
 
-# Concrete implementations we need immediately
 
 @dataclass(frozen=True)
 class TurnCompletedEvent(ContinuumCheckpointEvent):

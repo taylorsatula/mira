@@ -6,24 +6,19 @@ adding, retrieving, listing, and deleting contacts. Each contact has
 a UUID for unique identification and can be linked to other tools.
 """
 
-# Standard library imports
 import json
 import logging
 import uuid
 from typing import Dict, Any, Optional
 
-# Third-party imports
 from pydantic import BaseModel, Field
 
-# Import timezone utilities for UTC-everywhere approach
 from utils.timezone_utils import utc_now, format_utc_iso
 
-# Local imports
 from tools.repo import Tool
 from tools.registry import registry
 
 
-# -------------------- CONFIGURATION --------------------
 
 class ContactsToolConfig(BaseModel):
     """
@@ -31,13 +26,11 @@ class ContactsToolConfig(BaseModel):
 
     Defines the parameters that control the contacts tool's behavior.
     """
-    # Standard configuration parameter - all tools should include this
     enabled: bool = Field(
         default=True,
         description="Whether this tool is enabled by default"
     )
 
-# Register with registry
 registry.register("contacts_tool", ContactsToolConfig)
 
 
@@ -55,7 +48,6 @@ class ContactNotFoundError(ValueError):
     """
 
 
-# -------------------- MAIN TOOL CLASS --------------------
 
 class ContactsTool(Tool):
     """
@@ -161,30 +153,24 @@ class ContactsTool(Tool):
             return {}
         ident = identifier.strip()
 
-        # 1) Try UUID exact match using database WHERE clause
         contacts = self.db.select('contacts', 'id = :identifier', {'identifier': ident})
         if contacts:
             return {"contact": contacts[0], "matched_by": "id"}
 
-        # 2) Try case-insensitive exact name (name decrypted at select time)
         all_contacts = self.db.select('contacts')
         ident_lower = ident.lower()
         exact = [c for c in all_contacts if (c.get('encrypted__name') or '').strip().lower() == ident_lower]
         if exact:
             return {"contact": exact[0], "matched_by": "name"}
 
-        # 3) Partial matches by name (starts-with prioritized)
         starts = [c for c in all_contacts if (c.get('encrypted__name') or '').strip().lower().startswith(ident_lower)]
 
-        # Prioritize starts-with - only check contains if no starts-with matches
         if starts:
             if len(starts) == 1:
                 return {"contact": starts[0], "matched_by": "partial"}
-            # Multiple starts-with matches
             formatted = [self._format_contact(c) for c in starts[:10]]
             return {"ambiguous": True, "matches": formatted}
 
-        # No starts-with matches, check contains
         contains = [c for c in all_contacts if ident_lower in (c.get('encrypted__name') or '').strip().lower()]
 
         if len(contains) == 1:
@@ -210,11 +196,9 @@ class ContactsTool(Tool):
             ValueError: If operation fails or parameters are invalid
         """
         try:
-            # Handle batch contact operations
             if operation == "add_contact" and "contacts" in kwargs:
                 return self._batch_add_contacts(kwargs.get("contacts"))
 
-            # Route to the appropriate operation
             if operation == "add_contact":
                 return self._add_contact(**kwargs)
             elif operation == "get_contact":
@@ -264,7 +248,6 @@ class ContactsTool(Tool):
         name_lower = name.strip().lower()
         for contact in existing:
             if (contact.get('encrypted__name') or '').strip().lower() == name_lower:
-                # Found duplicate - return existing contact politely
                 self.logger.info(f"Contact '{name}' already exists, returning existing contact")
                 return {
                     "success": True,
@@ -273,7 +256,6 @@ class ContactsTool(Tool):
                     "message": f"Contact '{name}' already exists (returning existing contact)"
                 }
         
-        # Create new contact
         contact_id = str(uuid.uuid4())
         timestamp = format_utc_iso(utc_now())
         
@@ -291,10 +273,8 @@ class ContactsTool(Tool):
             'updated_at': timestamp
         }
         
-        # Insert into database
         self.db.insert('contacts', contact_data)
         
-        # Return formatted response
         return {
             "success": True,
             "contact": self._format_contact(contact_data),
@@ -403,7 +383,6 @@ class ContactsTool(Tool):
         """
         contacts = self.db.select('contacts')
         
-        # Format contacts for response
         formatted_contacts = []
         for contact in contacts:
             formatted_contacts.append(self._format_contact(contact))
@@ -456,7 +435,6 @@ class ContactsTool(Tool):
             }
         contact = resolved['contact']
 
-        # Delete from database
         rows_deleted = self.db.delete(
             'contacts',
             'id = :id',
@@ -525,7 +503,6 @@ class ContactsTool(Tool):
             }
         contact = resolved['contact']
 
-        # Require at least one field to update (beyond timestamp)
         if all(
             value is None
             for value in (name, email, phone, street, city, state, zip, pager_address)
@@ -536,7 +513,6 @@ class ContactsTool(Tool):
                 "or pager_address must be provided to update"
             )
 
-        # If renaming, prevent duplicates (case-insensitive) to preserve unique names
         if name is not None:
             all_contacts = self.db.select('contacts')
             name_lower = name.strip().lower()
@@ -545,7 +521,6 @@ class ContactsTool(Tool):
                 self.logger.error(f"Duplicate contact name '{name}' in update_contact operation")
                 raise ValueError(f"Contact with name '{name}' already exists")
 
-        # Build update data
         update_data = {'updated_at': format_utc_iso(utc_now())}
         if name is not None:
             update_data['encrypted__name'] = name
@@ -564,7 +539,6 @@ class ContactsTool(Tool):
         if pager_address is not None:
             update_data['encrypted__pager_address'] = pager_address
         
-        # Update in database
         rows_updated = self.db.update(
             'contacts',
             update_data,
@@ -574,7 +548,6 @@ class ContactsTool(Tool):
         if rows_updated == 0:
             raise ContactNotFoundError(f"Contact not found: {contact['id']}")
         
-        # Get updated contact
         updated_contacts = self.db.select(
             'contacts',
             'id = :id',

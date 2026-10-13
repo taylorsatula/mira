@@ -58,18 +58,16 @@ from .history import replay_blocks
 from .screen import Interrupt, Intent, Live, Quit, Screen, Status, Submit, ToggleThinking
 from .text import ReplyStream, display_lines
 
-# --- Bounded-wait constants (the only unbounded await is the inbox read) -----
+
+# Bounded-wait constants; the only unbounded await is the inbox read.
 
 # One print step: CPR wait (library bound 1 s) plus the emit lock. Generous.
 EMIT_TIMEOUT = 10.0
-# Joining the frame pump after close(): client.CLOSE_TIMEOUT is 5 s; cover it.
+# Joining the frame pump after close(): must exceed client.CLOSE_TIMEOUT (5 s).
 PUMP_JOIN_TIMEOUT = 8.0
-# Application teardown after Screen.close().
 SCREEN_CLOSE_TIMEOUT = 5.0
-# A cancelled connect() unwinds from inside websockets/auth waits.
 CONNECT_CANCEL_TIMEOUT = 5.0
-# Background tasks posting private items; the consumer is draining, so a
-# longer wait means it is wedged.
+# Background tasks posting private items; a longer wait means the consumer is wedged.
 QUEUE_PUT_TIMEOUT = 5.0
 
 # The server answers TURN_BUSY while any turn for this user holds its per-user
@@ -110,7 +108,6 @@ _LOST_BEFORE_CONFIRM = (
 ConnState = Literal["connected", "connecting", "disconnected"]
 
 
-# --- Private inbox items -------------------------------------------------------
 
 
 @dataclass
@@ -240,7 +237,6 @@ class ChatSession:
         self._background: set[asyncio.Task] = set()
         self._quitting = False
 
-    # --- public ----------------------------------------------------------------
 
     async def run(self) -> int:
         """Run until the user quits; returns 0. Raises if the screen dies or a
@@ -301,7 +297,6 @@ class ChatSession:
             await self._post_private(UpdateChecked(latest))
             await asyncio.sleep(UPDATE_CHECK_INTERVAL_SECONDS)
 
-    # --- derived state ---------------------------------------------------------
 
     def _busy(self) -> bool:
         return self._in_flight is not None or self._turn is not None
@@ -399,7 +394,6 @@ class ChatSession:
     def _refresh(self) -> None:
         self._screen.set_live(self._live())
 
-    # --- dispatch --------------------------------------------------------------
 
     async def _handle(self, item: Item) -> bool:
         """Handle one inbox item; True means quit."""
@@ -425,7 +419,7 @@ class ChatSession:
                 await self._on_auth_ok()
             case AuthFailed():
                 # Ignored by design: every connect failure also raises
-                # ClientError out of connect(), which arrives as ConnectFailed.
+                # ClientError out of connect(), arriving as ConnectFailed.
                 pass
             case ConnectFailed(error=error):
                 await self._on_connect_failed(error)
@@ -483,7 +477,6 @@ class ChatSession:
                 raise error
         return False
 
-    # --- keyboard --------------------------------------------------------------
 
     async def _on_submit(self, raw: str) -> bool:
         text = raw.strip()
@@ -528,7 +521,6 @@ class ChatSession:
                     self._refresh()
         return False
 
-    # --- slash commands -------------------------------------------------------
 
     async def _run_action(self, command: commands.Command) -> None:
         """Background producer: one bounded REST action, reported to the single
@@ -626,7 +618,6 @@ class ChatSession:
         turn.halt_requested = True
         self._refresh()
 
-    # --- sending ---------------------------------------------------------------
 
     async def _send_next(self) -> None:
         text = self._outbox.popleft()
@@ -664,7 +655,6 @@ class ChatSession:
         self._screen.restore_input("\n\n".join(texts))
         return True
 
-    # --- connection ------------------------------------------------------------
 
     def _start_pump(self) -> None:
         self._pump_task = asyncio.create_task(self._client.run())
@@ -824,7 +814,6 @@ class ChatSession:
         self._available_update = latest
         self._refresh()
 
-    # --- turn lifecycle --------------------------------------------------------
 
     async def _current(self, turn_id: str, kind: str) -> _Turn | None:
         turn = self._turn
@@ -1054,7 +1043,6 @@ class ChatSession:
         else:
             await self._emit(self._meta(transcript.alert(f"protocol error: {event.message} [{event.code}]")))
 
-    # --- shutdown --------------------------------------------------------------
 
     async def _teardown(self) -> None:
         """Bar first, then the socket: ``Screen.close`` erases the bar, the

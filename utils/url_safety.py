@@ -10,12 +10,12 @@ from urllib.parse import urlparse
 
 MAX_REDIRECT_HOPS = 5
 
-# IPv6 transition ranges embedding an IPv4 address in the low 32 bits. CPython's
-# `ipaddress.is_global` returns True for these, so they must be rejected explicitly:
-# `64:ff9b::a9fe:a9fe` (NAT64, RFC 6052) embeds 169.254.169.254 and passes is_global.
+# IPv6 transition ranges embedding IPv4 in the low 32 bits. CPython `ipaddress.is_global`
+# returns True for both, so reject explicitly: 64:ff9b::/96 (NAT64, RFC 6052) embeds
+# 169.254.169.254;  ::/96 (deprecated IPv4-compatible, RFC 4291).
 _EMBEDDED_IPV4_V6_NETWORKS = (
-    ipaddress.ip_network("64:ff9b::/96"),  # NAT64 well-known prefix (RFC 6052)
-    ipaddress.ip_network("::/96"),  # deprecated IPv4-compatible (RFC 4291)
+    ipaddress.ip_network("64:ff9b::/96"),
+    ipaddress.ip_network("::/96"),
 )
 
 _BLOCKED_HOSTNAMES = {

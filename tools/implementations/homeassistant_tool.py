@@ -23,7 +23,6 @@ from utils import http_client
 from utils.timezone_utils import utc_now, format_utc_iso
 
 
-# -------------------- CONFIGURATION --------------------
 
 class HomeassistantToolConfig(BaseModel):
     """Configuration for the homeassistant_tool."""
@@ -38,11 +37,9 @@ registry.register("homeassistant_tool", HomeassistantToolConfig)
 # Entity ID format: domain.object_id (e.g., light.kitchen_main)
 _ENTITY_ID_PATTERN = re.compile(r'^[a-z_]+\.[a-z0-9_]+$')
 
-# 24-hour staleness threshold for entity registry GC
 _REGISTRY_STALE_HOURS = 24
 
 
-# -------------------- MAIN TOOL CLASS --------------------
 
 class HomeassistantTool(Tool):
     """
@@ -126,7 +123,6 @@ class HomeassistantTool(Tool):
         if has_user_context():
             self._ensure_registry_table()
 
-    # -------------------- DEFERRED INIT --------------------
 
     def _ensure_registry_table(self):
         """Create the entity_registry table if it doesn't exist."""
@@ -139,7 +135,6 @@ class HomeassistantTool(Tool):
             last_seen TEXT NOT NULL
         """)
 
-    # -------------------- CONFIG & AUTH --------------------
 
     def _load_config(self):
         """Load HA URL and token from UserCredentialService. Fail-fast if missing."""
@@ -187,7 +182,6 @@ class HomeassistantTool(Tool):
     def _build_url(self, path: str) -> str:
         return f"{self._ha_url}{path}"
 
-    # -------------------- HTTP --------------------
 
     def _ha_request(
         self, method: str, path: str, json_body: dict = None
@@ -243,7 +237,6 @@ class HomeassistantTool(Tool):
                 )
             raise
 
-    # -------------------- ENTITY REGISTRY --------------------
 
     def _update_registry(self, states: List[Dict[str, Any]]):
         """Upsert entity_registry from a GET /api/states response, then GC stale entries."""
@@ -280,7 +273,6 @@ class HomeassistantTool(Tool):
             else:
                 self.db.insert('entity_registry', row)
 
-        # GC: prune entities not seen in the last 24 hours
         cutoff = format_utc_iso(utc_now() - timedelta(hours=_REGISTRY_STALE_HOURS))
         self.db.delete('entity_registry', 'last_seen < :cutoff', {'cutoff': cutoff})
 
@@ -299,16 +291,13 @@ class HomeassistantTool(Tool):
 
         identifier = identifier.strip()
 
-        # 1) Looks like a valid entity_id format → use directly
         if _ENTITY_ID_PATTERN.match(identifier):
             return {"entity_id": identifier, "matched_by": "direct"}
 
-        # 2) Fuzzy search against the local registry
         self._ensure_registry_table()
         all_entities = self.db.select('entity_registry')
         ident_lower = identifier.lower()
 
-        # 2a) Case-insensitive exact match on friendly_name
         exact = [
             e for e in all_entities
             if (e.get('friendly_name') or '').strip().lower() == ident_lower
@@ -324,7 +313,6 @@ class HomeassistantTool(Tool):
                 ]
             }
 
-        # 2b) Starts-with match
         starts = [
             e for e in all_entities
             if (e.get('friendly_name') or '').strip().lower().startswith(ident_lower)
@@ -340,7 +328,6 @@ class HomeassistantTool(Tool):
                 ]
             }
 
-        # 2c) Contains match
         contains = [
             e for e in all_entities
             if ident_lower in (e.get('friendly_name') or '').strip().lower()
@@ -382,7 +369,6 @@ class HomeassistantTool(Tool):
 
         raise ValueError(result.get("error", f"Cannot resolve '{identifier}'"))
 
-    # -------------------- VALIDATE CONFIG --------------------
 
     @classmethod
     def validate_config(cls, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -404,7 +390,6 @@ class HomeassistantTool(Tool):
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         timeout = config.get("request_timeout", 10)
 
-        # 1) Connectivity check
         try:
             response = http_client.get(f"{ha_url}/api/", headers=headers, timeout=timeout)
             response.raise_for_status()
@@ -415,7 +400,6 @@ class HomeassistantTool(Tool):
                 raise ValueError("Authentication failed. Check your Long-Lived Access Token.")
             raise ValueError(f"Home Assistant API error: {e.response.status_code}")
 
-        # 2) Get HA config for version info
         ha_version = None
         location_name = None
         try:
@@ -429,7 +413,6 @@ class HomeassistantTool(Tool):
         except Exception:
             pass  # Discovery is best-effort — connectivity already confirmed
 
-        # 3) Get all states for entity count + initial registry population
         try:
             states_resp = http_client.get(
                 f"{ha_url}/api/states", headers=headers, timeout=timeout
@@ -443,7 +426,6 @@ class HomeassistantTool(Tool):
                 if domain:
                     domain_counts[domain] = domain_counts.get(domain, 0) + 1
 
-            # Populate the registry for the current user
             try:
                 tool_instance = cls()
                 tool_instance._ensure_registry_table()
@@ -460,7 +442,6 @@ class HomeassistantTool(Tool):
         except Exception:
             return {"ha_version": ha_version, "entity_count": "unknown"}
 
-    # -------------------- RUN DISPATCH --------------------
 
     def run(self, operation: str, **kwargs) -> Dict[str, Any]:
         self._load_config()
@@ -492,7 +473,6 @@ class HomeassistantTool(Tool):
             self.logger.error(f"homeassistant_tool {operation} failed: {e}")
             return {"success": False, "message": str(e)}
 
-    # -------------------- READ OPERATIONS --------------------
 
     def _get_state(self, entity_id: str = "", **kwargs) -> Dict[str, Any]:
         if not entity_id:
@@ -521,11 +501,9 @@ class HomeassistantTool(Tool):
         if result is None:
             return {"success": False, "message": "Failed to retrieve states from Home Assistant"}
 
-        # Refresh the entity registry from this response
         self._update_registry(result)
 
         if domain:
-            # Filtered by domain: return full state objects with attributes
             filtered = [
                 s for s in result
                 if s.get("entity_id", "").startswith(f"{domain}.")
@@ -546,7 +524,6 @@ class HomeassistantTool(Tool):
                 ]
             }
 
-        # No domain filter: summary only (entity_id + friendly_name + state)
         return {
             "success": True,
             "count": len(result),
@@ -605,7 +582,6 @@ class HomeassistantTool(Tool):
             "services": result
         }
 
-    # -------------------- CONTROL OPERATIONS --------------------
 
     def _turn_on(
         self, entity_id: str = "", service_data: Dict[str, Any] = None, **kwargs
@@ -699,7 +675,6 @@ class HomeassistantTool(Tool):
             "changed_states": self._summarize_changed_states(result)
         }
 
-    # -------------------- HELPERS --------------------
 
     def _summarize_changed_states(self, states: Any) -> List[Dict[str, str]]:
         """Extract entity_id + new state from a service call response."""

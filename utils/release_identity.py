@@ -12,12 +12,9 @@ import json
 import urllib.request
 from pathlib import Path
 
-# Repo root: this file lives in utils/.
 VERSION_FILE = Path(__file__).parent.parent / "VERSION"
 
-# The newest *published* release, which is also what install.sh resolves. The
-# unauthenticated GitHub API allows 60 requests/hour/IP; the check job uses one
-# per 24 h and `mira update` one per invocation.
+# Newest *published* release — endpoint install.sh resolves (REPO_URL/releases/latest).
 RELEASES_LATEST_URL = "https://api.github.com/repos/taylorsatula/mira/releases/latest"
 FETCH_TIMEOUT_SECONDS = 10
 

@@ -201,7 +201,6 @@ class ToolLoopExecutor:
         try:
             raw_result = self.tool_repo.invoke_tool(tool_call.tool_name, dict(tool_call.input))
             if isinstance(raw_result, list):
-                # Tools returning content blocks directly (e.g. imagegen_tool)
                 result_content = raw_result
             elif isinstance(raw_result, dict) and raw_result.get("context_files"):
                 # Directory context maps (bash_tool): the command output stays
@@ -268,11 +267,11 @@ class ToolLoopExecutor:
         return raw_result
 
     def _schema_hint(self, tool_name: str, error: Exception, *, invalid_reason: str | None = None) -> str:
-        # Match by type, never by message substring: only genuine argument
-        # errors (ParameterError from tools.repo, or a provider-rejected
-        # call flagged with invalid_reason) get the CORRECT PARAMETERS hint.
-        # Operational failures (connection errors, tool-body TypeErrors,
-        # arbitrary ValueErrors) must not misdirect the model's recovery.
+        # Match by type, never message substring: only genuine argument errors
+        # (ParameterError from tools.repo, a provider-rejected call flagged
+        # invalid_reason) get the CORRECT PARAMETERS hint — operational
+        # failures (connection errors, tool-body TypeErrors, arbitrary
+        # ValueErrors) would misdirect the model's recovery.
         is_parameter_error = isinstance(error, ParameterError) or invalid_reason is not None
         if not is_parameter_error:
             return ""

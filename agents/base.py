@@ -52,10 +52,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# -----------------------------------------------------------------------
-# Prompt loading
-# -----------------------------------------------------------------------
-
 def load_agent_prompt(filename: str) -> str:
     """Load a prompt file from config/prompts/agents/."""
     from config.prompts.loader import load_prompt
@@ -74,10 +70,6 @@ def ensure_activity_schema(db) -> None:
     db.execute(SCRATCHPAD_TABLE_DDL)
     db.execute(SCRATCHPAD_INDEX_DDL)
 
-
-# -----------------------------------------------------------------------
-# Structured types for trace data
-# -----------------------------------------------------------------------
 
 class ToolCallTrace(TypedDict):
     tool_name: str
@@ -110,10 +102,6 @@ class AgentTrace(TypedDict):
     total_iterations: NotRequired[int]
     sentry: NotRequired[SentryTrace]
 
-
-# -----------------------------------------------------------------------
-# SidebarAgent ABC
-# -----------------------------------------------------------------------
 
 class SidebarAgent(ABC):
     """
@@ -149,7 +137,6 @@ class SidebarAgent(ABC):
         to publish to a non-default trinket.
     """
 
-    # Required -- subclasses must define
     agent_id: str
     model_config_name: str
     available_tools: list[str]
@@ -161,8 +148,6 @@ class SidebarAgent(ABC):
         self._work_item: 'WorkItem | None' = None
         self._event_bus: 'EventBus | None' = None
 
-        # Wall-clock timeouts resolved from config: per-agent override keyed by
-        # class name (ForageAgent -> 'forage'), falling back to the shared default.
         dispatcher_config = config.sidebar_dispatcher
         agent_key = type(self).__name__.removesuffix("Agent").lower()
         self.timeout_seconds = dispatcher_config.agent_timeout_overrides.get(
@@ -177,7 +162,6 @@ class SidebarAgent(ABC):
         self._blocking = False
         self._completion_record: dict[str, Any] | None = None
 
-    # Optional -- subclasses override as needed
     inherit_base_prompt: bool = True
     max_iterations: int = 5
     # Injection gate is ON by default (fail closed): any work item carrying
@@ -188,9 +172,6 @@ class SidebarAgent(ABC):
     sanitize_untrusted_input: bool = True
     max_retries: int = 0  # 0 = fire-and-forget, no retry on failure
 
-    # Per-tool schema overrides. Maps tool name → custom tool_schema.
-    # Used to restrict tool capabilities for sidebar agents (e.g.
-    # email_tool → reply_to_email only).
     tool_schema_overrides: dict[str, dict[str, Any]] = {}
 
     # Blocking mode -- opt-in synchronous execution via run_blocking().
@@ -236,10 +217,6 @@ class SidebarAgent(ABC):
         """Heartbeat injected as user message between iterations."""
         return "Continue."
 
-    # ------------------------------------------------------------------
-    # Overwatch -- passive iteration observer
-    # ------------------------------------------------------------------
-
     def get_overwatch_context(self, work_item: 'WorkItem') -> str:
         """One-line task context for the overwatch observer.
 
@@ -274,9 +251,9 @@ class SidebarAgent(ABC):
         if not self.overwatch_model_config_name:
             return
         if self._blocking:
-            # Blocking runs publish no trinket events at all — an in_progress
-            # overwatch entry with no terminal event following would strand
-            # the trinket state machine in a non-terminal state.
+            # Blocking runs publish no trinket events — an in_progress overwatch
+            # entry with no terminal event following would strand the trinket
+            # state machine.
             return
 
         import contextvars
@@ -350,10 +327,6 @@ class SidebarAgent(ABC):
         Returns text prepended to the initial message, or None (default).
         """
         return None
-
-    # ------------------------------------------------------------------
-    # Sentry gate -- cheap one-shot LLM pre-filter
-    # ------------------------------------------------------------------
 
     def build_sentry_message(self, work_item: 'WorkItem') -> str:
         """Build the sentry evaluation prompt.
@@ -454,10 +427,6 @@ class SidebarAgent(ABC):
             )
             return True
 
-    # ------------------------------------------------------------------
-    # Completion publication -- override to target a different trinket
-    # ------------------------------------------------------------------
-
     def _get_completion_trinket(self) -> str:
         """Return the trinket name to publish completion to.
         
@@ -504,10 +473,6 @@ class SidebarAgent(ABC):
             context=self._build_completion_context(status, summary, work_item),
         ))
 
-    # ------------------------------------------------------------------
-    # System prompt assembly
-    # ------------------------------------------------------------------
-
     def _build_system_prompt(
         self, work_item: 'WorkItem', iteration: int = 1
     ) -> str:
@@ -532,10 +497,6 @@ class SidebarAgent(ABC):
         """Optional per-iteration system-prompt addendum. Default: none."""
         return None
 
-    # ------------------------------------------------------------------
-    # Input sanitization
-    # ------------------------------------------------------------------
-
     def _sanitize_work_item(self, work_item: 'WorkItem') -> None:
         """Screen raw_content, write the wrapped sanitized_content back.
 
@@ -554,10 +515,6 @@ class SidebarAgent(ABC):
             raw = raw[:8000] + "\n[truncated]"
         work_item.context["sanitized_content"] = screen_untrusted(raw, work_item.interface_name)
 
-    # ------------------------------------------------------------------
-    # Tool schema assembly
-    # ------------------------------------------------------------------
-
     def _get_all_tool_names(self) -> list[str]:
         """sidebar_tool is always included; subclass tools are appended."""
         names = ['sidebar_tool']
@@ -565,10 +522,6 @@ class SidebarAgent(ABC):
             if name not in names:
                 names.append(name)
         return names
-
-    # ------------------------------------------------------------------
-    # Main loop
-    # ------------------------------------------------------------------
 
     def run(
         self,
@@ -687,9 +640,6 @@ class SidebarAgent(ABC):
         finally:
             self._blocking = False
         if self._completion_record is None:
-            # run() routes every termination through _exit, which always
-            # writes the record; None here means the base contract broke —
-            # fail loud rather than hand back an invented result.
             raise RuntimeError(
                 f"{self.agent_id}: blocking run ended without a completion record"
             )
@@ -828,10 +778,10 @@ class SidebarAgent(ABC):
                 complete_result.get('summary', '')
                 if isinstance(complete_result, dict) else ''
             )
-            # complete_task is terminal: the break in _execute_tool_calls
-            # guarantees tool_results[-1] is its envelope. Route its own
-            # status through to _exit -- the activity UPSERT default
-            # ('failed') would otherwise re-dispatch completed items.
+            # complete_task is terminal — the break in _execute_tool_calls makes
+            # tool_results[-1] its envelope. Routing its own status through _exit
+            # avoids the activity UPSERT's 'failed' default re-dispatching
+            # completed items.
             activity_status = (
                 complete_result.get('status', 'handled')
                 if isinstance(complete_result, dict) else 'handled'
@@ -875,7 +825,6 @@ class SidebarAgent(ABC):
                 and dict(tc.input).get('operation') == 'complete_task'
             )
             if is_sidebar:
-                # Mutate a copy of the frozen input mapping for sidebar identity injection
                 mutable_input = dict(tc.input)
                 mutable_input['thread_id'] = self._work_item.item_id
                 if is_complete:
@@ -895,10 +844,6 @@ class SidebarAgent(ABC):
 
         return completed, tool_results
 
-
-# -----------------------------------------------------------------------
-# Module-level helpers
-# -----------------------------------------------------------------------
 
 def _init_trace(
     agent_id: str, work_item: 'WorkItem', start_time: Any
@@ -1031,12 +976,10 @@ def _build_overwatch_prompt(
     )
     parts = [f"{task_context}\n{header}"]
 
-    # Prior log entries for continuity — the observer sees the arc
     if prior_entries:
         log_lines = [f"[{i+1}] {entry}" for i, entry in enumerate(prior_entries)]
         parts.append("Log so far:\n" + "\n".join(log_lines))
 
-    # Tools first — most concrete data about what happened
     tool_lines = []
     for tc, tr in zip(tool_calls, tool_results):
         name = tc.tool_name

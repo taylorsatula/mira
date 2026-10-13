@@ -16,7 +16,6 @@ from lt_memory.models import (
     MemoryLink,
     Entity,
     ProcessingChunk,
-    # Type aliases and TypedDicts
     RelationshipType,
     MemoryLinkEntry,
     EntityLinkEntry,
@@ -33,24 +32,20 @@ from lt_memory.models import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    # Factory
     'LTMemoryFactory',
     'get_lt_memory_factory',
 
-    # Classes (for type hints)
     'LTMemoryDB',
     'VectorOps',
     'LinkingService',
     'ProactiveService',
 
-    # Models
     'Memory',
     'ExtractedMemory',
     'MemoryLink',
     'Entity',
     'ProcessingChunk',
 
-    # TypedDicts and type aliases
     'RelationshipType',
     'MemoryLinkEntry',
     'EntityLinkEntry',

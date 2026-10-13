@@ -24,13 +24,9 @@ from tools.repo import Tool
 from tools.registry import registry
 from utils.untrusted_content import wrap_untrusted
 
-# KNOWN GAP (design decision, fix soon — not critical): all screening below
-# is structural-only (wrap_untrusted); attacker-controlled email content
-# never crosses the semantic screen (utils.untrusted_content.screen_untrusted).
-# The boundary wrapping plus model-side injection resistance makes this a
-# low-urgency exposure, not a closed one.
+# KNOWN GAP (accepted, not closed): screening is structural-only (wrap_untrusted);
+# email content never reaches the semantic screen (utils.untrusted_content.screen_untrusted).
 
-# Define configuration class for EmailTool
 class EmailToolConfig(BaseModel):
     """Configuration for the email_tool."""
     enabled: bool = Field(default=True, description="Whether this tool is enabled")
@@ -67,13 +63,11 @@ class EmailToolConfig(BaseModel):
         default=False,
         description="Use STARTTLS (typically port 587) for the SMTP submission connection instead of implicit TLS (typically port 465)"
     )
-    # Folders - auto-discovered during validation, can be manually overridden
     inbox_folder: str = Field(default="INBOX", description="Inbox folder name")
     sent_folder: str = Field(default="Sent", description="Sent mail folder name")
     drafts_folder: str = Field(default="Drafts", description="Drafts folder name")
     trash_folder: str = Field(default="Trash", description="Trash folder name")
 
-# Register with registry
 registry.register("email_tool", EmailToolConfig)
 
 
@@ -361,16 +355,13 @@ class EmailTool(Tool):
 
         connection = None
         try:
-            # Connect to IMAP server
             if use_ssl:
                 connection = imaplib.IMAP4_SSL(imap_server, imap_port, timeout=30)
             else:
                 connection = imaplib.IMAP4(imap_server, imap_port, timeout=30)
 
-            # Login
             connection.login(email_address, password)
 
-            # Discover folders
             typ, folder_data = connection.list()
             if typ != "OK":
                 raise ValueError("Failed to retrieve folder list from server")
@@ -389,32 +380,25 @@ class EmailTool(Tool):
                     flags = match.group("flags")
                     folder_name = match.group("name")
 
-                    # Remove quotes if present
                     if folder_name.startswith('"') and folder_name.endswith('"'):
                         folder_name = folder_name[1:-1]
 
                     folders.append({"name": folder_name, "flags": flags})
 
-                    # Auto-detect standard folders by flags or name
                     flags_lower = flags.lower()
                     name_lower = folder_name.lower()
 
-                    # Inbox: exact "inbox" or IMAP flag
                     if name_lower == "inbox" or "\\inbox" in flags_lower:
                         folder_mapping["inbox"] = folder_name
 
-                    # Sent: check flags first, then name patterns
                     if "\\sent" in flags_lower:
                         folder_mapping["sent"] = folder_name
                     elif folder_mapping["sent"] is None:
-                        # Check for common sent folder patterns (including INBOX.* namespace)
                         if name_lower in ("sent", "sent mail", "sent items", "[gmail]/sent mail"):
                             folder_mapping["sent"] = folder_name
                         elif "sent" in name_lower and "inbox" not in name_lower.replace("inbox.", ""):
-                            # Matches "INBOX.Sent Messages", "INBOX.Sent", etc.
                             folder_mapping["sent"] = folder_name
 
-                    # Drafts: check flags first, then name patterns
                     if "\\drafts" in flags_lower:
                         folder_mapping["drafts"] = folder_name
                     elif folder_mapping["drafts"] is None:
@@ -423,7 +407,6 @@ class EmailTool(Tool):
                         elif "draft" in name_lower:
                             folder_mapping["drafts"] = folder_name
 
-                    # Trash: check flags first, then name patterns
                     if "\\trash" in flags_lower:
                         folder_mapping["trash"] = folder_name
                     elif folder_mapping["trash"] is None:
@@ -432,12 +415,10 @@ class EmailTool(Tool):
                         elif "trash" in name_lower or "deleted" in name_lower:
                             folder_mapping["trash"] = folder_name
 
-            # Don't fail on missing folders - let user select manually
 
-            # SMTP submission check: validation must exercise the same
-            # transport the send operations use (STARTTLS vs implicit
-            # TLS), or a STARTTLS-only provider validates green here and
-            # then fails on every send.
+            # Validation must exercise the send transport (STARTTLS vs implicit
+            # TLS); a STARTTLS-only provider otherwise validates green here and
+            # fails every send.
             smtp_context = ssl.create_default_context()
             if smtp_starttls:
                 with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as smtp_connection:
@@ -479,7 +460,6 @@ class EmailTool(Tool):
         """Initialize the email tool with configuration."""
         super().__init__()
         
-        # Configuration will be loaded from user credentials when needed
         self.imap_server = None
         self.imap_port = None
         self.smtp_server = None
@@ -490,13 +470,11 @@ class EmailTool(Tool):
         self._password = None
         self._config_loaded = False
 
-        # Folder configuration (loaded from config)
         self.inbox_folder = "INBOX"
         self.sent_folder = "Sent"
         self.drafts_folder = "Drafts"
         self.trash_folder = "Trash"
         
-        # Session state
         self.connection = None
         self.selected_folder = None
         self.default_max_emails = 20
@@ -514,7 +492,6 @@ class EmailTool(Tool):
             self.logger.error("No email configuration found. Configure email in Settings > Tools.")
             raise ValueError("No email configuration found. Configure email in Settings > Tools.")
 
-        # Required fields
         self.imap_server = config.get("imap_server")
         self.smtp_server = config.get("smtp_server")
         self.email_address = config.get("email_address")
@@ -525,13 +502,11 @@ class EmailTool(Tool):
                        if not config.get(f)]
             raise ValueError(f"Missing required email config fields: {missing}")
 
-        # Optional fields with defaults
         self.imap_port = config.get("imap_port", 993)
         self.smtp_port = config.get("smtp_port", 465)
         self.use_ssl = config.get("use_ssl", True)
         self.smtp_starttls = config.get("smtp_starttls", False)
 
-        # Folder configuration (auto-discovered during validation, can be manually set)
         self.inbox_folder = config.get("inbox_folder", "INBOX")
         self.sent_folder = config.get("sent_folder", "Sent")
         self.drafts_folder = config.get("drafts_folder", "Drafts")
@@ -567,7 +542,6 @@ class EmailTool(Tool):
             return False
             
         try:
-            # Try a NOOP command to check if connection is still responsive
             status, response = self.connection.noop()
             return status == 'OK'
         except Exception as e:
@@ -582,12 +556,9 @@ class EmailTool(Tool):
         Returns:
             True if connection succeeded, False otherwise
         """
-        # Check if already connected and connection is alive
         if self.connection and self._is_connection_alive():
-            # Already connected and alive
             return True
             
-        # Reset connection state
         self.connection = None
         self.selected_folder = None
             
@@ -597,7 +568,6 @@ class EmailTool(Tool):
             else:
                 self.connection = imaplib.IMAP4(self.imap_server, self.imap_port, timeout=30)
             
-            # Login
             self.connection.login(self.email_address, self.password)
             self.logger.info(f"Connected to IMAP server {self.imap_server}")
             return True
@@ -625,15 +595,12 @@ class EmailTool(Tool):
         Returns:
             True if connection is established, False if connection failed
         """
-        # Load config first if not already loaded
         if not self._config_loaded:
             self._load_config()
             
-        # First check if the connection is alive
         if self._is_connection_alive():
             return True
             
-        # If we get here, we need to connect/reconnect
         return self._connect()
     
     def _select_folder(self, folder_name: str) -> bool:
@@ -646,11 +613,9 @@ class EmailTool(Tool):
         Returns:
             True if successful, False otherwise
         """
-        # Ensure connection is established
         if not self._ensure_connected():
             return False
         
-        # No need to reselect if already on this folder
         if folder_name == self.selected_folder:
             return True
         
@@ -809,7 +774,6 @@ class EmailTool(Tool):
             "attachments": []
         }
 
-        # Helper class for extracting text from HTML
         class HTMLTextExtractor(HTMLParser):
             def __init__(self):
                 super().__init__()
@@ -844,7 +808,6 @@ class EmailTool(Tool):
                         result["attachments"].append(attachment_info)
                     continue
 
-                # Handle text parts
                 if content_type == "text/plain" and "attachment" not in content_disposition:
                     payload = part.get_payload(decode=True)
                     if payload:
@@ -859,7 +822,6 @@ class EmailTool(Tool):
 
                         result["text"] += text
 
-                # Store HTML content for fallback if no text/plain found
                 elif content_type == "text/html" and "attachment" not in content_disposition:
                     if html_fallback_content is None:
                         payload = part.get_payload(decode=True)
@@ -870,7 +832,6 @@ class EmailTool(Tool):
                             except UnicodeDecodeError:
                                 html_fallback_content = payload.decode("utf-8", errors="replace")
         else:
-            # Non-multipart - get the payload directly
             content_type = msg.get_content_type()
 
             if content_type == "text/plain":
@@ -893,14 +854,12 @@ class EmailTool(Tool):
                     except UnicodeDecodeError:
                         html_fallback_content = payload.decode("utf-8", errors="replace")
 
-        # If no text/plain was found, fall back to HTML content
         if not result["text"] and html_fallback_content:
             try:
                 extractor = HTMLTextExtractor()
                 extractor.feed(html_fallback_content)
                 result["text"] = extractor.get_text().strip()
             except Exception:
-                # If HTML parsing fails, strip tags with simple regex as last resort
                 result["text"] = re.sub(r'<[^>]+>', '', html_fallback_content)
                 result["text"] = re.sub(r'\s+', ' ', result["text"]).strip()
 
@@ -948,7 +907,6 @@ class EmailTool(Tool):
             return []
 
         try:
-            # Fetch the flags using UID
             typ, data = self.connection.uid("FETCH", str(uid), "(FLAGS)")
             if typ != "OK" or not data or not data[0]:
                 return []
@@ -980,10 +938,8 @@ class EmailTool(Tool):
             if typ != "OK":
                 raise ValueError(f"IMAP search was rejected by the server (status {typ}) for criteria '{criteria}'")
             if not data or not data[0]:
-                # OK with no data: a legitimate empty result
                 return []
 
-            # Parse UIDs
             uids = data[0].decode("utf-8").split()
             return list(map(int, uids))
         except Exception as e:
@@ -1014,28 +970,22 @@ class EmailTool(Tool):
         for uid in uids:
             try:
                 if load_content:
-                    # Fetch full message AND flags in single request using UID.
-                    # BODY.PEEK[] does not implicitly set \Seen (RFC 3501 §6.4.5);
-                    # marking read is an explicit, separate decision.
+                    # BODY.PEEK[] keeps \Seen unset (RFC 3501 §6.4.5); marking
+                    # read is an explicit, separate decision.
                     typ, data = self.connection.uid("FETCH", str(uid), "(BODY.PEEK[] FLAGS)")
                     if typ != "OK" or not data or not data[0]:
                         continue
 
-                    # Parse flags from the response metadata
                     response_meta = data[0][0].decode("utf-8") if isinstance(data[0][0], bytes) else str(data[0][0])
                     flags = self._parse_flags(response_meta)
 
-                    # Parse the full message
                     email_data = data[0][1]
                     msg = email.message_from_bytes(email_data)
 
-                    # Extract body content
                     body = self._get_email_body(msg)
 
-                    # Create stable email ID from folder and UID
                     email_id = self._create_email_id(folder, uid)
 
-                    # Create the result with content
                     email_info = {
                         "id": email_id,
                         "from": wrap_untrusted(self._decode_header(msg.get("From", "")), "email_header"),
@@ -1048,16 +998,13 @@ class EmailTool(Tool):
                         "flags": flags,
                     }
 
-                    # Add attachment information if present
                     if body["has_attachments"]:
                         email_info["attachments"] = body["attachments"]
                 else:
-                    # Fetch headers AND flags in single request using UID
                     typ, data = self.connection.uid("FETCH", str(uid), "(BODY.PEEK[HEADER] FLAGS)")
                     if typ != "OK" or not data or not data[0]:
                         continue
 
-                    # Parse flags from the response metadata
                     response_meta = data[0][0].decode("utf-8") if isinstance(data[0][0], bytes) else str(data[0][0])
                     flags = self._parse_flags(response_meta)
 
@@ -1065,14 +1012,11 @@ class EmailTool(Tool):
                     if not header_data:
                         continue
 
-                    # Parse headers
                     parser = email.parser.BytesParser()
                     headers = parser.parsebytes(header_data, headersonly=True)
 
-                    # Create stable email ID from folder and UID
                     email_id = self._create_email_id(folder, uid)
 
-                    # Create header dictionary
                     email_info = {
                         "id": email_id,
                         "from": wrap_untrusted(self._decode_header(headers.get("From", "")), "email_header"),
@@ -1109,7 +1053,6 @@ class EmailTool(Tool):
             return False
 
         try:
-            # Set or unset the flag using UID
             command = "+FLAGS" if value else "-FLAGS"
             typ, _ = self.connection.uid("STORE", str(uid), command, flag)
             # imaplib only raises on BAD; a NO response means the server
@@ -1135,23 +1078,18 @@ class EmailTool(Tool):
         if not email_param:
             return None
             
-        # Check if the input might be a JSON array
         if email_param.startswith('[') and email_param.endswith(']'):
             try:
                 import json
                 emails = json.loads(email_param)
-                # Ensure we have a list of strings
                 if isinstance(emails, list):
-                    # Filter empty values and join with commas
                     valid_emails = [e.strip() for e in emails if e and isinstance(e, str) and e.strip()]
                     if valid_emails:
                         return ", ".join(valid_emails)
                     return None
             except json.JSONDecodeError:
-                # If not valid JSON, continue with original value
                 pass
                 
-        # Process as comma-separated string, filtering empty addresses
         valid_emails = [addr.strip() for addr in email_param.split(",") if addr and addr.strip()]
         if valid_emails:
             return ", ".join(valid_emails)
@@ -1203,7 +1141,6 @@ class EmailTool(Tool):
             ValueError: If the operation is invalid or fails
         """
         try:
-            # Ensure we're connected to the server
             if not self._ensure_connected():
                 self.logger.error("Failed to connect to email server for email_tool")
                 raise ValueError("Failed to connect to email server")
@@ -1227,28 +1164,23 @@ class EmailTool(Tool):
             if folder == "INBOX" and hasattr(self, 'inbox_folder') and self.inbox_folder:
                 folder = self.inbox_folder
 
-            # Make sure we're looking at the right folder for message operations
             if folder and folder != self.selected_folder and operation not in ["list_folders", "send_email", "create_draft", "mark_for_later_reply", "get_emails_for_later_reply"]:
                 if not self._select_folder(folder):
                     self.logger.error(f"Failed to select folder '{folder}' in email_tool")
                     raise ValueError(f"Failed to select folder '{folder}'")
             
-            # Validate reasoning for mutating operations
             if operation in _MUTATING_OPERATIONS and not (reasoning and reasoning.strip()):
                 raise ValueError(
                     f"reasoning is required for '{operation}'. "
                     "Explain why you are performing this action."
                 )
 
-            # Set default max_emails if not provided and convert to int if it's a string
             if max_emails is None:
                 max_emails = self.default_max_emails
             elif isinstance(max_emails, str):
                 max_emails = int(max_emails)
             
-            # Handle each operation type
             if operation == "get_emails":
-                # Build search criteria
                 search_parts = []
                 
                 if unread_only:
@@ -1256,7 +1188,7 @@ class EmailTool(Tool):
                 
                 if sender:
                     # Escape IMAP quoted-string specials in LLM-supplied strings;
-                    # an embedded " or \ would terminate the quoted string early and
+                    # an embedded " or \\ would terminate the quoted string early and
                     # the remainder would be reparsed as further search criteria.
                     escaped_sender = sender.replace("\\", "\\\\").replace('"', '\\"')
                     search_parts.append(f'FROM "{escaped_sender}"')
@@ -1273,14 +1205,11 @@ class EmailTool(Tool):
                     escaped_end = str(end_date).replace("\\", "\\\\").replace('"', '\\"')
                     search_parts.append(f'BEFORE "{escaped_end}"')
                 
-                # Default to ALL if no criteria specified
                 search_criteria = " ".join(search_parts) if search_parts else "ALL"
                 
-                # Execute search and fetch emails
                 message_ids = self._search_messages(search_criteria)
                 emails = self._fetch_message_headers(message_ids, max_emails, load_content)
                 
-                # LLM handling notes for categorization and summarization
                 categorization_note = """
                 CATEGORIZATION INSTRUCTIONS:
                 
@@ -1319,48 +1248,38 @@ class EmailTool(Tool):
                 }
             
             elif operation == "get_email_content":
-                # Validate required parameters
                 if not email_id:
                     raise ValueError("email_id is required for get_email_content operation")
 
-                # Parse email_id to get folder and UID
                 try:
                     email_folder, uid = self._parse_email_id(email_id)
                 except ValueError as e:
                     raise ValueError(f"Invalid email_id format: {e}")
 
-                # Select the folder containing this email
                 if not self._select_folder(email_folder):
                     raise ValueError(f"Failed to select folder '{email_folder}'")
 
                 try:
-                    # Fetch the full message using UID. BODY.PEEK[] does not
-                    # implicitly set \Seen; the explicit mark-read branch below
-                    # is the only thing that marks this message read.
+                    # BODY.PEEK[] does not set \Seen; the explicit mark-read branch
+                    # below is the only thing that marks this message read.
                     typ, data = self.connection.uid("FETCH", str(uid), "(BODY.PEEK[])")
                     if typ != "OK" or not data or not data[0]:
                         self.logger.error(f"Failed to fetch email content for ID {email_id} in email_tool")
                         raise ValueError(f"Failed to fetch email content for ID {email_id}")
 
-                    # Parse the message
                     email_data = data[0][1]
                     msg = email.message_from_bytes(email_data)
 
-                    # Extract body content
                     body = self._get_email_body(msg)
 
-                    # Get the flags
                     flags = self._get_message_flags(uid)
 
-                    # Mark the email as read if it wasn't already
                     if "unread" in flags:
                         if not self._set_flag(email_id, "\\Seen", True):
                             self.logger.warning(f"Failed to mark email {email_id} as read")
-                        # Update flags to reflect the change
                         flags = [flag for flag in flags if flag != "unread"]
                         flags.append("read")
 
-                    # Create the result
                     result = {
                         "id": email_id,
                         "from": wrap_untrusted(self._decode_header(msg.get("From", "")), "email_header"),
@@ -1373,7 +1292,6 @@ class EmailTool(Tool):
                         "flags": flags
                     }
 
-                    # Add attachment information if present
                     if body["has_attachments"]:
                         result["attachments"] = body["attachments"]
 
@@ -1385,11 +1303,9 @@ class EmailTool(Tool):
                     raise ValueError(f"Error fetching email content: {e}")
             
             elif operation == "mark_as_read":
-                # Validate required parameters
                 if not email_id:
                     raise ValueError("email_id is required for mark_as_read operation")
                 
-                # Set the \Seen flag
                 success = self._set_flag(email_id, "\\Seen", True)
                 
                 if not success:
@@ -1405,11 +1321,9 @@ class EmailTool(Tool):
                 }
 
             elif operation == "mark_as_unread":
-                # Validate required parameters
                 if not email_id:
                     raise ValueError("email_id is required for mark_as_unread operation")
                 
-                # Remove the \Seen flag
                 success = self._set_flag(email_id, "\\Seen", False)
                 
                 if not success:
@@ -1425,29 +1339,24 @@ class EmailTool(Tool):
                 }
 
             elif operation == "delete_email":
-                # Validate required parameters
                 if not email_id:
                     raise ValueError("email_id is required for delete_email operation")
 
-                # Parse email_id to get folder and UID
                 try:
                     email_folder, uid = self._parse_email_id(email_id)
                 except ValueError as e:
                     raise ValueError(f"Invalid email_id format: {e}")
 
-                # Select the folder containing this email
                 if not self._select_folder(email_folder):
                     raise ValueError(f"Failed to select folder '{email_folder}'")
 
                 try:
-                    # Mark the message as deleted using UID
                     typ, _ = self.connection.uid("STORE", str(uid), "+FLAGS", "\\Deleted")
                     if typ != "OK":
                         raise ValueError(f"Server rejected delete flag for UID {uid} (status {typ})")
 
-                    # Expunge the message: prefer UID EXPUNGE (UIDPLUS) so only
-                    # this UID is removed; a bare EXPUNGE would permanently remove
-                    # every \Deleted message in the folder.
+                    # Prefer UID EXPUNGE (UIDPLUS); bare EXPUNGE removes every
+                    # \Deleted message in the folder, not only this UID.
                     if b'UIDPLUS' in self.connection.capabilities:
                         typ, _ = self.connection.uid("EXPUNGE", str(uid))
                     else:
@@ -1469,54 +1378,42 @@ class EmailTool(Tool):
                     raise ValueError(f"Failed to delete email {email_id}: {e}")
             
             elif operation == "move_email":
-                # Validate required parameters
                 if not email_id:
                     raise ValueError("email_id is required for move_email operation")
 
                 if not destination_folder:
                     raise ValueError("destination_folder is required for move_email operation")
 
-                # Parse email_id to get folder and UID
                 try:
                     source_folder, uid = self._parse_email_id(email_id)
                 except ValueError as e:
                     raise ValueError(f"Invalid email_id format: {e}")
 
-                # Select the source folder
                 if not self._select_folder(source_folder):
                     raise ValueError(f"Failed to select folder '{source_folder}'")
 
                 try:
-                    # Try to use UID MOVE command if server supports it
                     move_supported = b'MOVE' in self.connection.capabilities
 
                     if move_supported:
-                        # Use the UID MOVE command
                         typ, _ = self.connection.uid("MOVE", str(uid), _quote_mailbox(destination_folder))
                         if typ != "OK":
                             raise ValueError(
                                 f"Server rejected move to '{destination_folder}' (status {typ})"
                             )
                     else:
-                        # Fall back to UID copy and delete
-                        # Copy to destination
                         typ, _ = self.connection.uid("COPY", str(uid), _quote_mailbox(destination_folder))
                         if typ != "OK":
-                            # Copy failed: do NOT delete the source message —
-                            # STORE + expunge here would destroy it uncopied.
+                            # A failed COPY must not delete the source — STORE + expunge would destroy it uncopied.
                             raise ValueError(
                                 f"Server rejected copy to '{destination_folder}' (status {typ}); "
                                 "source message left intact"
                             )
 
-                        # Mark as deleted
                         typ, _ = self.connection.uid("STORE", str(uid), "+FLAGS", "\\Deleted")
                         if typ != "OK":
                             raise ValueError(f"Server rejected delete flag for UID {uid} (status {typ})")
 
-                        # Expunge: prefer UID EXPUNGE (UIDPLUS) so only this UID
-                        # is removed; a bare EXPUNGE would permanently remove
-                        # every \Deleted message in the folder.
                         if b'UIDPLUS' in self.connection.capabilities:
                             typ, _ = self.connection.uid("EXPUNGE", str(uid))
                         else:
@@ -1540,7 +1437,6 @@ class EmailTool(Tool):
                     raise ValueError(f"Failed to move email {email_id} to {destination_folder}: {e}")
             
             elif operation == "send_email":
-                # Validate required parameters
                 if not to:
                     self.logger.error("Missing 'to' field for send_email operation in email_tool")
                     raise ValueError("to is required for send_email operation")
@@ -1554,7 +1450,6 @@ class EmailTool(Tool):
                     raise ValueError("body is required for send_email operation")
                 
                 try:
-                    # Parse the email addresses before creating the message
                     parsed_to = self._parse_email_addresses(to)
                     if not parsed_to:
                         self.logger.error("No valid email addresses in 'to' field in email_tool")
@@ -1563,7 +1458,6 @@ class EmailTool(Tool):
                     parsed_cc = self._parse_email_addresses(cc) if cc else None
                     parsed_bcc = self._parse_email_addresses(bcc) if bcc else None
                     
-                    # Create the message
                     msg = EmailMessage()
                     msg["Subject"] = subject
                     msg["From"] = self.email_address
@@ -1575,17 +1469,13 @@ class EmailTool(Tool):
                     if parsed_bcc:
                         msg["Bcc"] = parsed_bcc
                     
-                    # Set the date
                     msg["Date"] = email.utils.formatdate(localtime=True)
                     
-                    # Add Message-ID
                     domain = self.smtp_server.split(".", 1)[1] if "." in self.smtp_server else self.smtp_server
                     msg["Message-ID"] = email.utils.make_msgid(domain=domain)
                     
-                    # Set the content
                     msg.set_content(body)
                     
-                    # Build list of recipients (reuse already-parsed addresses)
                     recipients = []
                     if parsed_to:
                         recipients.extend([addr.strip() for addr in parsed_to.split(",") if addr.strip()])
@@ -1602,16 +1492,13 @@ class EmailTool(Tool):
                     
                     if self.smtp_starttls:
                         with smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=30) as server:
-                            # Upgrade to TLS, then login and send
                             server.starttls(context=context)
                             server.login(self.email_address, self.password)
                             server.send_message(msg)
                     else:
                         with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port, context=context, timeout=30) as server:
-                            # Login
                             server.login(self.email_address, self.password)
                             
-                            # Send the email
                             server.send_message(msg)
                     
                     # Save to Sent folder. Best-effort archival: the SMTP
@@ -1653,7 +1540,6 @@ class EmailTool(Tool):
                     raise ValueError(f"Failed to send email: {e}")
             
             elif operation == "reply_to_email":
-                # Validate required parameters
                 if not email_id:
                     self.logger.error("Missing email_id for reply_to_email operation in email_tool")
                     raise ValueError("email_id is required for reply_to_email operation")
@@ -1662,13 +1548,11 @@ class EmailTool(Tool):
                     self.logger.error("Missing body for reply_to_email operation in email_tool")
                     raise ValueError("body is required for reply_to_email operation")
 
-                # Parse email_id to get folder and UID
                 try:
                     email_folder, uid = self._parse_email_id(email_id)
                 except ValueError as e:
                     raise ValueError(f"Invalid email_id format: {e}")
 
-                # Select the folder containing this email
                 if not self._select_folder(email_folder):
                     raise ValueError(f"Failed to select folder '{email_folder}'")
 
@@ -1681,26 +1565,20 @@ class EmailTool(Tool):
                         self.logger.error("Failed to fetch original email for reply in email_tool")
                         raise ValueError("Failed to fetch original email for reply")
                     
-                    # Parse the message
                     email_data = data[0][1]
                     original_msg = email.message_from_bytes(email_data)
                     
-                    # Create reply message
                     msg = EmailMessage()
                     
-                    # Set subject with Re: prefix if needed. Unfold first: folded
-                    # headers retain embedded CR/LF and assigning them to msg[...]
-                    # raises ValueError under the default email policy.
+                    # Unfold first: folded headers retain embedded CR/LF and assigning them to msg[...] raises ValueError under the default email policy.
                     original_subject = _unfold_header(self._decode_header(original_msg.get("Subject", "")))
                     if original_subject.lower().startswith("re:"):
                         msg["Subject"] = original_subject
                     else:
                         msg["Subject"] = f"Re: {original_subject}"
                     
-                    # Set From
                     msg["From"] = self.email_address
                     
-                    # Set To
                     if to:
                         parsed_to = self._parse_email_addresses(to)
                         msg["To"] = parsed_to if parsed_to else _unfold_header(original_msg.get("From", ""))
@@ -1708,7 +1586,6 @@ class EmailTool(Tool):
                         reply_to = original_msg.get("Reply-To")
                         msg["To"] = _unfold_header(reply_to) if reply_to else _unfold_header(original_msg.get("From", ""))
                     
-                    # Add CC/BCC if specified
                     if cc:
                         parsed_cc = self._parse_email_addresses(cc)
                         if parsed_cc:
@@ -1719,22 +1596,18 @@ class EmailTool(Tool):
                         if parsed_bcc:
                             msg["Bcc"] = parsed_bcc
                     
-                    # Set the date
                     msg["Date"] = email.utils.formatdate(localtime=True)
                     
-                    # Set In-Reply-To and References headers for threading
                     message_id_header = _unfold_header(original_msg.get("Message-ID"))
                     if message_id_header:
                         msg["In-Reply-To"] = message_id_header
                         
-                        # Set References
                         references = _unfold_header(original_msg.get("References", ""))
                         if references:
                             msg["References"] = f"{references} {message_id_header}"
                         else:
                             msg["References"] = message_id_header
                     
-                    # Set the content
                     msg.set_content(body)
                     
                     # Connect to the SMTP server. The per-protocol encryption
@@ -1745,16 +1618,13 @@ class EmailTool(Tool):
                     
                     if self.smtp_starttls:
                         with smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=30) as server:
-                            # Upgrade to TLS, then login and send
                             server.starttls(context=context)
                             server.login(self.email_address, self.password)
                             server.send_message(msg)
                     else:
                         with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port, context=context, timeout=30) as server:
-                            # Login
                             server.login(self.email_address, self.password)
                             
-                            # Send the email
                             server.send_message(msg)
                     
                     # Save to Sent folder. Best-effort archival: the SMTP
@@ -1771,8 +1641,7 @@ class EmailTool(Tool):
                         self.logger.warning(f"Failed to save to sent folder: {e}")
                         saved_to_sent = False
                     
-                    # Mark as answered. Also best-effort: a missed \Answered
-                    # flag is surfaced in the envelope instead of masked.
+                    # Best-effort: a missed \Answered flag is surfaced in the envelope instead of masked.
                     marked_answered = self._set_flag(email_id, "\\Answered", True)
                     if not marked_answered:
                         self.logger.warning(f"Failed to mark email {email_id} as answered")
@@ -1806,7 +1675,6 @@ class EmailTool(Tool):
                     raise ValueError(f"Failed to reply to email: {e}")
             
             elif operation == "create_draft":
-                # Validate required parameters
                 if not to:
                     raise ValueError("to is required for create_draft operation")
                 
@@ -1817,11 +1685,9 @@ class EmailTool(Tool):
                     raise ValueError("body is required for create_draft operation")
                 
                 try:
-                    # Create the message
                     msg = EmailMessage()
                     msg["Subject"] = subject
                     msg["From"] = self.email_address
-                    # Parse email addresses
                     parsed_to = self._parse_email_addresses(to)
                     if parsed_to:
                         msg["To"] = parsed_to
@@ -1839,15 +1705,11 @@ class EmailTool(Tool):
                         if parsed_bcc:
                             msg["Bcc"] = parsed_bcc
                     
-                    # Set the date
                     msg["Date"] = email.utils.formatdate(localtime=True)
                     
-                    # Set the content
                     msg.set_content(body)
                     
-                    # Append to drafts folder with \Draft flag. imaplib.append
-                    # silently defaults to INBOX when the mailbox is falsy —
-                    # fail loudly instead of writing drafts into the inbox.
+                    # imaplib.append silently defaults to INBOX when the mailbox is falsy — fail loudly instead of writing drafts into the inbox.
                     if not self.drafts_folder:
                         raise ValueError(
                             "Drafts folder is not configured; cannot create draft "
@@ -1874,16 +1736,14 @@ class EmailTool(Tool):
                     raise ValueError(f"Failed to create draft: {e}")
             
             elif operation == "search_emails":
-                # Build search criteria
                 search_parts = []
                 
                 if unread_only:
                     search_parts.append("UNSEEN")
                 
                 if sender:
-                    # Escape IMAP quoted-string specials in LLM-supplied strings;
-                    # an embedded " or \ would terminate the quoted string early and
-                    # the remainder would be reparsed as further search criteria.
+                    # Escape IMAP quoted-string specials: an embedded " or \ would
+                    # terminate the quoted string early, reparsing the remainder as further search criteria.
                     escaped_sender = sender.replace("\\", "\\\\").replace('"', '\\"')
                     search_parts.append(f'FROM "{escaped_sender}"')
                 
@@ -1899,24 +1759,19 @@ class EmailTool(Tool):
                     escaped_end = str(end_date).replace("\\", "\\\\").replace('"', '\\"')
                     search_parts.append(f'BEFORE "{escaped_end}"')
                 
-                # Must have at least one search criterion
                 if not search_parts:
                     self.logger.error("No search criteria provided for search_emails operation in email_tool")
                     raise ValueError("At least one search criterion is required")
                 
-                # Combine criteria with AND
                 search_criteria = " ".join(search_parts)
                 
-                # Execute search and fetch emails
                 message_ids = self._search_messages(search_criteria)
                 
-                # Make sure max_emails is an integer
                 if isinstance(max_emails, str):
                     max_emails = int(max_emails)
                     
                 emails = self._fetch_message_headers(message_ids, max_emails, load_content)
                 
-                # LLM handling note for search results
                 search_note = """
                 For search results:
                 1. Display emails in a clear, numbered list
@@ -1935,7 +1790,6 @@ class EmailTool(Tool):
             
             elif operation == "list_folders":
                 try:
-                    # Get list of folders
                     typ, folder_data = self.connection.list()
                     
                     if typ != "OK":
@@ -1949,14 +1803,12 @@ class EmailTool(Tool):
                         
                         decoded_item = item.decode("utf-8")
                         
-                        # Parse folder data
                         match = re.match(r'^\((?P<flags>.*?)\) "(?P<delimiter>.*?)" (?P<name>.+)$', decoded_item)
                         
                         if match:
                             flags = match.group("flags")
                             folder_name = match.group("name")
                             
-                            # Remove quotes if present
                             if folder_name.startswith('"') and folder_name.endswith('"'):
                                 folder_name = folder_name[1:-1]
                             
@@ -1974,11 +1826,9 @@ class EmailTool(Tool):
                     raise ValueError(f"Error listing folders: {e}")
             
             elif operation == "mark_for_later_reply":
-                # Validate required parameters
                 if not email_id:
                     raise ValueError("email_id is required for mark_for_later_reply operation")
 
-                # Validate email_id format
                 try:
                     self._parse_email_id(email_id)
                 except ValueError as e:
@@ -1995,28 +1845,23 @@ class EmailTool(Tool):
             elif operation == "get_emails_for_later_reply":
                 email_ids = sorted(self._load_later_reply_ids())
 
-                # Get details for each email
                 emails = []
                 for eid in email_ids:
                     try:
                         email_folder, uid = self._parse_email_id(eid)
 
-                        # Select the folder
                         if not self._select_folder(email_folder):
                             self.logger.warning(f"Failed to select folder for later reply email {eid}")
                             continue
 
-                        # Fetch headers using UID
                         typ, data = self.connection.uid("FETCH", str(uid), "(BODY.PEEK[HEADER])")
                         if typ == "OK" and data and data[0]:
                             header_data = data[0][1]
                             parser = email.parser.BytesParser()
                             headers = parser.parsebytes(header_data, headersonly=True)
 
-                            # Get flags
                             flags = self._get_message_flags(uid)
 
-                            # Create header dictionary
                             email_info = {
                                 "id": eid,
                                 "from": wrap_untrusted(self._decode_header(headers.get("From", "")), "email_header"),
@@ -2029,7 +1874,6 @@ class EmailTool(Tool):
                     except Exception as e:
                         self.logger.error(f"Error fetching headers for later reply email {eid}: {e}")
 
-                # LLM handling note for later reply emails
                 later_reply_note = """
                 For emails marked for later reply:
                 1. Present these emails as a numbered list
@@ -2050,9 +1894,6 @@ class EmailTool(Tool):
             self.logger.error(f"Error executing email_tool operation '{operation}': {e}")
             raise
     
-    # ------------------------------------------------------------------
-    # Action audit log
-    # ------------------------------------------------------------------
 
     def _ensure_audit_table(self) -> None:
         """Create email_action_audit table if it doesn't exist. Idempotent."""

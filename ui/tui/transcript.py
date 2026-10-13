@@ -57,9 +57,7 @@ TAB_SIZE = 4
 
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SPINNER_STEP_SECONDS = 0.1  # frame advances per 0.1 s of wall time; the redraw cadence decides what is seen
-# The tool argument that names what a call does goes in the header, not a row.
 OPERATION_ARG = "operation"
-# Argument rows in the running-tool panel indent under the tool name.
 TOOL_ARG_INDENT = "    "
 
 # Indentation plus a list marker: wrapped rows of the line hang under its text.

@@ -21,7 +21,7 @@ class RateLimiter:
 
         # IP-based rate limiting (more permissive than email-based)
         self.ip_max_requests = 10
-        self.ip_window_seconds = 300  # 5 minutes
+        self.ip_window_seconds = 300
 
     def _get_key(self, identifier: str, key_type: str = "email") -> str:
         """Get Valkey key for identifier."""
@@ -47,25 +47,21 @@ class RateLimiter:
         """
         valkey = get_valkey()
 
-        # Check email-based rate limit
         email_key = self._get_key(email, "email")
         email_count = valkey.increment_with_expiry(email_key, self.window_seconds)
 
         if email_count > self.max_requests:
-            # Email rate limit exceeded
             ttl = valkey.ttl(email_key)
             seconds_until_reset = ttl if ttl > 0 else self.window_seconds
             email_hash = hashlib.sha256(email.encode()).hexdigest()[:16]
             logger.warning(f"Rate limit exceeded for email {email_hash} (retry after {seconds_until_reset}s)")
             return False, seconds_until_reset
 
-        # Check IP-based rate limit (if IP provided)
         if ip_address:
             ip_key = self._get_key(ip_address, "ip")
             ip_count = valkey.increment_with_expiry(ip_key, self.ip_window_seconds)
 
             if ip_count > self.ip_max_requests:
-                # IP rate limit exceeded
                 ttl = valkey.ttl(ip_key)
                 seconds_until_reset = ttl if ttl > 0 else self.ip_window_seconds
                 logger.warning(f"Rate limit exceeded for IP {ip_address} (retry after {seconds_until_reset}s)")
@@ -89,11 +85,9 @@ class RateLimiter:
         """
         valkey = get_valkey()
 
-        # Reset email rate limit
         email_key = self._get_key(email, "email")
         deleted_count = valkey.delete(email_key)
 
-        # Reset IP rate limit if provided
         if ip_address:
             ip_key = self._get_key(ip_address, "ip")
             deleted_count += valkey.delete(ip_key)

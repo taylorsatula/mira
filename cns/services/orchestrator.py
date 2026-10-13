@@ -72,13 +72,11 @@ from lt_memory.proactive import (
 from utils.tag_parser import TagParser, match_memory_id
 from utils.user_context import get_cancel_reason, get_current_segment_id
 
-# Context overflow remediation
 CONTEXT_OVERFLOW_FALLBACK_TEXT_LIMIT = 400
 CONTEXT_OVERFLOW_RECENT_USER_TURNS = 10
 
 TOOL_RESULT_MAX_CHARS = 31999  # Max chars for single tool result before truncation
 
-# Tool result persistence
 TOMBSTONE_MODE = False  # When True, tool results not persisted to history
 
 # Ceiling on local tool calls in one user turn. Reaching it disables tools and
@@ -131,7 +129,6 @@ def _try_json_list_truncation(result: str, limit: int) -> tuple[str, str] | None
 
     total = len(parsed)
 
-    # Binary search: find max N where json.dumps(parsed[:N]) fits within limit
     lo, hi = 0, total
     while lo < hi:
         mid = (lo + hi + 1) // 2
@@ -154,7 +151,6 @@ def _truncate_tool_result(result: str, limit: int, tool_name: str) -> str:
     """
     original_len = len(result)
 
-    # Handler chain: try each format, first match wins
     json_result = _try_json_list_truncation(result, limit)
     if json_result is not None:
         truncated, description = json_result
@@ -168,7 +164,6 @@ def _truncate_tool_result(result: str, limit: int, tool_name: str) -> str:
         )
         return truncated + marker
 
-    # Raw fallback
     truncated = result[:limit]
     marker = (
         f"\n\n[Truncated: {tool_name} returned {original_len:,} chars, "
@@ -361,20 +356,16 @@ class ContinuumOrchestrator:
         self.live_context_compaction_service = live_context_compaction_service
         self.event_bus = event_bus
 
-        # Get singleton embeddings provider for generating embeddings once
         self.embeddings_provider = get_embeddings_provider()
 
-        # Store composed prompt sections when received via event
         self._cached_content = None
         self._non_cached_content = None
         self._conversation_prefix_items = ()  # Before history (set from event.conversation_prefix_items)
         self._post_history_items = ()  # After history, before HUD (domaindoc, BP4)
         self._notification_center = None
 
-        # In-memory cache of provider-reported input tokens per continuum
-        self._last_turn_usage: dict[str, int] = {}  # {continuum_id: input_tokens}
+        self._last_turn_usage: dict[str, int] = {}  # provider-reported tokens keyed {continuum_id: input_tokens}
 
-        # Subscribe to events
         self.event_bus.subscribe('SystemPromptComposedEvent', self._handle_system_prompt_composed)
         self.event_bus.subscribe('SegmentCollapsedEvent', self._invalidate_on_segment_collapse)
 
@@ -538,8 +529,8 @@ class ContinuumOrchestrator:
                 continuum_id=str(continuum.id),
                 base_prompt=system_prompt,
             ))
-            # None means the compose handler failed — never proceed with an empty
-            # system prompt. (None, not falsy: trinket sections may be empty strings.)
+            # _cached_content None = compose handler failed; never proceed on an
+            # empty system prompt. is-None not falsy: trinket sections may be empty strings.
             if self._cached_content is None:
                 raise RuntimeError(
                     f"System prompt composition failed for continuum {continuum.id}"
@@ -867,7 +858,6 @@ class ContinuumOrchestrator:
 
             synthetic_text: str | None = None
 
-            # Tool execution tracking
             if isinstance(event, ToolExecutingEvent):
                 acc.tool_interactions.append(ToolInteraction(
                     tool_name=event.tool_name,
@@ -891,7 +881,6 @@ class ContinuumOrchestrator:
                         sorted(event.arguments.keys())
                     )
 
-            # Tool completion — capture result and touch results
             if isinstance(event, ToolCompletedEvent):
                 for interaction in acc.tool_interactions:
                     if interaction.tool_id == event.tool_id:
@@ -938,7 +927,6 @@ class ContinuumOrchestrator:
                     except (json.JSONDecodeError, AttributeError):
                         logger.warning("Failed to parse invokeother_tool result")
                 elif isinstance(event.result, list):
-                    # Content blocks (images) — log text blocks only, skip base64
                     text_block_count = sum(1 for b in event.result if b.get('type') == 'text')
                     logger.info(
                         "Tool completed: %s with %s content blocks and %s text blocks",
@@ -953,7 +941,6 @@ class ContinuumOrchestrator:
                         type(event.result).__name__
                     )
 
-                # Check for inline image artifact in tool result
                 try:
                     tool_result = json.loads(event.result) if isinstance(event.result, str) else event.result
                     image_artifact = tool_result.get("_image_artifact") if isinstance(tool_result, dict) else None
@@ -963,9 +950,8 @@ class ContinuumOrchestrator:
                         image_tag = f"\n\n![{alt}](/v0/api/images/{fid})\n\n📥 [Download full resolution](/v0/api/files/{fid})\n\n"
                         synthetic_text = image_tag
                 except (json.JSONDecodeError, KeyError, TypeError):
-                    pass  # Not an image-producing tool, ignore
+                    pass
 
-            # Tool errors
             if isinstance(event, ToolErrorEvent):
                 for interaction in acc.tool_interactions:
                     if interaction.tool_id == event.tool_id:
@@ -987,7 +973,6 @@ class ContinuumOrchestrator:
             if isinstance(event, TextEvent):
                 entry_id = acc.append_text(event.content)
 
-            # Stream to callback
             if stream and stream_callback:
                 if isinstance(event, TextEvent):
                     stream_callback({
@@ -1000,12 +985,9 @@ class ContinuumOrchestrator:
                 elif (tool_frame := tool_stream_frame(event)) is not None:
                     stream_callback(tool_frame)
                 elif isinstance(event, CircuitBreakerEvent):
-                    # The breaker's trip reason is matched on the text it
-                    # actually emits. The retired phrase was "failed after
-                    # correction"; a tool that fails twice on identical
-                    # arguments is the current one, and it is the only trip
-                    # reason that means "the model misused a tool" rather than
-                    # "the turn ran out of tool budget".
+                    # "failed on repeated attempt" — model-misuse trip reason emitted by
+                    # CircuitBreaker.should_continue (cns/services/tool_loop.py); matched here
+                    # and in the blank-response guard, never by tool-budget finalization.
                     if "failed on repeated attempt" in event.reason:
                         stream_callback({
                             "type": "model_error",
@@ -1035,9 +1017,8 @@ class ContinuumOrchestrator:
                     })
             acc.events.append(event)
 
-            # Capture model-step responses for replay separately from the
-            # terminal turn response. CompleteEvent is terminal for this
-            # orchestrator stream; ModelStepCompletedEvent is not.
+            # CompleteEvent is terminal for this orchestrator stream;
+            # ModelStepCompletedEvent is not.
             if isinstance(event, ModelStepCompletedEvent):
                 acc.tool_call_results.append(event.response)
                 acc.finish_step(event.response)
@@ -1047,13 +1028,11 @@ class ContinuumOrchestrator:
                 acc.finish_step(event.response)
 
             if isinstance(event, (ModelStepCompletedEvent, CompleteEvent)):
-                # Store container_id in Valkey for reuse (1-hour TTL)
                 if event.response.container_id:
                     valkey_key = f"container:{continuum_id}"
                     valkey.setex(valkey_key, 3600, event.response.container_id)
                     logger.info(f"📦 Stored container ID in Valkey: {event.response.container_id}")
 
-                # Log provider cache metrics and track input tokens for next turn.
                 if event.response.usage:
                     usage = event.response.usage
                     if isinstance(event, ModelStepCompletedEvent):
@@ -1127,7 +1106,6 @@ class ContinuumOrchestrator:
         if unit_of_work is None:
             raise ValueError("Unit of Work is required for message persistence")
 
-        # Add user message to continuum cache (no persistence yet)
         user_metadata: MessageMetadata = {
             "turn_id": str(active_turn_id),
             "segment_id": segment_id,
@@ -1166,7 +1144,6 @@ class ContinuumOrchestrator:
             )
             unit_of_work.add_messages(persist_user_msg)
 
-        # Extract text content for weighted context (bypass for multimodal)
         text_for_context = user_message
         if isinstance(user_message, list):
             text_parts = [item['text'] for item in user_message if item.get('type') == 'text']
@@ -1194,11 +1171,9 @@ class ContinuumOrchestrator:
         stopped = False
         stop_reason: str | None = None
         try:
-            # Memory surfacing, or the configured direct-response fast path.
             previous_memories = self._get_previous_memories()
             mem = self._surface_memories(continuum, text_for_context, previous_memories)
 
-            # Publish merged memories to ProactiveMemoryTrinket
             from cns.core.events import UpdateTrinketEvent
             self.event_bus.publish(UpdateTrinketEvent.create(
                 continuum_id=str(continuum.id),
@@ -1258,7 +1233,6 @@ class ContinuumOrchestrator:
                 input_tokens=last_input,
             )
 
-            # Stream LLM response with overflow remediation
             overflow_attempt = 0
             deep_fallback_active = False
 
@@ -1278,7 +1252,7 @@ class ContinuumOrchestrator:
                         ),
                         acc, continuum_id, stream, stream_callback, show_thinking_stream,
                     )
-                    break  # Success
+                    break
 
                 except ContextOverflowError as e:
                     overflow_attempt += 1
@@ -1324,13 +1298,10 @@ class ContinuumOrchestrator:
                 stop_reason, active_turn_id, continuum_id, segment_id,
             )
 
-        # Parse tags from the final response (preserve emotion tag for frontend
-        # extraction), then normalise every provider step the same way so the
-        # persisted text of each step matches the text streamed under its own
-        # entry_id. The retired synthetic tool-usage indicator is deliberately
-        # gone: it was prepended into acc.response_text, persisted, and re-fed
-        # to the model on every later turn, so the marker accumulated in
-        # durable history and polluted the context it was meant to inform.
+        # Normalise every provider step the same way so each step's persisted
+        # text matches the text streamed under its own entry_id. The retired
+        # synthetic tool-usage marker accumulated in durable history and
+        # polluted the context it was meant to inform.
         parsed_tags = self.tag_parser.parse_response(acc.response_text, preserve_tags=['my_emotion'])
         for step in acc.assistant_steps:
             step.text = self.tag_parser.parse_response(
@@ -1339,14 +1310,12 @@ class ContinuumOrchestrator:
             )['clean_text']
         clean_response_text = parsed_tags['clean_text']
 
-        # Process check-in response if Mira produced one
         if parsed_tags.get('checkin_response'):
             self._process_checkin_response(parsed_tags['checkin_response'])
 
         logger.debug(f"Emotion extracted: {parsed_tags.get('emotion')}")
         logger.debug(f"Emotion tag in clean_text: {'<mira:my_emotion>' in clean_response_text}")
 
-        # Check if model tool error caused a blank response - provide user-friendly fallback
         model_tool_error = next(
             (e for e in acc.events if isinstance(e, CircuitBreakerEvent)
              and "failed on repeated attempt" in e.reason),
@@ -1366,13 +1335,11 @@ class ContinuumOrchestrator:
             metadata["model_error"] = True
             metadata["model_error_reason"] = str(model_tool_error.reason)
 
-        # Validate response is not blank before saving. A halted turn is
-        # allowed to end with only partial text; that is not a blank response.
+        # A halted turn may end with only partial text — that is not a blank response.
         if not stopped and (not clean_response_text or not clean_response_text.strip()):
             logger.error("Attempted to save blank assistant response - rejecting")
             raise ValueError("Assistant response cannot be blank or empty. This may indicate an API error.")
 
-        # Build assistant metadata
         assistant_metadata = {
             "referenced_memories": acc.touch_resolved_uuids,
             "surfaced_memories": [m['id'] for m in mem.surfaced_memories],
@@ -1398,7 +1365,6 @@ class ContinuumOrchestrator:
 
         final_response = clean_response_text
 
-        # Update metadata
         metadata["tools_used"] = acc.tools_used
         metadata["referenced_memories"] = acc.touch_resolved_uuids
         metadata["surfaced_memories"] = [m['id'] for m in mem.surfaced_memories]
@@ -1535,7 +1501,6 @@ class ContinuumOrchestrator:
             previous_memories=previous_memories
         )
 
-        # LLM-guided retention
         pinned_ids = subcortical_result.pinned_memory_ids
         pinned_memories = self._apply_retention(previous_memories, pinned_ids)
 
@@ -1544,7 +1509,6 @@ class ContinuumOrchestrator:
             pinned_memories = pinned_memories[:max_pinned]
             logger.info(f"Hard cap: truncated pinned from {len(pinned_ids)} to {max_pinned}")
 
-        # Sliding fresh budget: as pinned grows, fresh compresses
         fresh_limit = max(min_fresh, max_surfaced - len(pinned_memories))
 
         assistant_text = self._format_assistant_messages(continuum, NUM_ASSISTANT_MESSAGES)
@@ -1648,11 +1612,9 @@ class ContinuumOrchestrator:
         Returns:
             Merged list with pinned first, then fresh (no duplicates)
         """
-        # Start with pinned memories
         merged = list(pinned_memories)
         seen_ids = {m.get('id') for m in pinned_memories if m.get('id')}
 
-        # Add fresh memories that aren't already in pinned
         for memory in fresh_memories:
             memory_id = memory.get('id')
             if memory_id and memory_id not in seen_ids:
@@ -1754,9 +1716,6 @@ class ContinuumOrchestrator:
             for m in recent
         )
 
-    # =========================================================================
-    # Context Overflow Detection and Remediation
-    # =========================================================================
 
     def _invalidate_on_segment_collapse(self, event: "ContinuumEvent") -> None:
         """Invalidate cached input-token baseline when segment collapse shrinks the message set."""
@@ -1937,7 +1896,6 @@ class ContinuumOrchestrator:
             logger.error("Failed to process check-in response: %s", e, exc_info=True)
 
 
-# Global orchestrator instance (singleton pattern)
 _orchestrator_instance = None
 
 

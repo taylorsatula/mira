@@ -257,7 +257,7 @@ def load_skill(user_id: str, skill_name: str) -> tuple[SkillRecord, str]:
     )
 
 
-# ── Per-user write path (the API surface for the future skills UI) ─────────
+# Per-user write path (the API surface for the future skills UI)
 
 
 def write_user_skill(user_id: str, name: str, description: str, body: str) -> SkillRecord:
@@ -299,10 +299,9 @@ def write_user_skill(user_id: str, name: str, description: str, body: str) -> Sk
         encoding="utf-8",
     )
 
-    # The write may be this user's FIRST skill — their empty-dir negative cache
-    # entry (user_catalog) is now stale and would hide the new skill until
-    # restart. Discard it only after the write succeeded, so a failed write
-    # leaves cache state truthful.
+    # The write may be this user's FIRST skill: the empty-dir negative cache
+    # entry (user_catalog) is now stale and would hide it until restart. Discard
+    # only after the write succeeds, so a failed write leaves cache state truthful.
     _empty_user_dirs.discard(user_id)
 
     logger.info("User skill written: %s (user=%s)", name, user_id)

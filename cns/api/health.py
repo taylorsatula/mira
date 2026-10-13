@@ -23,8 +23,7 @@ router = APIRouter()
 
 DIAGNOSTICS_TOKEN_HEADER = "X-MIRA-Diagnostics-Token"
 
-# Captured at import, which happens during app assembly — the effective
-# process start for uptime reporting.
+# Captured at import during app assembly — the effective process start for uptime reporting.
 _PROCESS_START = time.time()
 
 
@@ -37,8 +36,7 @@ class HealthEndpoint(BaseHandler):
         components: dict[str, dict] = {}
         overall_status = "healthy"
 
-        # Check database connectivity (unified mira_service database).
-        # Status only in the response — unauthenticated endpoint; detail goes to the log.
+        # Unauthenticated endpoint: status only in the response — detail goes to the log.
         try:
             db = PostgresClient("mira_service")
             db.execute_single("SELECT 1")
@@ -48,7 +46,6 @@ class HealthEndpoint(BaseHandler):
             components["database"] = {"status": "unhealthy"}
             overall_status = "unhealthy"
 
-        # Basic system info
         components["system"] = {
             "status": "healthy",
             "uptime_seconds": int(time.time() - _PROCESS_START),
@@ -67,7 +64,6 @@ class HealthEndpoint(BaseHandler):
             }
         }
 
-        # Return appropriate response based on health status
         if overall_status == "unhealthy":
             return ErrorResponse(
                 error={
@@ -136,17 +132,14 @@ async def thread_health_endpoint(_: None = Depends(_require_diagnostics_token)):
         from anyio import to_thread
         limiter = to_thread.current_default_thread_limiter()
 
-        # Get thread pool stats
         available_threads = limiter.available_tokens
         total_threads = limiter.total_tokens
         used_threads = total_threads - available_threads
         usage_percent = (used_threads / total_threads) * 100 if total_threads > 0 else 0
 
-        # Get stuck operations
         stuck_ops = ThreadMonitor.get_stuck_operations()
         active_ops = ThreadMonitor.get_active_operations()
 
-        # Get scheduled job stats
         job_stats = ScheduledTaskMonitor.get_job_stats()
         from utils.scheduler_service import scheduler_service
         scheduler_jobs = scheduler_service.scheduler.get_jobs() if scheduler_service._running else []
@@ -156,7 +149,6 @@ async def thread_health_endpoint(_: None = Depends(_require_diagnostics_token)):
             "apscheduler_jobs": sorted(job.id for job in scheduler_jobs),
         }
 
-        # Determine health status
         status = "healthy"
         if usage_percent > 90:
             status = "critical"
@@ -186,7 +178,6 @@ async def thread_health_endpoint(_: None = Depends(_require_diagnostics_token)):
 
         response = create_success_response(data)
 
-        # Return 503 if critical
         if status == "critical":
             return JSONResponse(status_code=503, content=response.to_dict())
 
@@ -210,7 +201,6 @@ def thread_dump_endpoint(_: None = Depends(_require_diagnostics_token)):
     try:
         dump = ThreadMonitor.dump_thread_states()
 
-        # Also save to file for later analysis
         import time
         dump_file = f"/tmp/thread_dump_api_{int(time.time())}.txt"
         with open(dump_file, 'w') as f:

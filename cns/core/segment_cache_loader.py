@@ -13,7 +13,6 @@ from cns.services.segment_helpers import create_collapse_marker, create_session_
 
 logger = logging.getLogger(__name__)
 
-# Two-tier session cache settings
 SESSION_SUMMARY_COMPLEXITY_LIMIT = 4.5  # Max total complexity for Tier 1 extended summaries
 SESSION_SUMMARY_MAX_COUNT = 4           # Max Tier 1 extended summaries
 SESSION_SUMMARY_QUERY_WINDOW = 14       # Recent segments to query for selection
@@ -79,34 +78,24 @@ class SegmentCacheLoader:
         Returns:
             [collapse_marker, summaries, continuity_turns, session_boundary, active_messages]
         """
-        # Set user context for private methods to use
         from utils.user_context import set_current_user_id
         set_current_user_id(user_id)
 
-        # Step 1: Load collapsed segment summaries (past conversations)
-        # Uses complexity-based selection for optimal information density
         segment_summaries = self._load_segment_summaries(continuum_id)
 
-        # Step 2: Load continuity messages (last 2 turns before active sentinel)
         continuity_messages = self._load_continuity_messages(continuum_id, turn_count=2)
 
-        # Step 3: Create collapse marker to indicate older searchable content,
-        # but only when there IS older content (collapsed summaries or
-        # continuity turns). An empty history must not claim searchable past
-        # conversations that do not exist.
+        # Only create the collapse marker when older content exists — an empty
+        # history must not claim searchable past conversations that do not exist.
         history_present = bool(segment_summaries or continuity_messages)
         collapse_marker = create_collapse_marker() if history_present else None
 
-        # Step 4: Load active segment messages (current unconsolidated conversation)
         active_segment_messages = self._load_active_segment_messages(continuum_id)
 
-        # Step 5: Create session boundary marking the break
         boundary = create_session_boundary_marker(segment_summaries)
 
-        # Step 5.5: Behavioral primer (only when collapsed segments provide conversation history)
         primer_turns = self._primer_turns if segment_summaries else []
 
-        # Step 6: Assemble in order - collapse marker first, then summaries, primer, continuity, boundary, and active messages
         marker_messages = [collapse_marker] if collapse_marker is not None else []
         messages = marker_messages + segment_summaries + primer_turns + continuity_messages + [boundary] + active_segment_messages
 
@@ -188,7 +177,6 @@ class SegmentCacheLoader:
         precis_max = SESSION_PRECIS_MAX_COUNT
         query_window = SESSION_SUMMARY_QUERY_WINDOW
 
-        # Query window of recent segments (returns oldest first, we reverse for selection)
         candidates = self.repository.find_collapsed_segments(
             continuum_id,
             user_id,
@@ -199,7 +187,6 @@ class SegmentCacheLoader:
             logger.debug(f"No collapsed segments found for continuum {continuum_id}")
             return [], []
 
-        # Tier 1: Extended summaries (newest first, complexity accumulation)
         tier1 = []
         total_complexity = 0
         tier1_stop_index = 0
@@ -219,7 +206,6 @@ class SegmentCacheLoader:
             if len(tier1) >= max_count:
                 break
 
-        # Tier 2: Precis-only (continue from where Tier 1 stopped)
         tier2 = []
         for segment in newest_first[tier1_stop_index:]:
             precis = segment.metadata.get('precis', '')
@@ -234,7 +220,6 @@ class SegmentCacheLoader:
             f"+ {len(tier2)} precis from {len(candidates)} candidates"
         )
 
-        # Return both in chronological order (oldest first)
         return list(reversed(tier1)), list(reversed(tier2))
 
     def _load_active_segment_messages(self, continuum_id: str) -> list[Message]:
@@ -256,14 +241,12 @@ class SegmentCacheLoader:
         from utils.user_context import get_current_user_id
         user_id = get_current_user_id()
 
-        # Find the active segment sentinel
         active_sentinel = self.repository.find_active_segment(continuum_id, user_id)
 
         if not active_sentinel:
             logger.debug(f"No active segment found for continuum {continuum_id}")
             return []
 
-        # Load all messages after the sentinel
         messages = self.repository.load_segment_messages(continuum_id, user_id, active_sentinel.created_at)
 
         logger.debug(f"Loaded {len(messages)} active segment messages for continuum {continuum_id}")

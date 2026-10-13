@@ -39,7 +39,8 @@ LOCAL_EMBEDDING_MODEL = "MongoDB/mdbr-leaf-ir-asym"
 LOCAL_EMBEDDING_DIMENSIONS = 768
 
 # pgvector's HNSW and IVFFlat indexes accept at most 2,000 dimensions for the
-# vector type, and every embedding column carries one of those indexes.
+# vector type (per pgvector's docs), and every embedding column carries one
+# of those indexes.
 MAX_EMBEDDING_DIMENSIONS = 2000
 
 # Remote request ceilings for a hung or failing endpoint — bounds, not measured
@@ -73,7 +74,7 @@ class EmbeddingCache:
         self.logger = logging.getLogger("embedding_cache")
         self.key_prefix = key_prefix
         from clients.valkey_client import get_valkey_client
-        self.valkey = get_valkey_client()  # Raises if Valkey unreachable
+        self.valkey = get_valkey_client()
         self.logger.debug(f"Embedding cache initialized with Valkey backend (prefix: {key_prefix})")
 
     def _get_cache_key(self, text: str) -> str:
@@ -91,7 +92,7 @@ class EmbeddingCache:
         if cached_data:
             return np.frombuffer(cached_data, dtype=np.float16)
 
-        return None  # Cache miss
+        return None
 
     def set(self, text: str, embedding: np.ndarray) -> None:
         """
@@ -232,13 +233,14 @@ class LocalEmbeddingsProvider(EmbeddingsProvider):
         # existing local install refuse to boot (build_embeddings_provider)
         # until its vectors are regenerated.
         # Offline-first load: when the model is already in the local HF cache
-        # this skips the Hub availability check (~2s network per process load,
-        # paid by both the POST gate child and the serving process). A cache miss
-        # falls back to the online load so fresh installs still download.
+        # this skips the Hub availability check (~2s measured network per
+        # process load, paid by both the POST gate child and the serving
+        # process). A cache miss falls back to the online load so fresh
+        # installs still download.
         try:
             self.model = SentenceTransformer(
                 LOCAL_EMBEDDING_MODEL,
-                cache_folder=None,  # Uses default HuggingFace cache directory
+                cache_folder=None,
                 local_files_only=True,
             )
         except Exception:

@@ -60,7 +60,6 @@ class EventBus:
         event_type = event.__class__.__name__
         logger.debug(f"Publishing event: {event_type} - {event}")
         
-        # Call subscribers
         if event_type in self._subscribers:
             # Delivery is at-most-once by design: subscriber failures are
             # logged with traceback and skipped — no retry, no re-queue. A

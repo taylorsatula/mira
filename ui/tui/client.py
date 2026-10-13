@@ -32,7 +32,7 @@ from .protocol import (
     parse_inbound_frame,
 )
 
-# --- Bounded-wait constants (no unbounded await anywhere in this module) ---
+# Bounded-wait constants; no unbounded await anywhere in this module.
 
 WS_OPEN_TIMEOUT = 15.0  # prompt-pinned: 15 s to establish the socket
 AUTH_WAIT_TIMEOUT = 12.0  # server closes with AUTH_TIMEOUT at 10 s; cover it
@@ -59,7 +59,7 @@ class ClientError(Exception):
         self.message = message
 
 
-# --- Client events (pinned contract; the app is written against these) -----
+# Client events: a pinned contract the app is written against.
 
 
 @dataclass
@@ -217,7 +217,6 @@ class MiraClient:
         self._server_shutdown_seen = False
         self._active_turn_id: str | None = None  # set by TurnStarted, cleared by terminals
 
-    # --- public API ---------------------------------------------------------
 
     @property
     def connected(self) -> bool:
@@ -519,7 +518,6 @@ class MiraClient:
             pass  # socket already gone; run() handles the fallout
         self._conn = None
 
-    # --- internals ----------------------------------------------------------
 
     def _ws_url(self) -> str:
         base = self._config.base_url

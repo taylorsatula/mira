@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Turns before error/timeout results auto-expire
 ERROR_TTL_TURNS = 5
 
 

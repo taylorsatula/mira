@@ -65,7 +65,6 @@ class FeedbackTracker:
         if activity_days % threshold != 0:
             return False
 
-        # Dedup: ensure we haven't already synthesized at this activity day
         session_manager = get_shared_session_manager()
         with session_manager.get_session(user_id) as session:
             result = session.execute_single("""
@@ -137,9 +136,7 @@ class FeedbackTracker:
                 WHERE user_id = %s
             """, (activity_days, now, synthesis_output, needs_checkin, user_id))
 
-        # Logged only after the session exits: the commit in __exit__ re-raises
-        # on failure, so "synthesis complete" is never reported for a snapshot
-        # that did not persist.
+        # Logged only after the session exits: __exit__ re-raises on commit failure, so completion is never reported for an unpersisted snapshot.
         logger.info("User %s: synthesis complete, snapshot activity_days=%d, needs_checkin=%s",
                    user_id, activity_days, needs_checkin)
 
@@ -275,9 +272,7 @@ class FeedbackTracker:
                 WHERE user_id = %s
             """, (user_id,))
 
-        # Logged only after the session exits: the commit in __exit__ re-raises
-        # on failure, so "reset to baseline" is never reported for a reset that
-        # did not persist.
+        # Logged only after the session exits: __exit__ re-raises on commit failure, so the reset is never reported if it did not persist.
         logger.info("User %s: synthesis tracking reset to fresh-install baseline", user_id)
 
     def acknowledge_checkin(self, user_id: str, checkin_response: str) -> None:
@@ -362,9 +357,7 @@ class FeedbackTracker:
             if result:
                 feedback = result.get('checkin_response')
 
-        # Logged only after the session exits: the commit in __exit__ re-raises
-        # on failure, so "consumed" is never claimed for feedback that did not
-        # persist (it stays in the column for the next synthesis cycle).
+        # Logged only after the session exits: __exit__ re-raises on commit failure, so consumption is never claimed for feedback that did not persist.
         if feedback:
             logger.info("User %s: consumed check-in feedback for synthesis", user_id)
         return feedback or None

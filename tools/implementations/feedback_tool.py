@@ -19,9 +19,6 @@ from utils.user_context import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 
 class FeedbackToolConfig(BaseModel):
     """Configuration for the feedback_tool."""
@@ -29,9 +26,6 @@ class FeedbackToolConfig(BaseModel):
 
 registry.register("feedback_tool", FeedbackToolConfig)
 
-# ---------------------------------------------------------------------------
-# Tool
-# ---------------------------------------------------------------------------
 
 _CATEGORIES = ("feature_request", "bug_report", "confusion", "praise", "other")
 
@@ -93,9 +87,6 @@ class FeedbackTool(Tool):
         super().__init__()
         self.logger = logging.getLogger(__name__)
 
-    # ------------------------------------------------------------------
-    # Public interface
-    # ------------------------------------------------------------------
 
     def run(self, category: str, description: str, **kwargs) -> Dict[str, Any]:
         """
@@ -148,9 +139,6 @@ class FeedbackTool(Tool):
             self.logger.error("Failed to record feedback: %s", e, exc_info=True)
             raise RuntimeError(f"Failed to record feedback: {e}") from e
 
-    # ------------------------------------------------------------------
-    # Usage examples
-    # ------------------------------------------------------------------
 
     usage_examples = [
         {

@@ -16,11 +16,9 @@ from utils.timezone_utils import get_default_timezone, validate_timezone
 class ApiConfig(BaseModel):
     """LLM API and provider dialect configuration."""
 
-    # Feature flags
     subcortical_prefill_warmup: bool = Field(default=False, description="Pre-warm subcortical KV cache after each turn (vLLM prefix-cache deployments only — wastes billed tokens on cloud providers)")
     show_openai_compat_thinking: bool = Field(default=True, description="Show thinking blocks from OpenAI-compatible dialects to end user")
 
-    # Operational limits
     # Both bounds sit at 15 minutes: a large non-streaming completion (segment
     # collapse summaries over a long segment, batch passes) can legitimately
     # take many minutes on a loaded gateway, and a bound that fires first
@@ -34,7 +32,6 @@ class ApiConfig(BaseModel):
         description="Max seconds a new chat turn waits for previous-turn background cache work.",
     )
 
-    # Request sizing
     context_window_tokens: int = Field(default=200000, description="Total context window size in tokens")
     temperature: float = Field(default=1.0, description="Temperature for response generation (Anthropic default: 1.0)")
     compaction_trigger_tokens: int = Field(
@@ -44,10 +41,10 @@ class ApiConfig(BaseModel):
     )
     compaction_raw_user_turns_to_preserve: int = Field(default=10, description="Number of recent user turns to preserve in raw format without compaction.")
 
-    # Provider failover (diverter): one global backup target for all five routes.
-    # While tripped, ModelResolver diverts every route to this target carrying the
-    # original route name (pricing continuity); the recovery probe job flips back
-    # after consecutive passing probes. See clients/llm/diverter.py.
+    # Provider failover (diverter): while tripped, ModelResolver diverts every
+    # route to the backup target carrying the original route name (pricing
+    # continuity). Probe/recovery mechanics: see the Field descriptions below
+    # and clients/llm/diverter.py.
     failover_enabled: bool = Field(default=False, description="Enable the provider failover diverter: after N consecutive retryable provider failures, route all LLM calls to the backup target below until the recovery probe confirms the primary recovered.")
     failover_endpoint_url: Optional[str] = Field(default=None, description="Backup provider endpoint (OpenAI-compatible or the dialect's native shape). Required when failover_enabled.")
     failover_model: Optional[str] = Field(default=None, description="Backup provider model name. Required when failover_enabled.")
@@ -100,7 +97,6 @@ class ApiConfig(BaseModel):
 class ApiServerConfig(BaseModel):
     """FastAPI server deployment configuration."""
 
-    # Infrastructure
     host: str = Field(default="0.0.0.0", description="Host address for the FastAPI server")
     port: int = Field(default=1993, description="Port for the FastAPI server")
     workers: int = Field(default=1, description="Number of uvicorn workers")
@@ -109,21 +105,18 @@ class ApiServerConfig(BaseModel):
         description="Max concurrent threads FastAPI uses for synchronous endpoints (per worker process). Lower it on single-user installs; raise it for high-concurrency multi-user deployments"
     )
 
-    # CORS
     enable_cors: bool = Field(default=True, description="Enable CORS middleware")
     cors_origins: List[str] = Field(
         default=["https://miraos.org", "http://localhost:1993", "http://127.0.0.1:1993"],
         description="Allowed CORS origins"
     )
 
-    # Operational
     log_level: str = Field(default="warning", description="Log level for uvicorn server")
 
 
 class SystemConfig(BaseModel):
     """System-level settings and feature flags."""
 
-    # Feature flags
     subcortical_enabled: bool = Field(default=True, description="Enable subcortical memory surfacing and complexity assessment")
     peanutgallery_enabled: bool = Field(default=True, description="Enable peanut gallery metacognitive observer")
     persona_enabled: bool = Field(default=True, description="Enable Persona evaluation, refinement, and prompt injection")
@@ -136,7 +129,6 @@ class SystemConfig(BaseModel):
         description="Enable the MCP endpoint at /v0/mcp exposing one tool (check_in: a complete chat turn via the same path as POST /v0/api/chat). Disabled constructs nothing — the route is not mounted and the mcp SDK is never imported. Overridable via MIRA_MCP_ENABLED (strict 0/1)",
     )
 
-    # Operational
     log_level: str = Field(default="WARNING", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     anthropic_sdk_content_logging: bool = Field(
         default=False,

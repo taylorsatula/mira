@@ -170,7 +170,6 @@ class PlaywrightService:
         """Record usage time and (re)schedule idle shutdown timer."""
         self._last_use = time.monotonic()
 
-        # Cancel any existing timer
         if self._idle_timer is not None:
             self._idle_timer.cancel()
 
@@ -241,12 +240,11 @@ class PlaywrightService:
         try:
             return future.result(timeout=timeout + 15)
         except concurrent.futures.TimeoutError:
-            # Python 3.11+ aliases concurrent.futures.TimeoutError to the
-            # built-in TimeoutError, so a TimeoutError raised by the worker
-            # itself surfaces here too. If the future is done, the worker
-            # raised it — re-raise so the worker's own "after {timeout}s"
-            # label propagates unrelabeled instead of being miscounted as a
-            # caller-budget timeout. (Mirror of scheduled_task_monitor.py:124-134.)
+            # Python 3.11+ aliases concurrent.futures.TimeoutError to builtin:
+            # a worker-raised TimeoutError surfaces here too. future.done() ->
+            # the worker raised it; re-raise so its "after {timeout}s" label
+            # survives instead of counting as a caller-budget timeout. Mirrors
+            # ScheduledTaskMonitor.wrap_scheduled_job.
             if future.done() and not future.cancelled():
                 raise
             cancel.set()
@@ -270,11 +268,10 @@ class PlaywrightService:
         cancel: threading.Event,
     ) -> str:
         """Actual fetch implementation — runs on the Playwright thread."""
-        # Queued-fetch entry check: with a single worker, this fetch may have
-        # sat in the executor queue behind another fetch while its caller's
-        # timeout expired. If so the caller is gone, and navigating now would
-        # hold the only Playwright worker through a full page load nobody will
-        # ever read — abort before creating a context or a page.
+        # Queued-fetch entry check: with one worker this fetch may have queued
+        # behind another while its caller's timeout expired. Navigating then
+        # holds the only worker through a page load nobody reads - abort before
+        # creating a context or a page.
         if cancel.is_set():
             self.logger.warning(
                 f"Fetch cancelled while queued for {url} — skipping navigation"
@@ -282,17 +279,14 @@ class PlaywrightService:
             raise _CancelledError()
 
         context = self._browser.new_context(
-            # Disable risky browser features
             geolocation=None,
             permissions=[],
             bypass_csp=False,
             java_script_enabled=True,
 
-            # Performance/security limits
             viewport={'width': 1280, 'height': 720},
             ignore_https_errors=False,
 
-            # User agent
             user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:143.0) Gecko/20100101 Firefox/143.0'
         )
 
@@ -310,26 +304,21 @@ class PlaywrightService:
                 route.abort()
                 return
 
-            # Block unnecessary resource types for faster loading
             resource_type = request.resource_type
             if resource_type in ['font', 'media', 'websocket']:
                 route.abort()
                 return
 
-            # Continue with request
             route.continue_()
 
         try:
             page = context.new_page()
 
-            # Set up request interception
             page.route('**/*', handle_request)
 
-            # Set resource limits
             page.set_default_timeout(timeout * 1000)
             page.set_default_navigation_timeout(timeout * 1000)
 
-            # Navigate with strict timeout
             try:
                 response = page.goto(
                     url,
@@ -356,21 +345,17 @@ class PlaywrightService:
             if cancel.is_set():
                 raise _CancelledError()
 
-            # Check response status
             if response and response.status >= 400:
                 raise RuntimeError(f"HTTP {response.status}")
 
-            # Get rendered HTML
             html = page.content()
 
-            # Check size limits
             html_size_mb = len(html) / (1024 * 1024)
             if html_size_mb > max_size_mb:
                 raise RuntimeError(
                     f"Content too large: {html_size_mb:.1f}MB exceeds {max_size_mb}MB limit"
                 )
 
-            # Warn if internal requests were blocked
             if blocked_requests:
                 self.logger.warning(
                     f"Blocked {len(blocked_requests)} SSRF attempts from {url}"
@@ -400,7 +385,6 @@ class PlaywrightService:
                 self._idle_timer.cancel()
                 self._idle_timer = None
 
-            # Force-kill the Chromium process tree
             if self._browser_pid:
                 try:
                     import psutil

@@ -29,7 +29,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Similarity and search
 PROACTIVE_SIMILARITY_THRESHOLD = 0.42
 PROACTIVE_MAX_LINK_TRAVERSAL_DEPTH = 3
 PROACTIVE_MAX_MEMORIES = 10
@@ -54,7 +53,6 @@ MAX_PINNED_MEMORIES = 6      # Max retained from the previous cache; also pressu
 MIN_FRESH_MEMORIES = 2       # Min fresh fetched; sliding budget = max(this, MAX_SURFACED - pinned)
 MAX_LINKED_PER_PRIMARY = 2
 
-# Assistant message embedding for memory surfacing
 NUM_ASSISTANT_MESSAGES = 2
 ASSISTANT_SIMILARITY_THRESHOLD = 0.75
 MAX_ASSISTANT_MEMORIES = 3
@@ -132,10 +130,8 @@ class ProactiveService:
         if limit is None:
             limit = PROACTIVE_MAX_MEMORIES
 
-        # Run both retrieval paths in parallel
-        # Each thread gets its own DB connection and sets app.current_user_id via RLS
-        # Each thread needs its OWN context copy - a single context object cannot be
-        # entered by multiple threads simultaneously (causes "already entered" error)
+        # One context copy per thread: a single Context cannot be entered by
+        # two threads at once ("already entered")
 
         def _fetch_similarity_pool():
             """Fetch similarity-based memories via hybrid search."""
@@ -157,18 +153,15 @@ class ProactiveService:
                 expansion_embedding=embedding
             )
 
-        # Execute both searches in parallel - each thread gets its own context copy
         with ThreadPoolExecutor(max_workers=config.lt_memory.proactive_search_workers) as executor:
             ctx_similarity = copy_context()
             ctx_hub = copy_context()
             similarity_future = executor.submit(ctx_similarity.run, _fetch_similarity_pool)
             hub_future = executor.submit(ctx_hub.run, _fetch_hub_pool)
 
-            # Wait for both to complete - exceptions will propagate on .result()
             similarity_pool = similarity_future.result()
             hub_pool = hub_future.result()
 
-        # Filter similarity pool by minimum importance score
         similarity_pool = [
             memory for memory in similarity_pool
             if memory.importance_score >= MIN_IMPORTANCE_SCORE
@@ -181,11 +174,9 @@ class ProactiveService:
             logger.debug("No relevant memories found")
             return []
 
-        # Include linked memories for context enrichment
         # (Hub chain already provides some traversal, but this adds explicit link metadata)
         expanded_results = self._include_linked_memories(merged_results[:limit])
 
-        # Rerank and filter linked memories by type and importance
         reranked_results = self._rerank_with_links(expanded_results)
         final_results = reranked_results[:limit]
 
@@ -194,7 +185,6 @@ class ProactiveService:
             f"(similarity: {len(similarity_pool)}, hub: {len(hub_pool)})"
         )
 
-        # Track access for retrieved memories to update importance scores
         self._track_memory_access(final_results)
 
         return [self._memory_to_dict(m) for m in final_results]
@@ -218,13 +208,11 @@ class ProactiveService:
         Returns:
             Merged, deduplicated list of Memory objects sorted by effective score
         """
-        # Debut boost from config
         debut_full_boost_days = DEBUT_FULL_BOOST_DAYS
         debut_end_days = DEBUT_END_DAYS
         debut_boost = DEBUT_BOOST_AMOUNT
         hub_connection_threshold = HUB_CONNECTION_THRESHOLD
 
-        # Get user's current activity days for vacation-proof age calculation
         from utils.user_context import get_user_cumulative_activity_days
         current_activity_days = get_user_cumulative_activity_days()
 
@@ -236,7 +224,6 @@ class ProactiveService:
                 merged.append(memory)
                 seen_ids.add(memory.id)
 
-        # Calculate effective scores with debut boost and supersedes penalty
         def effective_score(memory) -> float:
             score = memory.importance_score
 
@@ -256,7 +243,6 @@ class ProactiveService:
                         trailoff_window = debut_end_days - debut_full_boost_days + 1
                         score += debut_boost * (remaining / trailoff_window)
 
-            # Supersedes penalty (soft demotion for superseded memories)
             if memory.inbound_links:
                 has_supersedes = any(
                     link.get('type') == 'supersedes'
@@ -268,7 +254,6 @@ class ProactiveService:
 
             return score
 
-        # Sort by effective score
         merged.sort(key=effective_score, reverse=True)
         return merged
 
@@ -347,7 +332,6 @@ class ProactiveService:
 
         Ranking formula: type_weight × inherited_importance
         """
-        # Link type weights from config
         link_type_weights = {
             "conflicts": LINK_WEIGHT_CONFLICTS,
             "corroborates": LINK_WEIGHT_CORROBORATES,
@@ -374,21 +358,18 @@ class ProactiveService:
             scored_linked = []
 
             for linked in linked_memories:
-                # Deduplication
                 if linked.id in primary_ids:
                     continue
 
                 link_meta = getattr(linked, 'link_metadata', {})
                 link_type = link_meta.get('link_type', 'unknown')
 
-                # Type-based weighting
                 type_weight = default_weight
                 for known_type, weight in link_type_weights.items():
                     if link_type == known_type or link_type.startswith(f"{known_type}:"):
                         type_weight = weight
                         break
 
-                # Importance inheritance: (linked * weight) + (primary * (1 - weight))
                 linked_importance = getattr(linked, 'importance_score', 0.5)
                 primary_importance = getattr(primary_memory, 'importance_score', 0.5)
                 inherited_importance = (linked_importance * inheritance_weight) + (primary_importance * (1 - inheritance_weight))
@@ -421,7 +402,6 @@ class ProactiveService:
             "outbound_links": memory.outbound_links if hasattr(memory, 'outbound_links') else [],
             # Entity links for self-improving loop - shows which hubs this memory connects to
             "entity_links": memory.entity_links if hasattr(memory, 'entity_links') else [],
-            # Annotations for contextual notes
             "annotations": memory.annotations if hasattr(memory, 'annotations') else [],
         }
 

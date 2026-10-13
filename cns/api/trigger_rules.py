@@ -45,9 +45,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ------------------------------------------------------------------
-# Request models
-# ------------------------------------------------------------------
 
 class CreateRuleRequest(BaseModel):
     trigger_id: str = Field(description="Trigger this rule belongs to — a registered sidebar trigger (e.g. 'memory_floor'); the valid set is derived from the trigger registry at request time")
@@ -65,9 +62,6 @@ class UpdateRuleRequest(BaseModel):
     enabled: bool | None = Field(default=None, description="Enable or disable the rule")
 
 
-# ------------------------------------------------------------------
-# Response shapes
-# ------------------------------------------------------------------
 
 class TriggerSpecPayload(TypedDict):
     """One registered trigger as listed by GET /triggers/rules."""
@@ -87,9 +81,6 @@ def _trigger_spec_payloads() -> list[TriggerSpecPayload]:
     ]
 
 
-# ------------------------------------------------------------------
-# Validation helpers
-# ------------------------------------------------------------------
 
 def _validate_trigger_field(trigger_id: str, field: str) -> None:
     """Validate against the runtime trigger registry, derived per call."""
@@ -118,9 +109,6 @@ def _validate_pattern(pattern: str) -> None:
         raise ValidationError(f"Invalid regex pattern: {e}")
 
 
-# ------------------------------------------------------------------
-# Endpoints
-# ------------------------------------------------------------------
 
 @router.get("/triggers/rules")
 def list_rules(

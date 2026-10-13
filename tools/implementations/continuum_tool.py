@@ -97,7 +97,6 @@ class ContinuumSearchToolConfig(BaseModel):
         le=10,
         description="Default number of messages to include before/after when expanding"
     )
-    # Hybrid search configuration
     hybrid_vector_weight: float = Field(
         default=0.6,
         ge=0.0,
@@ -106,7 +105,6 @@ class ContinuumSearchToolConfig(BaseModel):
                     "Remaining weight goes to BM25 text ranking. "
                     "Higher values favor semantic similarity over keyword matching."
     )
-    # Confidence clustering configuration
     confidence_cluster_threshold: float = Field(
         default=0.15,
         ge=0.0,
@@ -120,7 +118,6 @@ class ContinuumSearchToolConfig(BaseModel):
         le=10,
         description="Maximum number of results to return even if more are within cluster threshold"
     )
-    # Search behavior configuration
     vector_search_multiplier: float = Field(
         default=2.0,
         ge=1.0,
@@ -306,22 +303,18 @@ class ContinuumSearchTool(Tool):
         super().__init__()
         self.logger = logging.getLogger(__name__)
 
-        # Load configuration
         from config import config
 
         self._config = config.get_tool_config("continuum_tool")
 
-        # Get continuum repository for database access
         self._continuum_repo = get_continuum_repository()
 
-        # Get embeddings provider for query embeddings
         self._embeddings_provider = get_embeddings_provider()
 
     def _escape_like_pattern(self, value: str) -> str:
         """Escape SQL LIKE special characters to prevent wildcard injection."""
         return value.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
 
-    # Parameter sets for each operation to filter kwargs
     _SEARCH_PARAMS = {
         'query', 'search_mode', 'entities', 'max_results', 'page',
         'start_time', 'end_time', 'temporal_direction', 'reference_time',
@@ -427,11 +420,9 @@ class ContinuumSearchTool(Tool):
 
         page = page or 1
 
-        # Validate search mode
         if search_mode not in ["summaries", "precis", "messages"]:
             raise ValueError(f"search_mode must be 'summaries', 'precis', or 'messages', got: {search_mode}")
 
-        # Message mode requires timescope
         if search_mode == "messages":
             if not start_time or not end_time:
                 raise ValueError(
@@ -449,7 +440,6 @@ class ContinuumSearchTool(Tool):
                 include_thinking=include_thinking
             )
 
-        # Summary or precis mode
         return self._search_summaries(
             query=query,
             entities=entities,
@@ -494,12 +484,9 @@ class ContinuumSearchTool(Tool):
         limit = max_results or (20 if precis_mode else 10)
         offset = (page - 1) * limit
 
-        # Generate query embedding
         try:
             query_embedding = self._embeddings_provider.encode_realtime(query)
-            # Convert to list for PostgreSQL
             embedding_list = query_embedding.tolist() if hasattr(query_embedding, 'tolist') else list(query_embedding)
-            # Format as PostgreSQL vector string
             embedding_str = '[' + ','.join(str(x) for x in embedding_list) + ']'
         except Exception as e:
             self.logger.error(f"Failed to generate query embedding: {e}")
@@ -507,7 +494,6 @@ class ContinuumSearchTool(Tool):
 
         precis_clause = "AND m.metadata->>'precis' IS NOT NULL AND m.metadata->>'precis' != ''" if precis_mode else ""
 
-        # Build temporal filter if specified
         temporal_clause = ""  # SQL structure component
         temporal_params = []  # Data parameters
 
@@ -580,7 +566,6 @@ class ContinuumSearchTool(Tool):
             LIMIT %s
         """
 
-        # Execute with all parameters
         # Fetch extra candidates for BM25 reranking, but cap to avoid excessive vector ops
         vector_limit = min(
             int(limit * self._config.vector_search_multiplier),
@@ -606,10 +591,8 @@ class ContinuumSearchTool(Tool):
             self.logger.error(f"Hybrid search failed: {e}")
             raise ValueError(f"Summary search failed: {str(e)}")
 
-        # Process results
         results = []
         for row in rows:
-            # Defensive metadata parsing
             metadata = row.get("metadata") or {}
             if not isinstance(metadata, dict):
                 self.logger.warning(f"Malformed metadata in segment {row.get('id')}: {type(metadata)}")
@@ -628,7 +611,6 @@ class ContinuumSearchTool(Tool):
                 for entity in entities:
                     if entity.lower() in summary_lower:
                         matched_entities.append(entity)
-                # Boost by 10% per matched entity
                 boost = 1.0 + (0.1 * len(matched_entities))
 
             result_entry = {
@@ -656,7 +638,6 @@ class ContinuumSearchTool(Tool):
         unfiltered_count = len(results)
         filtered_results = results if precis_mode else self._filter_results_by_confidence(results)
 
-        # Calculate overall confidence
         if not filtered_results:
             confidence = 0.0
             status = "no_results"
@@ -713,7 +694,6 @@ class ContinuumSearchTool(Tool):
         else:
             preview = content
 
-        # Extract first 8 chars of UUID
         full_uuid = message.get("id", "")
         short_id = full_uuid[:8] if full_uuid else ""
 
@@ -755,10 +735,8 @@ class ContinuumSearchTool(Tool):
         if len(text) <= max_chars:
             return text
 
-        # Reserve space for ellipsis
-        truncated = text[:max_chars - 2]  # Reserve 2 chars for ".."
+        truncated = text[:max_chars - 2]
 
-        # Look for sentence endings
         boundaries = [
             truncated.rfind('. '),
             truncated.rfind('.\n'),
@@ -768,11 +746,9 @@ class ContinuumSearchTool(Tool):
 
         last_boundary = max(boundaries)
 
-        # Use boundary if it's at least 60% of target length
         if last_boundary > (max_chars - 2) * 0.6:
             return text[:last_boundary + 1] + ".."
 
-        # Otherwise just cut at max length
         return truncated.rstrip() + ".."
 
     def _filter_results_by_confidence(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -796,35 +772,28 @@ class ContinuumSearchTool(Tool):
         if len(results) == 1:
             return results
 
-        # Start with the top result
         filtered = [results[0]]
         top_score = results[0]["confidence_score"]
 
-        # Check if there's a clear winner (>threshold ahead of second place)
         if len(results) > 1:
             second_score = results[1]["confidence_score"]
             if top_score - second_score > self._config.confidence_cluster_threshold:
-                # Clear winner, return only the top result
                 self.logger.debug(f"Clear winner with {top_score:.3f} confidence, {top_score - second_score:.3f} ahead")
                 return filtered
 
-        # Check how many results are within threshold of the top
         cluster_threshold = top_score - self._config.confidence_cluster_threshold
-        clustered_count = 1  # Start with top result
+        clustered_count = 1
 
-        for i in range(1, min(len(results), self._config.max_clustered_results)):  # Check up to max configured
+        for i in range(1, min(len(results), self._config.max_clustered_results)):
             if results[i]["confidence_score"] >= cluster_threshold:
                 clustered_count += 1
             else:
                 break
 
-        # Decide how many to return
         if clustered_count >= 3:
-            # Top 3 are close, return all of them
             filtered = results[:clustered_count]
             self.logger.debug(f"Returning {clustered_count} clustered results within {self._config.confidence_cluster_threshold:.1%} of top score {top_score:.3f}")
         else:
-            # Default: return top 2
             filtered = results[:min(len(results), 2)]
             second_score = f"{filtered[1]['confidence_score']:.3f}" if len(filtered) > 1 else "N/A"
             self.logger.debug(f"Returning top 2 results (scores: {filtered[0]['confidence_score']:.3f}, {second_score})")
@@ -858,15 +827,12 @@ class ContinuumSearchTool(Tool):
         Returns:
             Dict with message results within the timeframe
         """
-        # Parse timestamps
         start_ts = _parse_model_wall_time(start_time)
         end_ts = _parse_model_wall_time(end_time)
 
-        # Validate time range
         if start_ts >= end_ts:
             raise ValueError("start_time must be before end_time")
 
-        # Set pagination
         limit = max_results or 20  # More messages for detail search
         offset = (page - 1) * limit
 
@@ -904,13 +870,11 @@ class ContinuumSearchTool(Tool):
 
         rows = db.execute_query(search_sql, (query, query, start_ts, end_ts, offset, limit))
 
-        # Process results with entity boosting
         results = []
         for row in rows:
             # Normalize unbounded BM25 score to 0-1 range (matches summary search tanh normalization)
             rank = math.tanh(float(row.get("rank", 0)))
 
-            # Entity boosting
             matched_entities = []
             boost = 1.0
             if entities:
@@ -918,7 +882,6 @@ class ContinuumSearchTool(Tool):
                 for entity in entities:
                     if entity.lower() in content_lower:
                         matched_entities.append(entity)
-                # Boost by 20% per matched entity for messages
                 boost = 1.0 + (0.2 * len(matched_entities))
 
             final_rank = min(rank * boost, 1.0)
@@ -934,14 +897,11 @@ class ContinuumSearchTool(Tool):
                 "matched_entities": matched_entities
             })
 
-        # Format as message previews (includes confidence_score for filtering)
         formatted_results = [self._format_message_preview(msg, include_thinking=include_thinking) for msg in results]
 
-        # Apply smart filtering based on confidence clustering
         unfiltered_count = len(formatted_results)
         filtered_results = self._filter_results_by_confidence(formatted_results)
 
-        # Calculate overall confidence from filtered results
         if not filtered_results:
             confidence = 0.0
             status = "no_results"
@@ -1006,10 +966,8 @@ class ContinuumSearchTool(Tool):
                 "provide more characters or the full segment ID"
             )
 
-        # Find the full segment sentinel
         db = self._continuum_repo.get_user_db_client(self.user_id)
 
-        # Find segment by short ID
         segment_sql = """
             SELECT id, metadata, created_at
             FROM messages
@@ -1024,22 +982,18 @@ class ContinuumSearchTool(Tool):
             raise ValueError(f"No segment found with ID starting with '{segment_id}'")
 
         segment = rows[0]
-        # Defensive metadata parsing
         metadata = segment.get("metadata") or {}
         if not isinstance(metadata, dict):
             self.logger.warning(f"Malformed metadata in segment {segment.get('id')}: {type(metadata)}")
             metadata = {}
 
-        # Get time boundaries
         start_time = metadata.get("segment_start_time")
         end_time = metadata.get("segment_end_time")
 
         if not start_time:
-            # Fallback: use segment creation time as start
             start_time = format_utc_iso(segment["created_at"])
 
         if not end_time:
-            # Fallback: find next segment or use current time
             next_segment_sql = """
                 SELECT created_at
                 FROM messages
@@ -1054,7 +1008,6 @@ class ContinuumSearchTool(Tool):
             else:
                 end_time = format_utc_iso(utc_now())
 
-        # Use the time-bounded message search
         result = self._search_messages_in_timeframe(
             query=query,
             start_time=start_time,
@@ -1065,7 +1018,6 @@ class ContinuumSearchTool(Tool):
             include_thinking=include_thinking
         )
 
-        # Enhance result with segment information
         result["segment_info"] = {
             "segment_id": segment_id,
             "display_title": metadata.get("display_title", "Conversation segment"),
@@ -1095,16 +1047,13 @@ class ContinuumSearchTool(Tool):
         if not message_id or len(message_id) < 8:
             raise ValueError("message_id must be at least 8 characters")
 
-        # Validate direction
         if direction not in ["before", "after", "both"]:
             raise ValueError(f"direction must be 'before', 'after', or 'both', got: {direction}")
 
-        # Validate and set context count
         if context_count is None:
             context_count = self._config.default_context_window
         context_count = max(0, min(context_count, 10))
 
-        # Find the full UUID and message
         origin_message = self._find_message_by_short_id(message_id)
         if not origin_message:
             raise ValueError(f"No message found with ID starting with '{message_id}'")
@@ -1131,7 +1080,6 @@ class ContinuumSearchTool(Tool):
             "origin_message": origin_dict
         }
 
-        # Fetch context messages if requested
         if context_count > 0:
             if direction in ["before", "both"]:
                 result["context_before"] = self._fetch_context_messages(
@@ -1223,9 +1171,7 @@ class ContinuumSearchTool(Tool):
             continuum_id = origin_message["continuum_id"]
 
             if direction == "before":
-                # Scaffolding exclusions mirror continuum_repository.load_segment_messages:
-                # segment boundaries and system notifications stay out of
-                # context; real conversation stays in.
+                # Exclusion set must stay in lockstep with continuum_repository.load_segment_messages.
                 query = """
                     SELECT id, role, content, created_at, metadata
                     FROM messages
@@ -1237,9 +1183,8 @@ class ContinuumSearchTool(Tool):
                     LIMIT %s
                 """
                 rows = db.execute_query(query, (continuum_id, origin_time, count))
-                # Reverse to get chronological order
                 rows.reverse()
-            else:  # after
+            else:
                 query = """
                     SELECT id, role, content, created_at, metadata
                     FROM messages
@@ -1275,9 +1220,7 @@ class ContinuumSearchTool(Tool):
             return context
 
         except Exception:
-            # Required infrastructure: a DB/Valkey outage must propagate so the
-            # caller sees the failure -- an expand_message result that silently
-            # degrades to no context is worse than the error. Genuinely-empty
-            # query results never reach this handler.
+            # DB/Valkey outage must propagate: a context-less expand_message is
+            # worse than the error; empty query results never reach this handler.
             self.logger.exception("Failed to fetch context messages")
             raise

@@ -64,11 +64,9 @@ class FutureInfo(TypedDict):
     thread_prefix: str
 
 
-# Global registry of active thread operations
 _active_operations: Dict[int, ActiveOperation] = {}
 _operation_lock = threading.RLock()
 
-# Thread-local storage for operation context
 _thread_local = threading.local()
 
 
@@ -77,7 +75,7 @@ class ThreadMonitor:
 
     # Threshold for warning about long-running operations (seconds)
     SLOW_OPERATION_THRESHOLD = 30
-    STUCK_OPERATION_THRESHOLD = 300  # 5 minutes
+    STUCK_OPERATION_THRESHOLD = 300
 
     @classmethod
     def start_operation(cls, operation_name: str, context: Optional[Dict[str, str]] = None) -> None:
@@ -101,7 +99,6 @@ class ThreadMonitor:
                 'pid': os.getpid()
             }
 
-            # Store in thread-local for nested operations
             if not hasattr(_thread_local, 'operation_stack'):
                 _thread_local.operation_stack = []
             _thread_local.operation_stack.append(operation_name)
@@ -127,7 +124,6 @@ class ThreadMonitor:
                 op_info = _active_operations[thread_id]
                 duration = (utc_now() - op_info['start_time']).total_seconds()
 
-                # Log based on duration
                 if duration > cls.STUCK_OPERATION_THRESHOLD:
                     logger.error(
                         f"Thread {thread_name} completed STUCK operation '{op_info['operation']}' "
@@ -149,7 +145,6 @@ class ThreadMonitor:
 
                 del _active_operations[thread_id]
 
-                # Clean up thread-local stack
                 if hasattr(_thread_local, 'operation_stack'):
                     if _thread_local.operation_stack and _thread_local.operation_stack[-1] == operation_name:
                         _thread_local.operation_stack.pop()
@@ -206,7 +201,6 @@ class ThreadMonitor:
             ""
         ]
 
-        # System thread info
         process = psutil.Process()
         lines.append(f"Process ID: {process.pid}")
         lines.append(f"Thread Count: {process.num_threads()}")
@@ -214,7 +208,6 @@ class ThreadMonitor:
         lines.append(f"Memory RSS: {process.memory_info().rss / 1024 / 1024:.2f} MB")
         lines.append("")
 
-        # Active operations
         stuck_ops = cls.get_stuck_operations()
         if stuck_ops:
             lines.append(f"STUCK OPERATIONS ({len(stuck_ops)}):")
@@ -225,11 +218,10 @@ class ThreadMonitor:
                 lines.append(f"Duration: {op['duration_seconds']:.2f} seconds")
                 lines.append(f"Context: {op['context']}")
                 lines.append("Stack trace at start:")
-                for frame_line in op['stack_trace'][:10]:  # First 10 frames
+                for frame_line in op['stack_trace'][:10]:
                     lines.append(f"  {frame_line.strip()}")
                 lines.append("")
 
-        # All threads
         lines.append("ALL THREADS:")
         lines.append("-" * 40)
         for thread in threading.enumerate():
@@ -237,7 +229,6 @@ class ThreadMonitor:
             lines.append(f"  Daemon: {thread.daemon}")
             lines.append(f"  Alive: {thread.is_alive()}")
 
-            # Check if this thread has an active operation
             if thread.ident in _active_operations:
                 op = _active_operations[thread.ident]
                 duration = (utc_now() - op['start_time']).total_seconds()
@@ -264,7 +255,6 @@ def monitored_operation(operation_name: Optional[str] = None,
             context = {}
 
             if include_args:
-                # Include first few args/kwargs for context
                 context['args'] = str(args[:3]) if len(args) > 3 else str(args)
                 context['kwargs'] = str(dict(list(kwargs.items())[:3]))
 
@@ -303,7 +293,6 @@ def monitored_operation(operation_name: Optional[str] = None,
             finally:
                 ThreadMonitor.end_operation(name)
 
-        # Return appropriate wrapper based on function type
         if asyncio.iscoroutinefunction(func):
             return async_wrapper
         else:
@@ -324,7 +313,6 @@ class MonitoredThreadPoolExecutor(ThreadPoolExecutor):
         self._active_futures: Dict[Future, FutureInfo] = {}
         self._futures_lock = threading.RLock()
 
-        # Start monitoring thread
         self._monitor_thread = threading.Thread(
             target=self._monitor_futures,
             name=f"{thread_name_prefix}-monitor",
@@ -334,7 +322,6 @@ class MonitoredThreadPoolExecutor(ThreadPoolExecutor):
 
     def submit(self, fn, *args, **kwargs):
         """Submit a function with monitoring."""
-        # Wrap function with monitoring
         operation_name = f"{fn.__module__}.{fn.__name__}" if hasattr(fn, '__name__') else str(fn)
 
         @functools.wraps(fn)
@@ -350,7 +337,6 @@ class MonitoredThreadPoolExecutor(ThreadPoolExecutor):
 
         future = super().submit(monitored_fn, *args, **kwargs)
 
-        # Track the future
         with self._futures_lock:
             self._active_futures[future] = {
                 'operation': operation_name,
@@ -359,7 +345,6 @@ class MonitoredThreadPoolExecutor(ThreadPoolExecutor):
                 'thread_prefix': self._thread_name_prefix
             }
 
-        # Clean up when done
         def cleanup(_):
             with self._futures_lock:
                 if future in self._active_futures:
@@ -378,7 +363,7 @@ class MonitoredThreadPoolExecutor(ThreadPoolExecutor):
         """Monitor thread that checks for stuck futures."""
         while True:
             try:
-                time.sleep(60)  # Check every minute
+                time.sleep(60)
                 current_time = utc_now()
 
                 with self._futures_lock:
@@ -395,7 +380,6 @@ class MonitoredThreadPoolExecutor(ThreadPoolExecutor):
                 logger.error(f"Error in thread monitor: {e}")
 
 
-# Periodic monitoring task
 def start_periodic_monitoring(interval_seconds: int = 300):
     """
     Start a background thread that periodically logs thread state.
@@ -416,7 +400,6 @@ def start_periodic_monitoring(interval_seconds: int = 300):
                         extra={'stuck_operations': stuck_ops}
                     )
 
-                    # Dump full state for debugging
                     dump = ThreadMonitor.dump_thread_states()
                     logger.error(f"Thread state dump:\n{dump}")
 
@@ -434,14 +417,13 @@ def start_periodic_monitoring(interval_seconds: int = 300):
                     except OSError as e:
                         logger.warning(f"Could not write thread dump to file: {e}")
 
-                # Log active operation summary
                 active_ops = ThreadMonitor.get_active_operations()
                 if active_ops:
                     logger.info(
                         f"Thread monitor: {len(active_ops)} active operations",
                         extra={'active_count': len(active_ops)}
                     )
-                    for op in active_ops[:5]:  # Log top 5 longest running
+                    for op in active_ops[:5]:
                         if op['duration_seconds'] > 10:
                             logger.info(
                                 f"  - {op['operation']}: {op['duration_seconds']:.1f}s "

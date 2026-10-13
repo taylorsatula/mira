@@ -35,13 +35,11 @@ from .exceptions import AuthError
 logger = logging.getLogger(__name__)
 
 
-# WebAuthn origin/RP-ID mismatches compare CLIENT data against SERVER
-# configuration (self.origin comes from config.APP_URL and self.rp_id is
-# derived from it): with a misconfigured APP_URL every ceremony fails this
-# way, so classifying them as 400 invalid_credential masks a server fault
-# as client error. Matched on the library's message text (stable in the 2.x
-# line); if the wording ever drifts, classification falls back to
-# invalid_credential — the pre-narrowing behavior, never a crash.
+# Origin/RP-ID mismatches compare CLIENT data to SERVER config (self.origin =
+# config.APP_URL, self.rp_id derived from it): under a misconfigured APP_URL
+# every ceremony fails this way, so a 400 invalid_credential masks a server
+# fault as client error. Matched on the library's message text (stable across
+# webauthn 2.x); wording drift falls back to invalid_credential, never a crash.
 def _is_server_config_validation_error(e: WebAuthnException) -> bool:
     """True when the failure is a server origin/RP-ID misconfiguration."""
     msg = str(e)
@@ -57,15 +55,13 @@ class WebAuthnService:
         self.rp_name = "MIRA"
         self.origin = config.APP_URL
         self.challenge_prefix = "webauthn_challenge:"
-        self.challenge_ttl = 300  # 5 minutes
+        self.challenge_ttl = 300
 
     def _get_rp_id(self) -> str:
         """Extract RP ID from app URL."""
-        # For development, use localhost
         if "localhost" in config.APP_URL or "127.0.0.1" in config.APP_URL:
             return "localhost"
 
-        # For production, extract domain
         from urllib.parse import urlparse
         parsed = urlparse(config.APP_URL)
         if not parsed.hostname:
@@ -129,14 +125,12 @@ class WebAuthnService:
         """Generate WebAuthn registration options."""
         try:
             user_id = get_current_user_id()
-            # Check if user exists
             user = self.db.get_user_by_id(user_id)
             if not user:
                 raise AuthError("user_not_found", "User not found")
 
-            # Get existing credentials to exclude. Credentials are keyed by
-            # their base64url credential ID — the exact encoding browsers send
-            # back in ceremonies.
+            # Credentials are keyed by their base64url credential ID — the exact
+            # encoding browsers send back in ceremonies.
             existing_creds = []
             if user.webauthn_credentials:
                 for cred_id, cred_data in user.webauthn_credentials.items():
@@ -147,7 +141,6 @@ class WebAuthnService:
                         )
                     )
 
-            # Generate registration options
             options = generate_registration_options(
                 rp_id=self.rp_id,
                 rp_name=self.rp_name,
@@ -162,10 +155,8 @@ class WebAuthnService:
                 exclude_credentials=existing_creds
             )
 
-            # Store challenge
             self._store_challenge(options.challenge, "register")
 
-            # Convert to JSON-serializable format
             return json.loads(options_to_json(options))
 
         except AuthError:
@@ -181,12 +172,10 @@ class WebAuthnService:
         """Verify registration response and store credential."""
         try:
             user_id = get_current_user_id()
-            # Get stored challenge
             expected_challenge = self._get_challenge("register")
             if not expected_challenge:
                 raise AuthError("invalid_challenge", "Challenge expired or not found")
 
-            # Verify registration
             verification = verify_registration_response(
                 credential=credential_json,
                 expected_challenge=expected_challenge,
@@ -208,10 +197,8 @@ class WebAuthnService:
                 "name": f"Biometric Device {credential_id[:8]}"
             }
 
-            # Add the credential with a single guarded UPDATE: zero rows means
-            # the user vanished or this credential ID is already registered —
-            # either way the registration did not land and must not report
-            # success.
+            # Zero rows means the user vanished or this credential ID is
+            # already registered — must not report success.
             if not self.db.add_webauthn_credential(
                 user_id, credential_data["credential_id"], credential_data
             ):
@@ -250,17 +237,14 @@ class WebAuthnService:
     def generate_authentication_options(self, email: str) -> Dict[str, Any]:
         """Generate WebAuthn authentication options."""
         try:
-            # Get user by email
             user = self.db.get_user_by_email(email)
             if not user:
                 raise AuthError("user_not_found", "User not found")
 
-            # Get user's credentials
             user_creds = user.webauthn_credentials or {}
             if not user_creds:
                 raise AuthError("no_credentials", "No biometric credentials registered")
 
-            # Build allowed credentials list
             allow_credentials = []
             for cred_id, cred_data in user_creds.items():
                 allow_credentials.append(
@@ -270,7 +254,6 @@ class WebAuthnService:
                     )
                 )
 
-            # Generate authentication options
             options = generate_authentication_options(
                 rp_id=self.rp_id,
                 allow_credentials=allow_credentials,
@@ -281,7 +264,6 @@ class WebAuthnService:
             # before request context exists.
             self._store_challenge(options.challenge, "authenticate", str(user.id))
 
-            # Convert to JSON-serializable format
             return json.loads(options_to_json(options))
 
         except AuthError:
@@ -344,7 +326,6 @@ class WebAuthnService:
         Returns None when the challenge expired or never existed (legitimate
         cases). Raises on infrastructure failure.
         """
-        # Challenge IDs are hex; reject other shapes before building a key.
         try:
             bytes.fromhex(challenge_id)
         except ValueError:
@@ -405,21 +386,18 @@ class WebAuthnService:
     ) -> Dict[str, Any]:
         """Verify authentication response."""
         try:
-            # Get user by email
             user = self.db.get_user_by_email(email)
             if not user:
                 raise AuthError("user_not_found", "User not found")
 
             user_id = str(user.id)
 
-            # Get stored challenge
             expected_challenge = self._get_challenge("authenticate", user_id)
             if not expected_challenge:
                 raise AuthError("invalid_challenge", "Challenge expired or not found")
 
             self._verify_credential_response(user, credential_json, expected_challenge)
 
-            # Update last login
             self.db.update_user_login(user_id)
 
             return {
@@ -478,7 +456,6 @@ class WebAuthnService:
 
             self._verify_credential_response(user, credential_json, expected_challenge)
 
-            # Update last login
             self.db.update_user_login(user_id)
 
             return {
@@ -508,15 +485,12 @@ class WebAuthnService:
         """Remove a WebAuthn credential."""
         try:
             user_id = get_current_user_id()
-            # Get current user data
             user = self.db.get_user_by_id(user_id)
             if not user:
                 raise AuthError("user_not_found", "User not found")
 
-            # Remove the credential with a single guarded UPDATE: zero rows
-            # means the user vanished or this credential ID is no longer
-            # registered — either way the removal did not land and must not
-            # report success.
+            # Zero rows means the user vanished or this credential ID is no
+            # longer registered — must not report success.
             if not self.db.remove_webauthn_credential(user_id, credential_id):
                 raise AuthError("credential_not_found", "Credential not found")
 

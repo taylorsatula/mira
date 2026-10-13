@@ -17,7 +17,6 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# Compression configuration (hardcoded - these are known constraints)
 INFERENCE_MAX_DIMENSION = 1568  # API auto-resize ceiling — no point capping below this
 STORAGE_MAX_DIMENSION = 512     # Aggressive compression for multi-turn context
 STORAGE_WEBP_QUALITY = 75       # WebP quality for storage tier
@@ -27,7 +26,7 @@ STORAGE_WEBP_QUALITY = 75       # WebP quality for storage tier
 class CompressedImage:
     """Result of two-tier image compression."""
 
-    inference_base64: str       # 1200px max, original format
+    inference_base64: str       # 1568px max (INFERENCE_MAX_DIMENSION), original format
     inference_media_type: str   # Preserves original format
     storage_base64: str         # 512px max, WebP
     storage_media_type: str     # Always "image/webp"
@@ -60,24 +59,19 @@ def compress_image(image_bytes: bytes, original_media_type: str) -> CompressedIm
     # Handle animated GIFs - extract first frame only
     if getattr(img, 'is_animated', False):
         img.seek(0)
-        # Convert to static image by copying the first frame
         img = img.copy()
         logger.debug("Animated GIF detected - extracted first frame only")
 
-    # Determine output format for inference tier (preserve original)
     inference_format = _get_pil_format(original_media_type)
 
-    # Create inference tier (1200px max, preserve format)
     inference_img = _resize_to_max_dimension(img, INFERENCE_MAX_DIMENSION)
     inference_bytes = _encode_image(inference_img, inference_format, original_media_type)
     inference_base64 = base64.b64encode(inference_bytes).decode('utf-8')
 
-    # Create storage tier (512px max, always WebP)
     storage_img = _resize_to_max_dimension(img, STORAGE_MAX_DIMENSION)
 
     # Convert to RGB for WebP (removes alpha channel if present)
     if storage_img.mode in ('RGBA', 'LA', 'P'):
-        # Create white background for transparency
         background = Image.new('RGB', storage_img.size, (255, 255, 255))
         if storage_img.mode == 'P':
             storage_img = storage_img.convert('RGBA')
@@ -125,7 +119,7 @@ def _resize_to_max_dimension(img: Image.Image, max_dim: int) -> Image.Image:
     width, height = img.size
 
     if width <= max_dim and height <= max_dim:
-        return img.copy()  # No resize needed
+        return img.copy()
 
     if width > height:
         new_width = max_dim
@@ -165,7 +159,6 @@ def _encode_image(
         save_kwargs['quality'] = quality
         save_kwargs['method'] = 4  # Balanced compression speed
     elif fmt == "GIF":
-        # GIF has limited options
         pass
 
     img.save(buffer, format=fmt, **save_kwargs)

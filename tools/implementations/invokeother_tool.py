@@ -43,7 +43,6 @@ class InvokeOtherTool(Tool):
         from tools.repo import ESSENTIAL_TOOLS
         self.essential_tools = ESSENTIAL_TOOLS
 
-        # Build schema with tool catalog baked into description + enum
         catalog = self._build_catalog()
         self.tool_schema = self._build_schema(catalog)
 
@@ -60,7 +59,6 @@ class InvokeOtherTool(Tool):
             if tool_name in self.tool_repo.gated_tools:
                 continue
 
-            # Skip config-disabled tools
             tool_config = getattr(config, tool_name, None)
             if tool_config and not getattr(tool_config, 'enabled', True):
                 continue
@@ -78,7 +76,6 @@ class InvokeOtherTool(Tool):
         """Build tool_schema with dual load parameters and tool enum."""
         tool_names = sorted(catalog.keys())
 
-        # Build description with inline catalog
         desc_parts = ["Load additional tools on demand.\n\nAvailable tools:"]
         for name in tool_names:
             summary = catalog[name].split('\n')[0]
@@ -130,7 +127,6 @@ class InvokeOtherTool(Tool):
         loaded = []
         errors = []
 
-        # Process ephemeral tools
         for tool_name in ephemeral:
             result = self._enable_tool(tool_name)
             if result is None:
@@ -138,7 +134,6 @@ class InvokeOtherTool(Tool):
             else:
                 errors.append(result)
 
-        # Process pinned tools — enable + add to pinned set
         for tool_name in pinned:
             result = self._enable_tool(tool_name)
             if result is None:
@@ -164,14 +159,12 @@ class InvokeOtherTool(Tool):
             if tool_name not in self.tool_repo.list_all_tools():
                 return f"{tool_name} not found"
 
-            # Check config-disabled
             from config import config
             tool_config = getattr(config, tool_name, None)
             if tool_config and not getattr(tool_config, 'enabled', True):
                 logger.warning(f"Attempted to load disabled tool: {tool_name}")
                 return f"{tool_name} is disabled in config"
 
-            # Check gated tool availability
             if tool_name in self.tool_repo.gated_tools:
                 try:
                     tool = self.tool_repo.get_tool(tool_name)
@@ -181,7 +174,6 @@ class InvokeOtherTool(Tool):
                     logger.warning(f"Gated tool availability check failed for {tool_name}: {e}")
                     return f"{tool_name}: availability check failed"
 
-            # Already enabled — idempotent success
             if self.tool_repo.is_tool_enabled(tool_name):
                 return None
 

@@ -22,7 +22,6 @@ from config import config
 
 logger = logging.getLogger(__name__)
 
-# Module-level singleton instance
 _shared_session_manager = None
 _singleton_lock = threading.RLock()
 
@@ -41,7 +40,6 @@ def get_shared_session_manager() -> 'LTMemorySessionManager':
     global _shared_session_manager
     if _shared_session_manager is None:
         with _singleton_lock:
-            # Double-check pattern for thread safety
             if _shared_session_manager is None:
                 logger.info("Creating shared session manager singleton")
                 _shared_session_manager = LTMemorySessionManager()
@@ -60,7 +58,6 @@ class LTMemorySessionManager:
         """Initialize session manager with cleanup registration."""
         self._pools: Dict[str, ConnectionPool] = {}
         self._lock = threading.RLock()
-        # Register cleanup to prevent connection leaks
         atexit.register(self._cleanup_all_pools)
     
     def get_session(self, user_id: str) -> 'LTMemorySession':
@@ -113,7 +110,6 @@ class LTMemorySessionManager:
                 try:
                     from clients.vault_client import get_database_url
 
-                    # Determine if this is an admin pool
                     is_admin = database_name == 'mira_service_admin'
                     actual_db_name = 'mira_service'  # Both connect to same database
 
@@ -121,15 +117,14 @@ class LTMemorySessionManager:
                         get_database_url(actual_db_name, admin=is_admin)
                     )
 
-                    # Create pool with reasonable size limits
-                    # Industry best practice: keep pools small, let them queue
+                    # Keep pools small; let callers queue.
                     pool = ConnectionPool(
                         conninfo=conninfo,
                         min_size=config.database.session_pool_min,
                         max_size=config.database.session_pool_max,
                         timeout=30,
-                        max_lifetime=3600,  # Recycle connections after 1 hour
-                        max_idle=300,       # Close idle connections after 5 minutes
+                        max_lifetime=3600,
+                        max_idle=300,
                         check=ConnectionPool.check_connection,
                         # Register pgvector types once per physical connection
                         # (pool calls this at connection creation, not per session)
@@ -165,8 +160,7 @@ class LTMemorySessionManager:
         stats = {}
         with self._lock:
             for db_name, pool in self._pools.items():
-                # Note: psycopg3 pools don't expose detailed stats
-                # but we can at least show configuration
+                # psycopg3 pools don't expose detailed stats; show configuration only
                 stats[db_name] = {
                     "min_size": getattr(pool, 'min_size', 'unknown'),
                     "max_size": getattr(pool, 'max_size', 'unknown'),
@@ -221,7 +215,6 @@ class LTMemorySession:
 
         try:
             if exc_type:
-                # Rollback on exception regardless of transaction depth
                 self._conn.rollback()
             else:
                 # Always commit on success (matches AdminSession behavior)
@@ -254,10 +247,8 @@ class LTMemorySession:
         Supports nested transactions using savepoints for inner transactions.
         """
         if self._transaction_depth == 0:
-            # Start new top-level transaction (PostgreSQL does this automatically)
             pass
         else:
-            # Create savepoint for nested transaction
             savepoint_name = f"sp_{self._transaction_depth}"
             self._execute(f"SAVEPOINT {savepoint_name}")
         
@@ -267,19 +258,15 @@ class LTMemorySession:
             yield
             
             if self._transaction_depth == 1:
-                # Commit top-level transaction
                 self._conn.commit()
             else:
-                # Release savepoint for nested transaction
                 savepoint_name = f"sp_{self._transaction_depth - 1}"
                 self._execute(f"RELEASE SAVEPOINT {savepoint_name}")
                 
         except Exception:
             if self._transaction_depth == 1:
-                # Rollback top-level transaction
                 self._conn.rollback()
             else:
-                # Rollback to savepoint for nested transaction
                 savepoint_name = f"sp_{self._transaction_depth - 1}"
                 self._execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
             raise
@@ -377,8 +364,8 @@ class LTMemorySession:
         """
         try:
             start_time = time.time()
-            timeout = 30  # seconds
-            retry_interval = 0.1  # seconds
+            timeout = 30
+            retry_interval = 0.1
             
             while time.time() - start_time < timeout:
                 try:
@@ -386,15 +373,12 @@ class LTMemorySession:
                     if conn and not conn.closed:
                         return conn
                     elif conn and conn.closed:
-                        # Return bad connection and try again
                         self.pool.putconn(conn)
                 except PoolTimeout:
-                    # Pool exhausted, wait and retry
                     pass
 
                 time.sleep(retry_interval)
 
-            # Timeout reached
             logger.error(f"Database connection timeout after {timeout}s - pool may be exhausted")
             raise ValueError(f"Database connection timeout after {timeout}s - pool may be exhausted")
         except Exception as e:
@@ -462,16 +446,12 @@ class AdminSession:
 
     def _setup_connection(self):
         """Setup connection; pgvector is registered by the pool configure hook."""
-        # pgvector registration happens once per physical connection via the
-        # pool's configure hook.
-        #
-        # Don't set app.current_user_id: this pool authenticates as the
-        # mira_admin role, which was provisioned with BYPASSRLS
-        # (deploy/postgresql.sh), so RLS policies never apply to these
-        # connections and cross-user admin queries are allowed at the
-        # PostgreSQL level. RLS policies are scoped TO mira_dbuser and
-        # fail closed on missing/NULL context (no rows), so leaving the
-        # setting unset is safe here only because of the role attribute.
+        # Don't set app.current_user_id: this pool authenticates as mira_admin,
+        # provisioned BYPASSRLS (deploy/postgresql.sh), so RLS policies never
+        # apply and cross-user admin queries are allowed at the PostgreSQL level.
+        # Policies are scoped TO mira_dbuser and fail closed on missing/NULL
+        # context, so leaving the setting unset is safe only because of the role
+        # attribute.
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Exit session context - return connection."""

@@ -124,7 +124,6 @@ class AccountGarbageCollectionService:
             }
 
         except Exception as e:
-            # Log full exception before re-raising
             logger.error(
                 f"Account GC failed: {type(e).__name__}: {e}",
                 exc_info=True
@@ -132,7 +131,6 @@ class AccountGarbageCollectionService:
             raise
 
 
-# Singleton instance
 _account_gc_service = None
 
 

@@ -15,7 +15,6 @@ from utils.userdata_manager import UserDataManager
 
 logger = logging.getLogger(__name__)
 
-# Module-level state for lazy-loaded prompts
 _system_prompt: Optional[str] = None
 _user_template: Optional[str] = None
 _llm_provider: Optional[LLMProvider] = None
@@ -59,7 +58,6 @@ def update_section_summary(
         section_header: Header of the section (used in summary prompt)
         content: Content to summarize
     """
-    # Skip empty content
     if not content or not content.strip():
         return
 
@@ -67,7 +65,7 @@ def update_section_summary(
         summary = _generate_summary(section_header, content)
         _store_summary(db, section_id, summary)
     except Exception as e:
-        # Log and continue - don't block the save operation
+        # Summary failure is non-fatal: never block the section save.
         logger.warning(f"Failed to generate summary for section '{section_header}': {e}")
 
 

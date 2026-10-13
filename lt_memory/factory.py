@@ -21,7 +21,6 @@ from utils.database_session_manager import LTMemorySessionManager
 
 logger = logging.getLogger(__name__)
 
-# Singleton instance
 _lt_memory_factory_instance: Optional['LTMemoryFactory'] = None
 
 
@@ -60,7 +59,6 @@ class LTMemoryFactory:
         # Track initialization order for reverse cleanup
         self._service_init_order = []
 
-        # Build dependency graph in order
         self._init_services()
 
         logger.info("LTMemoryFactory initialization complete")
@@ -68,7 +66,6 @@ class LTMemoryFactory:
     def _init_services(self) -> None:
         """Initialize all services in dependency order, tracking for reverse cleanup."""
         try:
-            # Layer 1: Database access (no dependencies)
             logger.debug("Initializing LTMemoryDB...")
             self.db = LTMemoryDB(self._session_manager)
             self._service_init_order.append(self.db)
@@ -76,7 +73,6 @@ class LTMemoryFactory:
             raise RuntimeError(f"Failed to initialize LTMemoryDB: {e}") from e
 
         try:
-            # Layer 2: Vector operations (depends on db)
             logger.debug("Initializing VectorOps...")
             self.vector_ops = VectorOps(
                 embeddings_provider=self._embeddings_provider,
@@ -87,7 +83,6 @@ class LTMemoryFactory:
             raise RuntimeError(f"Failed to initialize VectorOps: {e}") from e
 
         try:
-            # Layer 3: Core services (depend on db + vector_ops)
             logger.debug("Initializing LinkingService...")
             self.linking = LinkingService(
                 vector_ops=self.vector_ops,
@@ -98,7 +93,6 @@ class LTMemoryFactory:
             raise RuntimeError(f"Failed to initialize LinkingService: {e}") from e
 
         try:
-            # Layer 3.5: New processing components (depend on db + vector_ops)
             logger.debug("Initializing MemoryProcessor...")
             self.memory_processor = MemoryProcessor(
                 vector_ops=self.vector_ops
@@ -170,7 +164,6 @@ class LTMemoryFactory:
         """
         logger.info("Cleaning up LTMemoryFactory")
 
-        # Cleanup in reverse initialization order
         for service in reversed(self._service_init_order):
             if service and hasattr(service, 'cleanup'):
                 try:

@@ -189,7 +189,6 @@ class PunchclockTool(Tool):
     def __init__(self):
         super().__init__()
 
-    # Public API -----------------------------------------------------------------
     def run(self, operation: str, **params: Any) -> Dict[str, Any]:
         """Execute punchclock operations."""
 
@@ -212,18 +211,15 @@ class PunchclockTool(Tool):
 
         raise ValueError(f"Unsupported operation '{operation}'")
 
-    # Parameter helpers ----------------------------------------------------------
     def _normalize_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
         payload: Dict[str, Any] = {}
         payload.update(params)
 
-        # Accept `time` instead of start_time for punch_in inputs
         if "time" in payload and "start_time" not in payload:
             payload["start_time"] = payload["time"]
 
         return payload
 
-    # Time helpers ---------------------------------------------------------------
     def _parse_time_input(self, time_input: Optional[str]) -> datetime:
         if time_input is None or (isinstance(time_input, str) and not time_input.strip()):
             return utc_now()
@@ -241,7 +237,6 @@ class PunchclockTool(Tool):
                 return utc_now() + delta
             if sign == "-" or value.endswith("ago"):
                 return utc_now() - delta
-            # Default to future if sign omitted but phrase says "ago"
             return utc_now() + delta
 
         try:
@@ -308,7 +303,6 @@ class PunchclockTool(Tool):
             parts.append(f"{secs}s")
         return " ".join(parts)
 
-    # State helpers --------------------------------------------------------------
     def _get_session(self, session_id: str) -> Dict[str, Any]:
         session = get_punchclock_session(session_id)
         if not session:
@@ -348,7 +342,6 @@ class PunchclockTool(Tool):
 
         return serialized
 
-    # Handlers ------------------------------------------------------------------
     def _handle_punch_in(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         label = payload.get("label")
         if not label or not str(label).strip():

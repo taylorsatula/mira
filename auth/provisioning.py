@@ -31,11 +31,10 @@ from utils.userdata_manager import clear_manager_cache
 
 logger = logging.getLogger(__name__)
 
-# Anchored to the project root rather than the process working directory, matching the
-# store this teardown removes (utils/userdata_manager.py:86-92). A CWD-relative
-# "data/users" would delete the wrong directory under any supervisor whose
-# WorkingDirectory is not the checkout. Path arithmetic only — nothing is created or
-# stat'd at import.
+# Anchored to the project root, matching `UserDataManager.base_dir`
+# (utils/userdata_manager.py), which builds data/users/<id> the same way. A CWD-relative
+# "data/users" would delete the wrong tree under any supervisor whose WorkingDirectory
+# is not the checkout. Path arithmetic only: nothing created or stat'd at import.
 DATA_USERS_ROOT = Path(__file__).resolve().parent.parent / "data" / "users"
 
 

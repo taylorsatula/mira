@@ -34,7 +34,6 @@ class TimeManager(EventAwareTrinket):
         user_tz = get_user_preferences().timezone
         local_time = convert_from_utc(current_time, user_tz)
         
-        # Format with day of week and prettier display
         day_of_week = local_time.strftime('%A').upper()
         date_part = local_time.strftime('%B %d, %Y').upper()
         time_part = strftime_no_pad(local_time, '%-I:%M %p').upper()

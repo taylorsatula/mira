@@ -84,7 +84,6 @@ class LatticeClient:
                 response.raise_for_status()
                 result = response.json()
 
-                # Log successful cross-boundary federation event
                 logger.info(f"Queued federated message: {from_address} → {to_address}")
 
                 return result
@@ -122,7 +121,6 @@ class LatticeClient:
 
 
 
-# Global singleton instance
 _lattice_client: Optional[LatticeClient] = None
 
 

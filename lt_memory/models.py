@@ -11,25 +11,20 @@ from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
-# Valid relationship types for memory linking
 # Used across extraction, linking, and processing modules
 VALID_RELATIONSHIP_TYPES = frozenset({
     "corroborates", "conflicts", "supersedes", "refines",
     "precedes", "contextualizes", "exemplifies", "null"
 })
 
-# Type aliases for Literal-validated fields
 RelationshipType = Literal[
     "corroborates", "conflicts", "supersedes", "refines",
     "precedes", "contextualizes", "exemplifies", "null"
 ]
 
 
-# ============================================================================
 # Shared TypedDicts — cross-file structures stored in JSONB or returned by
 # multiple modules. File-local types stay in their respective files.
-# ============================================================================
-
 class MemoryLinkEntry(TypedDict):
     """Entry in Memory.inbound_links / outbound_links JSONB arrays."""
     uuid: str
@@ -37,7 +32,6 @@ class MemoryLinkEntry(TypedDict):
     reasoning: str
     created_at: str
     extraction_bond: NotRequired[str]
-
 
 
 class EntityLinkEntry(TypedDict):
@@ -174,14 +168,13 @@ class Memory(BaseModel):
     activity_days_at_creation: Optional[int] = None
     activity_days_at_last_access: Optional[int] = None
 
-    # Annotations for manual notes/context
     annotations: List[AnnotationEntry] = Field(
         default_factory=list,
         description="Contextual notes: [{text, created_at, source}]"
     )
 
     # Source segment for context exploration
-    source_segment_id: Optional[UUID] = None  # Segment this memory was extracted from
+    source_segment_id: Optional[UUID] = None
 
     # Transient field populated by similarity search queries
     similarity_score: Optional[float] = None
@@ -211,11 +204,10 @@ class Memory(BaseModel):
         return v
 
 
-
 class ExtractionRef(TypedDict):
     """Reference to existing memory with extraction-time bond descriptor."""
     id: str       # Full UUID (after short-ID remapping)
-    bond: str     # 3-word relationship descriptor
+    bond: str
 
 
 class ExtractedMemory(BaseModel):
@@ -235,7 +227,7 @@ class ExtractedMemory(BaseModel):
     )
 
     # Source segment for context exploration
-    source_segment_id: Optional[UUID] = None  # Segment this memory was extracted from
+    source_segment_id: Optional[UUID] = None
 
     @field_validator('happens_at', 'expires_at', mode='after')
     @classmethod

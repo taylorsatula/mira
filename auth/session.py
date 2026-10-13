@@ -52,10 +52,8 @@ class SessionManager:
             valkey = get_valkey()
             session_token = self._generate_session_token()
 
-            # Extract user_id from UserRecord (Pydantic model)
             user_id = str(user_data.id)
 
-            # Use provided timeouts or defaults
             idle = idle_timeout if idle_timeout is not None else config.SESSION_IDLE_TIMEOUT
             max_life = max_lifetime if max_lifetime is not None else config.SESSION_MAX_LIFETIME
 
@@ -76,10 +74,11 @@ class SessionManager:
                 "max_expiry": (utc_now() + timedelta(seconds=max_life)).isoformat()
             }
 
-            # Optional additional metadata (e.g., API token markers)
             if extra and isinstance(extra, dict):
+                # Full overwrite by design: any key in `extra` replaces the field
+                # wholesale — extend the target list deliberately; core session
+                # fields are set above, not here.
                 for k, v in extra.items():
-                    # Avoid overwriting core fields unless explicit
                     session_data[k] = v
 
             key = self._session_key(session_token)
@@ -123,25 +122,19 @@ class SessionManager:
                 valkey.delete(self._csrf_key(session_token))
                 return None
 
-        # Check max lifetime
         max_expiry = session_data.get("max_expiry")
         if max_expiry:
             if parse_utc_time_string(max_expiry) < utc_now():
-                # Session exceeded max lifetime
                 valkey.delete(key)
                 valkey.delete(self._csrf_key(session_token))
                 return None
 
         if extend_activity:
-            # NOTE: The GET above followed by this
-            # unconditional SETEX is a non-atomic read-then-extend; a validate
-            # landing in a revoke window could in principle resurrect a revoked
-            # session. This race is unreachable at the current deployment shape:
-            # one worker per user (api_server workers=1), so revoke and extend are
-            # never concurrent for the same session. The unconditional extend is
-            # deliberate. Revisit an atomic extend (Lua/WATCH) only if a
-            # multi-worker deployment is introduced.
-            # Update last activity and extend TTL
+            # Unconditional extend is deliberate: GET-then-SETEX is non-atomic, so a
+            # revoke landing in the window could resurrect a revoked session. Unreachable
+            # at one worker per user (api_server workers=1) — revoke and extend never
+            # concurrent for one session. Revisit an atomic extend (Lua/WATCH) on a
+            # multi-worker deployment.
             session_data["last_activity"] = utc_now().isoformat()
             valkey.json_set_with_expiry(
                 key,
@@ -159,7 +152,6 @@ class SessionManager:
             key = self._session_key(session_token)
             deleted = valkey.delete(key)
 
-            # Also delete associated CSRF token if any
             csrf_key = self._csrf_key(session_token)
             valkey.delete(csrf_key)
 
@@ -182,7 +174,6 @@ class SessionManager:
 
         try:
             while True:
-                # Scan for session keys
                 cursor, keys = valkey.scan(
                     cursor,
                     match=f"{self.key_prefix}*",
@@ -190,7 +181,6 @@ class SessionManager:
                 )
 
                 for key in keys:
-                    # Check if session belongs to user
                     session_data_list = valkey.json_get(key, "$")
                     if (session_data_list and len(session_data_list) > 0 and
                         session_data_list[0].get("user_id") == user_id):
@@ -198,7 +188,6 @@ class SessionManager:
                         if valkey.delete(key):
                             revoked_count += 1
 
-                            # Also delete CSRF token
                             session_digest = key.replace(self.key_prefix, "", 1)
                             csrf_key = f"{self.csrf_prefix}{session_digest}"
                             valkey.delete(csrf_key)

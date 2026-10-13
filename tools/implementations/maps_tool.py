@@ -17,16 +17,13 @@ from tools.repo import Tool
 from tools.registry import registry
 from utils import nominatim_client
 
-# Define configuration class for MapsTool
 class MapsToolConfig(BaseModel):
     """Configuration for the maps_tool."""
     enabled: bool = Field(default=True, description="Whether this tool is enabled by default")
 
-# Register with registry
 registry.register("maps_tool", MapsToolConfig)
 
 
-# --- Input Models ---
 
 class GeocodeInput(BaseModel):
     """Input for geocode operation."""
@@ -66,7 +63,6 @@ class CalculateDistanceInput(BaseModel):
     lng2: float = Field(..., ge=-180, le=180, description="Second point longitude")
 
 
-# --- Tool Implementation ---
 
 class MapsTool(Tool):
     """
@@ -184,14 +180,10 @@ class MapsTool(Tool):
     @staticmethod
     def _process_nominatim_result(result: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize a Nominatim result dict into the tool's output shape."""
-        # Security note: OSM/map-provider
-        # response text (display_name, tags, etc.) is deliberately returned
-        # unwrapped. These responses come from deeply trusted map providers
-        # (the configured provider surface: Nominatim/Overpass), and the
-        # exploit path was assessed as very implausible. The wrap_untrusted
-        # boundary used elsewhere (e.g. pager_tool) was considered and
-        # deliberately not applied here — do not add the wrapper without
-        # revisiting that trust decision.
+        # DECLINED-ALTERNATIVE: map-provider response text (display_name, tags,
+        # etc.) is deliberately returned unwrapped — deeply trusted provider
+        # surface, exploit path assessed as very implausible. Do not add the
+        # wrap_untrusted boundary without revisiting this trust decision.
         processed = {
             "formatted_address": result.get("display_name", ""),
             "place_id": nominatim_client.osm_place_id(result.get("osm_type", ""), result.get("osm_id")),

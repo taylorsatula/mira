@@ -243,9 +243,7 @@ class ValkeyMessageCache:
         messages_key = self._get_key(user_id)
         epoch_key = self._get_epoch_key(user_id)
 
-        # One atomic operation: no in-flight writer holding the pre-collapse
-        # epoch can land its stale cache write between the delete and the
-        # epoch bump.
+        # One atomic op: no in-flight writer holding the pre-collapse epoch can land a stale write between the delete and the epoch bump.
         deleted_count, _ = self.valkey.delete_and_increment(messages_key, epoch_key)
 
         if deleted_count:

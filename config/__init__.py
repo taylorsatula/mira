@@ -21,11 +21,8 @@ Usage:
     enabled = config.web_tool.enabled
 """
 
-# First, initialize the registry (which has no dependencies)
 from tools.registry import registry
 
-# Then, import the configuration system
 from config.config_manager import AppConfig, config
 
-# Export the public interface
 __all__ = ["config", "AppConfig", "registry"]

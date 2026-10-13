@@ -36,12 +36,10 @@ if TYPE_CHECKING:
 # prices openly. A hosted install with a real billing backend will have
 # populated `usage_pricing` rows and never hit this fallback.
 FALLBACK_PRICES: Dict[str, Dict[str, float]] = {
-    # Anthropic Claude
     "claude-opus-4-6":           {"input": 15.00, "output": 75.00, "cache_read": 1.50,  "cache_write": 18.75},
     "claude-sonnet-4-6":         {"input":  3.00, "output": 15.00, "cache_read": 0.30,  "cache_write":  3.75},
     "claude-haiku-4-5":          {"input":  1.00, "output":  5.00, "cache_read": 0.10,  "cache_write":  1.25},
     "claude-haiku-4-5-20251001": {"input":  1.00, "output":  5.00, "cache_read": 0.10,  "cache_write":  1.25},
-    # Groq (subcortical)
     "qwen/qwen3.6-27b":          {"input":  0.29, "output":  0.39, "cache_read": 0.0,   "cache_write":  0.0},
 }
 

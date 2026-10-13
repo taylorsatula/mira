@@ -59,17 +59,12 @@ class WorkingMemory:
         self._current_continuum_ids: Dict[str, str] = {}
         self._portrait_cache: dict[str, str] = {}
 
-        # Subscribe to core events
-        # System prompt composition request
         self.event_bus.subscribe('ComposeSystemPromptEvent', self._handle_compose_prompt)
         
-        # Trinket update routing
         self.event_bus.subscribe('UpdateTrinketEvent', self._handle_update_trinket)
         
-        # Trinket content collection
         self.event_bus.subscribe('TrinketContentEvent', self._handle_trinket_content)
 
-        # Centralized segment collapse flush
         self.event_bus.subscribe('SegmentCollapsedEvent', self._flush_stateful_trinkets)
 
         logger.debug("Subscribed to working memory events")
@@ -95,11 +90,10 @@ class WorkingMemory:
         from cns.core.events import UpdateTrinketEvent, SystemPromptComposedEvent
 
         with _compose_lock:
-            # Store context for future trinket updates (per user: process-global
-            # singleton, concurrent composes for different users)
+            # Keyed per user — this dict lives on a process-global singleton
+            # shared by concurrent composes for different users.
             self._current_continuum_ids[get_current_user_id()] = event.continuum_id
 
-            # Substitute template variables in system prompt
             prefs = get_user_preferences()
             first_name = (prefs.first_name or '').strip() or "friend"
             logger.debug(f"Personalizing system prompt for '{first_name}'")
@@ -115,7 +109,6 @@ class WorkingMemory:
             portrait_text = f"\n{portrait}" if portrait else ""
             personalized_prompt = personalized_prompt.replace("{user_context}", portrait_text)
 
-            # Replace {relative time since account creation} with computed duration
             if prefs.created_at:
                 duration = format_relationship_duration(prefs.created_at)
             else:
@@ -133,13 +126,10 @@ class WorkingMemory:
             personalized_prompt = personalized_prompt.replace("{model_id}", llm_config.model)
             personalized_prompt = personalized_prompt.replace("{model_name}", llm_config.name)
 
-            # Set base prompt
             self.composer.set_base_prompt(personalized_prompt)
 
-            # Clear previous sections except base
             self.composer.clear_sections(preserve_base=True)
 
-            # Request updates from all registered trinkets
             for trinket_name in self._trinkets.keys():
                 self.event_bus.publish(UpdateTrinketEvent.create(
                     continuum_id=event.continuum_id,
@@ -147,10 +137,8 @@ class WorkingMemory:
                     context={}
                 ))
 
-            # After all trinkets have updated (synchronously), compose the prompt
             structured = self.composer.compose()
 
-            # Publish composed prompt event with structured content
             self.event_bus.publish(SystemPromptComposedEvent.create(
                 continuum_id=event.continuum_id,
                 cached_content=structured['cached_content'],
@@ -189,7 +177,6 @@ class WorkingMemory:
                 logger.debug(f"Routed update to {event.target_trinket}")
             except Exception as e:
                 # Event handler continues - isolate trinket failures
-                # Use exception type to distinguish infrastructure from logic errors
                 error_type = type(e).__name__
                 if 'Database' in error_type or 'Valkey' in error_type or 'Connection' in error_type:
                     logger.error(

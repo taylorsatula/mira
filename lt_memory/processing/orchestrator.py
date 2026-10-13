@@ -106,7 +106,6 @@ class ExtractionOrchestrator:
         """
         db_client = self.continuum_repo.get_user_db_client(user_id)
 
-        # Step 1: Query boundary row for segment_id, continuum_id, position
         boundary_row = db_client.execute_query("""
             SELECT id, continuum_id, created_at, metadata
             FROM messages
@@ -125,7 +124,6 @@ class ExtractionOrchestrator:
         segment_id = metadata.get('segment_id', boundary_message_id)
         segment_uuid = UUID(segment_id) if isinstance(segment_id, str) else segment_id
 
-        # Step 2: Load messages after boundary, stop at next boundary.
         message_rows = db_client.execute_query("""
             SELECT * FROM messages
             WHERE continuum_id = %s
@@ -139,7 +137,6 @@ class ExtractionOrchestrator:
         for msg_row in message_rows:
             msg_metadata = self._parse_metadata(msg_row.get('metadata', {}))
 
-            # Stop at next segment boundary
             if msg_metadata.get('is_segment_boundary'):
                 break
 
@@ -172,7 +169,6 @@ class ExtractionOrchestrator:
             """, (boundary_message_id,))
             return True
 
-        # Step 3: Build single ProcessingChunk (full segment, no chunking)
         chunk = ProcessingChunk.from_conversation_messages(
             messages,
             chunk_index=0,
@@ -180,10 +176,10 @@ class ExtractionOrchestrator:
         )
         chunk.memory_context_snapshot = self._build_memory_context(messages, user_id)
 
-        # Step 4: Execute directly through model_config=batch.
+        # Execute directly through model_config=batch.
         extraction_id = self.execution_strategy.execute_extraction(user_id, [chunk])
 
-        # Step 5: Mark boundary as extracted. Reached only when the LLM
+        # Mark boundary as extracted. Reached only when the LLM
         # returned a well-formed response (including a well-formed explicit
         # zero, []); an empty/degenerate response raises LLMResponseFormatError
         # in memory_processor and leaves the segment unextracted for retry.
@@ -235,7 +231,6 @@ class ExtractionOrchestrator:
         for user in users:
             uid = str(user["id"])
             try:
-                # Find collapsed segments needing extraction
                 failed_segments = self.continuum_repo.find_failed_extraction_segments(uid)
                 if not failed_segments:
                     continue
@@ -324,9 +319,6 @@ class ExtractionOrchestrator:
         )
         return results
 
-    # ============================================================================
-    # Helper Methods
-    # ============================================================================
 
     def _build_memory_context(
         self,
@@ -356,19 +348,16 @@ class ExtractionOrchestrator:
         for msg in messages:
             metadata = getattr(msg, "metadata", {}) or {}
 
-            # Extract referenced memories (explicit LLM references)
             if isinstance(metadata.get("referenced_memories"), list):
                 for ref in metadata["referenced_memories"]:
                     if isinstance(ref, str):
                         referenced_ids.add(ref)
 
-            # Extract pinned memory IDs (8-char short IDs from retention)
             if isinstance(metadata.get("pinned_memory_ids"), list):
                 for pin_id in metadata["pinned_memory_ids"]:
                     if isinstance(pin_id, str) and pin_id:
                         pinned_short_ids.add(pin_id.lower())
 
-        # Load memory texts from database
         memory_texts = {}
         if referenced_ids:
             memory_uuids = [UUID(ref_id) for ref_id in referenced_ids]

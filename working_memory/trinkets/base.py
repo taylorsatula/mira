@@ -21,7 +21,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Valkey key prefix for trinket content storage
 TRINKET_KEY_PREFIX = "trinkets"
 
 
@@ -39,10 +38,8 @@ class EventAwareTrinket(ABC):
         cache_policy: bool  — whether to use prompt caching (default False)
     """
 
-    # REQUIRED — subclasses must define (validated at init)
     variable_name: str
 
-    # Optional — subclasses override as needed
     cache_policy: bool = False
 
     def __init__(self, event_bus: 'EventBus', working_memory: 'WorkingMemory'):
@@ -64,7 +61,6 @@ class EventAwareTrinket(ABC):
         self.event_bus = event_bus
         self.working_memory = working_memory
 
-        # Register with working memory
         self.working_memory.register_trinket(self)
 
         logger.info(f"{self.__class__.__name__} initialized and registered")
@@ -85,7 +81,6 @@ class EventAwareTrinket(ABC):
         content = self.generate_content(event.context)
 
         if content and content.strip():
-            # Persist to Valkey for API access
             self._persist_to_valkey(content)
 
             self.event_bus.publish(TrinketContentEvent.create(
@@ -97,7 +92,6 @@ class EventAwareTrinket(ABC):
             ))
             logger.debug(f"{self.__class__.__name__} published content ({len(content)} chars)")
         else:
-            # Content is empty - clear stale data from Valkey
             self._clear_from_valkey()
 
     def _persist_to_valkey(self, content: str) -> None:

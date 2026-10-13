@@ -34,9 +34,8 @@ from utils.user_context import get_current_segment_id
 
 logger = logging.getLogger(__name__)
 
-# Valkey key pattern for pending memories
 PENDING_MEMORIES_KEY_PREFIX = "pending_memories"
-PENDING_MEMORIES_TTL = 86400  # 24 hours
+PENDING_MEMORIES_TTL = 86400
 
 
 class MemoryToolConfig(BaseModel):
@@ -66,7 +65,6 @@ class MemoryToolConfig(BaseModel):
     )
 
 
-# Register with registry
 registry.register("memory_tool", MemoryToolConfig)
 
 
@@ -152,7 +150,6 @@ class MemoryTool(Tool):
                     "enum": ["search", "create_memory", "link_memories", "annotate_memory", "touch", "archive", "merge_memories"],
                     "description": "Operation to perform: search (find memories), create_memory (queue a new memory), link_memories (write a typed relationship), annotate_memory (add a note), touch (record memories used in your response), archive (soft-delete a memory), merge_memories (consolidate 2+ memories into one)"
                 },
-                # Search parameters
                 "query": {
                     "type": "string",
                     "description": "Natural language search query (required for 'search')"
@@ -178,7 +175,6 @@ class MemoryTool(Tool):
                         "to a matched entity join the results. Omit when the query names none. Used by 'search' only"
                     )
                 },
-                # Create memory parameters
                 "content": {
                     "type": "string",
                     "description": "The memory content to store. Minimum 10 characters after whitespace trimming. Required for 'create_memory'"
@@ -200,7 +196,6 @@ class MemoryTool(Tool):
                     "items": {"type": "string"},
                     "description": "mem_XXXXXXXX IDs of existing memories this new memory replaces. Superseded memories receive a 70% score penalty in search results"
                 },
-                # Link memories parameters
                 "source_memory_id": {
                     "type": "string",
                     "description": "Identity of the source memory in the link: full UUID or mem_XXXXXXXX short ID (a short ID works only when unambiguous). The link reads as: source [link_type] target"
@@ -222,7 +217,6 @@ class MemoryTool(Tool):
                     "type": "string",
                     "description": "Optional 3-word relationship descriptor carried from extraction (e.g. 'annoyance became comfort'). Preserved on the link and surfaced when the memory is referenced elsewhere. Omit or empty when no extraction bond exists."
                 },
-                # Annotate memory parameters
                 "memory_id": {
                     "type": "string",
                     "description": "Identity of the memory to act on: full UUID or mem_XXXXXXXX short ID (short works only when unambiguous). Required for 'annotate_memory' and 'archive'"
@@ -231,13 +225,11 @@ class MemoryTool(Tool):
                     "type": "string",
                     "description": "Annotation content appended to the memory's annotation list. Min 3 chars. Required for 'annotate_memory'"
                 },
-                # Touch parameters
                 "memory_ids": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "List of memory identities: full UUIDs or mem_XXXXXXXX short IDs (short works only when unambiguous). Required for 'touch' (memories referenced in your response) and 'merge_memories' (memories to consolidate into one)"
                 },
-                # Merge memories parameters (curator)
                 "consolidated_text": {
                     "type": "string",
                     "description": "The unified memory text that replaces the merged memories. Captures what was preserved across the sources. Required for 'merge_memories'"
@@ -256,7 +248,6 @@ class MemoryTool(Tool):
         super().__init__()
         self.logger = logging.getLogger(__name__)
 
-        # Load configuration
         from config import config
 
         self._config = config.get_tool_config("memory_tool")
@@ -338,7 +329,7 @@ class MemoryTool(Tool):
         entities: Optional[List[str]] = None,
         include_link_traversal: bool = True,
         traversal_depth: int = 1,
-        **kwargs  # Accept extra params gracefully
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Comprehensive graph-aware memory search.
@@ -373,7 +364,6 @@ class MemoryTool(Tool):
 
         extracted_entities = [name.strip() for name in entities or [] if name and name.strip()]
 
-        # Run parallel retrieval
         def _fetch_similarity_pool():
             """Fetch similarity-based memories via hybrid search."""
             return self._hybrid_searcher.hybrid_search(
@@ -396,7 +386,6 @@ class MemoryTool(Tool):
                 top_n=limit * 2
             )
 
-        # Execute searches in parallel with context propagation
         with ThreadPoolExecutor(max_workers=2) as executor:
             ctx_similarity = copy_context()
             ctx_hub = copy_context()
@@ -409,7 +398,6 @@ class MemoryTool(Tool):
         # Merge pools (deduplicate, similarity pool takes precedence)
         merged_results = self._merge_memory_pools(similarity_pool, hub_pool)
 
-        # Apply pagination
         paginated_results = merged_results[offset:offset + limit]
 
         if not paginated_results:
@@ -422,7 +410,6 @@ class MemoryTool(Tool):
                 "has_more_pages": False
             }
 
-        # Link traversal on top results
         if include_link_traversal:
             from lt_memory.linking import LinkingService
             from lt_memory.vector_ops import VectorOps
@@ -433,10 +420,9 @@ class MemoryTool(Tool):
                 db=self._memory_db
             )
 
-            for memory in paginated_results[:5]:  # Traverse top 5
+            for memory in paginated_results[:5]:
                 related: List[TraversalResult] = linking_service.traverse_related(memory.id, depth=traversal_depth)
                 memory.linked_memories = [r["memory"] for r in related]
-                # Store metadata for each linked memory
                 for i, linked in enumerate(memory.linked_memories):
                     linked.link_metadata = {
                         "link_type": related[i]["link_type"],
@@ -446,7 +432,6 @@ class MemoryTool(Tool):
                         "linked_from_id": related[i]["linked_from_id"]
                     }
 
-        # Format results
         formatted_results = []
         for memory in paginated_results:
             result = self._format_memory_for_output(memory)
@@ -493,7 +478,6 @@ class MemoryTool(Tool):
         def effective_score(memory) -> float:
             score = memory.importance_score
 
-            # Apply supersedes penalty for soft demotion
             if memory.inbound_links:
                 has_supersedes = any(
                     link.get('type') == 'supersedes'
@@ -523,10 +507,8 @@ class MemoryTool(Tool):
             "inbound_links_count": len(memory.inbound_links) if memory.inbound_links else 0,
             "outbound_links_count": len(memory.outbound_links) if memory.outbound_links else 0,
             "annotations": memory.annotations if hasattr(memory, 'annotations') and memory.annotations else [],
-            # source_segment_id enables tracing a memory back to its origin conversation.
-            # A future "investigate" operation could use this + continuum_tool to pull
-            # the source segment's messages, but deferred — rarely needed and adds a
-            # new tool parameter for a niche use case.
+            # source_segment_id supports a future "investigate" op reading the
+            # source segment via continuum_tool — deferred: rare need, extra parameter.
             "source_segment_id": str(memory.source_segment_id) if hasattr(memory, 'source_segment_id') and memory.source_segment_id else None
         }
 
@@ -543,7 +525,7 @@ class MemoryTool(Tool):
         happens_at: Optional[str] = None,
         expires_at: Optional[str] = None,
         supersedes_memory_ids: Optional[List[str]] = None,
-        **kwargs  # Accept extra params gracefully
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Queue a new memory for processing at segment collapse.
@@ -563,7 +545,6 @@ class MemoryTool(Tool):
         Returns:
             Queue confirmation with pending_id for tracking
         """
-        # Validate content
         if not content or len(content.strip()) < self._config.min_text_length:
             raise ValueError(
                 f"Content must be at least {self._config.min_text_length} characters"
@@ -578,10 +559,8 @@ class MemoryTool(Tool):
         else:
             score = self._config.default_importance_self_directed
 
-        # Get current segment ID from ambient context
         segment_id = get_current_segment_id()
 
-        # Build pending memory
         pending = PendingManualMemory(
             text=content,
             importance_score=score,
@@ -593,7 +572,6 @@ class MemoryTool(Tool):
             pending_id=str(uuid4())
         )
 
-        # Queue to Valkey
         if segment_id:
             queue_key = f"{PENDING_MEMORIES_KEY_PREFIX}:{self.user_id}:{segment_id}"
         else:
@@ -625,7 +603,7 @@ class MemoryTool(Tool):
         link_type: str,
         reasoning: str,
         bond: str = "",
-        **kwargs  # Accept extra params gracefully
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Create a relationship link between two memories.
@@ -641,18 +619,15 @@ class MemoryTool(Tool):
         Returns:
             Link creation confirmation
         """
-        # Validate link_type
         allowed_types = VALID_RELATIONSHIP_TYPES - {"null"}  # null means no relationship
         if link_type not in allowed_types:
             raise ValueError(f"link_type must be one of {allowed_types}, got '{link_type}'")
 
-        # Validate reasoning
         if not reasoning or len(reasoning.strip()) < 5:
             raise ValueError("Reasoning must be at least 5 characters")
         reasoning = reasoning.strip()
         bond = bond.strip() if bond else ""
 
-        # Resolve IDs (full UUID or short) to full UUIDs
         source = self._resolve_memory(source_memory_id)
         target = self._resolve_memory(target_memory_id)
 
@@ -674,7 +649,6 @@ class MemoryTool(Tool):
             created_at=utc_now()
         )
 
-        # Store bidirectionally
         self._memory_db.create_links([link])
 
         self.logger.info(f"Created {link_type} link: {source.id} <-> {target.id}")
@@ -691,7 +665,7 @@ class MemoryTool(Tool):
         self,
         memory_id: str,
         annotation: str,
-        **kwargs  # Accept extra params gracefully
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Add an annotation to an existing memory.
@@ -703,24 +677,20 @@ class MemoryTool(Tool):
         Returns:
             Annotation confirmation
         """
-        # Validate annotation
         if not annotation or len(annotation.strip()) < 3:
             raise ValueError("Annotation must be at least 3 characters")
         annotation = annotation.strip()
 
-        # Resolve the ID (full UUID or short)
         memory = self._resolve_memory(memory_id)
         if not memory:
             raise ValueError(f"Memory '{memory_id}' not found")
 
-        # Build annotation object
         annotation_entry = {
             "text": annotation,
             "created_at": format_utc_iso(utc_now()),
             "source": "mira"
         }
 
-        # Append to existing annotations
         existing = memory.annotations if hasattr(memory, 'annotations') and memory.annotations else []
         updated = existing + [annotation_entry]
 
@@ -868,7 +838,6 @@ class MemoryTool(Tool):
         if not clean_id or len(clean_id) < 8:
             return None
 
-        # Query by UUID prefix
         with self._memory_db.session_manager.get_session(self.user_id) as session:
             query = """
             SELECT * FROM memories
@@ -889,7 +858,7 @@ class MemoryTool(Tool):
     def _touch(
         self,
         memory_ids: List[str],
-        **kwargs  # Accept extra params gracefully
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Record that surfaced memories were referenced in the response.

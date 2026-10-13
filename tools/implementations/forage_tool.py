@@ -28,8 +28,6 @@ if TYPE_CHECKING:
     from working_memory.core import WorkingMemory
 
 
-# -------------------- CONFIGURATION --------------------
-
 class ForageToolConfig(BaseModel):
     """Configuration for forage_tool."""
     enabled: bool = Field(
@@ -48,8 +46,6 @@ class ForageToolConfig(BaseModel):
 
 registry.register("forage_tool", ForageToolConfig)
 
-
-# -------------------- TOOL --------------------
 
 class ForageTool(Tool):
     """Dispatches a background forage agent for speculative context gathering."""
@@ -180,9 +176,7 @@ class ForageTool(Tool):
         user_id = get_current_user_id()
         continuum_id = user_context.get('continuum_id', user_id)
 
-        # If refining, validate the prior result resolves before dispatching —
-        # an unresolvable id must not silently degrade to a fresh ungrounded
-        # search under the same success envelope.
+        # An unresolvable refine id must not silently degrade to a fresh ungrounded search under the same success envelope.
         previous_result = None
         if refine_task_id:
             trinket = None
@@ -260,10 +254,8 @@ class ForageTool(Tool):
         # Resolve trace directory while user context is available (main thread)
         trace_dir = str(self.user_data_path)
 
-        # Publish pending state to trinket immediately
         self._publish_event(continuum_id, task_id, 'pending', {'query': query})
 
-        # Copy ambient context for the background thread
         from contextvars import copy_context
         ctx = copy_context()
 
@@ -319,8 +311,7 @@ class ForageTool(Tool):
         user_id = get_current_user_id()
         continuum_id = user_context.get('continuum_id', user_id)
 
-        # Existence-aware: the trinket removes only a present entry, so a
-        # dismiss of an absent/stale task_id must not report success.
+        # The trinket removes only a present entry, so dismissing an absent/stale task_id must not report success.
         trinket = None
         if self.working_memory:
             trinket = self.working_memory.get_trinket('ForageTrinket')

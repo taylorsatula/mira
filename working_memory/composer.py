@@ -12,33 +12,25 @@ from working_memory.types import ComposedPrompt
 
 logger = logging.getLogger(__name__)
 
-# Placement constants
 PLACEMENT_SYSTEM = "system"
 PLACEMENT_CONVERSATION_PREFIX = "conversation_prefix"
 PLACEMENT_POST_HISTORY = "post_history"
 PLACEMENT_NOTIFICATION = "notification"
 
-# Centralized layout — one place to control placement and ordering.
 # Sections not listed here still appear (in system, at end) with a warning,
 # so new trinkets work immediately without touching this file.
 SECTION_LAYOUT: Dict[str, List[str]] = {
     PLACEMENT_SYSTEM: [
         'base_prompt',
-        # Two separate slots, two separate subjects: behavioral_directives is
-        # the user model's descriptive observations about the user; persona_directives
-        # is MIRA's prescriptive self-evaluation. They are not two versions of one
-        # feature and must not share a slot.
+        # Two slots, two subjects: the user model's observations about the user vs. MIRA's prescriptive self-evaluation — must not share a slot.
         'behavioral_directives',
         'persona_directives',
-        # Reserved future surface: the consuming code path for this slot is
-        # available and correct but unexercised today — no trinket currently
-        # provides `tool_availability`. The silent miss in this direction is
-        # known and deliberate, not a wiring bug.
+        # Reserved surface: consumer path correct but unexercised — no trinket
+        # provides `tool_availability`. Silent miss deliberate, not a wiring bug.
         'tool_availability',
-        # Skills: the catalog lists name + description per skill (cached — a
-        # mid-session edit busts the prefix once, accepted); the active bodies
-        # section mutates on every activation, so it stays out of the cached
-        # prefix.
+        # The skills catalog is cached — a mid-session edit busts the prefix
+        # once, accepted; the active-bodies section mutates on every activation,
+        # so it stays out of the cached prefix.
         'skills_catalog',
         'active_skills',
         'location_context',
@@ -96,7 +88,6 @@ class SystemPromptComposer:
         Args:
             prompt: Base system prompt that always appears first
         """
-        # Add delimiter after base prompt to visually separate from injected content
         delimiter = "═" * 60
         scaffolding_note = (
             "Everything after this delimiter is part of MIRA's scaffolding, "
@@ -179,7 +170,6 @@ class SystemPromptComposer:
         notification_parts = []
         processed = set()
 
-        # Route sections by SECTION_LAYOUT (defines both placement and ordering)
         for placement, names in SECTION_LAYOUT.items():
             for name in names:
                 if name not in self._sections:
@@ -195,7 +185,6 @@ class SystemPromptComposer:
                     notification_parts,
                 )
 
-        # Stragglers: sections not in SECTION_LAYOUT default to system
         for name, section in self._sections.items():
             if name in processed:
                 continue
@@ -209,10 +198,8 @@ class SystemPromptComposer:
                 notification_parts,
             )
 
-        # Build notification center from collected parts
         notification_center = self._build_notification_center(notification_parts)
 
-        # Join and clean system prompt content
         cached_content = self._clean_content(SECTION_SEPARATOR.join(cached_parts))
         non_cached_content = self._clean_content(SECTION_SEPARATOR.join(non_cached_parts))
 
@@ -273,7 +260,6 @@ class SystemPromptComposer:
 
         delimiter = "═" * 60
 
-        # Build formatted notification center with mira:hud wrapper
         lines = [
             delimiter,
             "HUD - Runtime state, authoritative for current context",
@@ -292,6 +278,5 @@ class SystemPromptComposer:
 
     def _clean_content(self, content: str) -> str:
         """Clean up excessive whitespace in content."""
-        # Replace 3+ newlines with exactly 2 newlines
         content = re.sub(r'\n{3,}', '\n\n', content)
         return content.strip()

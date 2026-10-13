@@ -13,7 +13,6 @@ from typing import List, Tuple
 logger = logging.getLogger(__name__)
 
 
-# Registry of modules with scheduled tasks
 # Format: (module_path, service_name, needs_init, init_args_factory)
 SCHEDULED_TASK_MODULES: List[Tuple[str, str, bool, callable]] = [
     # The auth service's cleanup jobs (expired magic links hourly, account
@@ -43,23 +42,18 @@ def initialize_all_scheduled_tasks(scheduler_service):
     """
     successful = 0
 
-    # First register standard services from the registry
     registry = SCHEDULED_TASK_MODULES
     for module_path, service_name, needs_init, init_args_factory in registry:
         try:
-            # Dynamic import
             module = __import__(module_path, fromlist=[service_name])
 
             if needs_init:
-                # Service needs initialization
                 service_class = getattr(module, service_name)
                 init_args = init_args_factory() if init_args_factory else {}
                 service = service_class(**init_args)
             else:
-                # Service is already a global instance
                 service = getattr(module, service_name)
 
-            # Register the service's scheduled jobs (raises on failure)
             if hasattr(service, 'register_cleanup_jobs'):
                 service.register_cleanup_jobs(scheduler_service)
             elif hasattr(service, 'register_jobs'):
@@ -77,7 +71,6 @@ def initialize_all_scheduled_tasks(scheduler_service):
                 f"Failed to register scheduled tasks for {module_path}.{service_name}: {e}"
             ) from e
 
-    # Register LT_Memory jobs using its special pattern
     try:
         from utils.lt_memory_jobs import register_lt_memory_jobs
         from lt_memory.factory import get_lt_memory_factory
@@ -95,7 +88,7 @@ def initialize_all_scheduled_tasks(scheduler_service):
         logger.error(f"Error registering LT_Memory scheduled tasks: {e}", exc_info=True)
         raise RuntimeError(f"Failed to register LT_Memory scheduled tasks: {e}") from e
 
-    total_services = len(registry) + 1  # +1 lt_memory
+    total_services = len(registry) + 1
     logger.info(f"Scheduled task initialization complete: {successful}/{total_services} services registered")
     return successful
 

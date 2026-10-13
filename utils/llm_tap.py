@@ -22,7 +22,6 @@ _active = False
 # Serializes file writes from concurrent threads (streaming, background agents, etc.)
 _write_lock = threading.Lock()
 
-# Output paths in project root
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _REQUEST_PATH = _PROJECT_ROOT / "llm_requests.jsonl"
 _RESPONSE_PATH = _PROJECT_ROOT / "llm_responses.jsonl"
@@ -39,9 +38,6 @@ def toggle(signum=None, frame=None) -> None:
     logger.warning("LLM traffic tap %s", "ENABLED" if _active else "DISABLED")
 
 
-# ---------------------------------------------------------------------------
-# Internal writer
-# ---------------------------------------------------------------------------
 
 def _write(path: Path, record: Dict[str, Any]) -> None:
     """Append one JSON line. Thread-safe via lock."""
@@ -55,9 +51,6 @@ def _write(path: Path, record: Dict[str, Any]) -> None:
         logger.debug("Traffic tap write failed", exc_info=True)
 
 
-# ---------------------------------------------------------------------------
-# Public API: requests
-# ---------------------------------------------------------------------------
 
 def log_request(
     *,
@@ -78,9 +71,6 @@ def log_request(
     })
 
 
-# ---------------------------------------------------------------------------
-# Public API: responses
-# ---------------------------------------------------------------------------
 
 def log_response(
     *,
@@ -146,9 +136,6 @@ def _serialize_generic(obj: Any) -> Dict:
     return result
 
 
-# ---------------------------------------------------------------------------
-# httpx request hook (attached to Anthropic SDK clients)
-# ---------------------------------------------------------------------------
 
 def httpx_request_hook(request) -> None:
     """httpx event hook: capture full request body for Anthropic API calls.

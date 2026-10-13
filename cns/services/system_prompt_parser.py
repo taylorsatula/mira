@@ -34,7 +34,6 @@ def _parse_system_prompt_sections(raw_prompt: str) -> List[SystemPromptSection]:
     Returns:
         List of SystemPromptSection with section_id and content
     """
-    # Match all tag pairs with their spans
     pattern = r'<(\w+)>(.*?)</\1>'
     all_matches = []
 
@@ -44,7 +43,6 @@ def _parse_system_prompt_sections(raw_prompt: str) -> List[SystemPromptSection]:
             continue
         all_matches.append((section_id, match.group(2).strip(), match.start(), match.end()))
 
-    # Filter to top-level only: exclude any match whose span falls inside another match
     sections = []
     for section_id, content, start, end in all_matches:
         is_nested = any(
@@ -80,11 +78,9 @@ def anonymize_prompt(raw_prompt: str) -> str:
     """
     result = raw_prompt
 
-    # Replace template variables
     result = result.replace("{first_name}", "The User")
     result = result.replace("{relative time since account creation}", "a while")
 
-    # Remove blocklisted sections entirely
     result = re.sub(r'<user>.*?</user>', '', result, flags=re.DOTALL)
     result = re.sub(r'<environment>.*?</environment>', '', result, flags=re.DOTALL)
 

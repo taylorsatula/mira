@@ -33,7 +33,6 @@ class JobStats(TypedDict):
 class ScheduledTaskMonitor:
     """Monitors scheduled task execution for hanging detection."""
 
-    # Track execution history for each job
     _job_history: Dict[str, JobStats] = {}
     _history_lock = threading.RLock()
 
@@ -62,12 +61,10 @@ class ScheduledTaskMonitor:
             thread_id = threading.current_thread().ident
             thread_name = threading.current_thread().name
 
-            # Log job start
             logger.info(
                 f"Scheduled job '{job_id}' starting on thread {thread_name} (ID: {thread_id})"
             )
 
-            # Start monitoring
             ThreadMonitor.start_operation(
                 f"ScheduledJob: {job_id}",
                 {
@@ -78,7 +75,6 @@ class ScheduledTaskMonitor:
                 }
             )
 
-            # Update job history
             with cls._history_lock:
                 if job_id not in cls._job_history:
                     cls._job_history[job_id] = {
@@ -93,16 +89,15 @@ class ScheduledTaskMonitor:
                 cls._job_history[job_id]['total_runs'] += 1
                 cls._job_history[job_id]['last_run_time'] = start_time.isoformat()
 
-            # Set to True only by the monitor's own timeout path, so a
-            # TimeoutError raised by the job body itself is accounted as a
-            # failure instead of being re-raised as "already logged"
+            # Set only by the monitor's own timeout path, so a job-body
+            # TimeoutError is accounted as a failure, not re-raised as
+            # "already logged"
             timeout_counted = False
 
             try:
                 if timeout_seconds:
-                    # Execute with timeout using ThreadPoolExecutor
-                    # CRITICAL: Don't use 'with' context manager - it calls
-                    # shutdown(wait=True) which blocks forever if thread is stuck
+                    # Never wrap this executor in 'with': __exit__ calls
+                    # shutdown(wait=True), which blocks forever on a stuck thread
                     executor = ThreadPoolExecutor(max_workers=1)
                     future = executor.submit(func, *args, **kwargs)
                     try:
@@ -113,7 +108,6 @@ class ScheduledTaskMonitor:
                             f"Scheduled job '{job_id}' completed successfully in {duration:.2f}s"
                         )
 
-                        # Update success stats
                         with cls._history_lock:
                             cls._job_history[job_id]['successful_runs'] += 1
                             cls._job_history[job_id]['last_duration_seconds'] = duration
@@ -141,7 +135,6 @@ class ScheduledTaskMonitor:
                             f"{timeout_seconds}s (ran for {duration:.2f}s) on thread {thread_name}"
                         )
 
-                        # Update timeout stats
                         with cls._history_lock:
                             cls._job_history[job_id]['timeout_runs'] += 1
                         timeout_counted = True
@@ -155,7 +148,6 @@ class ScheduledTaskMonitor:
                                 f"Job '{job_id}' thread is stuck - cannot force-kill Python threads. "
                                 f"The orphaned thread will continue running until it completes or the process restarts."
                             )
-                            # Log thread dump for debugging
                             dump = ThreadMonitor.dump_thread_states()
                             logger.error(f"Thread dump for stuck job:\n{dump}")
 
@@ -168,7 +160,6 @@ class ScheduledTaskMonitor:
                         # cancel_futures=True attempts to cancel pending (not running) work
                         executor.shutdown(wait=False, cancel_futures=True)
                 else:
-                    # Execute without timeout
                     result = func(*args, **kwargs)
                     duration = (utc_now() - start_time).total_seconds()
 
@@ -176,7 +167,6 @@ class ScheduledTaskMonitor:
                         f"Scheduled job '{job_id}' completed in {duration:.2f}s"
                     )
 
-                    # Update success stats
                     with cls._history_lock:
                         cls._job_history[job_id]['successful_runs'] += 1
                         cls._job_history[job_id]['last_duration_seconds'] = duration
@@ -199,7 +189,6 @@ class ScheduledTaskMonitor:
                     exc_info=True
                 )
 
-                # Update failure stats
                 with cls._history_lock:
                     cls._job_history[job_id]['failed_runs'] += 1
                     cls._job_history[job_id]['last_duration_seconds'] = duration
@@ -213,7 +202,6 @@ class ScheduledTaskMonitor:
                     exc_info=True
                 )
 
-                # Update failure stats
                 with cls._history_lock:
                     cls._job_history[job_id]['failed_runs'] += 1
                     cls._job_history[job_id]['last_duration_seconds'] = duration
@@ -223,16 +211,14 @@ class ScheduledTaskMonitor:
             finally:
                 ThreadMonitor.end_operation(f"ScheduledJob: {job_id}")
 
-                # Log if job took unusually long
                 duration = (utc_now() - start_time).total_seconds()
-                if duration > 60:  # More than 1 minute
+                if duration > 60:
                     logger.warning(
                         f"Scheduled job '{job_id}' took {duration:.2f}s - "
                         f"this may indicate a performance issue"
                     )
 
-                    # Dump thread state if very long
-                    if duration > 300:  # More than 5 minutes
+                    if duration > 300:
                         dump = ThreadMonitor.dump_thread_states()
                         try:
                             with tempfile.NamedTemporaryFile(
@@ -292,7 +278,6 @@ class ScheduledTaskMonitor:
                     f"  Max duration: {stats.get('max_duration_seconds', 0):.2f}s"
                 )
 
-                # Warn about problematic jobs
                 if timeout_rate > 10:
                     logger.warning(
                         f"Job '{job_id}' has high timeout rate ({timeout_rate:.1f}%) - "

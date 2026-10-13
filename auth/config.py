@@ -32,11 +32,11 @@ class AuthConfig:
 
     # Not Vault-backed: identical in every deployment, and read on the hot path of
     # session creation and rate limiting.
-    MAGIC_LINK_EXPIRY: int = 600  # 10 minutes
-    SESSION_IDLE_TIMEOUT: int = 86400 * 14  # 14 days idle timeout
-    SESSION_MAX_LIFETIME: int = 86400 * 45  # 45 days max lifetime
+    MAGIC_LINK_EXPIRY: int = 600
+    SESSION_IDLE_TIMEOUT: int = 86400 * 14
+    SESSION_MAX_LIFETIME: int = 86400 * 45
     RATE_LIMIT_REQUESTS: int = 5
-    RATE_LIMIT_WINDOW: int = 300  # 5 minutes
+    RATE_LIMIT_WINDOW: int = 300
 
     @property
     def APP_URL(self) -> str:

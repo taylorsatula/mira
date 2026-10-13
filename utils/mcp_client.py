@@ -32,10 +32,8 @@ from utils.user_credentials import UserCredentialService
 
 logger = logging.getLogger("mcp_client")
 
-# Connection pool for user-scoped MCP sessions
 _connection_pool: Dict[str, Dict[str, 'MCPConnection']] = {}
 
-# Retry configuration
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_TIMEOUT = 30
 RETRYABLE_ERROR_TYPES = {ConnectionError, TimeoutError, OSError}
@@ -157,7 +155,6 @@ class MCPConnection:
             return self.session
 
         try:
-            # Get OAuth token if needed
             headers = dict(self.config.custom_headers or {})
             if self.config.oauth_client_id:
                 token = self.credential_service.get_credential(
@@ -171,21 +168,19 @@ class MCPConnection:
                     )
                 headers["Authorization"] = f"Bearer {token}"
 
-            # Create appropriate transport
             if self.config.transport == "sse":
                 if not self.config.url:
                     raise ValueError(f"SSE transport requires URL for {self.config.name}")
 
                 self._transport_context = sse_client(self.config.url, headers=headers)
                 self._read, self._write = await self._enter_transport_context()
-                # Bound every request/response read so a hung server cannot
-                # block callers indefinitely
+                # Bounded reads so a hung server cannot block callers indefinitely.
                 self.session = ClientSession(
                     self._read, self._write,
                     read_timeout_seconds=timedelta(seconds=DEFAULT_TIMEOUT)
                 )
-                # CRITICAL: ClientSession must be entered as async context manager
-                # to start _receive_loop which dispatches responses to waiting requests
+                # ClientSession must enter its async context manager: __aenter__
+                # starts _receive_loop, which dispatches responses to waiting requests
                 self._session_context = self.session
                 await self._session_context.__aenter__()
                 await self.session.initialize()
@@ -200,14 +195,11 @@ class MCPConnection:
                 )
                 self._transport_context = stdio_client(server_params)
                 self._read, self._write = await self._enter_transport_context()
-                # Bound every request/response read so a hung server cannot
-                # block callers indefinitely
+                # Bounded reads so a hung server cannot block callers indefinitely.
                 self.session = ClientSession(
                     self._read, self._write,
                     read_timeout_seconds=timedelta(seconds=DEFAULT_TIMEOUT)
                 )
-                # CRITICAL: ClientSession must be entered as async context manager
-                # to start _receive_loop which dispatches responses to waiting requests
                 self._session_context = self.session
                 await self._session_context.__aenter__()
                 await self.session.initialize()
@@ -289,7 +281,6 @@ class MCPConnection:
         """Call a tool on the MCP server."""
         session = await self.connect()
 
-        # Verify tool exists
         tools = await self.list_tools()
         if not any(t.name == name for t in tools):
             raise MCPToolNotFoundError(f"Tool '{name}' not found on {self.config.name}")
@@ -348,14 +339,13 @@ class RetryableMCPConnection(MCPConnection):
         """Calculate retry delay with exponential backoff and jitter."""
         base_delay = 1.0
         delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
-        return min(delay, 30.0)  # Cap at 30 seconds
+        return min(delay, 30.0)
 
     def _should_retry(self, exception: Exception, attempt: int) -> bool:
         """Determine if an operation should be retried."""
         if attempt >= self.max_retries:
             return False
 
-        # Check if it's a retryable error type
         if isinstance(exception, MCPConnectionError):
             return True
         if isinstance(exception, (ConnectionError, TimeoutError, OSError)):
@@ -385,7 +375,6 @@ class RetryableMCPConnection(MCPConnection):
                     )
                     await asyncio.sleep(delay)
 
-                    # Reset connection for next attempt
                     await self.disconnect()
                     continue
                 else:
@@ -419,7 +408,6 @@ class RetryableMCPConnection(MCPConnection):
         return await self._execute_with_retry(super().list_resources, use_cache=False)
 
 
-# Module-level functions for convenience
 
 @asynccontextmanager
 async def create_session(
@@ -454,7 +442,6 @@ async def create_session(
     if not user_id:
         raise RuntimeError("No user context set. Ensure authentication is properly initialized.")
 
-    # Check connection pool
     if user_id not in _connection_pool:
         _connection_pool[user_id] = {}
 
@@ -462,9 +449,9 @@ async def create_session(
     if pooled is not None and not pooled._in_use:
         connection = pooled
     else:
-        # The pooled connection (if any) is claimed by another concurrent
-        # context - give this call its own connection so one context exiting
-        # cannot disconnect another's session
+        # A pooled connection is claimed by one context at a time: a second
+        # concurrent context gets its own, else one context's exit disconnects
+        # another's session
         config = MCPServerConfig(
             name=server_name,
             url=server_url,
@@ -481,15 +468,10 @@ async def create_session(
     try:
         yield connection
     finally:
-        # Disconnect the session when exiting the context
-        # SSE connections spawn background tasks that keep the event loop alive,
-        # so we must disconnect to allow clean shutdown (especially important
-        # when running in a temporary thread with its own event loop)
+        # SSE connections spawn tasks that keep the event loop alive; disconnect for clean shutdown.
         try:
             await connection.disconnect()
-            # Remove from pool since it's now disconnected - but only if this
-            # connection is still the pooled one (a concurrent context may have
-            # replaced it with its own connection)
+            # Remove from pool only if still the pooled one (a concurrent context may have replaced it)
             if (
                 user_id in _connection_pool
                 and _connection_pool[user_id].get(server_name) is connection

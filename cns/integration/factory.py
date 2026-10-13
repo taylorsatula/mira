@@ -78,12 +78,10 @@ class CNSIntegrationFactory:
         # Create event bus early as it's needed by working memory
         event_bus = self._get_event_bus()
         
-        # Create working memory with event bus
         working_memory = self._get_working_memory(event_bus)
 
         tool_repo = self._get_tool_repository(working_memory)
 
-        # Wire ephemeral tool cleanup on turn end
         from tools.repo import ESSENTIAL_TOOLS
         essential_set = set(ESSENTIAL_TOOLS)
         event_bus.subscribe('TurnCompletedEvent',
@@ -92,8 +90,8 @@ class CNSIntegrationFactory:
         llm_provider = self._get_llm_provider()
         tag_parser = self._get_tag_parser()
 
-        # Create CNS services - first create repo without cache manager
         from ..infrastructure.continuum_repository import get_continuum_repository
+        # Create CNS services - first create repo without cache manager
         continuum_repo = get_continuum_repository()  # Use singleton
 
         live_context_compaction_service = self._get_live_context_compaction_service(
@@ -101,32 +99,22 @@ class CNSIntegrationFactory:
             llm_provider,
         )
 
-        # Create memory relevance service for surfacing memories
         memory_relevance_service = self._get_memory_relevance_service()
 
-        # Create the optional subcortical layer for retrieval query expansion.
         subcortical_layer = self._get_subcortical_layer(llm_provider)
 
-        # Initialize session cache loader
         self._initialize_session_cache(continuum_repo, event_bus)
 
-        # Initialize domain knowledge service with event bus and continuum pool
-        # Initialize segment collapse handler with event bus
         self._initialize_segment_collapse_handler(event_bus)
 
-        # Initialize UserDataManager cleanup handler for session collapse cleanup
         self._initialize_userdata_cleanup_handler(event_bus)
 
-        # Initialize manifest query service with event bus
         self._initialize_manifest_query_service(event_bus)
 
-        # Initialize Peanut Gallery metacognitive observer service with event bus
         self._initialize_peanutgallery_service(event_bus, llm_provider)
 
-        # Initialize inbox poller for email awareness during active segments
         self._initialize_inbox_poller(event_bus)
 
-        # Create orchestrator with all dependencies
         orchestrator = ContinuumOrchestrator(
             llm_provider=llm_provider,
             continuum_repo=continuum_repo,
@@ -139,7 +127,6 @@ class CNSIntegrationFactory:
             live_context_compaction_service=live_context_compaction_service,
         )
 
-        # Initialize async work barrier (shared gate for cross-turn async tasks)
         from cns.services.async_work_barrier import initialize_async_work_barrier
         initialize_async_work_barrier()
 
@@ -187,7 +174,6 @@ class CNSIntegrationFactory:
             from working_memory import WorkingMemory
             self._working_memory = WorkingMemory(event_bus)
             
-            # Create and register trinkets with event bus
             from working_memory.trinkets.time_manager import TimeManager
             from working_memory.trinkets.reminder_manager import ReminderManager
             from working_memory.trinkets.manifest_trinket import ManifestTrinket
@@ -244,11 +230,9 @@ class CNSIntegrationFactory:
             logger.info("Initializing tool repository")
             self._tool_repo = ToolRepository(working_memory=working_memory)
 
-            # Follow original initialization pattern
             self._tool_repo.discover_tools()
             self._tool_repo.enable_tools_from_config()
 
-            # Register gated tools - tools that self-determine availability
             self._register_gated_tools()
 
             logger.info(f"Tool repository initialized with {len(self._tool_repo.get_enabled_tools())} enabled tools")
@@ -298,11 +282,9 @@ class CNSIntegrationFactory:
         # Create summary generator (pre-warms the singleton; the value itself is unused)
         _ = self._get_summary_generator()
 
-        # Create session cache loader
         self._session_cache_loader = SegmentCacheLoader(repository=continuum_repo)
         logger.info("Session cache loader initialized")
 
-        # Initialize continuum pool with session loader
         initialize_continuum_pool(continuum_repo, self._session_cache_loader)
 
     def _get_memory_relevance_service(self) -> MemoryRelevanceService:
@@ -310,14 +292,11 @@ class CNSIntegrationFactory:
         if self._memory_relevance_service is None:
             logger.info("Initializing Memory Relevance Service")
 
-            # Import new CNS service and lt_memory factory
             from cns.services.memory_relevance_service import MemoryRelevanceService
             from lt_memory.factory import get_lt_memory_factory
 
-            # Get lt_memory factory singleton with all services initialized
             lt_memory_factory = get_lt_memory_factory()
 
-            # Create CNS memory relevance service wrapping ProactiveService
             self._memory_relevance_service = MemoryRelevanceService(
                 proactive_service=lt_memory_factory.proactive
             )
@@ -384,7 +363,6 @@ class CNSIntegrationFactory:
         # Get lt_memory factory for downstream processing (required)
         lt_memory_factory = get_lt_memory_factory()
 
-        # Create and register collapse handler
         collapse_handler = SegmentCollapseHandler(
             continuum_repo=continuum_repo,
             summary_generator=summary_generator,
@@ -396,7 +374,6 @@ class CNSIntegrationFactory:
             persona_enabled=self.config.system.persona_enabled,
         )
 
-        # Store singleton for API access
         from ..services.segment_collapse_handler import initialize_segment_collapse_handler
         initialize_segment_collapse_handler(collapse_handler)
 
@@ -424,7 +401,6 @@ class CNSIntegrationFactory:
 
         from cns.services.manifest_query_service import initialize_manifest_query_service
 
-        # Initialize service with event bus (singleton pattern)
         # Pre-warm the singleton; the value itself is unused
         _ = initialize_manifest_query_service(event_bus=event_bus)
 
@@ -482,10 +458,8 @@ class CNSIntegrationFactory:
         from cns.services.pollers.inbox_poller import InboxPollerService
         from working_memory.trinkets.email_trinket import EmailTrinket
 
-        # Trinket self-registers with working memory
         EmailTrinket(event_bus, self._working_memory)
 
-        # Service subscribes to lifecycle events in constructor
         self._inbox_poller = InboxPollerService(event_bus)
 
         logger.info("Inbox poller service initialized")

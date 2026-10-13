@@ -21,20 +21,13 @@ from utils.user_context import get_current_segment_id, set_current_segment_id
 
 logger = logging.getLogger(__name__)
 
-# How long a 'collapsing' claim stays exclusive before it is considered
-# crashed/abandoned and may be re-claimed or re-swept (crash recovery: a
-# process death between claim and save must not strand the segment).
-# Shared by SegmentCollapseHandler's claim UPDATE and the admin timeout sweep
-# below so the two arms can never disagree on the bound.
+# 'collapsing' claim exclusion window: past it the claim is presumed crashed
+# and re-claimable — a process death between claim and save must not strand
+# the segment.
 COLLAPSE_CLAIM_STALE_MINUTES = 10
 
-# Content-caused extraction failures before a collapsed segment is abandoned
-# (excluded) by the extraction sweep. Only failures caused by the segment's
-# own data consume this budget — infrastructure/LLM outages do not
-# (ExtractionOrchestrator.extract_unprocessed_segments classifies failures and
-# counts only content-caused ones). When the budget is exhausted the sweep
-# writes an 'extraction_abandoned' marker on the boundary message so the
-# exclusion is visible to operators instead of silent.
+# Only content-caused failures consume the abandon budget (infrastructure/LLM
+# outages do not); exhaustion writes a visible 'extraction_abandoned' marker.
 EXTRACTION_MAX_CONTENT_FAILURES = 3
 
 
@@ -82,7 +75,6 @@ class IncrementSegmentTurnResult(NamedTuple):
     segment_id: str
 
 
-# Module-level singleton instance
 _continuum_repo_instance: ContinuumRepository | None = None
 
 
@@ -134,7 +126,6 @@ class ContinuumRepository:
         try:
             db = self.get_user_db_client(user_id)
             
-            # Get most recent continuum
             existing = db.execute_query(
                 "SELECT * FROM continuums ORDER BY created_at DESC LIMIT 1"
             )
@@ -148,7 +139,6 @@ class ContinuumRepository:
             if isinstance(metadata, str):
                 metadata = json.loads(metadata) if metadata else {}
             
-            # Convert asyncpg UUID to standard UUID
             from uuid import UUID
             continuum_id = UUID(str(row['id'])) if not isinstance(row['id'], UUID) else row['id']
             
@@ -158,7 +148,6 @@ class ContinuumRepository:
                 metadata=metadata
             )
             
-            # Create continuum
             continuum = Continuum(state)
             
             logger.debug(f"Retrieved existing continuum {continuum.id} for user {user_id}")
@@ -178,10 +167,8 @@ class ContinuumRepository:
             New continuum instance
         """
         try:
-            # Create new continuum
             continuum = Continuum.create_new(user_id)
             
-            # Persist to database
             now = utc_now()
             db = self.get_user_db_client(user_id)
             db.execute_query(
@@ -217,33 +204,27 @@ class ContinuumRepository:
             user_id: User ID
         """
         try:
-            # Additional validation to prevent empty messages from being saved
             if isinstance(message.content, str) and not message.content.strip():
                 logger.error(f"Blocking empty {message.role} message for continuum {continuum_id}")
                 raise ValueError(f"Cannot save empty {message.role} message to database")
 
             db = self.get_user_db_client(user_id)
 
-            # Convert continuum_id to UUID if it's a string
             if isinstance(continuum_id, str):
                 from uuid import UUID as uuid_type
                 continuum_id = uuid_type(continuum_id)
 
-            # Check if this is a real conversation message (not segment/system notification)
             is_real_message = not (
                 message.metadata.get('is_segment_boundary') or
                 message.metadata.get('system_notification')
             )
 
-            # Ensure active segment exists if this is a real message
             if is_real_message:
                 self._ensure_active_segment(continuum_id, user_id, message.created_at, db)
 
-            # Extract segment embedding if this is a segment boundary with embedding
             segment_embedding_value = None
             if message.metadata.get('is_segment_boundary') and message.metadata.get('segment_embedding_value') is not None:
                 embedding_list = message.metadata['segment_embedding_value']
-                # Format as PostgreSQL vector: '[0.1, 0.2, ...]'
                 segment_embedding_value = '[' + ','.join(str(x) for x in embedding_list) + ']'
 
             # Stamp the content-type identity tag at write time so reloads
@@ -252,10 +233,8 @@ class ContinuumRepository:
             # returns a copy, so the in-memory message is untouched.
             content_type = "json" if not isinstance(message.content, str) else "text"
 
-            # Get base message tuple
             base_tuple = message.with_metadata(content_type=content_type).to_db_tuple(continuum_id, user_id)
 
-            # Upsert message with segment embedding
             # ON CONFLICT handles updates to existing messages (e.g., collapsed segment sentinels)
             db.execute_query(
                 """
@@ -312,7 +291,6 @@ class ContinuumRepository:
             current_message_time: Timestamp of message being saved
             db: Database client
         """
-        # Check if a live (active or paused) segment already exists
         live_segment_query = """
             SELECT * FROM messages
             WHERE continuum_id = %s
@@ -324,10 +302,8 @@ class ContinuumRepository:
         active_segments = db.execute_query(live_segment_query, (continuum_id,))
 
         if not active_segments:
-            # No active segment - create one for this segment's first message
             # This ensures segment exists from turn 1, enabling proper turn counting
 
-            # Find the most recent collapsed segment to determine time boundary
             last_segment_query = """
                 SELECT metadata->>'segment_end_time' as segment_end_time
                 FROM messages
@@ -339,7 +315,6 @@ class ContinuumRepository:
             """
             last_segment_row = db.execute_query(last_segment_query, (continuum_id,))
 
-            # If there's a previous collapsed segment, only look at messages after it ended
             if last_segment_row and last_segment_row[0].get('segment_end_time'):
                 last_segment_end = parse_utc_time_string(last_segment_row[0]['segment_end_time'])
 
@@ -354,7 +329,6 @@ class ContinuumRepository:
                 """
                 first_msg_row = db.execute_query(first_message_query, (continuum_id, last_segment_end))
             else:
-                # No previous collapsed segment - this may be the absolute first message
                 first_message_query = """
                     SELECT created_at FROM messages
                     WHERE continuum_id = %s
@@ -365,10 +339,8 @@ class ContinuumRepository:
                 """
                 first_msg_row = db.execute_query(first_message_query, (continuum_id,))
 
-            # Use first existing message time, or current message time if this IS the first message
             first_message_time = first_msg_row[0]['created_at'] if first_msg_row else current_message_time
 
-            # Create segment boundary sentinel (initializes segment_turn_count to 1)
             from cns.services.segment_helpers import create_segment_boundary_sentinel
 
             # The segment_id was allocated at API entry by increment_segment_turn
@@ -451,7 +423,6 @@ class ContinuumRepository:
             return
 
         try:
-            # Additional validation to prevent empty messages from being saved
             for message in messages:
                 if isinstance(message.content, str) and not message.content.strip():
                     logger.error(f"Blocking empty {message.role} message for continuum {continuum_id}")
@@ -459,12 +430,10 @@ class ContinuumRepository:
 
             db = self.get_user_db_client(user_id)
 
-            # Convert continuum_id to UUID if it's a string
             if isinstance(continuum_id, str):
                 from uuid import UUID as uuid_type
                 continuum_id = uuid_type(continuum_id)
 
-            # Check if any messages are real conversation messages
             real_messages = [
                 msg for msg in messages
                 if not (
@@ -473,9 +442,7 @@ class ContinuumRepository:
                 )
             ]
 
-            # Ensure active segment exists if we have real messages
             if real_messages:
-                # Use the earliest real message timestamp
                 earliest_timestamp = min(msg.created_at for msg in real_messages)
                 self._ensure_active_segment(continuum_id, user_id, earliest_timestamp, db)
                 logger.debug(f"Checked segment boundary for batch save with {len(real_messages)} real messages")
@@ -486,15 +453,12 @@ class ContinuumRepository:
             insert_operations: list[tuple[str, tuple[object, ...]]] = []
             has_user_message = False
             for message in messages:
-                # Extract segment embedding if this is a segment boundary with embedding
                 segment_embedding_value = None
                 if message.metadata.get('is_segment_boundary') and message.metadata.get('segment_embedding_value') is not None:
                     embedding_list = message.metadata['segment_embedding_value']
-                    # Format as PostgreSQL vector: '[0.1, 0.2, ...]'
                     segment_embedding_value = '[' + ','.join(str(x) for x in embedding_list) + ']'
 
-                # Stamp the content-type identity tag (see save_message) and
-                # get the base message tuple
+                # Stamp the content-type identity tag (see save_message)
                 content_type = "json" if not isinstance(message.content, str) else "text"
                 base_tuple = message.with_metadata(content_type=content_type).to_db_tuple(continuum_id, user_id)
 
@@ -510,7 +474,6 @@ class ContinuumRepository:
 
             db.execute_transaction(insert_operations)
 
-            # Track user activity day if batch contained user message
             if has_user_message:
                 try:
                     from utils.user_activity import increment_user_activity_day
@@ -547,10 +510,9 @@ class ContinuumRepository:
                     metadata = {}
             metadata = metadata or {}
 
-            # Reconstitute content by its stored identity tag, never by shape.
-            # A plain-text user message that happens to be valid JSON must
-            # reload as plain text; rows written before the tag existed carry
-            # no tag and are treated as plain text.
+            # Reconstitute by stored identity tag, never by shape: a plain-text
+            # message that happens to be valid JSON must reload as plain text.
+            # Rows written before the tag existed carry none and stay plain text.
             content = row.get("content")
             if metadata.get("content_type") == "json" and isinstance(content, str):
                 try:
@@ -560,7 +522,6 @@ class ContinuumRepository:
                         f"Message {canonical_id} tagged as JSON content failed to parse; keeping raw string"
                     )
 
-            # Read tool_call_id/is_error from dedicated columns
             tool_call_id = row.get("tool_call_id")
             is_error = row.get("is_error", False)
 
@@ -615,13 +576,10 @@ class ContinuumRepository:
         """
         db = self.get_user_db_client(user_id)
         
-        # Build query with metadata filters
         where_conditions = ["continuum_id = %s"]
         params = [continuum_id]
         
-        # Add metadata conditions
         for key, value in metadata_filters.items():
-            # Handle boolean values properly
             if isinstance(value, bool):
                 value = 'true' if value else 'false'
             where_conditions.append(f"metadata->>'{key}' = %s")
@@ -639,7 +597,6 @@ class ContinuumRepository:
 
         message_rows = db.execute_query(query, tuple(params))
 
-        # Reverse if we queried DESC to get chronological order
         if order_desc and len(message_rows) > 1:
             message_rows.reverse()
 
@@ -714,16 +671,12 @@ class ContinuumRepository:
         """
         db = self.get_user_db_client(user_id)
         
-        # Build query with optional date filtering
         where_conditions = ["user_id = %s"]
         params = [user_id]
 
-        # Filter by message type
         if message_type == "all":
-            # Include all messages, no additional filter
             pass
         else:
-            # Default to regular messages (exclude system notifications)
             where_conditions.append("COALESCE(metadata->>'system_notification', 'false') != 'true'")
         
         if start_date:
@@ -739,7 +692,6 @@ class ContinuumRepository:
             where_conditions.append("(created_at, id) < (%s, %s)")
             params.extend([before_created_at, before_id])
         
-        # Get messages with pagination
         query = f"""
             SELECT * FROM messages 
             WHERE {' AND '.join(where_conditions)}
@@ -750,7 +702,6 @@ class ContinuumRepository:
         
         message_rows = db.execute_query(query, tuple(params))
         
-        # Check if there are more results
         has_more = len(message_rows) > limit
         if has_more:
             message_rows = message_rows[:limit]  # Drop the lookahead row
@@ -797,9 +748,6 @@ class ContinuumRepository:
             (json.dumps(continuum._state.metadata), continuum.id)
         )
 
-    # =========================================================================
-    # Segment Query Methods
-    # =========================================================================
 
     def find_active_segment(self, continuum_id: str | UUID, user_id: str) -> Message | None:
         """
@@ -1005,7 +953,6 @@ class ContinuumRepository:
 
         rows = db.execute_query(query, (str(continuum_id), limit))
 
-        # Reverse to get chronological order (oldest first)
         if rows:
             rows.reverse()
 
@@ -1271,12 +1218,11 @@ class ContinuumRepository:
         """
         db = self.get_user_db_client(user_id)
 
-        # Get messages before the most recent collapsed segment's end time.
-        # The stored boundary carries an explicit UTC offset; casting it to
-        # timestamptz honors that offset. A plain ::timestamp cast strips it,
-        # and Postgres then re-interprets the naive value in the session
-        # timezone — shifting the cutoff by hours on non-UTC clusters.
-        # Request 4x turn_count to ensure we have enough messages to find complete pairs
+        # Cutoff = most recent collapsed segment's segment_end_time. Stored boundary
+        # carries an explicit UTC offset; ::timestamptz honors it, a plain
+        # ::timestamp strips it and Postgres re-interprets the naive value in the
+        # session timezone — hours off on non-UTC clusters. 4x turn_count
+        # requested to have enough messages for complete pairs.
         query = """
             WITH boundary_time AS (
                 SELECT (metadata->>'segment_end_time')::timestamptz as cutoff_time
@@ -1304,10 +1250,8 @@ class ContinuumRepository:
         if not rows:
             return []
 
-        # Parse messages (in reverse chronological order from query)
         all_messages = self._parse_message_rows(rows)
 
-        # Work backwards to find last N assistant messages and their corresponding user messages
         pairs = []
         assistant_count = 0
         i = 0
@@ -1316,27 +1260,22 @@ class ContinuumRepository:
             msg = all_messages[i]
 
             if msg.role == 'assistant':
-                # Found an assistant message, now find its corresponding user message
                 assistant_msg = msg
                 user_msg = None
 
-                # Look backwards for the user message
                 for j in range(i + 1, len(all_messages)):
                     if all_messages[j].role == 'user':
                         user_msg = all_messages[j]
                         break
 
-                # Only add if we found the user message
                 if user_msg:
                     pairs.append((user_msg, assistant_msg))
                     assistant_count += 1
 
             i += 1
 
-        # Reverse pairs to get chronological order (oldest first)
         pairs.reverse()
 
-        # Flatten the pairs into a single list
         messages = []
         for user_msg, assistant_msg in pairs:
             messages.extend([user_msg, assistant_msg])

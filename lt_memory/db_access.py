@@ -56,7 +56,6 @@ def _load_scoring_formula() -> str:
         return f.read().strip()
 
 
-# Load scoring formula once at module initialization (zero file I/O after this)
 _SCORING_FORMULA_SQL = _load_scoring_formula()
 
 
@@ -92,9 +91,8 @@ class LTMemoryDB:
             RuntimeError: If ambient context lookup fails when user_id is None
         """
         if user_id is not None:
-            return str(user_id)  # Convert UUID to string if needed
+            return str(user_id)
 
-        # Only attempt ambient context lookup when user_id truly absent
         try:
             return get_current_user_id()
         except RuntimeError:
@@ -124,7 +122,6 @@ class LTMemoryDB:
             with session.transaction():
                 yield session
 
-    # ==================== MEMORY CRUD ====================
 
     def store_memories(
         self,
@@ -319,19 +316,16 @@ class LTMemoryDB:
         """
         resolved_user_id = self._resolve_user_id(user_id)
 
-        # Build SET clause dynamically
         set_clauses = []
         params = {'memory_id': memory_id}
 
         for field, value in updates.items():
             param_name = f'update_{field}'
             set_clauses.append(f"{field} = %({param_name})s")
-            # JSONB columns must be wrapped for psycopg — raw lists/dicts
-            # raise `cannot adapt type 'dict'` at the driver boundary (the
-            # memory curator's merge_memories died to this in the wild)
+            # Raw lists/dicts raise `cannot adapt type 'dict'` at the driver boundary
+            # (the memory curator's merge_memories died to this in the wild)
             params[param_name] = Jsonb(value) if field in _JSONB_MEMORY_FIELDS else value
 
-        # Always update updated_at
         set_clauses.append("updated_at = NOW()")
 
         set_clause = ", ".join(set_clauses)
@@ -378,12 +372,10 @@ class LTMemoryDB:
 
                 self._recount_entity_link_counts([memory_id], session)
 
-        # Clean up dead links while we're here
         self.remove_dead_links([memory_id], user_id=resolved_user_id)
 
         logger.info(f"Archived memory {memory_id} and cleaned up dead links")
 
-    # ==================== CURATOR (last_tended_at) ====================
 
     def update_last_tended(
         self,
@@ -464,8 +456,6 @@ class LTMemoryDB:
             })
 
             return [row['id'] for row in results]
-
-    # ==================== SEARCH & RETRIEVAL ====================
 
     # The UNION queries below use explicit column lists; a compatibility VIEW
     # over global_memories that adds default columns could allow SELECT *
@@ -633,7 +623,6 @@ class LTMemoryDB:
                 'search_query': search
             }
 
-    # ==================== SCORING OPERATIONS ====================
 
     def _recalculate_importance_scores(
         self,
@@ -656,7 +645,6 @@ class LTMemoryDB:
         if not memory_ids:
             return 0
 
-        # Build UPDATE query using formula from scoring_formula.sql
         # Use positional param %s with tuple for PostgreSQL array type
         recalc_query = f"""
         UPDATE memories m
@@ -732,7 +720,6 @@ class LTMemoryDB:
 
         with self.session_manager.get_session(resolved_user_id) as session:
             with session.transaction():
-                # Step 1: Update access statistics
                 access_update = """
                 UPDATE memories m
                 SET
@@ -752,12 +739,10 @@ class LTMemoryDB:
                 if not result:
                     raise ValueError(f"Memory {memory_id} not found")
 
-                # Step 2: Recalculate importance score using shared formula
                 self._recalculate_importance_scores([memory_id], session)
 
-                # Step 3: Fetch and return updated memory from THIS
-                # transaction — get_memory would read through a second pooled
-                # connection and miss the uncommitted UPDATE above
+                # Fetch in THIS transaction: get_memory opens a second pooled
+                # connection and would miss the uncommitted UPDATE above
                 result = session.execute_single("""
                     SELECT * FROM memories
                     WHERE id = %(memory_id)s
@@ -781,7 +766,6 @@ class LTMemoryDB:
 
         with self.session_manager.get_session(resolved_user_id) as session:
             with session.transaction():
-                # Strip mem_ prefix if present before building LIKE patterns
                 like_patterns = [f"{parse_memory_id(sid).lower()}%" for sid in short_ids]
 
                 update_query = """
@@ -862,7 +846,6 @@ class LTMemoryDB:
         resolved_user_id = self._resolve_user_id(user_id)
 
         with self.session_manager.get_session(resolved_user_id) as session:
-            # Get stale memories
             stale_query = """
             SELECT id FROM memories
             WHERE (last_accessed < NOW() - INTERVAL '7 days' OR last_accessed IS NULL)
@@ -878,10 +861,8 @@ class LTMemoryDB:
             if not stale_ids:
                 return 0
 
-            # Recalculate scores using shared formula
             updated_count = self._recalculate_importance_scores(stale_ids, session)
 
-            # Archive memories that fell below threshold
             # Use positional param %s with tuple for PostgreSQL array type
             archive_query = """
             UPDATE memories
@@ -903,8 +884,7 @@ class LTMemoryDB:
                 # Mirror archive_memory: link_count tracks non-archived links only
                 self._recount_entity_link_counts(archived_ids, session)
 
-        # Mirror archive_memory: purge archived UUIDs from live memories' link
-        # arrays (remove_dead_links opens its own session, so stay outside ours)
+        # Mirror archive_memory: remove_dead_links outside our transaction (opens its own session)
         if archived_ids:
             self.remove_dead_links(archived_ids, user_id=resolved_user_id)
 
@@ -937,7 +917,6 @@ class LTMemoryDB:
         resolved_user_id = self._resolve_user_id(user_id)
 
         with self.session_manager.get_session(resolved_user_id) as session:
-            # Query temporal memories within relevant windows
             temporal_query = """
             SELECT id FROM memories
             WHERE is_archived = FALSE
@@ -960,10 +939,9 @@ class LTMemoryDB:
                 logger.debug("No temporal memories in relevant windows")
                 return 0
 
-            # Recalculate scores using shared formula
             updated_count = self._recalculate_importance_scores(temporal_ids, session)
 
-            # Archive memories that fell below threshold or expired
+            # Use positional param %s with tuple for PostgreSQL array type
             archive_query = """
             UPDATE memories
             SET is_archived = TRUE,
@@ -984,8 +962,7 @@ class LTMemoryDB:
                 # Mirror archive_memory: link_count tracks non-archived links only
                 self._recount_entity_link_counts(archived_ids, session)
 
-        # Mirror archive_memory: purge archived UUIDs from live memories' link
-        # arrays (remove_dead_links opens its own session, so stay outside ours)
+        # Mirror archive_memory: remove_dead_links outside our transaction (opens its own session)
         if archived_ids:
             self.remove_dead_links(archived_ids, user_id=resolved_user_id)
 
@@ -996,7 +973,6 @@ class LTMemoryDB:
 
         return updated_count
 
-    # ==================== LINK OPERATIONS ====================
 
     def create_links(
         self,
@@ -1021,7 +997,6 @@ class LTMemoryDB:
         with self.session_manager.get_session(resolved_user_id) as session:
             with session.transaction():
                 for link in links:
-                    # Create outbound link object for source
                     outbound_obj = {
                         'uuid': str(link.target_id),
                         'type': link.link_type,
@@ -1031,7 +1006,6 @@ class LTMemoryDB:
                     if link.extraction_bond:
                         outbound_obj['extraction_bond'] = link.extraction_bond
 
-                    # Create inbound link object for target
                     inbound_obj = {
                         'uuid': str(link.source_id),
                         'type': link.link_type,
@@ -1141,7 +1115,6 @@ class LTMemoryDB:
         dead_uuid_strs = [str(uuid) for uuid in dead_uuids]
 
         with self.session_manager.get_session(resolved_user_id) as session:
-            # Build JSONB filter to remove dead UUIDs
             query = """
             UPDATE memories
             SET
@@ -1172,7 +1145,6 @@ class LTMemoryDB:
 
             return updated_count
 
-    # ==================== ENTITY OPERATIONS ====================
 
     def find_similar_entity_pairs(
         self,
@@ -1254,14 +1226,12 @@ class LTMemoryDB:
             })
 
             if existing:
-                # Update timestamp and return
                 session.execute_update(
                     "UPDATE entities SET updated_at = NOW() WHERE id = %(id)s",
                     {'id': existing['id']}
                 )
                 return Entity(**existing)
 
-            # Try fuzzy match using trigram similarity
             fuzzy_query = """
             SELECT *, similarity(name, %(name)s) AS sim_score
             FROM entities
@@ -1282,12 +1252,10 @@ class LTMemoryDB:
                     f"Fuzzy matched '{name}' to existing entity '{fuzzy_match['name']}' "
                     f"(similarity: {fuzzy_match.get('sim_score', 'N/A'):.3f})"
                 )
-                # Update timestamp and return existing entity
                 session.execute_update(
                     "UPDATE entities SET updated_at = NOW() WHERE id = %(id)s",
                     {'id': fuzzy_match['id']}
                 )
-                # Remove sim_score before passing to Entity model
                 fuzzy_match.pop('sim_score', None)
                 return Entity(**fuzzy_match)
 
@@ -1344,7 +1312,6 @@ class LTMemoryDB:
 
         with self.session_manager.get_session(resolved_user_id) as session:
             with session.transaction():
-                # Add entity to memory's entity_links
                 entity_link_obj = {
                     'uuid': str(entity_id),
                     'type': entity_type,
@@ -1361,7 +1328,6 @@ class LTMemoryDB:
                     'entity_obj': json.dumps(entity_link_obj)
                 })
 
-                # Update entity link_count and last_linked_at
                 session.execute_update("""
                     UPDATE entities
                     SET link_count = link_count + 1,
@@ -1403,7 +1369,6 @@ class LTMemoryDB:
             ORDER BY created_at DESC
             """
 
-            # JSONB containment query
             entity_filter = json.dumps([{"uuid": str(entity_id)}])
 
             params: list = [entity_filter]
@@ -1491,8 +1456,7 @@ class LTMemoryDB:
                     'source_filter': json.dumps([{"uuid": str(source_id)}])
                 })
 
-                # Recount, not increment: a memory already linked to both
-                # entities would otherwise be counted twice
+                # Recount, not increment: a memory linked to both entities would double-count
                 session.execute_update("""
                     UPDATE entities
                     SET link_count = (

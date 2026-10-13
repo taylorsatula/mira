@@ -92,7 +92,6 @@ class SchedulerService:
                 )
                 logger.info(f"Added job {job_id} for component {job_reg.component}")
 
-            # Start scheduler once with all jobs registered
             self.scheduler.start()
             self._running = True
             logger.info(f"Scheduler service started with {len(self._registered_jobs)} jobs")

@@ -18,12 +18,9 @@ from dataclasses import dataclass
 
 from clients.llm.resolver import ModelSelection
 
-# First-token stall bound, not a generation bound. A thinking model under load
-# can spend 25s+ before its first token while streaming normally after that
-# (measured: gw.lunaroute.com glm-5.3, 2026-10-11, first streamed byte 25.2s
-# solo), and concurrent probes over one API key queue behind each other —
-# observed first-token latency has a tail past 60s. The bound covers the tail;
-# a genuinely hung endpoint still stalls at it.
+# First-token bound, not a completion bound. Measured first streamed byte 25.2s
+# solo (gw.lunaroute.com glm-5.3, 2026-10-11); concurrent probes over one API key
+# queue, observed first-token tail past 60s. The bound covers that tail.
 FIRST_TOKEN_PROBE_SECONDS = 120
 
 PROBE_SYSTEM = "MIRA provider reachability probe. Reply with OK."

@@ -79,11 +79,10 @@ class ActionSchema(TypedDict, total=False):
 class BaseDomainHandler(BaseHandler):
     """Base handler for domain-specific actions."""
 
-    # Define available actions and their required/optional fields
     ACTIONS: dict[str, ActionSchema] = {}
     
     def __init__(self):
-        super().__init__()  # Initialize BaseHandler (logger, thread pool)
+        super().__init__()
         from utils.user_context import get_current_user_id
         self.user_id = get_current_user_id()
     
@@ -96,20 +95,17 @@ class BaseDomainHandler(BaseHandler):
                 f"Available actions: {', '.join(available_actions)}"
             )
         
-        # Get schema for this action
         schema = self.ACTIONS[action]
         required_fields = schema.get('required', [])
         optional_fields = schema.get('optional', [])
         all_fields = required_fields + optional_fields
         
-        # Check required fields
         missing_fields = [field for field in required_fields if field not in data]
         if missing_fields:
             raise ValidationError(
                 f"Missing required fields for action '{action}': {', '.join(missing_fields)}"
             )
         
-        # Check for unknown fields
         unknown_fields = [field for field in data.keys() if field not in all_fields]
         if unknown_fields:
             raise ValidationError(
@@ -117,12 +113,10 @@ class BaseDomainHandler(BaseHandler):
                 f"Valid fields: {', '.join(all_fields)}"
             )
         
-        # Validate field types
         for field, value in data.items():
             if field in schema.get('types', {}):
                 expected_type = schema['types'][field]
                 
-                # Special handling for UUID type
                 if expected_type == 'uuid':
                     from uuid import UUID
                     try:
@@ -264,7 +258,6 @@ class ReminderDomainHandler(BaseDomainHandler):
         
         try:
             if action == "complete":
-                # Mark single reminder as completed
                 run_kwargs: dict[str, Any] = {
                     "operation": "mark_completed",
                     "reminder_id": data["id"]
@@ -280,11 +273,9 @@ class ReminderDomainHandler(BaseDomainHandler):
                 }
 
             elif action == "bulk_complete":
-                # Mark multiple reminders as completed
                 reminder_ids = data["ids"]
                 resolution_note = data.get("resolution_note")
 
-                # Validate that ids is a non-empty list of strings
                 if not reminder_ids:
                     raise ValidationError("At least one reminder ID is required")
 
@@ -303,17 +294,13 @@ class ReminderDomainHandler(BaseDomainHandler):
                         if resolution_note:
                             run_kwargs["resolution_note"] = resolution_note
                         result = reminder_tool.run(**run_kwargs)
-                        # Strict access: the tool's contract returns the
-                        # completed reminder; a contract drift must surface as
-                        # an error, not a titleless success entry.
+                        # Strict access: a contract drift must surface as an error, not a titleless success entry.
                         completed.append({
                             "id": reminder_id,
                             "title": _project_reminder(result["reminder"])["title"]
                         })
                     except ValueError as e:
-                        # Per-item failure (not-found or otherwise) is an
-                        # honest failed-list entry with its reason — the rest
-                        # of the batch still reports what actually completed.
+                        # Per-item failure is an honest failed-list entry with its reason; the rest of the batch still reports.
                         failed.append({
                             "id": reminder_id,
                             "error": str(e)
@@ -328,10 +315,9 @@ class ReminderDomainHandler(BaseDomainHandler):
                 }
 
             elif action == "create":
-                # Create new reminder with all provided fields
                 result = reminder_tool.run(
                     operation="add_reminder",
-                    **data  # Pass all validated data
+                    **data
                 )
                 return {
                     "created": True,
@@ -343,9 +329,7 @@ class ReminderDomainHandler(BaseDomainHandler):
                 }
             
             elif action == "update":
-                # Update existing reminder
                 reminder_id = data["id"]
-                # Only pass fields that were actually provided
                 update_fields = {k: v for k, v in data.items() if k != "id" and v is not None}
                 
                 if not update_fields:
@@ -364,7 +348,6 @@ class ReminderDomainHandler(BaseDomainHandler):
                 }
             
             elif action == "delete":
-                # Delete reminder
                 result = reminder_tool.run(
                     operation="delete_reminder",
                     reminder_id=data["id"]
@@ -379,11 +362,9 @@ class ReminderDomainHandler(BaseDomainHandler):
                 raise ValidationError(f"Unknown action: {action}")
 
         except ReminderNotFoundError as e:
-            # The tool's documented not-found channel: single-id actions map to
-            # the standard 404 missing-id envelope instead of 200 false-success.
+            # The tool's documented not-found channel: single-id actions map to the 404 missing-id envelope, not 200 false-success.
             raise NotFoundError("reminder", data.get("id", "")) from e
         except ValueError as e:
-            # Tool raises ValueError for business logic errors
             raise ValidationError(str(e)) from e
 
 
@@ -416,7 +397,6 @@ class MemoryDomainHandler(BaseDomainHandler):
         from lt_memory.db_access import LTMemoryDB
         from utils.database_session_manager import get_shared_session_manager
 
-        # Set user context for LTMemoryDB operations
         set_current_user_id(self.user_id)
 
         # Use shared session manager to prevent connection pool exhaustion
@@ -424,25 +404,20 @@ class MemoryDomainHandler(BaseDomainHandler):
         lt_db = LTMemoryDB(session_manager)
         
         if action == "create":
-            # Manual memory creation
             content = data["content"]
             importance = data.get("importance", 0.5)
             
-            # Validate importance score
             if not 0 <= importance <= 1:
                 raise ValidationError("Importance score must be between 0 and 1")
             
-            # Generate embedding for the memory
             from clients.embeddings_provider import get_embeddings_provider
             from lt_memory.models import ExtractedMemory
-            embeddings_provider = get_embeddings_provider()  # Use singleton
+            embeddings_provider = get_embeddings_provider()
             # Document encoding for memory storage
             embedding = embeddings_provider.encode_deep(content)
 
-            # Convert ndarray to list for database storage (serialization boundary)
             embedding_list = embedding.tolist()
 
-            # Create ExtractedMemory object (embedding passed separately to store_memories)
             memory = ExtractedMemory(
                 text=content,
                 importance_score=importance
@@ -453,7 +428,6 @@ class MemoryDomainHandler(BaseDomainHandler):
             if not memory_ids:
                 raise ValidationError("Failed to create memory")
             
-            # Get the created memory to return
             created_memory = lt_db.get_memory(memory_ids[0])
 
             return jsonable_encoder({
@@ -468,15 +442,12 @@ class MemoryDomainHandler(BaseDomainHandler):
             })
         
         elif action == "delete":
-            # Delete single memory
             memory_id = data["id"]
             
-            # Verify memory exists
             memory = lt_db.get_memory(UUID(memory_id))
             if not memory:
                 raise NotFoundError("memory", memory_id)
 
-            # Archive the memory (soft delete)
             lt_db.archive_memory(UUID(memory_id))
 
             return {
@@ -486,10 +457,8 @@ class MemoryDomainHandler(BaseDomainHandler):
             }
         
         elif action == "bulk_delete":
-            # Delete multiple memories
             memory_ids = data["ids"]
             
-            # Validate that ids is a non-empty list of strings
             if not memory_ids:
                 raise ValidationError("At least one memory ID is required")
             
@@ -508,7 +477,6 @@ class MemoryDomainHandler(BaseDomainHandler):
             if missing:
                 raise NotFoundError("memories", ", ".join(missing))
 
-            # Archive memories (soft delete)
             for mid in parsed_ids:
                 lt_db.archive_memory(mid)
 
@@ -579,10 +547,9 @@ class ContactsDomainHandler(BaseDomainHandler):
         
         try:
             if action == "create":
-                # Create new contact
                 result = contacts_tool.run(
                     operation="add_contact",
-                    **data  # Pass all validated data
+                    **data
                 )
                 return {
                     "created": True,
@@ -592,7 +559,6 @@ class ContactsDomainHandler(BaseDomainHandler):
                 }
             
             elif action == "get":
-                # Get contact by UUID or name
                 result = contacts_tool.run(
                     operation="get_contact",
                     identifier=data["identifier"]
@@ -611,7 +577,6 @@ class ContactsDomainHandler(BaseDomainHandler):
                 }
             
             elif action == "list":
-                # List all contacts
                 result = contacts_tool.run(
                     operation="list_contacts"
                 )
@@ -622,9 +587,7 @@ class ContactsDomainHandler(BaseDomainHandler):
                 }
             
             elif action == "update":
-                # Update existing contact
                 identifier = data["identifier"]
-                # Only pass fields that were actually provided
                 update_fields = {k: v for k, v in data.items() if k != "identifier" and v is not None}
                 
                 if not update_fields:
@@ -656,7 +619,6 @@ class ContactsDomainHandler(BaseDomainHandler):
                 }
             
             elif action == "delete":
-                # Delete contact
                 result = contacts_tool.run(
                     operation="delete_contact",
                     identifier=data["identifier"]
@@ -685,11 +647,9 @@ class ContactsDomainHandler(BaseDomainHandler):
                 raise ValidationError(f"Unknown action: {action}")
                 
         except ContactNotFoundError as e:
-            # The tool's documented not-found channel: the standard 404
-            # missing-id envelope instead of found:true/400 false shapes.
+            # The tool's documented not-found channel: the 404 missing-id envelope, not found:true/400 false shapes.
             raise NotFoundError("contact", data.get("identifier", "")) from e
         except ValueError as e:
-            # Tool raises ValueError for business logic errors
             raise ValidationError(str(e)) from e
 
 
@@ -783,15 +743,13 @@ class UserDomainHandler(BaseDomainHandler):
         elif action == "update_profile":
             from utils.database_session_manager import get_shared_session_manager
             from utils.profile_validation import validate_profile_name
-            # get_valkey_client stays module-level (imported at :35) — a local
-            # re-import here shadows it for the whole execute_action scope and
+            # get_valkey_client is module-level (clients.valkey_client import):
+            # a local re-import shadows it for execute_action's whole scope and
             # UnboundLocalErrors the effort-override branches below.
 
-            # At least one field must be provided
             if not any(k in data for k in ["first_name", "last_name", "timezone", "temperature_unit"]):
                 raise ValidationError("At least one field (first_name, last_name, timezone, temperature_unit) must be provided")
 
-            # Validate timezone if provided
             if "timezone" in data:
                 from utils.timezone_utils import validate_timezone
                 try:
@@ -799,7 +757,6 @@ class UserDomainHandler(BaseDomainHandler):
                 except Exception:
                     raise ValidationError(f"Invalid timezone: {data['timezone']}")
 
-            # Validate temperature_unit if provided
             if "temperature_unit" in data:
                 valid_units = ("fahrenheit", "celsius")
                 if data["temperature_unit"] not in valid_units:
@@ -808,7 +765,6 @@ class UserDomainHandler(BaseDomainHandler):
                         f"Valid units: {', '.join(valid_units)}"
                     )
 
-            # Build UPDATE query dynamically based on provided fields
             update_fields = []
             params = {"user_id": self.user_id}
 
@@ -834,7 +790,6 @@ class UserDomainHandler(BaseDomainHandler):
                 update_fields.append("temperature_unit = %(temperature_unit)s")
                 params["temperature_unit"] = data["temperature_unit"]
 
-            # Execute update
             session_manager = get_shared_session_manager()
             with session_manager.get_session(self.user_id) as db:
                 db.execute_update(
@@ -842,7 +797,6 @@ class UserDomainHandler(BaseDomainHandler):
                     params
                 )
 
-            # Invalidate user preferences cache so changes take effect immediately
             invalidate_user_preferences_cache(self.user_id)
 
             return {
@@ -856,7 +810,6 @@ class UserDomainHandler(BaseDomainHandler):
 
             calendar_url = data["calendar_url"]
 
-            # Store calendar URL in user credentials
             credential_service = UserCredentialService()
             credential_service.store_credential(
                 credential_type="calendar_url",
@@ -895,7 +848,6 @@ class UserDomainHandler(BaseDomainHandler):
             except ValueError as e:
                 raise ValidationError(str(e))
 
-            # Validate name format (alphanumeric + underscore/hyphen)
             if not name or not name.replace("_", "").replace("-", "").isalnum():
                 raise ValidationError("Credential name must be alphanumeric (underscores/hyphens allowed)")
 
@@ -1352,18 +1304,12 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
                 resolved = resolve_domaindoc(self.user_id, label)
                 if resolved.is_shared:
                     db = resolved.db
-                    # Downstream methods use data["label"] for DB lookups —
-                    # must be the owner's original label, not the suffixed one
+                    # Downstream DB lookups need the owner's original label, not the suffixed one.
                     data["label"] = owner_label_from_shared(label)
             except (ValidationError, ValueError) as e:
-                # The resolver is the routing authority for `_shared` labels:
-                # when it cannot resolve one, the share is missing, revoked,
-                # or unavailable — a not-found, never a label-syntax problem.
-                # Left to fall through, _validate_label's reserved-suffix
-                # rejection would misattribute the denial to label syntax.
-                # Malformed labels (empty / illegal characters) still fall
-                # through to the action's own validation, which reports the
-                # syntax error exactly as before.
+                # The resolver is the routing authority for `_shared` labels: an unresolvable
+                # one is a not-found, never a label-syntax problem; malformed labels fall
+                # through to the action's own validation.
                 if is_shared_label(label) and label and label.replace("_", "").isalnum():
                     raise _not_found_envelope(
                         ValueError("Shared document not found or access revoked"),
@@ -1427,7 +1373,6 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         else:
             raise ValidationError(f"Unknown action: {action}")
 
-        # Invalidate trinket cache after write operations
         if action not in self._READ_ONLY_ACTIONS:
             self._invalidate_trinket_cache()
             if resolved and resolved.is_shared and resolved.owner_user_id:
@@ -1470,8 +1415,7 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
             "updated_at": now
         })
 
-        # Every section's history starts at its birth: version 1 captures the
-        # initial section's as-created content.
+        # Every section's history starts at its birth: version 1 captures the as-created content.
         self._record_version(db, int(domaindoc_id), "create", {
             "section": "OVERVIEW",
             "content": "",
@@ -1624,7 +1568,6 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         self._validate_label(label)
         doc = self._get_domaindoc(db, label)
 
-        # Get ALL sections for this domaindoc (both top-level and subsections)
         all_results = db.fetchall(
             "SELECT * FROM domaindoc_sections WHERE domaindoc_id = :doc_id ORDER BY parent_section_id NULLS FIRST, sort_order",
             {"doc_id": doc["id"]}
@@ -1671,7 +1614,6 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
 
         if new_label:
             self._validate_label(new_label)
-            # Check for collision
             existing = db.select("domaindocs", "label = :label AND id != :id", {"label": new_label, "id": doc["id"]})
             if existing:
                 raise ValidationError(f"Domaindoc '{new_label}' already exists")
@@ -1763,15 +1705,13 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
             {"id": section["id"]}
         )
 
-        # Record version for UI edits — "content" is the section content as of
-        # this version, the restore target for rollback_section.
+        # "content" is the section content as of this version — the restore target for rollback_section.
         self._record_version(db, doc["id"], "ui_replace", {
             "section": header,
             "content": content,
             "parent": parent_header
         }, section["id"])
 
-        # Update section summary
         from cns.services.domaindoc_summary_service import update_section_summary
         update_section_summary(db, section["id"], header, content)
 
@@ -1800,10 +1740,8 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
                 raise ValidationError("Maximum nesting depth is 2. Cannot add children to a sub-subsection.")
             parent_id = parent["id"]
 
-        # Get sections at the target level (top-level or within parent)
         sections = self._get_all_sections(db, doc["id"], parent_id)
 
-        # Check for duplicate section name at this level
         self._check_duplicate_section(db, doc["id"], header, parent_id)
 
         if after:
@@ -1824,7 +1762,7 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
             "header": header,
             "encrypted__content": content,
             "sort_order": new_order,
-            "collapsed": True,  # New sections start collapsed
+            "collapsed": True,
             "created_at": now,
             "updated_at": now
         })
@@ -1838,7 +1776,6 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
             "parent": parent_header
         }, int(section_id))
 
-        # Generate section summary (if content is provided)
         if content:
             from cns.services.domaindoc_summary_service import update_section_summary
             update_section_summary(db, int(section_id), header, content)
@@ -1866,8 +1803,7 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
             {"new_name": new_name, "now": now, "id": section["id"]}
         )
 
-        # Record version — content is unchanged by a rename; record the as-of
-        # content so the rename version is a restorable rollback target.
+        # Content is unchanged by a rename; record the as-of content so the rename version is a restorable rollback target.
         self._record_version(db, doc["id"], "ui_rename_section", {
             "old_name": header,
             "new_name": new_name,
@@ -1886,19 +1822,15 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         doc = self._get_domaindoc(db, label)
         section = self._get_section(db, doc["id"], header, parent_header)
 
-        # Can't delete pinned sections
         if section.get("pinned"):
             raise ValidationError(f"Cannot delete pinned section '{header}'. Unpin it first.")
 
-        # For top-level sections, check if section AND all subsections are expanded
         deleted_children = []
         if section.get("parent_section_id") is None:
             subsections = self._get_subsections(db, section["id"])
             if subsections:
-                # Check section itself is expanded
                 if section.get("collapsed"):
                     raise ValidationError(f"Please expand section '{header}' before deleting to review its contents")
-                # Check all subsections are expanded
                 collapsed_subs = [s["header"] for s in subsections if s.get("collapsed")]
                 if collapsed_subs:
                     raise ValidationError(
@@ -1918,7 +1850,6 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         # Delete cascades to children via FK ON DELETE CASCADE
         db.execute("DELETE FROM domaindoc_sections WHERE id = :id", {"id": section["id"]})
 
-        # Renumber remaining sections at the same level
         parent_id = section.get("parent_section_id")
         sections = self._get_all_sections(db, doc["id"], parent_id)
         for i, s in enumerate(sections):
@@ -1994,9 +1925,8 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         doc = self._get_domaindoc(db, label)
         section = self._get_section(db, doc["id"], header, parent_header)
 
-        # Can't collapse pinned sections — same guard shape as delete_section
-        # (pinned sections are always expanded; a silent no-op would let the
-        # caller believe the collapse took effect)
+        # Can't collapse pinned sections — same guard shape as delete_section;
+        # a silent no-op would let the caller believe the collapse took effect.
         if section.get("pinned"):
             raise ValidationError(
                 f"Cannot collapse pinned section '{header}'. Pinned sections are always expanded — unpin it first."
@@ -2058,7 +1988,6 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         doc = self._get_domaindoc(db, label)
         section = self._get_section(db, doc["id"], header, parent_header)
 
-        # Find the target version
         result = db.fetchone(
             "SELECT * FROM domaindoc_versions WHERE domaindoc_id = :doc_id AND section_id = :sec_id AND version_num = :ver",
             {"doc_id": doc["id"], "sec_id": section["id"], "ver": version_num}
@@ -2072,7 +2001,6 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
         if "content" not in diff_data:
             raise ValidationError(f"Version {version_num} does not contain restorable content")
 
-        # Restore the content as of version N
         restored_content = diff_data["content"]
         now = format_utc_iso(utc_now())
 
@@ -2083,8 +2011,7 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
             {"id": section["id"]}
         )
 
-        # Record the rollback as a new version carrying the restored content,
-        # so it is itself restorable
+        # Record the rollback as a new version carrying the restored content, so it is itself restorable.
         new_version = self._record_version(db, doc["id"], "rollback", {
             "rolled_back_to": version_num,
             "content": restored_content,
@@ -2137,9 +2064,8 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
             elif existing["status"] == "pending":
                 raise ValidationError(f"Already invited {email} to '{label}'")
             elif existing["status"] in ("revoked", "rejected"):
-                # SET deliberately scoped to the granted columns — schema grants mira_dbuser
-                # only UPDATE (status, accepted_at) on domaindoc_shares; writing invited_at
-                # would raise 42501 and surface as a spurious 500 on re-invite.
+                # SET deliberately scoped to the granted columns — mira_dbuser has
+                # UPDATE (status, accepted_at) only; writing invited_at raises 42501.
                 pg.execute_update(
                     "UPDATE domaindoc_shares SET status = 'pending', accepted_at = NULL WHERE id = %(sid)s",
                     {"sid": existing["id"]}
@@ -2180,7 +2106,6 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
                 {"sid": share["id"]}
             )
         else:
-            # Pending/rejected shares can be fully deleted by the owner
             pg.execute_update(
                 "DELETE FROM domaindoc_shares WHERE id = %(sid)s",
                 {"sid": share["id"]}
@@ -2427,7 +2352,6 @@ class ContinuumDomainHandler(BaseDomainHandler):
             from cns.core.events import SegmentTimeoutEvent
             from cns.services.segment_collapse_handler import get_segment_collapse_handler
 
-            # Get user's continuum and active segment
             continuum_pool = get_continuum_pool()
             continuum = continuum_pool.get_or_create()
 
@@ -2435,9 +2359,7 @@ class ContinuumDomainHandler(BaseDomainHandler):
             sentinel = continuum_repo.find_active_segment(continuum.id, self.user_id)
 
             if not sentinel:
-                # A segment mid-claim ('collapsing') is invisible to
-                # find_active_segment; distinguish it from a genuinely absent
-                # segment so the user gets a truthful error, not "not found".
+                # A 'collapsing' segment is invisible to find_active_segment; distinguish it for a truthful error.
                 if self._latest_boundary_is_collapsing(continuum_repo, continuum.id):
                     raise ValidationError(
                         "A segment collapse is already in progress; try again in a moment."
@@ -2466,7 +2388,6 @@ class ContinuumDomainHandler(BaseDomainHandler):
                                "the segment will collapse as soon as the current response finishes."
                 }
 
-            # Create event and invoke the collapse handler
             event = SegmentTimeoutEvent.create(
                 continuum_id=str(continuum.id),
                 user_id=self.user_id,
@@ -2520,8 +2441,7 @@ class ContinuumDomainHandler(BaseDomainHandler):
             # find_active_segment returns active OR paused — check current state
             sentinel = continuum_repo.find_active_segment(continuum.id, self.user_id)
             if not sentinel:
-                # Same truthful-error rule as collapse_segment: a mid-claim
-                # segment cannot be paused, but it exists.
+                # Same truthful-error rule: a mid-claim segment cannot be paused, but it exists.
                 if self._latest_boundary_is_collapsing(continuum_repo, continuum.id):
                     raise ValidationError(
                         "A segment collapse is already in progress; try again in a moment."
@@ -2578,7 +2498,6 @@ class ContinuumDomainHandler(BaseDomainHandler):
                     "is_paused": True
                 }
 
-            # Active segment — calculate collapse time from last message
             segment_messages = continuum_repo.load_segment_messages(
                 continuum.id, self.user_id, sentinel.created_at
             )
@@ -2604,10 +2523,9 @@ class ContinuumDomainHandler(BaseDomainHandler):
             from cns.infrastructure.continuum_pool import get_continuum_pool
             from cns.infrastructure.continuum_repository import get_continuum_repository
 
-            # A live turn while the segment is paused is exactly the divergent
-            # state this must not compound — resume underneath it and the turn
-            # keeps writing to a segment the rest of the system re-reads as
-            # active mid-flight. Same probe as pause_session.
+            # A live turn while the segment is paused is the divergent state this must
+            # not compound: resuming underneath it leaves the turn writing to a segment
+            # the system re-reads as active mid-flight.
             if _user_request_lock.is_locked(self.user_id):
                 raise ValidationError(
                     "A turn is currently running — resume once it completes."
@@ -2727,10 +2645,8 @@ class LoraDomainHandler(BaseDomainHandler):
             if "<mira:user_model>" not in xml:
                 raise ValidationError("Invalid user model XML - must contain <mira:user_model> element")
 
-            # The store path validates anchors just like the refine path:
-            # every stored user model must name assessable sections, so a
-            # manual edit cannot bypass the check the synthesizer's output
-            # already passed. ValueError naming the valid set → 400.
+            # The store path validates anchors so a manual edit cannot bypass the
+            # check the synthesizer's output already passed.
             from cns.services.system_prompt_parser import validate_section_anchors
             try:
                 validate_section_anchors(xml, config.system_prompt)
@@ -2765,11 +2681,7 @@ class LoraDomainHandler(BaseDomainHandler):
             try:
                 result = refine_lora(self.user_id, instructions)
             except ValueError as e:
-                # Precondition failures (no model to refine, empty
-                # instructions, no output, invalid section anchors naming
-                # the valid set) are caller-facing 400s; the service's message
-                # tells the user what to do. Infrastructure failures are not
-                # ValueErrors and keep propagating.
+                # Precondition failures are caller-facing 400s; infrastructure failures are not ValueErrors and keep propagating.
                 raise ValidationError(str(e)) from e
             return {
                 "success": True,
@@ -2891,8 +2803,7 @@ class PersonaDomainHandler(BaseDomainHandler):
             try:
                 result = service.create_preview(self.user_id, data["instructions"])
             except ValueError as e:
-                # Caller-facing failures (empty instructions, validation
-                # exhausted) are 400s preserving the service's feedback.
+                # Caller-facing failures are 400s preserving the service's feedback.
                 raise ValidationError(str(e)) from e
             return {
                 "success": True,
@@ -2930,8 +2841,7 @@ class PersonaDomainHandler(BaseDomainHandler):
             try:
                 revision = service.rollback(self.user_id, UUID(revision_id))
             except ValueError as e:
-                # The repository raises ValueError only for a missing
-                # revision id — a 404, not an internal fault.
+                # The repository raises ValueError only for a missing revision id — a 404, not an internal fault.
                 raise _not_found_envelope(e, revision_id=str(revision_id)) from e
             return {
                 "success": True,
@@ -2963,9 +2873,7 @@ _REPULSION_REWRITER_EXECUTOR = ThreadPoolExecutor(
 
 _REWRITER_SYSTEM_PROMPT_FILE = "repulsion_rewriter_system.txt"
 _REWRITER_USER_PROMPT_FILE = "repulsion_rewriter_user.txt"
-# D6: the repulsion rewriter runs with effort='high' on the batch route
-# (main chat is the only primary consumer; batch keeps rewrites off the
-# single local llama-server slot so they cannot evict the chat KV cache).
+# D6: the repulsion rewriter runs on the batch route so rewrites cannot evict the chat KV cache.
 _REWRITER_MODEL_CONFIG = "batch"
 
 
@@ -3156,9 +3064,7 @@ class PortraitDomainHandler(BaseDomainHandler):
             try:
                 result = refine_portrait(self.user_id, instructions)
             except ValueError as e:
-                # Precondition failures (no portrait to refine, empty
-                # instructions, no output) are caller-facing 400s; the
-                # service's message tells the user what to do.
+                # Precondition failures are caller-facing 400s; infrastructure failures are not ValueErrors and keep propagating.
                 raise ValidationError(str(e)) from e
             return {
                 "success": True,
@@ -3249,8 +3155,7 @@ class SkillsDomainHandler(BaseDomainHandler):
             try:
                 skill_files.delete_user_skill(self.user_id, data["name"])
             except skill_files.GlobalSkillReadOnlyError as e:
-                # Exists but is repo content — a client misunderstanding, not a
-                # missing resource, so 400 with the reason, not a bare 404.
+                # An existing repo skill is a client misunderstanding, not a missing resource — 400 with the reason, not a bare 404.
                 raise ValidationError(str(e))
             except skill_files.SkillNotFoundError:
                 raise NotFoundError("skill", data["name"])
@@ -3282,9 +3187,7 @@ class ActionsEndpoint(PropagatingHandler):
             DomainType.PORTRAIT: PortraitDomainHandler,
             DomainType.SKILLS: SkillsDomainHandler,
         }
-        # MIRA_PERSONA_ENABLED=0 omits the domain at construction instead of branching
-        # inside the handler, so a disabled install rejects `persona/*` as an unknown
-        # domain rather than writing revisions nothing ever injects.
+        # MIRA_PERSONA_ENABLED=0 omits the domain at construction, so a disabled install rejects `persona/*` as an unknown domain.
         from config import config
 
         if config.system.persona_enabled:
@@ -3296,7 +3199,6 @@ class ActionsEndpoint(PropagatingHandler):
         user_id = current_user.user_id
         request_data = params['request_data']
         
-        # Set user context for any functions that need it
         from utils.user_context import set_current_user_id
         set_current_user_id(user_id)
         
@@ -3304,21 +3206,16 @@ class ActionsEndpoint(PropagatingHandler):
         action = request_data.action
         data = request_data.data
         
-        # Get domain handler
         handler_class = self.domain_handlers.get(domain)
         if not handler_class:
             raise ValidationError(f"Unknown domain: {domain}")
 
-        # Create handler instance
         handler = handler_class()
         
-        # Validate action and data
         validated_data = handler.validate_action(action, data)
         
-        # Execute action
         result = handler.execute_action(action, validated_data)
         
-        # Add metadata
         result["meta"] = {
             "domain": domain.value,
             "action": action,
@@ -3352,11 +3249,7 @@ def actions_endpoint(
     return response.to_dict()
 
 
-# =============================================================================
-# TOOL QUERY ENDPOINT
-# =============================================================================
 
-# Whitelist of tools that can be queried directly via API
 QUERYABLE_TOOLS = {"reminder_tool", "contacts_tool"}
 
 # Required kwargs per (tool, operation), validated by query_tool before
@@ -3412,7 +3305,6 @@ def query_tool(
     Deliberately sync (not async def) so Starlette runs it in a threadpool
     instead of blocking the event loop during the blocking tool DB queries.
     """
-    # Set user context
     set_current_user_id(current_user.user_id)
 
     if tool_name not in QUERYABLE_TOOLS:
@@ -3430,16 +3322,13 @@ def query_tool(
     try:
         tool = _get_tool_instance(tool_name)
 
-        # Build kwargs from query params (only include non-None values)
         kwargs = {"operation": operation}
         if date_filter is not None:
             kwargs["date_filter"] = date_filter
         if category is not None:
             kwargs["category"] = category
 
-        # A missing required argument is a caller input error, not an internal
-        # fault — raise ValueError so the 400 branch below returns the standard
-        # VALIDATION_ERROR envelope naming the missing argument.
+        # A missing required argument is a caller input error — raise ValueError so the 400 branch returns the standard envelope naming the argument.
         required = TOOL_QUERY_REQUIRED_KWARGS.get((tool_name, operation), ())
         missing = [name for name in required if name not in kwargs]
         if missing:
@@ -3449,9 +3338,7 @@ def query_tool(
 
         result = tool.run(**kwargs)
 
-        # Storage-column names (the encrypted__ prefix) never cross the API
-        # boundary: the reminder/contact list payloads are projected to the
-        # documented API field names, same as the actions handlers.
+        # Storage-column names (the encrypted__ prefix) never cross the API boundary: payloads are projected to the documented API field names.
         if "reminders" in result:
             result["reminders"] = [_project_reminder(r) for r in result["reminders"]]
         if "contacts" in result:
@@ -3481,8 +3368,7 @@ def query_tool(
     except Exception:
         request_id = generate_request_id()
         logger.exception("Tool query error for %s (request_id: %s)", tool_name, request_id)
-        # Fixed message plus request id, mirroring main.py's
-        # general_exception_handler; the real exception stays in the log only.
+        # Fixed message plus request id, mirroring main.py's general_exception_handler; the exception stays in the log only.
         return JSONResponse(
             status_code=500,
             content={

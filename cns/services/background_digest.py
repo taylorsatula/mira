@@ -100,8 +100,8 @@ class SidebarActivityContributor:
     accordingly.
     """
 
-    # 24h covers a sleep of any realistic length; 15 rows keeps the digest
-    # bounded no matter how chatty the agents were.
+    # 24h: covers any realistic sleep. 15 rows: bounds the digest regardless of
+    # contributor chattiness.
     _WINDOW_HOURS = 24
     _LIMIT = 15
     _SNIPPET_CHARS = 200

@@ -87,7 +87,6 @@ class UserModelSynthesizer:
         self.llm_provider = llm_provider or get_llm_provider()
         self._load_prompts()
 
-        # Pre-compute section list for critic and synthesis prompt context
         raw_prompt = config.system_prompt
         sections = get_assessable_sections(raw_prompt)
         self._section_list = format_section_list(sections)
@@ -149,14 +148,11 @@ class UserModelSynthesizer:
         tracker = FeedbackTracker()
         checkin_feedback = tracker.get_checkin_response(user_id)
 
-        # Format signals grouped by section
         signals_text = self._format_signals_by_section(signals) if signals else "No new signals."
         current_model_text = current_model_xml if current_model_xml else "No existing user model (first synthesis)."
 
-        # Initial synthesis
         candidate_xml = self._run_synthesis(signals_text, current_model_text, checkin_feedback)
 
-        # Critic validation loop
         for attempt in range(CRITIC_MAX_ATTEMPTS):
             # Deterministic section-anchor validation runs BEFORE the LLM
             # critic: an invalid anchor is a code-checked failure, never left
@@ -288,7 +284,6 @@ class UserModelSynthesizer:
 
         raw_output = self.llm_provider.extract_text_content(response)
 
-        # Parse critic result
         status_match = re.search(r'<mira:critic_review\s+status="(\w+)"', raw_output)
         if not status_match:
             # Fail closed: an unparseable critic verdict is a validation failure,
@@ -311,7 +306,6 @@ class UserModelSynthesizer:
         if status == "pass":
             return CriticResult(passed=True, feedback="")
 
-        # Extract issue descriptions as feedback
         issues = []
         issue_pattern = r'<mira:issue\s+type="([^"]+)"\s+section="([^"]+)">(.*?)</mira:issue>'
         for match in re.finditer(issue_pattern, raw_output, re.DOTALL):
@@ -393,7 +387,6 @@ class UserModelSynthesizer:
         observations = []
         checkin_topics = []
 
-        # Parse observations
         obs_pattern = r'<mira:observation\s+section="([^"]+)"\s+confidence="([^"]+)">(.*?)</mira:observation>'
 
         for match in re.finditer(obs_pattern, xml_output, re.DOTALL):
@@ -401,11 +394,9 @@ class UserModelSynthesizer:
             confidence = match.group(2).strip()
             body = match.group(3)
 
-            # Extract changelog
             changelog_match = re.search(r'<changelog>(.*?)</changelog>', body, re.DOTALL)
             changelog = changelog_match.group(1).strip() if changelog_match else ""
 
-            # Observation text is everything except the changelog
             obs_text = re.sub(r'<changelog>.*?</changelog>', '', body, flags=re.DOTALL).strip()
 
             if confidence not in ('high', 'moderate', 'low'):
@@ -419,7 +410,6 @@ class UserModelSynthesizer:
                 changelog=changelog
             ))
 
-        # Parse check-in topics
         topic_pattern = r'<mira:topic\s+section="([^"]+)"\s+reason="([^"]+)"\s*(?:/>|>\s*</mira:topic>)'
 
         for match in re.finditer(topic_pattern, xml_output, re.DOTALL):

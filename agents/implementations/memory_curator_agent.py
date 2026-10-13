@@ -33,9 +33,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
 # Work-item context contract
-# ============================================================================
 # These TypedDicts are the contract between the triggers (MemoryFloorTrigger,
 # segment-collapse spawn) and this agent. The triggers populate
 # work_item.context to one of these shapes; build_initial_message renders it
@@ -58,9 +56,9 @@ class CandidateRef(TypedDict):
     the agent's job.
     """
     memory_id: str               # SHORT id (mem_XXXXXXXX) — discovery-side pointer to an existing memory; resolvable by memory_tool when unambiguous (collision → search by text to recover the full UUID)
-    bond: str                    # 3-word extraction bond, "" if none
-    discovery_signal: str         # "extraction" | "vector" | "entity" | "tfidf"
-    similarity: float | None     # vector similarity if discovery_signal == "vector"
+    bond: str
+    discovery_signal: str
+    similarity: float | None
 
 
 class NewMemory(TypedDict):
@@ -89,10 +87,6 @@ class FloorContext(TypedDict):
     mode: str                    # "floor"
     memories: list[FloorMemory]
 
-
-# ============================================================================
-# Agent
-# ============================================================================
 
 class MemoryCuratorAgent(SidebarAgent):
     """Agentic curator of the memory graph (integration + floor modes)."""
@@ -123,17 +117,12 @@ class MemoryCuratorAgent(SidebarAgent):
     def __init__(self, tool_repo: 'ToolRepository'):
         super().__init__(tool_repo)
 
-    # ------------------------------------------------------------------
-    # Prompt + initial message (mode-branched)
-    # ------------------------------------------------------------------
-
     def get_agent_prompt(self, work_item: 'WorkItem') -> str:
         mode = work_item.context.get('mode')
         if mode == 'integration':
             return load_agent_prompt("memory_curator_integration.txt")
         if mode == 'floor':
             return load_agent_prompt("memory_curator_floor.txt")
-        # Unknown mode is a trigger bug -- fail loud, not silent.
         raise ValueError(
             f"MemoryCuratorAgent: work_item.context['mode'] must be "
             f"'integration' or 'floor', got {mode!r}"
@@ -227,10 +216,6 @@ class MemoryCuratorAgent(SidebarAgent):
 
         return "\n".join(lines).strip()
 
-    # ------------------------------------------------------------------
-    # Completion — stamp last_tended_at, publish observability
-    # ------------------------------------------------------------------
-
     def on_completion(
         self,
         event_bus: 'EventBus',
@@ -249,7 +234,6 @@ class MemoryCuratorAgent(SidebarAgent):
         if tended_uuids:
             self._stamp_tended(tended_uuids)
 
-        # Publish the completion event to the MemoryCuratorTrinket.
         super().on_completion(event_bus, work_item, status, summary)
 
     def _tended_uuids_for_status(
@@ -311,10 +295,6 @@ class MemoryCuratorAgent(SidebarAgent):
             ctx['segment_id'] = work_item.context.get('segment_id', '')
         return ctx
 
-
-# ============================================================================
-# Helpers
-# ============================================================================
 
 def _short(full_uuid: str) -> str:
     """Format a full UUID string to the mem_XXXXXXXX display form."""

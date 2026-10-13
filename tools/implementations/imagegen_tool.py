@@ -408,22 +408,18 @@ class ImageGenerationTool(Tool):
 
         self._ensure_generations_table()
 
-        # Compose prompt with style notes
         full_prompt = prompt
         if style_notes:
             full_prompt = f"{prompt}\n\nStyle: {style_notes}"
 
-        # Create Chat session and generate with per-message image config
         chat = self._create_chat()
         msg_config = self._message_config(aspect_ratio=aspect_ratio, image_size=image_size)
         response = chat.send_message(full_prompt, config=msg_config)
 
         image_bytes, mime_type, response_text = self._extract_image_from_response(response)
 
-        # Save image file
         file_id = self._save_image(image_bytes, mime_type)
 
-        # Create generation record
         session_id = f"sess_{uuid4().hex[:12]}"
         image_id = f"imggen_{uuid4().hex[:12]}"
 
@@ -467,18 +463,14 @@ class ImageGenerationTool(Tool):
         if not instructions:
             raise ValueError("'instructions' is required for refine operation")
 
-        # Look up the generation to find its session
         gen_record = self._lookup_generation(image_id)
         session_id = gen_record['session_id']
-        # Use provided aspect_ratio, or fall back to the original generation's ratio
         effective_ratio = aspect_ratio or gen_record.get('aspect_ratio', '1:1')
 
-        # Load and restore Chat history
         history_data = self._load_session_history(session_id)
         restored_history = [types.Content.model_validate(item) for item in history_data]
         chat = self._create_chat(history=restored_history)
 
-        # Compose refinement message
         message = instructions
         if preserve:
             preserve_list = ", ".join(preserve)
@@ -489,10 +481,8 @@ class ImageGenerationTool(Tool):
 
         image_bytes, mime_type, response_text = self._extract_image_from_response(response)
 
-        # Save new image
         file_id = self._save_image(image_bytes, mime_type)
 
-        # Create generation record (same session, new image)
         new_image_id = f"imggen_{uuid4().hex[:12]}"
         self.db.insert('image_generations', {
             'id': new_image_id,
@@ -503,7 +493,6 @@ class ImageGenerationTool(Tool):
             'created_at': utc_now().isoformat(),
         })
 
-        # Save updated Chat history
         self._save_session(session_id, chat)
 
         return self._build_content_blocks(
@@ -529,7 +518,6 @@ class ImageGenerationTool(Tool):
         gen_record = self._lookup_generation(image_id)
         file_id = gen_record['file_id']
 
-        # Verify the image file exists
         self._load_image(file_id)
 
         return {

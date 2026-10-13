@@ -44,18 +44,15 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 CSPMode = Literal["off", "strict"]
 
-#: Environment variable naming the CSP posture.
 CSP_MODE_ENVIRONMENT_FIELD = "MIRA_CSP"
 
-#: The posture assumed when the variable is unset. See the module docstring for what
-#: has to change before "strict" can become the default.
+#: See the module docstring for what has to change before "strict" can become the default.
 DEFAULT_CSP_MODE: CSPMode = "off"
 
-#: The complete set of accepted values, derived from the annotation so the type and the
-#: parser cannot drift apart.
+#: The complete set of accepted values, derived from the annotation so the type and
+#: the parser cannot drift apart.
 CSP_MODES: tuple[str, ...] = get_args(CSPMode)
 
-#: The policy emitted when `MIRA_CSP=strict`.
 STRICT_CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
     "script-src 'self'; "
@@ -108,18 +105,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         """Add security headers to response."""
         response = await call_next(request)
 
-        # Core security headers
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(self)"
 
-        # HSTS only for HTTPS
         if request.url.scheme == "https":
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
 
-        # Absent while MIRA_CSP is off.
         if self.content_security_policy:
             response.headers["Content-Security-Policy"] = self.content_security_policy
 

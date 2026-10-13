@@ -25,9 +25,7 @@ from clients.llm_provider import LLMProvider, get_llm_provider
 
 logger = logging.getLogger(__name__)
 
-# Minimum collapsed segments required before generating a portrait.
-# Below this threshold the LLM has too little signal to produce useful output.
-MIN_SUMMARIES = 3
+MIN_SUMMARIES = 3  # Below this the LLM has too little signal to produce useful output
 
 # Fetch all collapsed segments within the user's last N activity days.
 # Replaces the old flat LIMIT — gives consistent temporal coverage regardless
@@ -42,7 +40,6 @@ PREVIEW_TTL_SECONDS = 600
 _PORTRAIT_PREVIEW_PREFIX = "portrait_preview"
 
 
-# Module-level state — loaded once per process
 _system_prompt: Optional[str] = None
 _user_template: Optional[str] = None
 _llm_provider: Optional[LLMProvider] = None
@@ -116,7 +113,6 @@ def synthesize_and_store(user_id: str) -> bool:
         raise ValueError("Portrait synthesis produced no output — collapsed summaries were not usable.")
     _save_portrait(user_id, portrait)
 
-    # Mark dedup after successful save
     from utils.user_context import get_user_cumulative_activity_days
     _portrait_last_synthesized[user_id] = get_user_cumulative_activity_days()
 
@@ -220,7 +216,6 @@ def refine_portrait(user_id: str, instructions: str) -> dict[str, str]:
     if not instructions or not instructions.strip():
         raise ValueError("Refinement instructions cannot be empty.")
 
-    # Load refinement prompt
     refinement_system = _load_prompt_file("portrait_refinement_system.txt")
 
     user_message = (
@@ -239,7 +234,6 @@ def refine_portrait(user_id: str, instructions: str) -> dict[str, str]:
     if not proposed:
         raise ValueError("Portrait refinement produced no output — try different instructions.")
 
-    # Store preview in Valkey with TTL
     preview_id = str(uuid4())
     valkey_key = f"{_PORTRAIT_PREVIEW_PREFIX}:{user_id}:{preview_id}"
 
@@ -329,7 +323,6 @@ def _pop_preview(user_id: str, preview_id: str, required: bool = True) -> Option
             "Please generate a new preview."
         )
 
-    # Valkey returns bytes
     if isinstance(proposed, bytes):
         proposed = proposed.decode("utf-8")
 

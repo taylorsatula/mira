@@ -18,7 +18,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Vector search defaults
 DEFAULT_VECTOR_SIMILARITY_THRESHOLD = 0.7
 DEFAULT_VECTOR_SEARCH_LIMIT = 10
 
@@ -148,7 +147,6 @@ class VectorOps:
         Returns:
             List of Memory models sorted by similarity
         """
-        # Apply defaults if values not provided
         limit = limit if limit is not None else DEFAULT_VECTOR_SEARCH_LIMIT
         similarity_threshold = (
             similarity_threshold
@@ -157,7 +155,10 @@ class VectorOps:
         )
         min_importance = min_importance if min_importance is not None else 0.1
 
-        # Use realtime (query) encoding for search queries
+        # Pairing contract: search queries use realtime (query) encoding
+        # (encode_realtime); stored memories carry the document encoding
+        # applied at storage time — query form and document form must not
+        # be mixed.
         embedding = self.embeddings_provider.encode_realtime([query])[0]
         if isinstance(embedding, np.ndarray):
             query_embedding = embedding.tolist()
@@ -218,11 +219,9 @@ class VectorOps:
         Returns:
             List of Memory models sorted by similarity
         """
-        # Convert numpy array to list if needed
         if isinstance(query_embedding, np.ndarray):
             query_embedding = query_embedding.tolist()
 
-        # Validate dimensions
         if len(query_embedding) != self.embeddings_provider.dimensions:
             raise ValueError(
                 f"Expected {self.embeddings_provider.dimensions}-dimensional embedding, "
@@ -324,7 +323,6 @@ class VectorOps:
         Returns:
             List of Memory models ranked by hybrid score
         """
-        # Convert numpy array to list if needed
         if isinstance(query_embedding, np.ndarray):
             query_embedding = query_embedding.tolist()
 

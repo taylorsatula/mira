@@ -12,7 +12,6 @@ Datetime handling follows the UTC-everywhere approach:
 - The utility functions from utils.timezone_utils are used consistently
 """
 
-# Standard library imports
 import logging
 import json
 import os
@@ -20,11 +19,9 @@ import hashlib
 from typing import Dict, List, Any, Optional, Union
 from datetime import timedelta
 
-# Third-party imports
 from utils import http_client, nominatim_client
 from pydantic import BaseModel, Field
 
-# Import timezone utilities for UTC-everywhere approach
 from utils.timezone_utils import (
     utc_now,
     ensure_utc,
@@ -32,15 +29,12 @@ from utils.timezone_utils import (
     parse_time_string,
 )
 
-# Local imports
 from tools.repo import Tool
 from tools.registry import registry
 
 
-# -------------------- OAI SCHEMA --------------------
 
 
-# -------------------- CONFIGURATION --------------------
 
 class WeatherToolConfig(BaseModel):
     """
@@ -49,19 +43,16 @@ class WeatherToolConfig(BaseModel):
     Defines the parameters that control the weather tool's behavior,
     including API endpoints, caching, and default settings.
     """
-    # Standard configuration parameter - all tools should include this
     enabled: bool = Field(
         default=False,
         description="Whether this tool is enabled by default"
     )
     
-    # API configuration
     api_endpoint: str = Field(
         default="https://api.open-meteo.com/v1/forecast", 
         description="The OpenMeteo API endpoint"
     )
     
-    # Caching configuration
     cache_enabled: bool = Field(
         default=True, 
         description="Whether to cache weather data"
@@ -75,7 +66,6 @@ class WeatherToolConfig(BaseModel):
         description="Subdirectory name for cached weather data (resolved via user_data_path)"
     )
     
-    # Default parameters
     timezone: str = Field(
         default="auto", 
         description="Default timezone (auto or IANA time zone name)"
@@ -97,11 +87,9 @@ class WeatherToolConfig(BaseModel):
         description="WBGT thresholds for heat stress risk levels in Celsius"
     )
 
-# Register with registry
 registry.register("weather_tool", WeatherToolConfig)
 
 
-# -------------------- CACHE MANAGER --------------------
 
 class WeatherCache:
     """
@@ -119,7 +107,6 @@ class WeatherCache:
         self.cache_dir = cache_dir
         self.cache_duration = cache_duration
         
-        # Create cache directory if it doesn't exist
         os.makedirs(cache_dir, exist_ok=True)
     
     def get_cache_path(self, key: str) -> str:
@@ -146,11 +133,9 @@ class WeatherCache:
         Returns:
             True if cache is valid, False otherwise
         """
-        # Check if file exists
         if not os.path.exists(cache_path):
             return False
             
-        # Check if cache is expired based on file modification time
         # Use utc_now timestamp for consistent timezone handling
         cache_mtime = os.path.getmtime(cache_path)
         cache_age = utc_now().timestamp() - cache_mtime
@@ -168,11 +153,9 @@ class WeatherCache:
         """
         cache_path = self.get_cache_path(key)
         
-        # Check if cache is valid
         if not self.is_valid(cache_path):
             return None
             
-        # Read from cache
         try:
             with open(cache_path, 'r') as f:
                 return json.load(f)
@@ -197,7 +180,6 @@ class WeatherCache:
             logging.warning(f"Failed to cache data for {key}: {str(e)}")
 
 
-# -------------------- VALIDATION FUNCTIONS --------------------
 
 class ValidationUtils:
     """
@@ -221,7 +203,6 @@ class ValidationUtils:
         """
         errors = {}
         
-        # Check if latitude is missing or invalid
         if latitude is None:
             errors["latitude"] = "Latitude is required"
         else:
@@ -233,7 +214,6 @@ class ValidationUtils:
             except (ValueError, TypeError):
                 errors["latitude"] = f"Latitude must be a valid number, got {type(latitude).__name__}: {latitude}"
         
-        # Check if longitude is missing or invalid
         if longitude is None:
             errors["longitude"] = "Longitude is required"
         else:
@@ -245,7 +225,6 @@ class ValidationUtils:
             except (ValueError, TypeError):
                 errors["longitude"] = f"Longitude must be a valid number, got {type(longitude).__name__}: {longitude}"
         
-        # If there are any errors, raise exception
         if errors:
             error_message = "; ".join(f"{key}: {value}" for key, value in errors.items())
             raise ValueError(error_message)
@@ -266,18 +245,15 @@ class ValidationUtils:
         Raises:
             ValueError: If date is invalid
         """
-        # Allow None value
         if date_str is None:
             return None
             
-        # Check if parameter is a string
         if not isinstance(date_str, str):
             raise ValueError(
                 "Date must be a string in ISO format (YYYY-MM-DD)",
                 {"date": date_str}
             )
             
-        # Parse date in ISO format using our timezone utilities
         try:
             date_obj = parse_utc_time_string(date_str)
         except ValueError:
@@ -286,7 +262,6 @@ class ValidationUtils:
                 {"date": date_str, "error_type": "format"}
             )
 
-        # Ensure we're working with UTC time for consistency
         now_utc = utc_now()
 
         # OpenMeteo's forecast endpoint only serves a bounded window:
@@ -304,7 +279,6 @@ class ValidationUtils:
                 {"date": date_str, "min_days": min_days, "max_days": max_days, "error_type": "range"}
             )
 
-        # Return the validated date string
         return date_str
     
     @staticmethod
@@ -321,29 +295,23 @@ class ValidationUtils:
         Raises:
             ValueError: If parameters are invalid
         """
-        # If None, return None (all parameters)
         if parameters is None:
             return None
         
-        # If string, split by comma
         if isinstance(parameters, str):
-            # Empty string means all parameters
             if not parameters.strip():
                 return None
             parameters = [p.strip() for p in parameters.split(',')]
         
-        # Validate it's a list
         if not isinstance(parameters, list):
             raise ValueError(
                 f"Parameters must be a list or comma-separated string, got {type(parameters).__name__}",
                 {"parameters": parameters}
             )
         
-        # Check if list is empty
         if not parameters:
             return None
         
-        # Validate each parameter is a string
         for i, param in enumerate(parameters):
             if not isinstance(param, str):
                 raise ValueError(
@@ -367,7 +335,6 @@ class ValidationUtils:
                 {"parameters": invalid_params, "valid_parameters": valid_parameters}
             )
         
-        # Return list of validated parameters
         return parameters
     
     @staticmethod
@@ -387,7 +354,7 @@ class ValidationUtils:
         valid_types = ["hourly", "daily"]
         
         if not forecast_type:
-            return "hourly"  # Default
+            return "hourly"
         
         if not isinstance(forecast_type, str):
             raise ValueError(
@@ -467,7 +434,6 @@ class ValidationUtils:
                 {"latitude": latitude, "longitude": longitude, "location": location}
             )
         
-        # If coordinates provided, both must be present
         if has_coordinates and (latitude is None or longitude is None):
             raise ValueError(
                 "Both latitude and longitude must be provided when using coordinates",
@@ -475,7 +441,6 @@ class ValidationUtils:
             )
 
 
-# -------------------- MAIN TOOL CLASS --------------------
 
 class WeatherTool(Tool):
     """
@@ -542,7 +507,6 @@ class WeatherTool(Tool):
             }
         }
 
-    # Common hourly parameters available in the API
     _available_hourly_params = [
         "temperature_2m", "relative_humidity_2m", "dew_point_2m", "apparent_temperature",
         "precipitation_probability", "precipitation", "rain", "showers", "snowfall",
@@ -562,7 +526,6 @@ class WeatherTool(Tool):
         "is_day", "wet_bulb_temperature_2m", "sunshine_duration"
     ]
     
-    # Common daily parameters available in the API
     _available_daily_params = [
         "weather_code", "temperature_2m_max", "temperature_2m_min", "temperature_2m_mean",
         "apparent_temperature_max", "apparent_temperature_min", "apparent_temperature_mean",
@@ -574,7 +537,6 @@ class WeatherTool(Tool):
         "wind_speed_10m_mean"
     ]
     
-    # Parameters required for WBGT calculation
     _wbgt_required_params = [
         "temperature_2m", "wet_bulb_temperature_2m", 
         "shortwave_radiation", "wind_speed_10m"
@@ -620,7 +582,6 @@ class WeatherTool(Tool):
                     {"location": location}
                 )
 
-            # Get the first (best) result
             result = results[0]
             latitude = result.get("lat")
             longitude = result.get("lon")
@@ -631,7 +592,6 @@ class WeatherTool(Tool):
                     {"location": location, "result": result}
                 )
 
-            # Log the resolved location info
             formatted_address = result.get("display_name", "")
             self.logger.info(f"Resolved '{location}' to {formatted_address} ({latitude}, {longitude})")
 
@@ -639,7 +599,6 @@ class WeatherTool(Tool):
 
         except Exception as e:
             if isinstance(e, ValueError) and "Location" in str(e):
-                # Re-raise our custom ValueError messages
                 raise
             self.logger.exception("Failed to geocode location")
             raise ValueError(f"Failed to geocode location '{location}': {str(e)}")
@@ -664,18 +623,14 @@ class WeatherTool(Tool):
         Raises:
             ValueError: If input validation or geocoding fails
         """
-        # Validate input parameters
         ValidationUtils.validate_location_input(latitude, longitude, location)
         
-        # If coordinates provided, validate them
         if latitude is not None and longitude is not None:
             return ValidationUtils.validate_coordinates(latitude, longitude)
         
-        # If location provided, geocode it
         if location:
             return self._geocode_location(location)
         
-        # This should not happen due to validation, but just in case
         raise ValueError("Neither coordinates nor location provided")
     
     def run(
@@ -711,14 +666,12 @@ class WeatherTool(Tool):
         self.logger.info(f"Running weather tool with operation: {operation}")
         
         try:
-            # Validate and resolve coordinates
             lat, lon = self._resolve_coordinates(latitude, longitude, location)
             forecast_type = ValidationUtils.validate_forecast_type(forecast_type)
             validated_forecast_days = ValidationUtils.validate_forecast_days(forecast_days)
             validated_date = ValidationUtils.validate_date(date)
             validated_params = ValidationUtils.validate_parameters(parameters)
             
-            # Execute appropriate operation
             if operation == "get_forecast":
                 result = self._get_forecast(
                     lat,
@@ -788,14 +741,12 @@ class WeatherTool(Tool):
             else (forecast_days or config.weather_tool.forecast_days)
         )
 
-        # Create cache key
         cache_key = f"{latitude}_{longitude}_{forecast_type}_{days_to_request}d"
         if date:
             cache_key += f"_{date}"
         if parameters:
             cache_key += f"_{','.join(sorted(parameters))}"
 
-        # Create cache if enabled
         if config.weather_tool.cache_enabled:
             cache = WeatherCache(str(self.cache_directory), config.weather_tool.cache_duration)
             cached_data = cache.get(cache_key)
@@ -803,15 +754,13 @@ class WeatherTool(Tool):
                 self.logger.info(f"Using cached weather data for: {cache_key}")
                 return cached_data
 
-        # Determine parameters to request
         hourly_params = []
         daily_params = []
         
         if parameters is None:
-            # Default parameters if none specified
             if forecast_type == "hourly":
                 hourly_params = self._available_hourly_params
-            else:  # daily
+            else:
                 daily_params = self._available_daily_params
         else:
             # Requested parameters — reject invalid ones for this forecast
@@ -835,10 +784,9 @@ class WeatherTool(Tool):
                 )
             if forecast_type == "hourly":
                 hourly_params = list(parameters)
-            else:  # daily
+            else:
                 daily_params = list(parameters)
         
-        # Build API request URL
         url = config.weather_tool.api_endpoint
         params = {
             "latitude": latitude,
@@ -848,18 +796,15 @@ class WeatherTool(Tool):
         if not date:
             params["forecast_days"] = days_to_request
 
-        # Add parameters
         if hourly_params:
             params["hourly"] = ",".join(hourly_params)
         if daily_params:
             params["daily"] = ",".join(daily_params)
         
-        # Filter to specific date if provided
         if date:
             params["start_date"] = date
             params["end_date"] = date
         
-        # Make API request
         self.logger.debug("Requesting weather data from OpenMeteo API")
         
         try:
@@ -867,7 +812,6 @@ class WeatherTool(Tool):
             response.raise_for_status()
             data = response.json()
             
-            # Cache if enabled
             if config.weather_tool.cache_enabled:
                 cache.set(cache_key, data)
             
@@ -918,7 +862,6 @@ class WeatherTool(Tool):
         """
         self.logger.info(f"Getting {forecast_type} forecast for coordinates: {latitude}, {longitude}")
         
-        # Get weather data
         weather_data = self._get_weather_data(
             latitude,
             longitude,
@@ -928,13 +871,10 @@ class WeatherTool(Tool):
             forecast_days=forecast_days
         )
         
-        # Get the API timezone from the response
         api_timezone = weather_data.get("timezone", "UTC")
         
-        # Process forecast data to ensure all timestamps are properly handled
         forecast_data = weather_data.get(forecast_type, {})
         
-        # Process timestamps in time data if they exist in the response.
         # Only hourly timestamps are UTC-normalized; daily 'time' entries are
         # date-only local labels from the API and are passed through unchanged.
         if "time" in forecast_data and forecast_type == "hourly":
@@ -950,14 +890,11 @@ class WeatherTool(Tool):
                         dt = ensure_utc(parse_time_string(time_str, api_timezone))
                     processed_times.append(dt.isoformat())
                 except ValueError:
-                    # If parsing fails, use the original string
                     processed_times.append(time_str)
             
-            # Replace the original times with processed ones if successful
             if processed_times:
                 forecast_data["time"] = processed_times
         
-        # Return formatted response
         return {
             "location": {
                 "latitude": weather_data.get("latitude", latitude),
@@ -967,10 +904,8 @@ class WeatherTool(Tool):
             },
             "forecast_type": forecast_type,
             "forecast": {
-                # Include units if available
                 f"{forecast_type}_units": weather_data.get(f"{forecast_type}_units", {}),
                 
-                # Include processed forecast data
                 forecast_type: forecast_data
             }
         }
@@ -1005,12 +940,10 @@ class WeatherTool(Tool):
             self.logger.warning("Heat stress calculation requires hourly forecast, switching from daily")
             forecast_type = "hourly"
         
-        # Ensure we request the parameters needed for WBGT calculation
         required_params = set(self._wbgt_required_params)
         requested_params = set(parameters or [])
         combined_params = list(required_params.union(requested_params))
         
-        # Get weather data with required parameters
         weather_data = self._get_weather_data(
             latitude,
             longitude,
@@ -1020,16 +953,13 @@ class WeatherTool(Tool):
             forecast_days=forecast_days
         )
         
-        # Extract required data for WBGT calculation
         hourly_data = weather_data.get("hourly", {})
         if not all(param in hourly_data for param in self._wbgt_required_params):
             missing_params = [param for param in self._wbgt_required_params if param not in hourly_data]
             raise ValueError(f"Missing required parameters for WBGT calculation: {missing_params}")
         
-        # Get the API timezone from the response
         api_timezone = weather_data.get("timezone", "UTC")
         
-        # Process timestamps in time data - ensure they're properly formatted
         times = hourly_data.get("time", [])
         processed_times = []
         
@@ -1042,14 +972,11 @@ class WeatherTool(Tool):
                     dt = ensure_utc(parse_time_string(time_str, api_timezone))
                 processed_times.append(dt.isoformat())
             except ValueError:
-                # If parsing fails, use the original string
                 processed_times.append(time_str)
         
-        # Replace the original times with processed ones if successful
         if processed_times:
             hourly_data["time"] = processed_times
         
-        # Continue with WBGT calculation
         temp_2m = hourly_data.get("temperature_2m", [])
         wet_bulb_temp = hourly_data.get("wet_bulb_temperature_2m", [])
         radiation = hourly_data.get("shortwave_radiation", [])
@@ -1069,7 +996,6 @@ class WeatherTool(Tool):
         risk_levels = []
 
         for i in range(valid_length):
-            # Calculate WBGT
             try:
                 wbgt = self._calculate_wbgt(
                     wet_bulb_temp[i],
@@ -1084,7 +1010,6 @@ class WeatherTool(Tool):
                 continue
             wbgt_values.append(round(wbgt, 1))
             
-            # Determine risk level
             risk_level = self._get_heat_stress_risk_level(wbgt)
             risk_levels.append(risk_level)
         
@@ -1093,15 +1018,12 @@ class WeatherTool(Tool):
             wbgt_values.append(None)
             risk_levels.append(None)
         
-        # Add WBGT and risk levels to hourly data
         hourly_data["wbgt"] = wbgt_values
         hourly_data["heat_stress_risk"] = risk_levels
         
-        # Add WBGT unit to units
         hourly_units = weather_data.get("hourly_units", {})
         hourly_units["wbgt"] = "°C"
         
-        # Return formatted response
         return {
             "location": {
                 "latitude": weather_data.get("latitude", latitude),
@@ -1140,7 +1062,6 @@ class WeatherTool(Tool):
         Returns:
             WBGT value in °C
         """
-        # Apply the WBGT formula
         wbgt = (
             0.7 * wet_bulb_temperature +
             0.3 * temperature +
@@ -1162,10 +1083,8 @@ class WeatherTool(Tool):
         """
         from config import config
         
-        # Get thresholds from config
         thresholds = config.weather_tool.wbgt_risk_thresholds
         
-        # Determine risk level based on thresholds
         if wbgt < thresholds["moderate"]:
             return "Low"
         elif wbgt < thresholds["high"]:

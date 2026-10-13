@@ -38,14 +38,12 @@ class ManifestTrinket(EventAwareTrinket):
 
         user_id = get_current_user_id()
 
-        # Get raw segment data from service (handles caching)
         segments = get_manifest_query_service().get_segments(user_id)
 
         if not segments:
             logger.debug("No segments available for manifest")
             return ""  # Legitimately empty - no conversation history yet
 
-        # Format segments into XML
         manifest = self._format_manifest(segments)
 
         logger.debug(f"Generated manifest for user {user_id}")
@@ -64,24 +62,19 @@ class ManifestTrinket(EventAwareTrinket):
         if not segments:
             return ""
 
-        # Get user's timezone for local time display
         try:
             user_tz = get_user_preferences().timezone
         except Exception:
             user_tz = 'UTC'
 
-        # Group segments by date
         grouped = self._group_segments_by_date(segments, user_tz)
 
-        # Build XML structure
         lines = ["<conversation_manifest>"]
 
         for date_label, date_segments in grouped.items():
             lines.append(f'<date_group label="{date_label}">')
 
-            # Format segments within date group
             for segment in date_segments:
-                # Format time range
                 time_range = self._format_time_range(
                     segment['start_time'],
                     segment['end_time'],
@@ -89,7 +82,6 @@ class ManifestTrinket(EventAwareTrinket):
                     user_tz
                 )
 
-                # Format segment as XML element
                 display_title = segment['display_title']
                 status = segment['status']
                 lines.append(f'<segment time="{time_range}" status="{status}">{display_title}</segment>')
@@ -122,7 +114,6 @@ class ManifestTrinket(EventAwareTrinket):
         grouped = OrderedDict()
 
         for segment in reversed(segments):  # Process newest first for date grouping
-            # Parse segment start time
             try:
                 if segment['start_time']:
                     start_time_utc = parse_utc_time_string(segment['start_time'])
@@ -133,16 +124,13 @@ class ManifestTrinket(EventAwareTrinket):
             except Exception:
                 segment_date = today
 
-            # Determine date label
             if segment_date == today:
                 date_label = "TODAY"
             elif segment_date == yesterday:
                 date_label = "YESTERDAY"
             else:
-                # Format as "JAN 18" or similar
                 date_label = segment_date.strftime("%b %d").upper()
 
-            # Add to grouped dict
             if date_label not in grouped:
                 grouped[date_label] = []
             grouped[date_label].insert(0, segment)  # Insert at beginning for chronological order
@@ -176,11 +164,9 @@ class ManifestTrinket(EventAwareTrinket):
             start_time_local = convert_from_utc(start_time_utc, timezone)
 
             if status == 'active':
-                # Active segment - show start time and "ACTIVE"
                 start_str = strftime_no_pad(start_time_local, "%-I:%M%p").upper()
                 return f"[{start_str} - ACTIVE]"
             else:
-                # Collapsed segment - show time range
                 if end_time_str:
                     end_time_utc = parse_utc_time_string(end_time_str)
                     end_time_local = convert_from_utc(end_time_utc, timezone)

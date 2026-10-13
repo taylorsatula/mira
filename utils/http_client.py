@@ -29,7 +29,6 @@ from contextlib import contextmanager
 import httpcore
 import httpx
 
-# Re-export httpx exceptions so code doesn't need to change
 from httpx import (
     TimeoutException,
     HTTPStatusError,
@@ -41,15 +40,12 @@ from httpx import (
 
 logger = logging.getLogger("http_client")
 
-# Configuration for retry behavior
 RETRYABLE_STATUS_CODES = {429, 502, 503, 504, 529}
 BACKOFF_STATUS_CODES = {429, 529}  # Need longer delays
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_TIMEOUT = 30
 
-# Non-idempotent verbs are never retried on status: the server may have
-# already processed the write before returning a retryable status, and a
-# re-send would duplicate it.
+# Non-idempotent verbs are never retried on status: the write may already have landed.
 NON_IDEMPOTENT_METHODS = {"POST", "PATCH"}
 
 
@@ -79,25 +75,19 @@ class RetryMixin:
     def __init__(self, *args, max_retries: Optional[int] = None, retry_non_idempotent: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
         self.max_retries = max_retries if max_retries is not None else DEFAULT_MAX_RETRIES
-        # Per-caller opt-in: when True, status retries apply to this client's
-        # POST/PATCH requests too. Callers may opt in ONLY when every
-        # non-idempotent request the client sends is safe to repeat — e.g.
-        # pure inference queries where a 429/5xx is returned before any
-        # server-side effect. The default (False) keeps POST/PATCH
-        # un-retried on status for every existing caller.
+        # Per-caller opt-in: status retries then apply to this client's POST/PATCH too —
+        # safe ONLY when every non-idempotent request it sends is repeatable.
         self.retry_non_idempotent = retry_non_idempotent
         
     def _calculate_delay(self, attempt: int, status_code: int) -> float:
         """Calculate retry delay with exponential backoff and jitter."""
         if status_code in BACKOFF_STATUS_CODES:
-            # Longer delays for rate limiting: 2, 4, 8 seconds
             base_delay = 2.0
         else:
-            # Shorter delays for transient errors: 0.5, 1, 2 seconds
             base_delay = 0.5
             
         delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
-        return min(delay, 30.0)  # Cap at 30 seconds
+        return min(delay, 30.0)
     
     def _should_retry(self, status_code: int, attempt: int, method: Optional[str] = None) -> bool:
         """Determine if a request should be retried based on status code and attempt number.
@@ -125,9 +115,9 @@ class RetryMixin:
         retries the final response is returned to the caller (httpx semantics).
         """
         last_exception = None
-        # The request method is the first positional argument of the wrapped
-        # request call (httpx request(method, url, ...)); fall back to the
-        # keyword form. Used to block status retries of non-idempotent verbs.
+        # method is the first positional arg of the wrapped call (httpx
+        # request(method, url, ...)); fall back to the keyword form. Blocks
+        # status retries of non-idempotent verbs.
         method = args[0] if args else kwargs.get("method")
         
         for attempt in range(self.max_retries + 1):
@@ -171,14 +161,12 @@ class RetryMixin:
                     time.sleep(delay)
                     continue
                 else:
-                    # Not retryable or max retries exceeded
                     raise
                     
             except (ConnectError, ConnectTimeout) as e:
-                # Connection errors might be retryable
                 last_exception = e
                 if attempt < self.max_retries:
-                    delay = self._calculate_delay(attempt, 503)  # Treat as service unavailable
+                    delay = self._calculate_delay(attempt, 503)  # Treat a connect error as service unavailable
                     logger.warning(f"Connection error, attempt {attempt + 1}/{self.max_retries + 1}, retrying in {delay:.1f}s...")
                     time.sleep(delay)
                     continue
@@ -186,10 +174,8 @@ class RetryMixin:
                     raise
                     
             except (TimeoutException, RequestError):
-                # Other errors are not retryable
                 raise
         
-        # If we exhausted retries, raise the last exception
         if last_exception:
             raise last_exception
 
@@ -215,7 +201,6 @@ class Client(RetryMixin, httpx.Client):
     """
     
     def __init__(self, *args, max_retries: Optional[int] = None, retry_non_idempotent: bool = False, **kwargs):
-        # Set default timeout if not provided
         if 'timeout' not in kwargs:
             kwargs['timeout'] = DEFAULT_TIMEOUT
         super().__init__(*args, max_retries=max_retries, retry_non_idempotent=retry_non_idempotent, **kwargs)
@@ -260,7 +245,6 @@ class Client(RetryMixin, httpx.Client):
         return super().stream(*args, **kwargs)
 
 
-# Convenience functions that mirror httpx module-level functions
 def get(url: str, **kwargs) -> Response:
     """
     Convenience function for GET requests with automatic retry.

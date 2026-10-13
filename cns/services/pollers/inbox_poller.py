@@ -16,7 +16,6 @@ from cns.services.pollers.segment_poller import SegmentPoller
 
 logger = logging.getLogger(__name__)
 
-# Maximum unread emails to surface in the trinket
 MAX_UNREAD_EMAILS = 20
 
 
@@ -40,7 +39,6 @@ class InboxPollerService(SegmentPoller):
         if not config:
             return None
 
-        # Require minimum viable IMAP config
         required = ('imap_server', 'email_address', 'password')
         missing = [f for f in required if not config.get(f)]
         if missing:
@@ -67,7 +65,6 @@ class InboxPollerService(SegmentPoller):
         """
         conn = None
         try:
-            # Connect
             if config['use_ssl']:
                 conn = imaplib.IMAP4_SSL(
                     config['imap_server'],
@@ -89,14 +86,12 @@ class InboxPollerService(SegmentPoller):
                 logger.warning(f"inbox poller: could not select {folder}")
                 return None
 
-            # Search for unseen
             typ, data = conn.uid('SEARCH', None, 'UNSEEN')
             if typ != 'OK' or not data or not data[0]:
                 return []  # No unread emails — valid empty result
 
             uid_list = data[0].decode('utf-8').split()
 
-            # Cap at most recent
             uid_list = uid_list[-MAX_UNREAD_EMAILS:]
 
             # Batch fetch headers (PEEK avoids marking as read)
@@ -142,10 +137,6 @@ class InboxPollerService(SegmentPoller):
                 except Exception:
                     pass
 
-
-# ------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------
 
 def _extract_uid(response_line: bytes) -> int | None:
     """Extract UID integer from IMAP FETCH response line.

@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Global connection pool (singleton like PostgresClient)
 _valkey_pool = None
 
 
@@ -31,7 +30,6 @@ class ValkeyClient:
     """
 
     def __init__(self):
-        # Get configuration and initialize connections
         # System fails to start if Valkey is unreachable (fail-fast)
         self._load_config()
         self._init_connections()
@@ -48,11 +46,7 @@ class ValkeyClient:
             logger.toast("Valkey running without authentication")
 
         parsed = urlparse(self.valkey_url)
-        # TLS schemes must not be accepted-and-dropped — this client
-        # implements no TLS (no ssl key reaches any connection constructor),
-        # so honoring the scheme silently would connect in plaintext. Reject
-        # loudly at config load instead (same fail-fast shape as the
-        # query-parameter rejection in postgres_client._parse_database_url).
+        # This client implements no TLS, so honoring the scheme would connect in plaintext — reject loudly.
         if parsed.scheme in ('rediss', 'valkeys'):
             raise ValueError(
                 f"Valkey URL scheme {parsed.scheme!r} requests TLS, which this client does not "
@@ -94,7 +88,6 @@ class ValkeyClient:
             'socket_timeout': 5
         }
 
-        # Create thread-safe connection pool (like PostgresClient)
         if _valkey_pool is None:
             _valkey_pool = ConnectionPool(
                 max_connections=config.cache.max_connections,
@@ -102,16 +95,13 @@ class ValkeyClient:
             )
             logger.toast(f"Valkey connection pool created: {self.host}:{self.port} (max=20)")
 
-        # Use pooled connections
         self._client = valkey.Valkey(connection_pool=_valkey_pool)
         self._client.ping()  # Raises if unreachable - system fails to start
 
-        # Create binary client using same connection params but without decode_responses
         binary_conn_params = conn_params.copy()
         binary_conn_params['decode_responses'] = False
         self._binary_client = valkey.Valkey(**binary_conn_params)
 
-        # Build URL for async client (with auth if password is set)
         if self.password:
             from urllib.parse import quote
             auth_url = f"valkey://:{quote(self.password, safe='')}@{self.host}:{self.port}"
@@ -228,14 +218,12 @@ class ValkeyClient:
             True if successful, False if key doesn't exist (for field updates)
         """
         if path == "$":
-            # Full replacement
             json_data = json.dumps(value)
             if ex is not None:
                 return self._client.setex(key, ex, json_data)
             else:
                 return self._client.set(key, json_data)
 
-        # Field update: read-modify-write
         if not path.startswith("$."):
             raise ValueError(f"Unsupported path: {path}. Use '$' or '$.field_name'")
 
@@ -247,7 +235,6 @@ class ValkeyClient:
         field = path[2:]
         data[field] = value
 
-        # Preserve existing TTL if no expiry specified
         if ex is None:
             remaining_ttl = self.ttl(key)
             ex = remaining_ttl if remaining_ttl > 0 else None
@@ -269,7 +256,7 @@ class ValkeyClient:
             return None
 
         data = json.loads(json_str)
-        return [data]  # Wrap in list to match expected JSONPath result format
+        return [data]
 
     def getdel(self, key: str) -> Optional[str]:
         """Atomically get-and-delete a raw string (single-use semantics).
@@ -287,7 +274,7 @@ class ValkeyClient:
             return None
 
         data = json.loads(json_str)
-        return [data]
+        return [data]  # Wrap in list to match expected JSONPath result format
 
     def hset_with_retry(self, hash_key: str, field: str, value: str) -> int:
         """Hash set with retry pattern for transient failures."""
@@ -460,9 +447,7 @@ class ValkeyClient:
         deleted_count = 0
         preserved_count = 0
 
-        # Scan all keys
         for key in self.scan_iter(match="*"):
-            # Check if key starts with any whitelisted prefix
             should_preserve = any(key.startswith(prefix) for prefix in preserve_prefixes)
 
             if should_preserve:

@@ -27,10 +27,9 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-# Importing logging_config is load-bearing for the gate verdict: on
-# checkouts where the deploy-installed _mira_log_levels .pth is absent it
-# registers the TOAST level name (60); deployed instances get the same
-# registration at interpreter startup via site-packages.
+# Importing logging_config is load-bearing: it registers the TOAST level name
+# (60) on checkouts lacking the deploy-installed _mira_log_levels .pth;
+# deployed instances register it at startup via site-packages.
 from utils.logging_config import TOAST
 
 from utils.timezone_utils import format_utc_iso, utc_now
@@ -38,13 +37,12 @@ from utils.timezone_utils import format_utc_iso, utc_now
 logger = logging.getLogger(__name__)
 
 PRE_SERVER_POST_DEADLINE_SECONDS = 300
-# Bounded startup gate policy (2f980ab): after this many failed gate rounds
-# the gate performs its failure action instead of looping forever. The action
-# defaults to parking (sleep forever, server never binds) rather than
-# exiting, because s6 restarts an exited service immediately and every
-# restart re-runs the provider reachability probes - real, billed LLM
-# requests - turning a failing gate into an unbounded probe loop that pins
-# inference GPUs at load. Operators supervised by systemd may prefer
+# Bounded startup gate policy (2f980ab): after this many failed gate rounds the
+# gate performs its failure action instead of looping forever. Default park
+# (sleep forever, server never binds), not exit: s6 restarts an exited service
+# immediately and every restart re-runs the provider reachability probes - real,
+# billed LLM requests - turning a failing gate into an unbounded probe loop that
+# pins inference GPUs at load. systemd-supervised installs may prefer
 # exit-and-restart: set MIRA_POST_GATE_FAILURE_ACTION=exit.
 PRE_SERVER_GATE_ATTEMPTS = 3
 PRE_SERVER_GATE_RETRY_SECONDS = 10
@@ -556,12 +554,11 @@ def _check_vault() -> dict[str, Any]:
             raise RuntimeError(f"Vault mira/database {label} is not a PostgreSQL URL")
         if not parsed.hostname or not parsed.username:
             raise RuntimeError(f"Vault mira/database {label} is missing host or username")
-        # Lockstep with the runtime connection builder: validate the URL
-        # through PostgresClient._parse_database_url itself, so the gate and
-        # the pools share one credential-encoding rule (percent-encoded URL
-        # userinfo, decoded by libpq) — a URL the builder rejects (e.g. query
-        # parameters, malformed credentials) fails boot here, not the first
-        # pool creation.
+        # Lockstep with the runtime connection builder: validate through
+        # PostgresClient._parse_database_url so gate and pools share one
+        # credential-encoding rule (percent-encoded URL userinfo, decoded by
+        # libpq). A URL the builder rejects (query parameters, malformed
+        # credentials) fails boot here, not at first pool creation.
         from clients.postgres_client import PostgresClient
         import psycopg
         try:
@@ -569,9 +566,9 @@ def _check_vault() -> dict[str, Any]:
         except (ValueError, psycopg.Error) as exc:
             raise RuntimeError(f"Vault mira/database {label}: {exc}") from exc
 
-    # Allow-list only the schemes the Valkey client actually implements —
-    # it has no TLS support, so rediss/valkeys must fail boot here rather
-    # than be accepted by the gate and dropped by the client.
+    # Allow-list only the schemes the Valkey client implements: it has no TLS,
+    # so rediss/valkeys must fail boot here, not be accepted by the gate and
+    # dropped by the client.
     parsed_valkey = urlparse(service_values["valkey_url"])
     if parsed_valkey.scheme not in {"redis", "valkey"}:
         raise RuntimeError(
@@ -1269,12 +1266,11 @@ def _check_llm_provider_reachability() -> dict[str, Any]:
                 )
 
     if failures:
-        # All five routes are critical: OSS seeds every route at a cloud
-        # vendor, so there is no local fallback target to degrade onto and
-        # no route to excuse. Name each failed route with the vendor, model,
-        # and endpoint it is seeded to, so an operator staring at a parked
-        # process learns from this message alone which credential or
-        # endpoint to fix.
+        # All five routes are critical: OSS seeds every route at a cloud vendor,
+        # so there is no local fallback target to degrade onto. Name each failed
+        # route with the vendor, model, and endpoint it is seeded to, so an
+        # operator staring at a parked process learns from this message alone
+        # which credential or endpoint to fix.
         detail = "; ".join(
             f"route(s) {', '.join(failure['routes'])} at {failure['target']} "
             f"-> {failure['diagnostic']}"

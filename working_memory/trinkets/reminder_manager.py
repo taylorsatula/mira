@@ -73,7 +73,6 @@ class ReminderManager(EventAwareTrinket):
         Raises:
             Exception: If ReminderTool operations fail (infrastructure/filesystem issues)
         """
-        # Fetch all four reminder sets
         categories: List[Tuple[_CategoryConfig, List[Dict], List[Dict]]] = []
         for config, cat_name in [(_USER_CONFIG, "user"), (_INTERNAL_CONFIG, "internal")]:
             overdue = self._collect_reminders(self._reminder_tool.run(
@@ -84,7 +83,6 @@ class ReminderManager(EventAwareTrinket):
             ))
             categories.append((config, overdue, today))
 
-        # Skip if all empty
         if not any(overdue or today for _, overdue, today in categories):
             logger.debug("No active reminders")
             return ""  # Legitimately empty - user has no reminders set

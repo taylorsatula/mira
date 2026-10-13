@@ -23,13 +23,11 @@ REMOTE_UPDATE_URL = "https://miraos.org/check_update"
 
 logger = logging.getLogger(__name__)
 
-# Dedicated file logger for update check analytics
 _update_log_path = Path(__file__).parent.parent.parent / "data" / "update_checks.log"
 _update_log_path.parent.mkdir(parents=True, exist_ok=True)
 
 update_logger = logging.getLogger("update_checks")
 update_logger.setLevel(logging.INFO)
-# Rotate at 10MB, keep 5 backups
 _handler = RotatingFileHandler(_update_log_path, maxBytes=10_000_000, backupCount=5)
 _handler.setFormatter(logging.Formatter("%(asctime)s\t%(message)s"))
 update_logger.addHandler(_handler)
@@ -73,7 +71,6 @@ def check_update_endpoint(request: Request, version: str = "") -> UpdateCheckRes
     safe_version = _sanitize_log_field(version)
     update_logger.info(f"ip={client_ip}\tversion={safe_version or 'none'}\tlatest={latest}")
 
-    # No version provided or invalid - can't compare
     if not version:
         return UpdateCheckResponse(
             update_available=False,

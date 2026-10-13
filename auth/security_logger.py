@@ -22,15 +22,12 @@ class SecurityLogger:
 
         local, domain = email.split('@', 1)
 
-        # Show first 2 and last 3 chars of local part
         if len(local) <= 5:
-            # Short email, just mask middle
             if len(local) <= 2:
                 sanitized_local = "*" * len(local)
             else:
                 sanitized_local = local[0] + "*" * (len(local) - 2) + local[-1]
         else:
-            # Show first 2 and last 3 chars
             sanitized_local = local[:2] + "*" * (len(local) - 5) + local[-3:]
 
         return f"{sanitized_local}@{domain}"
@@ -68,7 +65,6 @@ class SecurityLogger:
             "details": details or {}
         }
 
-        # Remove None values for cleaner logs
         log_data = {k: v for k, v in log_data.items() if v is not None}
 
         if success:
@@ -79,5 +75,4 @@ class SecurityLogger:
         return log_data
 
 
-# Singleton instance
 security_logger = SecurityLogger()

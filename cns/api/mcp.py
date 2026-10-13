@@ -50,10 +50,7 @@ logger = logging.getLogger("mira.mcp")
 _CHAT_CONNECT_TIMEOUT_S = 10.0
 _CHAT_READ_TIMEOUT_S = 600.0
 
-# The raw Authorization header of the current MCP request ("Bearer <token>"),
-# set by _AuthGate for the duration of one request and forwarded verbatim to
-# the self-call. Default None: the tool refuses to run outside an
-# authenticated request.
+# Set by _AuthGate for the duration of one request; default None — the tool refuses to run outside an authenticated request.
 _forwarded_authorization: ContextVar[Optional[str]] = ContextVar(
     "mcp_forwarded_authorization", default=None
 )
@@ -99,22 +96,15 @@ async def _check_in(
     document_type: Optional[str] = None,
 ) -> str:
     """One complete chat turn with MIRA; returns MIRA's reply text verbatim."""
-    # ToolError is the SDK's sanctioned anticipated-failure channel: its message
-    # reaches the model as the tool's error content. Any other exception type is
-    # treated as a crash and the model sees only "Error executing tool check_in".
+    # ToolError is the SDK's sanctioned anticipated-failure channel — its message reaches the model as the tool's error content; any other exception type reads as a crash.
     from mcp.server.mcpserver.exceptions import ToolError
 
     header = _forwarded_authorization.get()
     if header is None:
-        # Unreachable through the mounted app (_AuthGate always sets it); a
-        # bare call means the tool ran outside an authenticated request.
+        # Unreachable via the mounted app (_AuthGate always sets it) — a bare call means the tool ran outside an authenticated request.
         raise RuntimeError("check_in invoked outside an authenticated MCP request")
 
-    # Async, not sync: a sync tool runs in an anyio worker thread from the
-    # same default limiter that sizes the sync-endpoint pool (main.py), and
-    # its blocking self-call would hold a token while waiting for another —
-    # a self-dependency that deadlocks the whole sync pool at saturation.
-    # On the event loop the tool holds no token; only the inner /chat does.
+    # Async, not sync: a sync tool would hold a limiter token while waiting for another — deadlocking the sync pool at saturation.
     url = f"{_self_call_base_url()}/v0/api/chat"
     try:
         async with httpx.AsyncClient(
@@ -144,8 +134,7 @@ async def _check_in(
     try:
         envelope = response.json()
     except ValueError:
-        # Non-JSON body: fall through to the error rows below, which report
-        # the status and raw text truthfully — the generic row is the reporter.
+        # Non-JSON body: the error rows below are the reporter — status and raw text, truthfully.
         envelope = None
 
     if response.status_code == 200 and isinstance(envelope, dict) and envelope.get("success"):
@@ -162,8 +151,7 @@ async def _check_in(
         error_message = str(envelope["error"].get("message") or "")
     detail = error_message or response.text[:500]
 
-    # The busy case is the one 400 whose remedy the caller needs spelled out;
-    # keyed on chat.py's rejection constant (imported — no transcription).
+    # Keyed on chat.py's rejection constant (imported — no transcription): the one 400 whose remedy the caller needs spelled out.
     if response.status_code == 400 and _BUSY_REJECTION_MESSAGE in error_message:
         raise ToolError(
             "Another turn is already in progress for this MIRA user (one turn at a "
@@ -234,9 +222,7 @@ class _AuthGate:
 
         token = header.split(" ", 1)[1].strip()
         auth_service = get_auth_service()
-        # Validation is synchronous Valkey/Postgres I/O — cross to the
-        # threadpool so this per-request wrapper never blocks the event loop
-        # that schedules WebSocket frame sends.
+        # Validation is synchronous Valkey/Postgres I/O — cross to the threadpool so WebSocket frame sends never block the event loop.
         if (
             await run_in_threadpool(auth_service.validate_session, token, False) is None
             and await run_in_threadpool(auth_service.validate_api_token, token) is None
@@ -269,11 +255,7 @@ def mount(app) -> None:
 
     server = MCPServer("mira")
     server.add_tool(_check_in, name="check_in", description=_CHECK_IN_DESCRIPTION)
-    # DNS-rebinding protection (the SDK's default) validates the Host header
-    # against a fixed host list — unworkable for an instance whose address is
-    # DHCP-assigned per spawn, and redundant here: _AuthGate is the security
-    # boundary (no request reaches the MCP protocol without a valid Bearer
-    # token), and rebinding attacks target unauthenticated localhost servers.
+    # DNS-rebinding protection is unworkable for a DHCP-assigned address and redundant here: _AuthGate is the security boundary.
     inner_app = server.streamable_http_app(
         stateless_http=True,
         transport_security=TransportSecuritySettings(

@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from working_memory.core import WorkingMemory
 
 
-# -------------------- CONFIGURATION --------------------
 
 class WhileTheCatsAwayToolConfig(BaseModel):
     """Configuration for whilethecatsaway_tool."""
@@ -35,7 +34,6 @@ class WhileTheCatsAwayToolConfig(BaseModel):
 registry.register("whilethecatsaway_tool", WhileTheCatsAwayToolConfig)
 
 
-# -------------------- TOOL --------------------
 
 class WhileTheCatsAwayTool(Tool):
     """Dispatches a background agent for curiosity-driven research."""

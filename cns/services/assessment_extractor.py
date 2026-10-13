@@ -25,8 +25,7 @@ from utils.timezone_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
-# Thinking content threshold: include thinking traces when they exceed this
-# proportion of total conversation content
+# Include thinking traces when they exceed this proportion of total conversation content
 THINKING_INCLUSION_THRESHOLD = 0.7
 
 
@@ -55,7 +54,6 @@ class AssessmentExtractor:
         self.llm_provider = llm_provider or get_llm_provider()
         self._load_prompts()
 
-        # Pre-compute system prompt sections and anonymized prompt
         raw_prompt = config.system_prompt
         self._sections = get_assessable_sections(raw_prompt)
         self._anonymized_prompt = anonymize_prompt(raw_prompt)
@@ -93,16 +91,12 @@ class AssessmentExtractor:
             logger.debug("No messages to assess")
             return []
 
-        # Format messages as XML
         conversation_text = self._format_messages(messages)
 
-        # Compile system prompt with conditional thinking instructions
         system_prompt = self._compile_system_prompt(messages)
 
-        # Format user model context
         user_model_text = self._format_user_model(user_model_xml)
 
-        # Build user prompt
         user_prompt = self._user_template.format(
             anonymized_system_prompt=self._anonymized_prompt,
             user_model_observations=user_model_text,
@@ -176,7 +170,6 @@ class AssessmentExtractor:
             content = msg.content
 
             if isinstance(content, list):
-                # Structured content (multimodal)
                 text_parts = []
                 thinking_parts = []
                 media_count = 0
@@ -234,7 +227,6 @@ class AssessmentExtractor:
         for match in re.finditer(pattern, user_model_xml, re.DOTALL):
             section_id = match.group(1)
             confidence = match.group(2)
-            # Strip the changelog from the observation text
             obs_text = re.sub(r'<changelog>.*?</changelog>', '', match.group(3), flags=re.DOTALL).strip()
             observations.append(f"[{section_id}, {confidence}] {obs_text}")
 
@@ -267,14 +259,12 @@ class AssessmentExtractor:
         valid_types = {'alignment', 'misalignment', 'contextual_pass'}
         valid_strengths = {'strong', 'moderate', 'mild'}
 
-        # Match section blocks
         section_pattern = r'<mira:section\s+id="([^"]+)"\s*>(.*?)</mira:section>'
 
         for section_match in re.finditer(section_pattern, xml_output, re.DOTALL):
             section_id = section_match.group(1).strip()
             section_body = section_match.group(2)
 
-            # Match signals within this section
             signal_pattern = r'<mira:signal\s+type="([^"]+)"\s+strength="([^"]+)"\s*>\s*<evidence>(.*?)</evidence>\s*</mira:signal>'
 
             for sig_match in re.finditer(signal_pattern, section_body, re.DOTALL):

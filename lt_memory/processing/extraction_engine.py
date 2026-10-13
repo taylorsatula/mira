@@ -98,11 +98,9 @@ class ExtractionEngine:
                 f"Chunks should be filtered before payload building."
             )
 
-        # Get memory context for this chunk
         memory_context = self._get_memory_context_for_chunk(chunk)
         short_to_uuid = memory_context.get("short_to_uuid", {})
 
-        # Format messages with memory attribution injected into assistant turns
         formatted_messages = self._format_chunk_for_extraction(
             chunk,
             memory_texts=memory_context.get("memory_texts", {})
@@ -193,7 +191,6 @@ class ExtractionEngine:
         else:
             memory_context = chunk.memory_context_snapshot
 
-        # Extract memory IDs from snapshot
         # Only include explicitly referenced memories as context
         # Surfaced memories that weren't explicitly mentioned are not relevant
         memory_ids = memory_context.get("memory_ids")
@@ -202,20 +199,17 @@ class ExtractionEngine:
             memory_ids = memory_context.get("referenced_memory_ids", [])
 
         if memory_ids is None:
-            # Neither field present - context is malformed or empty
             memory_ids = []
 
-        # Retrieve memory texts (always dict format)
+        # Memory texts are expected as a {uuid: text} dict; a non-dict cache
+        # falls back to the DB below
         memory_texts: Dict[str, str] = {}
         if memory_ids:
-            # Try cached texts first
             cached_texts = memory_context.get("memory_texts")
 
             if isinstance(cached_texts, dict):
-                # Use cached dict directly
                 memory_texts = cached_texts
             else:
-                # Fall back to database if no cached texts
                 # Cache miss should only happen for old chunks or migrations
                 logger.warning(
                     f"Chunk {chunk.chunk_index} missing memory_texts cache, falling back to DB. "
@@ -225,7 +219,6 @@ class ExtractionEngine:
                 memory_uuids = [UUID(mid) for mid in memory_ids]
                 memories = self.db.get_memories_by_ids(memory_uuids)
 
-                # Verify all requested memories were found
                 if len(memories) != len(memory_uuids):
                     found_ids = {m.id for m in memories}
                     missing_ids = set(memory_uuids) - found_ids
@@ -235,7 +228,6 @@ class ExtractionEngine:
                         "Indicates deleted/corrupted memory references in chunk context."
                     )
 
-                # Build dict: {uuid: text}
                 memory_texts = {str(m.id): m.text for m in memories}
 
                 logger.debug(
@@ -243,7 +235,6 @@ class ExtractionEngine:
                     f"chunk {chunk.chunk_index} from database"
                 )
 
-        # Build bidirectional identifier maps
         uuid_to_short, short_to_uuid = self._build_identifier_maps(memory_ids)
 
         return {
@@ -283,7 +274,6 @@ class ExtractionEngine:
             role = getattr(msg, "role", "unknown")
             metadata = getattr(msg, "metadata", {}) or {}
 
-            # Filter system notifications and tool messages
             if metadata.get("system_notification"):
                 continue
             if role == "tool":
@@ -291,7 +281,6 @@ class ExtractionEngine:
 
             content = getattr(msg, "content", "")
 
-            # Preprocess structured content (strips media, truncates tool results)
             preprocessed = preprocess_content_blocks(content)
             content = " ".join(preprocessed.text_parts)
             if preprocessed.image_count > 0:
@@ -304,14 +293,12 @@ class ExtractionEngine:
             if role == "user":
                 formatted_lines.append(f"<user>{content}</user>")
             elif role == "assistant":
-                # Build <meta> attribution block if this message used existing memories
                 meta_block = self._build_attribution_meta(metadata, memory_texts)
                 if meta_block:
                     formatted_lines.append(f"<assistant>\n{meta_block}\n{content}</assistant>")
                 else:
                     formatted_lines.append(f"<assistant>{content}</assistant>")
             else:
-                # Discard unsupported roles (developer, system, etc.)
                 logger.debug(f"Skipping message with unsupported role: {role}")
                 continue
 
@@ -354,7 +341,6 @@ class ExtractionEngine:
                 lines.append(f'<references_memory id="{short_id}">{text}</references_memory>')
 
         if len(lines) == 1:
-            # No valid attributions found
             return ""
 
         lines.append("</meta>")

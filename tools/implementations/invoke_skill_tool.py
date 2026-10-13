@@ -21,9 +21,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 
 
 class InvokeSkillToolConfig(BaseModel):
@@ -36,9 +33,6 @@ class InvokeSkillToolConfig(BaseModel):
 
 registry.register("invoke_skill_tool", InvokeSkillToolConfig)
 
-# ---------------------------------------------------------------------------
-# Tool
-# ---------------------------------------------------------------------------
 
 
 class InvokeSkillTool(Tool):
@@ -90,9 +84,6 @@ class InvokeSkillTool(Tool):
         super().__init__()
         self.working_memory = working_memory
 
-    # ------------------------------------------------------------------
-    # Public interface
-    # ------------------------------------------------------------------
 
     def run(self, skill_name: str, **kwargs) -> Dict[str, Any]:
         """
@@ -144,9 +135,6 @@ class InvokeSkillTool(Tool):
             ),
         }
 
-    # ------------------------------------------------------------------
-    # Usage examples
-    # ------------------------------------------------------------------
 
     usage_examples = [
         {

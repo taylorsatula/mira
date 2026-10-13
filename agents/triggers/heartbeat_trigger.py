@@ -35,11 +35,11 @@ class HeartbeatTrigger:
     trigger_id = "heartbeat"
     interface_name = "heartbeat"
 
-    # No scalar context keys to match rules against (the briefs list is the
-    # payload); declared empty per the trigger-rules contract.
+    # No scalar context keys to match rules against — the briefs list is the
+    # payload; declared empty per the trigger-rules contract.
     FILTERABLE_FIELDS = ()
 
-    # Lazily imported: a module-level import here would pull the agent (and
+    # Lazily imported: a module-level import pulls the agent (and
     # heartbeat_tool's Postgres session machinery) into
     # utils/sidebar_jobs.py's registration import path.
     @property

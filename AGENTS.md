@@ -185,6 +185,27 @@ These convert recurring failure modes into mandatory patterns. The banned forms 
 - **Retry Counters Never Gate Data on Infrastructure Failure**: attempt counters that trigger destructive or data-losing fallbacks (tombstones, abandons) count only failures the data caused; infrastructure/LLM outages are excluded. Three provider blips must not consume a data-bearing budget.
 - **Every Claimed Defense Has a Witness**: any sentence in this tree claiming something is "wrapped", "enforced", "atomic", or "verified" corresponds to a live path-probe. If writing the probe is impractical, delete the claim. Prose that promises an unwitnessed mechanism is where bugs hide longest.
 
+## Comment Discipline
+
+Binding in every session. Code cannot diverge from itself; a comment can, and a stale one suppresses the reading that would have corrected it. **One test:** could a reader recover this by reading the enclosing code and grepping what it references? Then write nothing. A comment earns its place only by carrying a fact the code cannot show — four kinds qualify, and you name the class:
+
+- `DECLINED-ALTERNATIVE` — an option rejected, with its ticket or date. Check `git log` first: a commit body cannot rot.
+- `ACCEPTED-RESIDUAL` — a known, deliberate gap; the code cannot show it was accepted rather than missed.
+- `CROSS-FILE-COUPLING` — two sites that must change together, where no `AGENTS.md` map can carry it (maps load for a file's directory and its ancestors, never for a directory you merely call into). One line.
+- `FALSIFICATION-HOOK` — the condition under which a claim stops holding.
+
+**Never write:**
+
+- Decoration — rules, boxed banners (`grep -nE '^[[:space:]]*# ?[-=*_#]{4,}'`).
+- Restatement — of the line below, a name's meaning, or a type the annotation carries.
+- Narration or history — what you did, or what the code used to be; `git log` holds both.
+- An untagged quantity (`# 5 minutes`) — reads as fact, is a guess.
+- A claim about the outside world — nothing here can refute it.
+- Commented-out code — code that does not run, carrying prose that does not describe.
+- A `TODO` without a ticket — a wish, not a record.
+
+**Shape:** one line; anchor a named symbol, never a line number; state the checkable condition, never your intent.
+
 ## Architecture & Design
 
 ### User Context Management

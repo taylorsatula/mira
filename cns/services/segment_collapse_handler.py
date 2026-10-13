@@ -52,12 +52,10 @@ from utils.user_context import (
 
 logger = logging.getLogger(__name__)
 
-# Maximum collapse attempts before tombstoning a segment.
-# Prevents infinite retry loops when a persistent failure (billing, DB schema,
-# missing config) causes every attempt to fail after the expensive LLM call.
-# The counter deliberately counts infrastructure failures too — the
-# transient-vs-persistent distinction is intentionally not made (accepted
-# decision 2026-09-20).
+# Cap before tombstoning: stops infinite retry when a persistent failure
+# (billing, DB schema, missing config) fails every attempt after the expensive
+# LLM call. Counts infrastructure failures too — the transient-vs-persistent
+# distinction deliberately not made (accepted decision 2026-09-20).
 MAX_COLLAPSE_ATTEMPTS = 3
 
 # Pending manual collapse. A manual collapse requested while the user's
@@ -74,16 +72,9 @@ MAX_COLLAPSE_ATTEMPTS = 3
 PENDING_MANUAL_COLLAPSE_KEY = "pending_manual_collapse:{user_id}"
 PENDING_MANUAL_COLLAPSE_TTL_SECONDS = 24 * 3600
 
-# Pending manual-memory drain. The Valkey queue written by
-# memory_tool.create_memory is the sole durable record of a user-confirmed
-# memory, so an item counts as consumed only once a per-pending_id done
-# marker is durably set — never via a blanket queue delete before the work
-# (store_memories is NOT idempotent; the marker is what prevents a re-drain
-# from double-storing, mirroring the keyed-idempotence shape of the
-# extract_unprocessed_segments retry sweep).
-PENDING_DONE_MARKER_TTL_SECONDS = 14 * 86400  # outlives the queue's refreshed TTL below
-PENDING_QUEUE_RETRY_TTL_SECONDS = 7 * 86400   # keeps failing items retryable past the producer's 24h TTL
-PENDING_ITEM_MAX_ATTEMPTS = 3                # dead-letter bound: a permanently-failing item must not wedge the queue
+PENDING_DONE_MARKER_TTL_SECONDS = 14 * 86400  # must outlive PENDING_QUEUE_RETRY_TTL_SECONDS
+PENDING_QUEUE_RETRY_TTL_SECONDS = 7 * 86400   # must exceed PENDING_MEMORIES_TTL (tools/implementations/memory_tool.py, 24h) so failing items stay retryable
+PENDING_ITEM_MAX_ATTEMPTS = 3
 
 
 def _resolve_pending_memory_timezone(segment_id: str) -> str:
@@ -151,7 +142,7 @@ def _parse_pending_temporal_field(
 
 
 # Pending-drain entity pass. The queue payload (PendingManualMemory) carries no
-# entities, so drain-stored memories get the same LLM entity extraction
+# entities, so drain-stored memories get the same LLM entity extraction that
 # extraction-stored memories get — one batch-route call per drain, keyed by
 # pending_id. These constants are the wire contract between the prompt and the
 # parser; the format example spliced into the system prompt is generated from
@@ -335,7 +326,6 @@ class SegmentCollapseHandler:
         except Exception:
             logger.warning("Could not register on_memories_stored callback", exc_info=True)
 
-        # Initialize feedback loop components (lazy - may not be available yet)
         self._assessment_extractor = None
         self._feedback_repo = None
         self._feedback_tracker = None
@@ -348,12 +338,9 @@ class SegmentCollapseHandler:
         self._persona_enabled = persona_enabled
         self._persona_service = None
 
-        # Subscribe to timeout events
         self.event_bus.subscribe('SegmentTimeoutEvent', self.handle_timeout)
         logger.info("SegmentCollapseHandler subscribed to SegmentTimeoutEvent")
 
-        # Consume a queued manual collapse at the turn's completion —
-        # see _handle_turn_completed.
         self.event_bus.subscribe('TurnCompletedEvent', self._handle_turn_completed)
         logger.info("SegmentCollapseHandler subscribed to TurnCompletedEvent")
 
@@ -572,9 +559,10 @@ class SegmentCollapseHandler:
             RuntimeError: On any collapse failure (sentinel not found, no messages,
                 summary generation failed, etc.)
         """
-        # Clear stale per-user cached fields (e.g. cumulative_activity_days)
-        # before setting new identity — required when the timeout service
-        # processes multiple users sequentially on the same thread.
+        # Clear before set_current_user_id: set merges into the existing context
+        # dict (utils/user_context.py), so a reused thread leaks the prior user's
+        # cached fields (cumulative_activity_days). Required — the timeout service
+        # collapses users sequentially on one thread.
         clear_user_context()
         set_current_user_id(event.user_id)
 
@@ -585,7 +573,6 @@ class SegmentCollapseHandler:
             f"local_hour={event.local_hour}"
         )
 
-        # Find the segment boundary sentinel
         sentinel = self._find_segment_sentinel(
             event.continuum_id,
             event.segment_id
@@ -597,7 +584,6 @@ class SegmentCollapseHandler:
                 f"Data consistency violation - timeout event published for non-existent segment."
             )
 
-        # Circuit breaker: stop retrying after MAX_COLLAPSE_ATTEMPTS
         attempts = sentinel.metadata.get('collapse_attempts', 0)
         if attempts >= MAX_COLLAPSE_ATTEMPTS:
             logger.critical(
@@ -618,7 +604,6 @@ class SegmentCollapseHandler:
                 return sentinel
             sentinel.metadata['collapse_attempts'] = attempts + 1
 
-            # Force-collapse with tombstone so segment exits timeout queue
             tombstone = collapse_segment_sentinel(
                 sentinel,
                 summary="[Segment collapse failed after maximum retry attempts]",
@@ -716,7 +701,6 @@ class SegmentCollapseHandler:
         if not self._claim_collapse(sentinel, attempts):
             raise RuntimeError("Segment no longer active; collapse already claimed")
 
-        # Generate summary and embedding (raises on failure)
         result, embedding = self._generate_summary(
             messages,
             sentinel,
@@ -744,10 +728,8 @@ class SegmentCollapseHandler:
         # Extract tools used from actual messages (not sentinel metadata)
         tools_used = self._extract_tools_from_messages(messages)
 
-        # Set segment_end_time from last message (guaranteed to exist at this point)
         segment_end_time = messages[-1].created_at
 
-        # Collapse sentinel (returns new Message with collapsed state)
         collapsed_sentinel = collapse_segment_sentinel(
             sentinel,
             summary=result.synopsis,
@@ -787,10 +769,8 @@ class SegmentCollapseHandler:
             user_id
         )
 
-        # Invalidate Valkey cache to force reload with collapsed sentinel
         self.continuum_pool.invalidate()
 
-        # Publish collapsed event
         self.event_bus.publish(SegmentCollapsedEvent.create(
             continuum_id=event.continuum_id,
             segment_id=event.segment_id,
@@ -820,14 +800,12 @@ class SegmentCollapseHandler:
                 result.synopsis,
             )
 
-            # DIY Reinforcement Loop: Extract feedback and run synthesis if due
             self._process_feedback_loop(
                 messages=messages,
                 segment_id=UUID(event.segment_id),
                 continuum_id=UUID(event.continuum_id),
             )
 
-            # Portrait synthesis if use-day threshold reached
             self._process_portrait_synthesis()
         except Exception:
             logger.critical(
@@ -926,8 +904,6 @@ class SegmentCollapseHandler:
         user_id = get_current_user_id()
         db = self.continuum_repo.get_user_db_client(user_id)
 
-        # Load messages after sentinel timestamp, excluding boundaries and
-        # system notifications.
         query = """
             SELECT * FROM messages
             WHERE continuum_id = %s
@@ -939,10 +915,8 @@ class SegmentCollapseHandler:
 
         rows = db.execute_query(query, (continuum_id, sentinel.created_at))
 
-        # Stop at next segment boundary by filtering results
         segment_rows = []
         for row in rows:
-            # Check for next segment boundary in remaining results
             metadata = row.get('metadata', {})
             if isinstance(metadata, str):
                 import json
@@ -981,15 +955,13 @@ class SegmentCollapseHandler:
         tools_used = sentinel.metadata.get('tools_used', [])
         user_id = get_current_user_id()
 
-        # Fetch recent collapsed segments for narrative continuity (sliding window)
         previous_summaries = self.continuum_repo.find_collapsed_segments(
             continuum_id=continuum_id,
             user_id=user_id,
-            limit=5  # Last 5 segments for context
+            limit=5
         )
 
         try:
-            # Generate summary using SummaryGenerator with previous summaries for continuity
             result = self.summary_generator.generate_summary(
                 messages=messages,
                 summary_type=SummaryType.SEGMENT,
@@ -1000,14 +972,11 @@ class SegmentCollapseHandler:
             # Generate embedding for segment search (required for semantic segment search)
             embedding = self.embeddings_provider.encode_deep(result.synopsis)
 
-            # Convert ndarray to list for JSON serialization (storage boundary)
             embedding_list = embedding.tolist()
 
             return result, embedding_list
 
         except Exception as e:
-            # Re-raise to fail the entire collapse operation
-            # Segment will remain active and retry on next timeout check
             logger.exception(
                 "Segment summary generation failed; segment %s will remain active and retry",
                 sentinel.metadata.get('segment_id')
@@ -1058,7 +1027,6 @@ class SegmentCollapseHandler:
                 segment_id,
             )
 
-        # Memory extraction (direct through the fixed background route)
         if messages:
             # submit_segment_extraction is self-contained: loads messages, extracts, marks boundary
             extracted = self.lt_memory_factory.extraction_orchestrator.submit_segment_extraction(
@@ -1071,16 +1039,13 @@ class SegmentCollapseHandler:
 
             logger.info("Direct extraction completed for segment %s", segment_id)
 
-        # Process pending manual memories (from memory_tool.create_memory)
         self._process_pending_manual_memories(user_id, segment_id)
 
-        # Domain knowledge updates (if user has blocks enabled)
-        # NOTE (2025-11-07): Considered implementing segment collapse flush to domain knowledge service.
-        # Trade-off: Letta requires consistent batches of 10 messages for iterative learning,
-        # but segment collapse would flush partial batches (< 10 messages). Need to resolve
-        # whether to prioritize: (a) Letta batch consistency vs (b) data completeness on collapse.
-        # Current behavior: Messages buffer until batch size (10) or explicit disable/delete.
-        # Deferred for future architectural decision.
+        # Segment collapse flush to domain knowledge deferred (2025-11-07).
+        # Trade-off then: Letta needs consistent 10-message batches for iterative
+        # learning; collapse would flush partial (< 10) batches. Unresolved:
+        # (a) Letta batch consistency vs (b) collapse data completeness.
+        # Recorded behavior: buffer to batch size 10 or explicit disable/delete.
 
     def _process_pending_manual_memories(self, user_id: str, segment_id: str) -> None:
         """
@@ -1296,7 +1261,6 @@ class SegmentCollapseHandler:
                     source_segment_id=_segment_provenance_from_queue_key(queue_key),
                 )
 
-                # Store memory
                 created_ids = db.store_memories([extracted], embeddings=[embedding])
                 memory_id = created_ids[0]
 
@@ -1317,7 +1281,6 @@ class SegmentCollapseHandler:
                             memory_id, mem.pending_id, exc_info=True,
                         )
 
-                # Create supersedes links if provided
                 for short_id in mem.supersedes_memory_ids:
                     target = self._find_memory_by_short_id(short_id, db)
                     if target:
@@ -1631,14 +1594,11 @@ class SegmentCollapseHandler:
         tools_used = set()
 
         for msg in messages:
-            # Skip non-assistant messages (tools only in assistant responses)
             if msg.role != "assistant":
                 continue
 
-            # Check if content is structured (list of blocks)
             if isinstance(msg.content, list):
                 for block in msg.content:
-                    # Extract tool name from tool_call blocks
                     if isinstance(block, dict) and block.get('type') == 'tool_call':
                         tool_name = block.get('name')
                         if tool_name:
@@ -1696,10 +1656,8 @@ class SegmentCollapseHandler:
         user_id = get_current_user_id()
 
         try:
-            # Step 1: Get current user model (needed by assessor for calibration)
             current_model_xml = self._feedback_tracker.get_last_synthesis_output(user_id)
 
-            # Step 2: Extract assessment signals from this segment
             signals = self._assessment_extractor.extract_signals(
                 messages=messages,
                 segment_id=segment_id,
@@ -1707,12 +1665,10 @@ class SegmentCollapseHandler:
                 user_model_xml=current_model_xml
             )
 
-            # Step 3: Persist signals
             if signals:
                 self._feedback_repo.save_signals(signals)
                 logger.info("Extracted %d assessment signals from segment %s", len(signals), segment_id)
 
-            # Step 4: Synthesize user model if threshold reached (every 7 use-days)
             if self._feedback_tracker.should_synthesize(user_id):
                 logger.info("Running user model synthesis for user %s", user_id)
 
@@ -1721,14 +1677,12 @@ class SegmentCollapseHandler:
                     current_model_xml=current_model_xml
                 )
 
-                # Store result
                 self._feedback_tracker.mark_synthesized(
                     user_id,
                     result.raw_xml,
                     needs_checkin=len(result.checkin_topics) > 0
                 )
 
-                # Mark signals as synthesized
                 unsynthesized = self._feedback_repo.get_unsynthesized_signals(user_id)
                 signal_ids = [s['id'] for s in unsynthesized]
                 if signal_ids:
@@ -1819,9 +1773,6 @@ class SegmentCollapseHandler:
             logger.warning("Failed to invalidate LoRA trinket cache: %s", e, exc_info=True)
 
 
-# =============================================================================
-# SINGLETON ACCESS
-# =============================================================================
 
 _collapse_handler_instance: Optional[SegmentCollapseHandler] = None
 

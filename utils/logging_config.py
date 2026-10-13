@@ -22,22 +22,13 @@ if TYPE_CHECKING:
 import colorama
 from colorama import Fore, Style
 
-# colorama.init() with wrap=True (the default) replaces sys.stdout/stderr
-# with autoreset-wrapping streams that inject RESET codes around every
-# write. That corruptes any stdout used as a protocol channel - the POST
-# gate child prints BEGIN/END markers and JSON on stdout. On Linux wrapping
-# is pure corruption: ANSI renders natively and ColoredFormatter appends
-# Style.RESET_ALL itself; wrapping is only needed on legacy Windows consoles.
+# colorama wrap=True corrupts stdout used as a protocol channel: the POST gate
+# prints BEGIN/END markers + JSON on stdout; wrapping only aids legacy Windows consoles.
 colorama.init(autoreset=False, strip=False, wrap=False)
 
-# Import for contextvar access
 from utils.user_context import get_current_user_id
 
-# --- Custom log levels ---
-# _mira_log_levels is installed into site-packages by deploy, so TOAST
-# is normally registered at interpreter startup via .pth file. This
-# import ensures the constant is available here and acts as a fallback
-# if the .pth file hasn't been installed (dev without deploy).
+# _mira_log_levels is deployed via .pth so TOAST registers at interpreter startup; this import is the fallback when not deployed.
 try:
     from _mira_log_levels import TOAST
 except ImportError:
@@ -52,7 +43,6 @@ except ImportError:
         logging.Logger.toast = _toast
 
 
-# --- User context filter ---
 
 class UserContextFilter(logging.Filter):
     """Injects user_id from contextvar into every log record."""
@@ -61,15 +51,12 @@ class UserContextFilter(logging.Filter):
         """Add formatted user_id to record from contextvar, empty if not in user context."""
         try:
             user_id = get_current_user_id()
-            # Format with brackets and trailing space only when present
             record.user_id = f"[{user_id}] " if user_id else ""
         except (LookupError, RuntimeError):
-            # No user context (startup, background jobs without explicit context)
             record.user_id = ""
         return True
 
 
-# --- Credential redaction filter ---
 
 # Matches password='..' or keyword-value pairs that psycopg might log
 _CONNINFO_PASSWORD_RE = re.compile(r"password='[^']*'")
@@ -99,7 +86,6 @@ class CredentialRedactionFilter(logging.Filter):
         return True
 
 
-# --- Colored formatter ---
 
 class ColoredFormatter(logging.Formatter):
     """Custom logging formatter that adds colors to log levels."""
@@ -150,20 +136,17 @@ def setup_colored_root_logging(log_level=logging.INFO,
     """
     root_logger = logging.getLogger()
 
-    # Remove any existing StreamHandlers to avoid duplicates
     handlers_to_remove = [h for h in root_logger.handlers if isinstance(h, logging.StreamHandler)]
     for handler in handlers_to_remove:
         root_logger.removeHandler(handler)
 
-    # Add colored console handler with user context filter
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.addFilter(UserContextFilter())  # Filter runs before formatting
     console_handler.setFormatter(ColoredFormatter(fmt=fmt))
     root_logger.addHandler(console_handler)
     root_logger.setLevel(log_level)
 
-    # Redact credentials from psycopg pool logs at the logger level so no
-    # handler (journal, file, stdout) ever sees plaintext passwords
+    # Redact credentials at the logger level so no handler ever sees plaintext passwords
     psycopg_pool_logger = logging.getLogger('psycopg.pool')
     psycopg_pool_logger.addFilter(CredentialRedactionFilter())
 
@@ -189,7 +172,6 @@ def _extract_messages_tail(messages: list, limit: int = 500) -> str:
     return full[-limit:] if len(full) > limit else full
 
 
-# Logger for req_id → query content mapping (written to SDK log file)
 _sdk_request_log = logging.getLogger("mira.sdk_requests")
 
 
@@ -255,7 +237,7 @@ def setup_anthropic_sdk_logging(log_dir: str = "logs"):
 
     file_handler = RotatingFileHandler(
         os.path.join(log_dir, "anthropic_sdk.log"),
-        maxBytes=50_000_000,  # 50MB
+        maxBytes=50_000_000,
         backupCount=3
     )
     file_handler.setLevel(logging.DEBUG)
@@ -263,14 +245,12 @@ def setup_anthropic_sdk_logging(log_dir: str = "logs"):
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     ))
 
-    # Route SDK debug output to file (captures HTTP details)
     for logger_name in ("anthropic", "httpx"):
         sdk_logger = logging.getLogger(logger_name)
         sdk_logger.setLevel(logging.DEBUG)
         sdk_logger.addHandler(file_handler)
         sdk_logger.propagate = False  # Don't flood console
 
-    # Route our req_id → content mapping to the same file
     _sdk_request_log.setLevel(logging.DEBUG)
     _sdk_request_log.addHandler(file_handler)
     _sdk_request_log.propagate = False
@@ -285,7 +265,6 @@ def instrument_anthropic_client(client: 'anthropic.Anthropic') -> None:
 
     Call this after constructing the client.
     """
-    # Access the underlying httpx client to add event hooks
     http_client = getattr(client, '_client', None)
     if http_client is None:
         logging.getLogger(__name__).warning(
@@ -302,6 +281,5 @@ def instrument_anthropic_client(client: 'anthropic.Anthropic') -> None:
 
     event_hooks.setdefault("response", []).append(_on_anthropic_response)
 
-    # Traffic tap: capture full request body when tap is active
     from utils.llm_tap import httpx_request_hook
     event_hooks.setdefault("request", []).append(httpx_request_hook)

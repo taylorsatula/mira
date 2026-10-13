@@ -25,7 +25,7 @@ router = APIRouter()
 NOMINATIM_BASE = "https://nominatim.openstreetmap.org/reverse"
 OPEN_METEO_BASE = "https://api.open-meteo.com/v1/forecast"
 NOMINATIM_USER_AGENT = "MIRA/1.0 (location-context)"
-LOCATION_CACHE_TTL_SECONDS = 86400  # 24 hours
+LOCATION_CACHE_TTL_SECONDS = 86400
 
 # Simplified WMO weather code mapping (WMO 4677 subset)
 WMO_DESCRIPTIONS: dict[int, str] = {
@@ -110,8 +110,7 @@ def _get_days_since_last_conversation(user_id: str, timezone: str) -> int:
     user_tz = pytz.timezone(timezone)
     today = utc_now().astimezone(user_tz).date()
 
-    # Days between last conversation and today, not counting either endpoint
-    # last spoke Friday, today Monday → Sat, Sun = 2 gap days
+    # Gap days exclude both endpoints: last spoke Friday, today Monday → Sat, Sun = 2 gap days
     gap = (today - last_date).days - 1
     return max(0, min(gap, 3))
 
@@ -149,7 +148,6 @@ def _fetch_forecast(
         result: dict = {}
         unit_symbol = "°F" if temperature_unit == "fahrenheit" else "°C"
 
-        # Parse hourly forecast
         hourly = data.get("hourly", {})
         times = hourly.get("time", [])
         temps = hourly.get("temperature_2m", [])
@@ -177,19 +175,16 @@ def _fetch_forecast(
         sunrises = daily.get("sunrise", [])
         sunsets = daily.get("sunset", [])
 
-        # Sunrise/sunset from today (last entry)
         if sunrises and sunsets:
             sunrise_dt = datetime.fromisoformat(sunrises[-1])
             sunset_dt = datetime.fromisoformat(sunsets[-1])
             result["sunrise"] = strftime_no_pad(sunrise_dt, "%-I:%M %p")
             result["sunset"] = strftime_no_pad(sunset_dt, "%-I:%M %p")
 
-        # UV from today (last entry)
         uv_values = daily.get("uv_index_max", [])
         if uv_values and uv_values[-1] is not None and uv_values[-1] >= 8:
             result["uv_index"] = round(uv_values[-1])
 
-        # Recent daily weather history (past days only, exclude today)
         if past_days > 0:
             highs = daily.get("temperature_2m_max", [])
             lows = daily.get("temperature_2m_min", [])
@@ -197,7 +192,6 @@ def _fetch_forecast(
             daily_precip = daily.get("precipitation_sum", [])
 
             recent_weather = []
-            # All entries except the last (today) are past days
             for i in range(len(daily_dates) - 1):
                 day_dt = date.fromisoformat(daily_dates[i])
                 entry: dict = {
@@ -237,7 +231,6 @@ class LocationHandler(PropagatingHandler):
         location_name = _reverse_geocode(latitude, longitude)
         weather = _fetch_forecast(latitude, longitude, temperature_unit, prefs.timezone, past_days)
 
-        # Only cache if we got at least some data
         if location_name or weather:
             cache_data = {}
             if location_name:

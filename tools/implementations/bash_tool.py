@@ -490,6 +490,7 @@ if _UNKNOWN_CATASTROPHIC:
     raise RuntimeError(f"_CATASTROPHIC_PATTERNS names unknown rules: {sorted(_UNKNOWN_CATASTROPHIC)}")
 
 
+
 # -- argument layer -----------------------------------------------------------
 #
 # Verbs whose arguments are resolved and checked against the protected-path
@@ -528,7 +529,6 @@ if not _CATASTROPHIC_VERBS <= _PROHIBITED_VERBS:
         f"{sorted(_CATASTROPHIC_VERBS - _PROHIBITED_VERBS)}"
     )
 
-# Command runners that stand in front of the real verb.
 _WRAPPERS = frozenset({
     "sudo", "doas", "pkexec", "nohup", "env", "time", "nice", "ionice",
     "setsid", "command", "builtin", "stdbuf", "timeout", "script", "watch",
@@ -786,7 +786,6 @@ def _load_app_tree() -> Optional[Tuple[str, FrozenSet[str]]]:
     return str(_APP_ROOT), frozenset(names)
 
 
-# Inert from import onwards: (app root, untracked top-level names) or None.
 _APP_TREE: Optional[Tuple[str, FrozenSet[str]]] = _load_app_tree()
 
 
@@ -1451,7 +1450,6 @@ def _inplace_operands(verb: str, args: List[str]) -> List[str]:
                 continue
             operands.append(arg)
         return operands if in_place else []
-    # gawk / awk
     value_of = ""
     for arg in args:
         if value_of:
@@ -2138,7 +2136,6 @@ class BashTool(Tool):
         super().__init__()
         self.logger = logging.getLogger(__name__)
 
-    # -- plumbing -----------------------------------------------------------
 
     def _resolve(self, cfg: BashToolConfig, path: str) -> str:
         """Normalize a path and confirm it stays inside the configured root."""
@@ -2322,7 +2319,6 @@ class BashTool(Tool):
         with open(path, "a", encoding="utf-8") as handle:
             handle.write(f"{stamp} cwd={cwd!r} command={command!r}\n")
 
-    # -- run ----------------------------------------------------------------
 
     def run(self, operation: str, command: str, **kwargs) -> Dict[str, Any]:
         """
@@ -2371,7 +2367,6 @@ class BashTool(Tool):
         filtered = {k: v for k, v in kwargs.items() if k in accepted}
         return handler(cfg, command, **filtered)
 
-    # -- operations ---------------------------------------------------------
 
     def _run(
         self,

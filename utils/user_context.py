@@ -20,13 +20,11 @@ logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 
-# Context variable for current user data
 _user_context: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
     'user_context',
     default=None
 )
 
-# Context variable for current segment ID (set during conversation processing)
 _current_segment_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     'current_segment_id',
     default=None
@@ -118,7 +116,6 @@ def set_current_user_data(user_data: Dict[str, Any]) -> None:
     """
     data = user_data.copy()
     if "user_id" not in data and "id" in data:
-        # Normalize legacy key to standardized key
         data["user_id"] = data.pop("id")
     current = _user_context.get() or {}
     current.update(data)
@@ -195,9 +192,6 @@ def set_current_segment_id(segment_id: str) -> contextvars.Token:
     return _current_segment_id.set(segment_id)
 
 
-# ============================================================
-# ModelConfig - fixed database-backed model routes
-# ============================================================
 
 @dataclass(frozen=True)
 class ModelConfig:
@@ -310,9 +304,6 @@ def get_model_config(name: str) -> ModelConfig:
         raise KeyError(f"Unknown model_config '{name}'") from error
 
 
-# ============================================================
-# UserPreferences - Database-backed user settings
-# ============================================================
 
 def _config_default_timezone() -> str:
     """Timezone default from system config; lazy import avoids a module-level cycle."""
@@ -351,14 +342,12 @@ def get_user_preferences() -> UserPreferences:
     user_id = get_current_user_id()
     cache_key = f"user_prefs:{user_id}"
 
-    # Check Valkey cache first (shared across all contexts)
     valkey = get_valkey_client()
     cached = valkey.get(cache_key)
     if cached:
         data = json.loads(cached)
         return UserPreferences(**data)
 
-    # Cache miss - fetch from database
     db = PostgresClient('mira_service', user_id=user_id)
     result = db.execute_single(
         """SELECT first_name, last_name, timezone, temperature_unit, memory_manipulation_enabled, created_at
@@ -393,9 +382,8 @@ def invalidate_user_preferences_cache(user_id: str) -> None:
     get_valkey_client().delete(f"user_prefs:{user_id}")
 
 
-# ============================================================
+
 # Activity tracking (not a preference - computed value)
-# ============================================================
 
 def get_user_cumulative_activity_days() -> int:
     """
@@ -413,7 +401,6 @@ def get_user_cumulative_activity_days() -> int:
     Raises:
         RuntimeError: If no user context is set
     """
-    # Check if already cached in context
     try:
         user_data = get_current_user()
         if 'cumulative_activity_days' in user_data:
@@ -421,13 +408,11 @@ def get_user_cumulative_activity_days() -> int:
     except RuntimeError:
         raise RuntimeError("No user context set. Cannot get activity days without user context.")
 
-    # Not cached - query user activity module and cache result
     user_id = get_current_user_id()
 
     from utils.user_activity import get_user_cumulative_activity_days as get_activity_days
     activity_days = get_activity_days(user_id)
 
-    # Cache for subsequent calls
     update_current_user({'cumulative_activity_days': activity_days})
 
     return activity_days

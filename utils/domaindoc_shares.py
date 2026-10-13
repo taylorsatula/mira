@@ -77,9 +77,7 @@ def resolve_domaindoc(
     if is_shared_label(label):
         return _resolve_shared(user_id, owner_label_from_shared(label))
 
-    # Own doc — check user's SQLite. db.select already decrypts via _decrypt_dict;
-    # calling _decrypt_dict again would try to decrypt plaintext and fail with
-    # InvalidToken.
+    # db.select already decrypts; a second _decrypt_dict would fail on plaintext with InvalidToken.
     db = get_user_data_manager(user_id)
     results = db.select("domaindocs", "label = :label", {"label": label})
     if not results:
@@ -128,9 +126,9 @@ def get_accepted_shares(user_id: UUID) -> list[AcceptedShare]:
     the collaborator sees, share.domaindoc_label for the owner's original label.
     """
     pg = _get_pg(user_id)
-    # active_user_identity() is a SECURITY DEFINER function over users: RLS on that
-    # table is unconditional, so a plain `JOIN users` here drops the whole share row
-    # for a counterparty the caller cannot see.
+    # active_user_identity() is SECURITY DEFINER over users, whose RLS is
+    # unconditional: a plain `JOIN users` here drops the share row for a
+    # counterparty the caller cannot see.
     shares = pg.execute_query(
         "SELECT ds.owner_user_id, ds.domaindoc_label, ai.first_name, ai.email "
         "FROM domaindoc_shares ds "

@@ -20,7 +20,7 @@ from clients.llm.capabilities import Capabilities
 from clients.llm.thinking import TranslationNote
 from clients.llm.types import NativeField, Request, Result, Usage
 
-if TYPE_CHECKING:  # avoid runtime import cycle
+if TYPE_CHECKING:
     from clients.llm.artifacts import FileArtifactSink
     from clients.llm.resolver import ModelSelection
 
