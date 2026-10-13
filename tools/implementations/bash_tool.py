@@ -57,6 +57,7 @@ import shlex
 import signal
 import subprocess
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Iterable, List, NoReturn, Optional, Tuple
 
@@ -107,6 +108,77 @@ def ensure_background_jobs(db) -> None:
     launched.
     """
     db.create_table("background_jobs", _BACKGROUND_JOBS_DDL)
+
+
+# -- directory context maps ---------------------------------------------------
+#
+# Every command run from a working directory may touch code whose contracts
+# live in that directory's AGENTS.md orientation map. The tool loads the maps
+# for the working directory and its ancestor chain and returns them alongside
+# the command output, where the tool loop renders each as its own content
+# block. Maps already delivered unchanged within the CURRENT SEGMENT are not
+# re-sent; when the segment ends (user leaves, session times out) the
+# conversation history truncates and a fresh segment re-delivers every map.
+# The cache is keyed by segment id from the user context, holds only
+# filesystem facts (mtime, size), never per-user content state, and is
+# LRU-bounded by segment so concurrent turns across users each keep their own
+# dedup window.
+
+_CONTEXT_FILE_NAME = "AGENTS.md"
+_MAX_CONTEXT_FILE_BYTES = 64 * 1024
+_MAX_CONTEXT_SEGMENTS = 32
+_CONTEXT_DELIVERED: "OrderedDict[str, Dict[str, Tuple[int, int]]]" = OrderedDict()
+
+
+def _collect_context_files(workdir: str) -> List[Dict[str, str]]:
+    """Un-delivered AGENTS.md maps for workdir and its ancestor chain.
+
+    Walks from the working directory to the filesystem root, reading each
+    directory's AGENTS.md. A map is returned only when it changed (mtime or
+    size) since it was last delivered in the current segment; unchanged maps
+    are already in the conversation history for that segment. Outside an
+    active segment (background jobs, sidebar agents) the segment key is a
+    shared process-lifetime bucket — the same dedup, without a turn boundary
+    to expire it. Files above the size cap are skipped rather than truncated —
+    a half-delivered map is worse than none.
+    """
+    from utils.user_context import get_current_segment_id
+
+    segment_key = get_current_segment_id() or "presegment"
+    bucket = _CONTEXT_DELIVERED.get(segment_key)
+    if bucket is None:
+        bucket = {}
+        _CONTEXT_DELIVERED[segment_key] = bucket
+        while len(_CONTEXT_DELIVERED) > _MAX_CONTEXT_SEGMENTS:
+            _CONTEXT_DELIVERED.pop(next(iter(_CONTEXT_DELIVERED)))
+    else:
+        _CONTEXT_DELIVERED.move_to_end(segment_key)
+    collected: List[Dict[str, str]] = []
+    seen: set = set()
+    node = _normalize_absolute(workdir)
+    while node not in seen:
+        seen.add(node)
+        path = posixpath.join(node, _CONTEXT_FILE_NAME)
+        try:
+            stat = os.stat(path)
+        except OSError:
+            stat = None
+        if stat is not None and stat.st_size <= _MAX_CONTEXT_FILE_BYTES:
+            stamp = (stat.st_mtime_ns, stat.st_size)
+            if bucket.get(path) != stamp:
+                try:
+                    with open(path, encoding="utf-8") as handle:
+                        content = handle.read()
+                except OSError:
+                    content = None
+                if content is not None:
+                    bucket[path] = stamp
+                    collected.append({"path": path, "content": content})
+        parent = posixpath.dirname(node)
+        if parent == node:
+            break
+        node = parent
+    return collected
 
 
 class BashToolConfig(BaseModel):
@@ -2291,6 +2363,9 @@ class BashTool(Tool):
             "stdout_truncated": stdout_truncated,
             "stderr_truncated": stderr_truncated,
         }
+        context_files = _collect_context_files(workdir)
+        if context_files:
+            outcome["context_files"] = context_files
         if skip_permissions:
             outcome["guardrail"] = "bypassed"
         return outcome
@@ -2369,6 +2444,9 @@ class BashTool(Tool):
         }
         if skip_permissions:
             outcome["guardrail"] = "bypassed"
+        context_files = _collect_context_files(workdir)
+        if context_files:
+            outcome["context_files"] = context_files
         if pid is not None:
             # Record the launch so kill_background can stop it later: only
             # pids present in this table are stoppable from the

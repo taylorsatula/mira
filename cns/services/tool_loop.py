@@ -203,6 +203,26 @@ class ToolLoopExecutor:
             if isinstance(raw_result, list):
                 # Tools returning content blocks directly (e.g. imagegen_tool)
                 result_content = raw_result
+            elif isinstance(raw_result, dict) and raw_result.get("context_files"):
+                # Directory context maps (bash_tool): the command output stays
+                # one JSON block; each AGENTS.md map is its own text block so
+                # the model reads it as a separate attachment, the way context
+                # files ride alongside tool results elsewhere.
+                payload = {k: v for k, v in raw_result.items() if k != "context_files"}
+                result_content = [
+                    {"type": "text", "text": json.dumps(payload)},
+                    *(
+                        {
+                            "type": "text",
+                            "text": (
+                                f'<context_file path="{entry["path"]}">\n'
+                                f"{entry['content']}\n"
+                                "</context_file>"
+                            ),
+                        }
+                        for entry in raw_result["context_files"]
+                    ),
+                ]
             elif isinstance(raw_result, dict):
                 result_content = json.dumps(raw_result)
             else:
