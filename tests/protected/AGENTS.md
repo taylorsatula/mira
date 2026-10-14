@@ -1,77 +1,25 @@
-# tests/protected/ — admission-gated permanent verification batteries
+# tests/protected/ — admission-gated permanent verification batteries: the sole authorized exception to the no-test-files rule
+
+Elsewhere: probe-writing craft and the promote-or-discard moment — the `writing-probes` skill · the three verification homes and routing — `tests/AGENTS.md` · the disposable-probe exhibit — `tests/tmp/AGENTS.md` · live-infrastructure checks — `utils/AGENTS.md` (POST path-probes under `power_on_self_test.py`).
 
 ## Rules
 
-- **Admission requires the user to type the exact phrase `AUTHORIZE PROTECTED TEST SAVE`.**
-  Nothing else admits a file here: not agent judgment, not "this battery is too
-  valuable to throw away", not a prior authorization on a different file, not a
-  paraphrase, not an inferred intent. Authorization is per-file and per-save —
-  one phrase covers the one artifact it was said about. An agent that believes a
-  probe deserves permanence asks; it does not decide.
-- Until that phrase appears, a probe being written here is scratch work and
-  belongs in `/tmp` per `tests/tmp/AGENTS.md`.
-- Files here are **never autodeleted**. That is the whole distinction from
-  `tests/tmp/`, whose autodelete-on-sight policy is owned by
-  `tests/tmp/AGENTS.md`. A session that finds this folder and reaches for the
-  `tests/tmp/` reflex is wrong: check for this map before deleting anything.
-- This folder is the sole authorized exception to the NO MOCKS prohibition on
-  test files (doctrine owned by `tests/AGENTS.md`). The exception is narrow and does not relax any
-  other part of that doctrine — a file admitted here still may not contain mock
-  objects, stubs, fakes, or simulated infrastructure. It must call real
-  production code. What is waived is the "disposable, never permanent"
-  requirement, not the "no mocks, verification is real" requirement.
-- **A battery here must test the shipped artifact, not a transcription of it.**
-  Copying a pattern list, constant table, or validation function into the probe
-  so it can be exercised without importing the module is prohibited: the copy
-  drifts the first time the source is edited, and a battery that passes against
-  a stale copy asserts nothing about production. Import the real symbol and call
-  it.
-- **A battery exercising a destructive surface must be structurally incapable of
-  reaching it**, not merely careful. Required shape: install a
-  `sys.addaudithook` that raises on every process-spawn and network audit event
-  *before* importing the module under test, so an accidental call path aborts
-  the interpreter instead of touching a host. Call the pure decision function
-  directly; never construct the tool, never call its `run()` or transport
-  methods. See the safety contract at the top of
-  `bash_guardrail_probe.py`.
-- A battery here must be runnable offline and must not require Vault, Postgres,
-  Valkey, embeddings, or any live service. If a check needs live infrastructure
-  it is a POST path-probe under `utils/power_on_self_test.py` (ownership:
-  `utils/AGENTS.md`), not a file in this folder. "Offline" means no connection is
-  opened, not that the import graph is small: importing any module under
-  `tools/` pulls in `clients/__init__.py`, which eagerly imports the Vault,
-  Postgres, Valkey, SQLite and embeddings clients and constructs the config
-  singleton. Those clients keep their connections lazy, and this folder's
-  batteries depend on that staying true — a client gaining an eager import-time
-  connection breaks every battery here.
-- One recorded exception to the offline rule, by the user's direction (2026-09-26): `injection_defense_probe.py`'s live half calls the configured System One endpoint. Its audit barrier admits name resolution of that host, connections to the addresses it resolved to, and socket construction itself (only `getaddrinfo`/`connect` are restricted to the permitted targets); the bearer token comes from `SYSTEMONE_API_KEY` for as long as the user keeps that temporary arrangement. Every other rule here still binds it.
-- Importing project code writes `.pyc` caches via a temp file plus `os.rename`,
-  which the required audit barrier refuses. A battery that installs the
-  filesystem-mutation half of the barrier must set
-  `sys.dont_write_bytecode = True` before the project import, rather than
-  weakening the barrier to let the interpreter's own caching through.
-- Every case carries a stated expectation — destructive cases must be refused,
-  benign cases must be allowed. A battery that only asserts "blocked" will pass
-  forever while the guardrail over-blocks legitimate work into uselessness, so
-  the false-positive half is mandatory, not optional.
+- Admission requires the user to type the exact phrase `AUTHORIZE PROTECTED TEST SAVE`. Nothing else admits a file: not agent judgment, not "too valuable to lose", not a prior authorization for a different file, not a paraphrase. Authorization is per-file and per-save. An agent that believes a probe deserves permanence asks; it never decides. Until the phrase appears, scratch work lives in `/tmp` per `tests/tmp/AGENTS.md`.
+- Files here are never autodeleted — the whole distinction from `tests/tmp/`. Never apply the tmp-autodelete reflex inside this folder.
+- The waiver from the no-test-files prohibition is narrow (`tests/AGENTS.md` owns the doctrine): what is waived is "disposable, never permanent" — NOT "no mocks, verification is real". A battery still calls real production code with zero simulation, zero stubs, zero fakes.
+- Test the shipped artifact, never a transcription: import the real symbol and call it. A copied pattern list, constant table, or validation function drifts on the source's next edit, and a battery passing against a stale copy asserts nothing about production.
+- A destructive surface must be structurally unreachable, not merely avoided: install `sys.addaudithook` raising on every process-spawn and network audit event *before* importing the module under test — an accidental call path aborts the interpreter instead of touching the host — then call the pure decision function directly; never construct the tool, never call its transport.
+- Importing project code writes `.pyc` via a temp-file rename that the audit barrier refuses: a battery with the filesystem-mutation half sets `sys.dont_write_bytecode = True` before the project import, rather than weakening the barrier to let the interpreter's own caching through.
+- Offline by contract: no connection is opened — "offline" means no live service, not a small import graph (importing `tools/` pulls `clients/__init__.py`, which eagerly imports Vault/Postgres/Valkey/SQLite/embeddings and constructs the config singleton). Every battery here depends on those clients keeping their connections lazy — a client gaining an eager import-time connection breaks every battery. One recorded user-directed exception: `injection_defense_probe.py`'s live half calls the configured System One endpoint, its barrier admitting only that host's name resolution and connections (token from `SYSTEMONE_API_KEY`).
+- Every case carries a stated expectation, both halves: destructive cases must be refused AND benign cases must be allowed. A block-only battery passes forever while an over-blocking guardrail makes the tool useless — the false-positive half is mandatory.
+- Run from the repo root as `python3 tests/protected/<name>.py` — the `-m` form fails (no `__init__.py` under `tests/`).
 
 ## Files
 
-- `bash_guardrail_probe.py` — Regression battery for the
-  `tools/implementations/bash_tool.py` guardrail, calling the real
-  `_validate_command(command, root, cwd, skip_permissions, blocked, audit_log)`
-  with the handlers' audit-log path. Five matrices, each case with its
-  expectation: the default destructive and benign corpora (the parity baseline
-  — leave them as-is when a change targets another mode), skip_permissions
-  must-refuse/must-allow, the operator blocklist (both modes), and the
-  both-modes matrix (default-mode closures plus the line-splitter, heredoc, and
-  editing-skill shapes that must keep passing). The case tables are the
-  coverage record; read them, not this bullet. Exits non-zero on any bypass or
-  false positive and prints the firing rule per case. Known pre-existing red:
-  N01–N08 (interpreter-payload escapes) bypass — exit 1 with exactly those 8 is
-  the expected state until that separate fix lands. Self-checks first that
-  `_validate_command` is still pure (recursive `dis` walk allowlisting every
-  global it loads). Run from the repo root:
-  `python3 tests/protected/bash_guardrail_probe.py` (the `-m` form fails — no
-  `__init__.py` in `tests/`).
-- `injection_defense_probe.py` — Battery for `utils/untrusted_content.py`. Offline half (network blocked): `_reveal_hidden` must surface each hidden payload (base64, hex, `\x` escapes, percent, HTML entities, tag characters, letter-spacing) and reveal nothing on designated benign text; `wrap_untrusted` over every case and hostile source labels must keep exactly one boundary, no raw `<`/`>`/`"` inside it, and no tag characters. Live half: tier-1 `InjectionScreen.assess()` over 64 labeled attacks (indirect and subtle manipulation; each names the questions it should trigger) and 46 hard benign cases through a real `SystemOneClient` built from `config.systemone`; `screen()` witnessed on one auto-rejected and one auto-passed case. Tier 2 (the escalation LLM) is not exercised — it resolves a route from `model_configs`. Fails only on a safety failure (attack auto-passed unless recorded as a documented miss; benign auto-rejected), an offline failure, a witness failure, or a blocked side effect; reports drift between safe dispositions, per-question counts, corpus loss, and the smallest safety margins for wording work. Run from the repo root: `SYSTEMONE_API_KEY=... python3 tests/protected/injection_defense_probe.py`.
+- `bash_guardrail_probe.py` — regression battery for `tools/implementations/bash_tool.py`'s guardrail: calls the real `_validate_command(command, root, cwd, skip_permissions, blocked, audit_log)` (purity self-checked first by a recursive `dis` walk allowlisting every loaded global) across five matrices — the default destructive/benign corpora (the parity baseline: leave as-is when a change targets another mode), skip-mode must-refuse/must-allow, the operator blocklist (both modes), and the both-modes matrix (persistence planting spellings, newline chains, heredocs, comments, ANSI-C quoting, audit-log tamper, guardrail self-edits refused; the precise-file-editing skill's patterns allowed). Exits 1 on any bypass or false positive, printing the firing rule per case. Gotcha: run it after any guardrail change (patterns or `_analyze_command`) — the case tables are the coverage record; read them, not prose.
+- `injection_defense_probe.py` — battery for `utils/untrusted_content.py`. Offline half: `_reveal_hidden` must surface each hidden payload (base64, hex, `\x`, percent, HTML entities, tag characters, letter-spacing) and reveal nothing on designated benign text; `wrap_untrusted` keeps exactly one boundary with no raw `<`/`>`/`"` inside it across every case and hostile source label. Live half: tier-1 `InjectionScreen.assess()` over labeled attacks (indirect and subtle; each names the questions it should trigger) and hard benign corpora through a real `SystemOneClient` built from `config.systemone`, plus a `screen()` witness on one auto-rejected and one auto-passed case. Fails only on a safety failure (attack auto-passed unless recorded as a documented miss; benign auto-rejected), an offline failure, a witness failure, or a blocked side effect; reports drift and the smallest safety margins for wording work. Run: `SYSTEMONE_API_KEY=... python3 tests/protected/injection_defense_probe.py`. Gotcha: the band edges and question wording in `utils/untrusted_content.py` and `config/prompts/injection_screen/` are calibrated against this battery — change them only with its numbers.
+
+## Wiring
+
+- Both batteries consume shipped artifacts across directory lines, and the battery is the edge's witness: `bash_guardrail_probe.py` → `tools/implementations/bash_tool.py:_validate_command`; `injection_defense_probe.py` → `utils/untrusted_content.py` (plus its screen prompts under `config/prompts/injection_screen/`). A contract change on either side runs the matching battery in the same commit.
+- Nothing consumes this directory. Inbound edges are admissions (owned by `tests/AGENTS.md` routing) and the calibration couplings named in the cards above.

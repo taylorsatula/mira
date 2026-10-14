@@ -13,7 +13,8 @@ MIRA is a self-hosted personal AI assistant — persistent long-term memory, a u
 Every directory with ≥2 source files, or any invariant not documented in its
 parent directory's map, has an `AGENTS.md` orientation map. Smaller
 directories are documented in the parent's `## Files` section. Full template
-and authoring rules: `docs/AGENTS_MAP_SPEC.md`.
+and authoring rules: the `maintaining-agentsmd-maps` skill (the global agent
+skill; the repo's maps are governed by it).
 
 **Map registry** — every directory with a map, and what it owns. A directory not
 listed here that meets the coverage gate needs a map created; a listed
@@ -40,7 +41,7 @@ directory whose map is missing is a defect.
 | `deploy/docker/scripts/` | Container bootstrap and supervision scripts |
 | `deploy/lib/` | Shared bash helper libraries, Vault state machine |
 | `deploy/vm/` | VM spin-up, dev-build deploy, and sarcophagus restore toolkit: modes, transports, sarcophagus contract, reference-host recipes |
-| `docs/` | Operator documentation, plus two cited authorities: `AGENTS_MAP_SPEC.md` (map shape) and `REGISTER.md` (writing register for any text a model reads) |
+| `docs/` | Operator documentation and process authorities: `REGISTER.md` (writing register for any text a model reads) and `AGENTS_MAP_RESEARCH.md` (research base behind the map law; the law lives in the `maintaining-agentsmd-maps` skill) |
 | `lt_memory/` | Long-term memory: storage, scoring, retrieval, linking, entity services |
 | `lt_memory/processing/` | Extraction pipeline and consolidation |
 | `mcp/` | Agent-facing check-in clients: the pi `talkto_mira` extension, its TUI-store twin contract, and the shared check-in mapping rows |
@@ -65,11 +66,17 @@ file). The harness loads the full ancestor chain whenever a file in the
 directory is read, so those maps are present in context together with this
 one.
 
-**Shape, authoring rules, and audits:** the full map spec — fixed section order,
-the four Rule requirements, cross-map reciprocity (each fact has exactly one
-owning map; others cite it in one line), `## Files` and anchor conventions, the
-complete maintenance trigger table, and the two run-before-committing audits
-(path-anchor and reciprocity) — lives in `docs/AGENTS_MAP_SPEC.md`.
+**Shape, authoring rules, and audits:** the map law — fixed section order,
+the six Rule requirements, cross-map reciprocity (each fact has exactly one
+owning map; others cite it in one line), routing-card and anchor conventions,
+the complete maintenance trigger table, and the run-before-committing audits
+(path-anchor, one-card-per-file, grep-validity, reciprocity, density) — lives
+in the `maintaining-agentsmd-maps` skill.
+
+Corpus regeneration in flight (checkpointed): the listed directories' maps
+are being rebuilt from source under the skill; this root map and the five
+pilot maps (`tools/implementations/`, `utils/`, `ui/tui/`, `tests/protected/`,
+`lt_memory/processing/`) are the standing references.
 
 The high-frequency obligations, binding in every session: map updates are part
 of the same commit as the triggering change — a new/deleted/renamed file updates
@@ -77,10 +84,11 @@ its directory's `## Files` bullet; a behavior or contract change greps its map
 for the old statement; a wiring edge is stated fully by the owner map and cited
 one-line by every counterpart; a directory reaching the coverage gate gets a
 map. Every bullet must change agent behavior — delete on sight what doesn't
-(the requirement-5 gate and line budgets live in `docs/AGENTS_MAP_SPEC.md`).
-Run the audits in `docs/AGENTS_MAP_SPEC.md` before committing any change
-that touched source files or maps. When in doubt, update the map — an
-unnecessary edit costs a line; a missed one misleads every session.
+(the requirement gates and the convergence doctrine live in the
+`maintaining-agentsmd-maps` skill). Run the audits in that skill before
+committing any change that touched source files or maps. When in doubt,
+update the map — an unnecessary edit costs a line; a missed one misleads
+every session.
 
 
 ## Repo root files
