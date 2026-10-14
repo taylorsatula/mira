@@ -31,6 +31,7 @@ Elsewhere: factory construction and the `on_memories_stored` seam — `lt_memory
 - The `on_memories_stored` callback is registered by the collapse handler on the factory (seam owned by `lt_memory/AGENTS.md`), invoked None-safe after storage, and spawns `MemoryCuratorAgent` in integration mode — context shapes owned by `agents/implementations/memory_curator_agent.py`.
 - Prompts: the `memory_extraction_*` pair (variables and examples — `config/prompts/AGENTS.md`); `pending_memory_entities_*` consumed by the drain-side pass (`cns/services/AGENTS.md`).
 - Consolidation is reached only through `memory_tool` `merge_memories` (short ids resolved first; link rules owned by `lt_memory/AGENTS.md`).
+- Inbound counterparts: the extraction content-failure budget is set by the dialect error taxonomy ↔ `clients/llm/dialects/AGENTS.md`; `Message`/`ProcessingChunk` shapes arrive from the domain model ↔ `cns/core/AGENTS.md`; the pi check-in's extraction promise lands here at collapse-time ↔ `mcp/AGENTS.md`.
 
 ## Extraction, collapse to curator
 

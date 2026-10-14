@@ -1,11 +1,11 @@
 # tests/protected/ — admission-gated permanent verification batteries: the sole authorized exception to the no-test-files rule
 
-Elsewhere: probe-writing craft and the promote-or-discard moment — the `writing-probes` skill · the three verification homes and routing — `tests/AGENTS.md` · the disposable-probe exhibit — `tests/tmp/AGENTS.md` · live-infrastructure checks — `utils/AGENTS.md` (POST path-probes under `power_on_self_test.py`).
+Elsewhere: probe-writing craft and the promote-or-discard moment — the `writing-probes` skill · the verification homes and routing — `tests/AGENTS.md` · live-infrastructure checks — `utils/AGENTS.md` (POST path-probes under `power_on_self_test.py`).
 
 ## Rules
 
-- Admission requires the user to type the exact phrase `AUTHORIZE PROTECTED TEST SAVE`. Nothing else admits a file: not agent judgment, not "too valuable to lose", not a prior authorization for a different file, not a paraphrase. Authorization is per-file and per-save. An agent that believes a probe deserves permanence asks; it never decides. Until the phrase appears, scratch work lives in `/tmp` per `tests/tmp/AGENTS.md`.
-- Files here are never autodeleted — the whole distinction from `tests/tmp/`. Never apply the tmp-autodelete reflex inside this folder.
+- Admission requires the user to type the exact phrase `AUTHORIZE PROTECTED TEST SAVE`. Nothing else admits a file: not agent judgment, not "too valuable to lose", not a prior authorization for a different file, not a paraphrase. Authorization is per-file and per-save. An agent that believes a probe deserves permanence asks; it never decides. Until the phrase appears, scratch work lives outside this directory (`/tmp`), never here.
+- Files here are never autodeleted — nothing removes them but the user; never apply a tmp-autodelete reflex inside this folder.
 - The waiver from the no-test-files prohibition is narrow (`tests/AGENTS.md` owns the doctrine): what is waived is "disposable, never permanent" — NOT "no mocks, verification is real". A battery still calls real production code with zero simulation, zero stubs, zero fakes.
 - Test the shipped artifact, never a transcription: import the real symbol and call it. A copied pattern list, constant table, or validation function drifts on the source's next edit, and a battery passing against a stale copy asserts nothing about production.
 - A destructive surface must be structurally unreachable, not merely avoided: install `sys.addaudithook` raising on every process-spawn and network audit event *before* importing the module under test — an accidental call path aborts the interpreter instead of touching the host — then call the pure decision function directly; never construct the tool, never call its transport.
@@ -22,4 +22,5 @@ Elsewhere: probe-writing craft and the promote-or-discard moment — the `writin
 ## Wiring
 
 - Both batteries consume shipped artifacts across directory lines, and the battery is the edge's witness: `bash_guardrail_probe.py` → `tools/implementations/bash_tool.py:_validate_command`; `injection_defense_probe.py` → `utils/untrusted_content.py` (plus its screen prompts under `config/prompts/injection_screen/`). A contract change on either side runs the matching battery in the same commit.
+- Sibling home: `tests/fixtures/` — reusable real-infrastructure scaffolding under the same no-mock doctrine (owner `tests/AGENTS.md`) ↔ `tests/fixtures/AGENTS.md`.
 - Nothing consumes this directory. Inbound edges are admissions (owned by `tests/AGENTS.md` routing) and the calibration couplings named in the cards above.

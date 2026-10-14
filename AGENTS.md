@@ -35,6 +35,7 @@ directory whose map is missing is a defect.
 | `cns/infrastructure/` | Persistence and caching: repositories, UnitOfWork, segment sentinel lifecycle |
 | `cns/integration/` | Event bus and CNS dependency-graph construction |
 | `cns/services/` | Turn orchestration, segment collapse, memory surfacing, user-model and Persona pipelines |
+| `cns/services/pollers/` | Segment-lifecycle-bound pollers: per-user threads started on a segment's first compose, stopped on collapse |
 | `config/` | Pydantic config schema, the config singleton, the system prompt |
 | `config/prompts/` | LLM prompt templates and the loader contract |
 | `deploy/` | Host-metal and Docker deployment tooling |
@@ -46,10 +47,9 @@ directory whose map is missing is a defect.
 | `lt_memory/processing/` | Extraction pipeline and consolidation |
 | `mcp/` | Agent-facing check-in clients: the pi `talkto_mira` extension, its TUI-store twin contract, and the shared check-in mapping rows |
 | `scripts/` | Operational CLI entry points run against a deployed service |
-| `tests/` | The verification doctrine (NO MOCKS, probe-surface membership, the realtime verification loop) plus the probe-artifact homes: disposable exhibit, shared real-infra fixtures, admission-gated batteries — not a suite |
+| `tests/` | The verification doctrine (NO MOCKS, probe-surface membership, the realtime verification loop) plus the probe-artifact homes: shared real-infra fixtures, admission-gated batteries — not a suite |
 | `tests/fixtures/` | Reusable probe scaffolding: real-infrastructure setup/teardown, claim-free, no simulation |
 | `tests/protected/` | Admission-gated permanent verification batteries; the exact-phrase authorization rule and the no-mock, no-drift, cannot-execute requirements |
-| `tests/tmp/` | Display exhibit for the disposable-probe pattern: autodeleted-on-sight test policy, one exemplary probe |
 | `tools/` | Tool framework: base class, repository, config registry |
 | `tools/implementations/` | All concrete LLM-callable tools |
 | `ui/` | The two chat clients: the rule that a server frame change updates both, and the cross-client twin code (reply display filter, backoff constants, history row grouping) |
@@ -72,11 +72,6 @@ owning map; others cite it in one line), routing-card and anchor conventions,
 the complete maintenance trigger table, and the run-before-committing audits
 (path-anchor, one-card-per-file, grep-validity, reciprocity, density) — lives
 in the `maintaining-agentsmd-maps` skill.
-
-Corpus regeneration in flight (checkpointed): the listed directories' maps
-are being rebuilt from source under the skill; this root map and the five
-pilot maps (`tools/implementations/`, `utils/`, `ui/tui/`, `tests/protected/`,
-`lt_memory/processing/`) are the standing references.
 
 The high-frequency obligations, binding in every session: map updates are part
 of the same commit as the triggering change — a new/deleted/renamed file updates
@@ -123,15 +118,11 @@ every session.
   `curl … | bash` stays interactive; forwards installer flags (`--config`,
   `--loud`, `--local`). Release mechanics owned by `deploy/AGENTS.md`.
 - `.env.example` — repo-root env-var template (container first-boot vars plus the runtime feature switches `config/config_manager.py` reads). Nothing loads it; the operative container contract is `deploy/.env.example` + `deploy/docker/scripts/init-mira.sh`.
-- `README.md`, `license.txt`, `NEARFUTURE_FEATURES.md` — static repo documents;
+- `README.md`, `license.txt` — static repo documents;
   no runtime consumers.
 - `BREAKING.md` — transient breaking-release marker: its presence makes `mira update`
   refuse the tree and print the manual path. Contract owned by `deploy/AGENTS.md`;
   removed in the first release that is safe again.
-- `UPGRADE_PATH.md` — unimplemented design guide; its design-only status, the
-  no-upgrade-path doctrine, and the dead `--migrate` references are owned by
-  `deploy/AGENTS.md` and `docs/AGENTS.md`.
-
 ## Critical Principles (Non-Negotiable)
 
 # NO MOCKS — verification doctrine lives in `tests/AGENTS.md`
@@ -201,6 +192,8 @@ Binding in every session. Code cannot diverge from itself; a comment can, and a 
 - `ACCEPTED-RESIDUAL` — a known, deliberate gap; the code cannot show it was accepted rather than missed.
 - `CROSS-FILE-COUPLING` — two sites that must change together, where no `AGENTS.md` map can carry it (maps load for a file's directory and its ancestors, never for a directory you merely call into). One line.
 - `FALSIFICATION-HOOK` — the condition under which a claim stops holding.
+
+These four are labels, not the whole set: the seven shapes a comment may carry, where comments are load-bearing, and the rewrite-not-abridge rule are the `comment-discipline` skill.
 
 **Never write:**
 
