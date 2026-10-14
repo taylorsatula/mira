@@ -32,10 +32,10 @@ class ApiConfig(BaseModel):
         description="Max seconds a new chat turn waits for previous-turn background cache work.",
     )
 
-    context_window_tokens: int = Field(default=200000, description="Total context window size in tokens")
+    context_window_tokens: int = Field(default=256000, description="Total context window size in tokens")
     temperature: float = Field(default=1.0, description="Temperature for response generation (Anthropic default: 1.0)")
     compaction_trigger_tokens: int = Field(
-        default=40_000,
+        default=225000,
         ge=1,
         description="Estimated input-token count at which to trigger live context compaction.",
     )
