@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field, model_validator
 from auth.api import get_current_user
 from auth.types import SessionData, APITokenContext
 from config.config_manager import config as app_config
-from cns.services.async_work_barrier import get_async_work_barrier
 from utils.distributed_lock import UserRequestLock
 
 from utils.document_processing import process_document, ProcessedDocument, SUPPORTED_DOCUMENT_FORMATS, MAX_DOCUMENT_SIZE_MB
@@ -201,13 +200,6 @@ class ChatEndpoint(PropagatingHandler):
 
             orchestrator = get_orchestrator()
             continuum_pool = get_continuum_pool()
-
-            # Compaction head start before loading the hot continuum; the timeout is intentionally fail-open.
-            get_async_work_barrier().wait_for_user(
-                user_id,
-                timeout=app_config.api.async_work_barrier_timeout_seconds,
-                source="tool_summarizer",
-            )
 
             continuum = continuum_pool.get_or_create()
 

@@ -602,44 +602,6 @@ class ContinuumRepository:
 
         return self._parse_message_rows(message_rows)
 
-    def load_tool_result_by_id(
-        self,
-        user_id: str,
-        session_id: str,
-        tool_result_id: str,
-    ) -> str | None:
-        """Load raw tool-result text by its session-scoped retrieval ID."""
-        try:
-            message_id = UUID(tool_result_id.rsplit("_", 1)[1])
-        except (IndexError, ValueError) as exc:
-            raise ValueError("Malformed tool result identifier") from exc
-
-        db = self.get_user_db_client(user_id)
-        rows = db.execute_query(
-            """
-            SELECT content
-            FROM messages
-            WHERE id = %s
-              AND user_id = %s
-              AND role = 'tool'
-              AND metadata->>'tool_result_session_id' = %s
-              AND metadata->>'tool_result_id' = %s
-            """,
-            (message_id, user_id, session_id, tool_result_id),
-        )
-        if len(rows) > 1:
-            raise RuntimeError(
-                f"Ambiguous tool result ID in session {session_id}: {tool_result_id}"
-            )
-        if not rows:
-            return None
-        content = rows[0].get("content")
-        if not isinstance(content, str):
-            raise RuntimeError(
-                f"Tool result {tool_result_id} does not contain persisted text"
-            )
-        return content
-
     def get_history(
         self,
         user_id: str,
@@ -1171,9 +1133,8 @@ class ContinuumRepository:
         """
         Load DB-backed ordinary messages for live active-context compaction.
 
-        This query intentionally excludes segment boundaries, system
-        notifications, and any compaction synopsis scaffolding. It returns the
-        raw persisted messages in chronological order.
+        Excludes segment boundaries and system notifications; returns the raw
+        persisted messages in chronological order.
         """
         db = self.get_user_db_client(user_id)
 
@@ -1186,7 +1147,6 @@ class ContinuumRepository:
               AND created_at <= %s
               AND COALESCE(metadata->>'is_segment_boundary', 'false') = 'false'
               AND COALESCE(metadata->>'system_notification', 'false') = 'false'
-              AND COALESCE(metadata->>'is_compaction_synopsis', 'false') = 'false'
             ORDER BY created_at ASC, id ASC
         """
 

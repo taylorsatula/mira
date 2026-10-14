@@ -34,7 +34,6 @@ from config import config
 from cns.core.continuum import Continuum
 from cns.core.events import (
     ContinuumEvent,
-    ToolResultHistoryCommittedEvent,
     TurnCompletedEvent,
 )
 from clients.llm.events import (
@@ -459,42 +458,24 @@ class ContinuumOrchestrator:
                 if interaction is None or tool_call.id not in persisted_tool_ids:
                     continue
                 tool_result = interaction.result
-                is_retrieved_result = (
-                    interaction.tool_name == "continuum_tool"
-                    and interaction.arguments.get("operation") == "get_tool_result"
-                )
                 if isinstance(tool_result, list):
                     tool_result = json.dumps(tool_result)
-                if (
-                    not is_retrieved_result
-                    and isinstance(tool_result, str)
-                    and len(tool_result) > TOOL_RESULT_MAX_CHARS
-                ):
+                if isinstance(tool_result, str) and len(tool_result) > TOOL_RESULT_MAX_CHARS:
                     tool_result = _truncate_tool_result(
                         tool_result,
                         TOOL_RESULT_MAX_CHARS,
                         interaction.tool_name,
                     )
 
-                message_id = uuid4()
                 tool_metadata: MessageMetadata = {
                     "turn_id": str(turn_id),
                     "segment_id": segment_id,
                     "tool_name": interaction.tool_name,
                     "tool_arguments": interaction.arguments,
                 }
-                if is_retrieved_result:
-                    tool_metadata["tool_result_retrieved"] = True
-                    source_id = interaction.arguments.get("tool_result_id")
-                    if isinstance(source_id, str):
-                        tool_metadata["tool_result_source_id"] = source_id
-                elif not interaction.is_error and isinstance(tool_result, str):
-                    session_prefix = segment_id.replace("-", "")[:8]
-                    tool_metadata["tool_result_id"] = f"tr_{session_prefix}_{message_id.hex}"
-                    tool_metadata["tool_result_session_id"] = segment_id
 
                 messages.append(Message(
-                    id=message_id,
+                    id=uuid4(),
                     content=tool_result,
                     role="tool",
                     metadata=tool_metadata,
@@ -1387,18 +1368,6 @@ class ContinuumOrchestrator:
         continuum.add_tool_history(turn_messages)
         unit_of_work.add_messages(*turn_messages)
         unit_of_work.mark_metadata_updated()
-        committed_tool_messages = [
-            message for message in turn_messages
-            if message.role == "tool"
-        ]
-        if committed_tool_messages:
-            committed_event = ToolResultHistoryCommittedEvent.create(
-                continuum_id=continuum_id,
-                tool_messages=committed_tool_messages,
-            )
-            unit_of_work.add_post_commit_callback(
-                lambda event=committed_event: self._publish_events([event])
-            )
 
         # A stopped turn ends without a completed-turn event: subscribers
         # must not observe a halted turn as completed.

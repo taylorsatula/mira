@@ -226,8 +226,8 @@ def filter_messages_for_live_context(
     omitted.
 
     Messages are omitted when an artifact for this continuum covers their
-    timestamp. Segment boundaries, system notifications, and compaction
-    synopsis scaffolding are always preserved.
+    timestamp. Segment boundaries and system notifications are always
+    preserved.
 
     ``active_turn_id`` is vestigial: its only consumer was the in-flight
     keepsleeping-heartbeat-turn exemption, removed with the heartbeat wake
@@ -253,8 +253,6 @@ def _is_covered_ordinary_message(
     if message.metadata.get("is_segment_boundary"):
         return False
     if message.metadata.get("system_notification"):
-        return False
-    if message.metadata.get("is_compaction_synopsis"):
         return False
     return artifact.covered_start < message.created_at <= artifact.covered_end
 
@@ -283,8 +281,6 @@ def format_messages_for_live_compaction(messages: Sequence[Message]) -> str:
         if message.metadata.get("system_notification"):
             continue
         if message.metadata.get("is_segment_boundary"):
-            continue
-        if message.metadata.get("is_compaction_synopsis"):
             continue
 
         if message.role == "tool":

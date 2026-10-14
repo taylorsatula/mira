@@ -25,7 +25,6 @@ from utils.timezone_utils import utc_now
 
 if TYPE_CHECKING:
     from cns.core.continuum import Continuum
-    from cns.core.message import Message
 
 @dataclass(frozen=True, kw_only=True)
 class ContinuumEvent:
@@ -106,28 +105,6 @@ class TurnCompletedEvent(ContinuumCheckpointEvent):
             turn_number=turn_number,
             segment_turn_number=segment_turn_number,
             continuum=continuum
-        )
-
-
-@dataclass(frozen=True, kw_only=True)
-class ToolResultHistoryCommittedEvent(ContinuumCheckpointEvent):
-    """Tool result messages committed to PostgreSQL and the hot Valkey cache."""
-
-    tool_messages: tuple[Message, ...]
-
-    @classmethod
-    def create(
-        cls,
-        continuum_id: str,
-        tool_messages: list[Message],
-    ) -> ToolResultHistoryCommittedEvent:
-        """Create a post-commit tool-result event for the current user."""
-        from utils.user_context import get_current_user_id
-
-        return cls(
-            continuum_id=continuum_id,
-            user_id=get_current_user_id(),
-            tool_messages=tuple(tool_messages),
         )
 
 
