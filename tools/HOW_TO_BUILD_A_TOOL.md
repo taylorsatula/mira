@@ -98,7 +98,7 @@ Every tool needs these core patterns. Anchors name a file and a symbol; line num
 | | `contacts_tool.py:ContactsToolConfig` | Config with `Field` descriptions |
 | **Deferred Initialization** | `reminder_tool.py:ReminderTool.__init__` | `has_user_context()` guard around table creation |
 | **Database Schema (inline)** | `reminder_tool.py:_ensure_reminders_table` | `self.db.create_table` + indexes owned by the tool |
-| **Database Schema (central)** | `utils/userdata_manager.py:_init_contacts_schema` | Table created at user-DB init; DDL text in `tools/implementations/schemas/contacts_tool.sql` |
+| **Database Schema (central)** | `utils/userdata_manager.py:_init_contacts_schema` | Table created at user-DB init; DDL owned inline there, with `_migrate_contacts_schema` backfilling columns on existing user DBs |
 | **Operation Routing** | `reminder_tool.py:ReminderTool.run` | Operation dispatch with signature-filtered kwargs |
 | | `contacts_tool.py:ContactsTool.run` | Clean routing, one `_handler` per operation |
 | **Input Validation** | `contacts_tool.py:_add_contact` | Collect all errors before raising |
