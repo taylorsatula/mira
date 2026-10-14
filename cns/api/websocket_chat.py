@@ -23,7 +23,6 @@ import contextvars
 import logging
 import threading
 from collections.abc import Callable
-from functools import partial
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
@@ -45,7 +44,6 @@ from cns.core.continuum import Continuum
 from cns.core.message import ContentBlock
 from cns.infrastructure.continuum_pool import get_continuum_pool
 from cns.infrastructure.continuum_repository import get_continuum_repository
-from cns.services.async_work_barrier import get_async_work_barrier
 from cns.services.orchestrator import get_orchestrator
 from config.config_manager import config as app_config
 from utils.distributed_lock import UserRequestLock
@@ -785,13 +783,6 @@ class WebSocketChatHandler:
             if not app_config.system_prompt:
                 raise RuntimeError("System prompt not configured")
 
-            wait_for_background_work = partial(
-                get_async_work_barrier().wait_for_user,
-                user_id,
-                timeout=app_config.api.async_work_barrier_timeout_seconds,
-                source="tool_summarizer",
-            )
-            await run_in_threadpool(context.run, wait_for_background_work)
             continuum = await run_in_threadpool(context.run, self._get_user_continuum)
             segment = await run_in_threadpool(
                 context.run,

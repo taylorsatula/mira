@@ -24,7 +24,7 @@ from cns.infrastructure.continuum_repository import get_continuum_repository
 from utils.timezone_utils import (
     ensure_utc, format_utc_iso, parse_time_string, utc_now,
 )
-from utils.user_context import get_current_segment_id, get_user_preferences
+from utils.user_context import get_user_preferences
 from clients.embeddings_provider import get_embeddings_provider
 
 
@@ -163,22 +163,13 @@ class ContinuumSearchTool(Tool):
                         "search",
                         "search_within_segment",
                         "expand_message",
-                        "get_tool_result",
                     ],
                     "default": "search",
                     "description": (
                         "'search' (default): query segment summaries or time-bounded messages. "
                         "'search_within_segment': query messages inside a specific segment (requires segment_id, query). "
-                        "'expand_message': get full message text plus context (requires message_id). "
-                        "'get_tool_result': retrieve an exact collapsed tool result (requires tool_result_id)"
+                        "'expand_message': get full message text plus context (requires message_id)"
                     )
-                },
-                "tool_result_id": {
-                    "type": "string",
-                    "description": (
-                        "Session-scoped tool result identifier copied from a collapsed-result "
-                        "breadcrumb. Required for 'get_tool_result'."
-                    ),
                 },
                 "search_mode": {
                     "type": "string",
@@ -322,7 +313,6 @@ class ContinuumSearchTool(Tool):
     }
     _SEARCH_WITHIN_SEGMENT_PARAMS = {'segment_id', 'query', 'max_results', 'include_thinking'}
     _EXPAND_MESSAGE_PARAMS = {'message_id', 'direction', 'context_count', 'include_thinking'}
-    _GET_TOOL_RESULT_PARAMS = {'tool_result_id'}
 
     def run(self, operation: str = "search", **kwargs) -> Any:
         """
@@ -349,38 +339,15 @@ class ContinuumSearchTool(Tool):
             elif operation == "expand_message":
                 filtered = {k: v for k, v in kwargs.items() if k in self._EXPAND_MESSAGE_PARAMS}
                 return self._expand_message(**filtered)
-            elif operation == "get_tool_result":
-                filtered = {k: v for k, v in kwargs.items() if k in self._GET_TOOL_RESULT_PARAMS}
-                return self._get_tool_result(**filtered)
             else:
                 raise ValueError(
                     f"Unknown operation: {operation}. "
                     "Valid operations are: search, search_within_segment, "
-                    "expand_message, get_tool_result"
+                    "expand_message"
                 )
         except Exception as e:
             self.logger.error(f"Error executing {operation} in continuum_tool: {e}")
             raise
-
-    def _get_tool_result(self, tool_result_id: str | None = None) -> str:
-        """Return the exact persisted tool result referenced by a breadcrumb."""
-        if not tool_result_id or not tool_result_id.startswith("tr_"):
-            raise ValueError("tool_result_id must be copied from a collapse breadcrumb")
-
-        session_id = get_current_segment_id()
-        if not session_id:
-            raise ValueError("No active conversation session for tool result lookup")
-
-        content = self._continuum_repo.load_tool_result_by_id(
-            user_id=self.user_id,
-            session_id=session_id,
-            tool_result_id=tool_result_id,
-        )
-        if content is None:
-            raise ValueError(
-                "No tool result found for that identifier in the active session"
-            )
-        return content
 
     def _search_messages(
         self,

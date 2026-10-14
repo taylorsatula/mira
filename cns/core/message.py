@@ -142,12 +142,6 @@ class MessageMetadata(TypedDict, total=False):
     tool_calls: list[dict[str, object]]
     tool_name: str
     tool_arguments: dict[str, object]
-    tool_result_id: str
-    tool_result_session_id: str
-    tool_result_compacted: bool
-    tool_result_original_chars: int
-    tool_result_retrieved: bool
-    tool_result_source_id: str
     # Reasoning round-trip fields (Anthropic dialect reads these)
     thinking_signatures: list[dict[str, object]]
     reasoning_details: list[dict[str, object]]
@@ -165,10 +159,6 @@ class MessageMetadata(TypedDict, total=False):
     referenced_memories: list[str]
     surfaced_memories: list[str]
     pinned_memory_ids: list[str]
-    is_compaction_synopsis: bool
-    compacted_count: int
-    original_start_time: str
-    original_end_time: str
     # Content-type identity tag: stamped at every persisted write and read
     # back by name to reconstitute content (continuum_repository save paths)
     content_type: Literal["json", "text"]

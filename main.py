@@ -175,7 +175,8 @@ async def lifespan(app: FastAPI):
     # beside `session:<digest>` and revoke deletes both, so flushing CSRF while keeping
     # sessions 403s the first cookie-authenticated write after restart (O-10).
     # `pending_memories*` (queue + `_done:`/`_attempts:` markers) exists nowhere else.
-    logger.info("Flushing Valkey caches (preserving sessions, CSRF tokens, rate limits and pending memories)...")
+    # `live_context_compaction_report:` holds each active segment's compaction report; flushed, the next request resends the full segment.
+    logger.info("Flushing Valkey caches (preserving sessions, CSRF tokens, rate limits, pending memories and compaction reports)...")
     from clients.valkey_client import get_valkey_client
     try:
         valkey_client = get_valkey_client()
@@ -183,6 +184,7 @@ async def lifespan(app: FastAPI):
             preserve_prefixes=[
                 "session:", "csrf:", "rate_limit:",
                 "pending_memories:", "pending_memories_done:", "pending_memories_attempts:",
+                "live_context_compaction_report:",
             ]
         )
     except Exception as e:

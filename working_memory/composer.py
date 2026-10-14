@@ -13,7 +13,6 @@ from working_memory.types import ComposedPrompt
 logger = logging.getLogger(__name__)
 
 PLACEMENT_SYSTEM = "system"
-PLACEMENT_CONVERSATION_PREFIX = "conversation_prefix"
 PLACEMENT_POST_HISTORY = "post_history"
 PLACEMENT_NOTIFICATION = "notification"
 
@@ -35,9 +34,6 @@ SECTION_LAYOUT: Dict[str, List[str]] = {
         'active_skills',
         'location_context',
         'conversation_manifest',
-    ],
-    PLACEMENT_CONVERSATION_PREFIX: [
-        'context_compaction',
     ],
     PLACEMENT_POST_HISTORY: [
         'domaindoc',
@@ -140,7 +136,7 @@ class SystemPromptComposer:
 
     def compose(self) -> ComposedPrompt:
         """
-        Compose system prompt, prefix, post-history, and notification center content.
+        Compose system prompt, post-history, and notification center content.
 
         Placement and ordering are driven by SECTION_LAYOUT. Sections not in the
         layout default to system placement at the end, with a warning.
@@ -149,7 +145,6 @@ class SystemPromptComposer:
             Dictionary with:
             - 'cached_content': Static system prompt content (base_prompt, behavioral_directives, persona_directives, tool_availability)
             - 'non_cached_content': Non-cached system content
-            - 'conversation_prefix_items': Pre-history assistant messages
             - 'post_history_items': Post-history assistant messages (domaindoc, BP4)
             - 'notification_center': Sliding assistant message content (time, memories, etc.)
         """
@@ -158,14 +153,12 @@ class SystemPromptComposer:
             return {
                 "cached_content": "",
                 "non_cached_content": "",
-                "conversation_prefix_items": [],
                 "post_history_items": [],
                 "notification_center": ""
             }
 
         cached_parts = []
         non_cached_parts = []
-        conversation_prefix_items = []
         post_history_items = []
         notification_parts = []
         processed = set()
@@ -181,8 +174,7 @@ class SystemPromptComposer:
                 self._route_section(
                     placement, section,
                     cached_parts, non_cached_parts,
-                    conversation_prefix_items, post_history_items,
-                    notification_parts,
+                    post_history_items, notification_parts,
                 )
 
         for name, section in self._sections.items():
@@ -194,8 +186,7 @@ class SystemPromptComposer:
             self._route_section(
                 PLACEMENT_SYSTEM, section,
                 cached_parts, non_cached_parts,
-                conversation_prefix_items, post_history_items,
-                notification_parts,
+                post_history_items, notification_parts,
             )
 
         notification_center = self._build_notification_center(notification_parts)
@@ -206,7 +197,6 @@ class SystemPromptComposer:
         logger.info(
             f"Composed: {len(cached_parts)} cached ({len(cached_content)} chars), "
             f"{len(non_cached_parts)} non-cached ({len(non_cached_content)} chars), "
-            f"{len(conversation_prefix_items)} prefix items, "
             f"{len(post_history_items)} post-history items, "
             f"{len(notification_parts)} notification ({len(notification_center)} chars)"
         )
@@ -214,7 +204,6 @@ class SystemPromptComposer:
         return {
             "cached_content": cached_content,
             "non_cached_content": non_cached_content,
-            "conversation_prefix_items": conversation_prefix_items,
             "post_history_items": post_history_items,
             "notification_center": notification_center
         }
@@ -225,15 +214,12 @@ class SystemPromptComposer:
         section: SectionData,
         cached_parts: List[str],
         non_cached_parts: List[str],
-        conversation_prefix_items: List[str],
         post_history_items: List[str],
         notification_parts: List[str],
     ) -> None:
         """Route a section to the appropriate output list based on placement."""
         if placement == PLACEMENT_POST_HISTORY:
             post_history_items.append(section.content)
-        elif placement == PLACEMENT_CONVERSATION_PREFIX:
-            conversation_prefix_items.append(section.content)
         elif placement == PLACEMENT_NOTIFICATION:
             notification_parts.append(section.content)
         elif section.cache_policy:

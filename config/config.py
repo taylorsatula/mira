@@ -26,18 +26,13 @@ class ApiConfig(BaseModel):
     # every large-segment collapse on 2026-10-08 (jammed the sweep for hours).
     timeout: int = Field(default=900, description="Max seconds an LLM provider HTTP request (socket/connect/read) may run before it is aborted. Distinct from provider_response_timeout, which bounds no-progress stalls. The two move together: an HTTP bound below the stall bound makes the stall bound moot for non-streaming calls.")
     provider_response_timeout: int = Field(default=900, description="Max seconds an LLM provider call may show no progress before the lifecycle aborts it (stall detection). Distinct from timeout, which bounds the HTTP request itself. The two move together: an HTTP bound below this makes this moot for non-streaming calls.")
-    async_work_barrier_timeout_seconds: float = Field(
-        default=30.0,
-        gt=0,
-        description="Max seconds a new chat turn waits for previous-turn background cache work.",
-    )
 
     context_window_tokens: int = Field(default=256000, description="Total context window size in tokens")
     temperature: float = Field(default=1.0, description="Temperature for response generation (Anthropic default: 1.0)")
     compaction_trigger_tokens: int = Field(
         default=225000,
         ge=1,
-        description="Estimated input-token count at which to trigger live context compaction.",
+        description="Previous turn's full prompt size in tokens (uncached input plus cache writes plus cache reads) at which to schedule live context compaction.",
     )
     compaction_raw_user_turns_to_preserve: int = Field(default=10, description="Number of recent user turns to preserve in raw format without compaction.")
 
@@ -224,7 +219,6 @@ class WorkerPoolsConfig(BaseModel):
     """Background executor thread-pool sizes."""
 
     peanutgallery_workers: int = Field(default=1, ge=1, description="Peanut-gallery commentary executor workers")
-    tool_result_summarizer_workers: int = Field(default=2, ge=1, description="Tool-result summarization executor workers")
     orchestrator_encode_workers: int = Field(default=2, ge=1, description="Orchestrator dual-embedding encode executor workers")
     repulsion_rewriter_workers: int = Field(default=4, ge=1, description="Repulsion-rewrite executor workers")
 

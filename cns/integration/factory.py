@@ -127,25 +127,6 @@ class CNSIntegrationFactory:
             live_context_compaction_service=live_context_compaction_service,
         )
 
-        from cns.services.async_work_barrier import initialize_async_work_barrier
-        initialize_async_work_barrier()
-
-        # Tool-result compaction is DEADHEADED (2026-09-30, human-directed):
-        # the existing design is too convoluted (two uncoordinated size-reduction
-        # layers whose interaction is self-defeating — see census run
-        # census-20260930b and the compaction-flow map attached to that run's
-        # sqdf ticket) and will be REDESIGNED soon. Until the redesign lands,
-        # the hot cache keeps full tool results; the only bound is
-        # orchestrator._truncate_tool_result's raw 31999-char truncation.
-        # Do not re-enable initialize_tool_result_summarizer() piecemeal —
-        # replace this whole block with the redesigned mechanism.
-        # from cns.services.tool_result_summarizer import initialize_tool_result_summarizer
-        # initialize_tool_result_summarizer(
-        #     llm_provider,
-        #     event_bus,
-        #     get_continuum_pool().valkey_cache,
-        # )
-
         logger.info("CNS orchestrator initialized successfully with full integration")
         return orchestrator
         
@@ -185,7 +166,6 @@ class CNSIntegrationFactory:
             from working_memory.trinkets.persona_trinket import PersonaTrinket
             from working_memory.trinkets.location_trinket import LocationTrinket
             from working_memory.trinkets.asyncactivity_trinket import AsyncActivityTrinket
-            from working_memory.trinkets.live_context_compaction_trinket import LiveContextCompactionTrinket
             from working_memory.trinkets.memory_curator_trinket import MemoryCuratorTrinket
             from working_memory.trinkets.skills_catalog_trinket import SkillsCatalogTrinket
             from working_memory.trinkets.active_skills_trinket import ActiveSkillsTrinket
@@ -194,10 +174,6 @@ class CNSIntegrationFactory:
             # auto-registration. Trinkets self-register with working memory.
             TimeManager(event_bus, self._working_memory)
             ReminderManager(event_bus, self._working_memory)
-            LiveContextCompactionTrinket(
-                event_bus,
-                self._working_memory,
-            )
             ManifestTrinket(event_bus, self._working_memory)
             ProactiveMemoryTrinket(event_bus, self._working_memory)
             DomaindocTrinket(event_bus, self._working_memory)

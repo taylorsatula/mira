@@ -1193,8 +1193,16 @@ class OpenAIChatBase(Dialect):
         prompt_tokens = self._required_usage_token(usage, "prompt_tokens")
         completion_tokens = self._required_usage_token(usage, "completion_tokens")
         cache_write, cache_read = self._extract_cache_usage(prompt_details)
+        uncached_tokens = prompt_tokens - cache_write - cache_read
+        if uncached_tokens < 0:
+            raise ProviderProtocolError(
+                self.endpoint_url,
+                "usage",
+                f"Cached prompt tokens ({cache_write} written + {cache_read} read) exceed "
+                f"prompt_tokens ({prompt_tokens})",
+            )
         return Usage(
-            input_tokens=prompt_tokens,
+            input_tokens=uncached_tokens,
             output_tokens=completion_tokens,
             cache_creation_input_tokens=cache_write,
             cache_read_input_tokens=cache_read,

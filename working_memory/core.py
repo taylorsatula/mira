@@ -143,7 +143,6 @@ class WorkingMemory:
                 continuum_id=event.continuum_id,
                 cached_content=structured['cached_content'],
                 non_cached_content=structured['non_cached_content'],
-                conversation_prefix_items=tuple(structured['conversation_prefix_items']),
                 post_history_items=tuple(structured['post_history_items']),
                 notification_center=structured['notification_center']
             ))
@@ -151,7 +150,6 @@ class WorkingMemory:
             logger.info(
                 f"Composed system prompt: cached {len(structured['cached_content'])} chars, "
                 f"non-cached {len(structured['non_cached_content'])} chars, "
-                f"{len(structured['conversation_prefix_items'])} prefix items, "
                 f"{len(structured['post_history_items'])} post-history items, "
                 f"notification center {len(structured['notification_center'])} chars"
             )

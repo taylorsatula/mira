@@ -9,7 +9,6 @@ class ComposedPrompt(TypedDict):
     """Output of SystemPromptComposer.compose()."""
     cached_content: str
     non_cached_content: str
-    conversation_prefix_items: list[str]
     post_history_items: list[str]
     notification_center: str
 

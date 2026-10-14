@@ -44,7 +44,7 @@ Build a trinket when you need to:
 | `EventAwareTrinket` | Stateless render, or state that survives segment collapse | `generate_content()` | Valkey persist/clear, self-registration, publish cycle |
 | `StatefulTrinket` | Turn-scoped state that must expire or reset on collapse | `generate_content()`, `_expire_items()`, `_clear_all_state()` | `current_turn` (per-user), `TurnCompletedEvent` subscription, `_refresh_content()` |
 
-Live split: `manifest`, `time_manager`, `location`, `persona`, `lora`, `proactive_memory`, `reminder_manager`, `domaindoc`, `asyncactivity` are plain; `email`, `forage`, `whilethecatsaway`, `memory_curator`, `peanutgallery`, `live_context_compaction` are stateful.
+Live split: `manifest`, `time_manager`, `location`, `persona`, `lora`, `proactive_memory`, `reminder_manager`, `domaindoc`, `asyncactivity` are plain; `email`, `forage`, `whilethecatsaway`, `memory_curator`, `peanutgallery` are stateful.
 
 ### Pattern 1: Basic Trinket Structure
 
@@ -188,7 +188,7 @@ class MyTrinket(EventAwareTrinket):
     cache_policy = True   # stable within a session -- don't bust the prompt cache
 ```
 
-**Only affects `PLACEMENT_SYSTEM` sections.** `post_history`, `conversation_prefix`, and `notification` placements are routed before the cache check, so `cache_policy` on a HUD trinket is a no-op. Placement is decided by `SECTION_LAYOUT` in `composer.py` (see Registration below).
+**Only affects `PLACEMENT_SYSTEM` sections.** `post_history` and `notification` placements are routed before the cache check, so `cache_policy` on a HUD trinket is a no-op. Placement is decided by `SECTION_LAYOUT` in `composer.py` (see Registration below).
 
 **Set True for:** user preferences, persona/LoRA directives, domaindoc content, location — anything stable within a session.
 
@@ -405,7 +405,7 @@ Four decisions before writing code — record them in the module docstring:
 ```python
 """
 Slot:      my_section          (unique; must be added to SECTION_LAYOUT)
-Placement: notification        (system | conversation_prefix | post_history | notification)
+Placement: notification        (system | post_history | notification)
 Base:      StatefulTrinket     (turn-scoped state) | EventAwareTrinket (stateless / collapse-surviving)
 Updates:   producer publishes UpdateTrinketEvent on task status change
 Cache:     False               (True only for session-stable system-placement content)
@@ -468,7 +468,6 @@ to exactly one placement list:
 | Placement | Lands in | Typical content |
 |---|---|---|
 | `PLACEMENT_SYSTEM` | `cached_content` / `non_cached_content` (by `cache_policy`) | stable orientation: persona, LoRA, domaindoc, manifest, location |
-| `PLACEMENT_CONVERSATION_PREFIX` | before conversation history | compaction brief |
 | `PLACEMENT_POST_HISTORY` | after history | domaindoc body |
 | `PLACEMENT_NOTIFICATION` | `<mira:hud>` assistant message that slides forward each turn | time, reminders, inbox, task results, surfaced memories |
 
@@ -539,7 +538,6 @@ a Valkey round-trip is unverified — `get_trinket_state()` is the check.
 | `forage_trinket.py` | stateful | Task-status state machine, terminal-state guard, per-iteration summary stacking |
 | `whilethecatsaway_trinket.py` | stateful | Same machine, all results TTL-expire, no dismiss path |
 | `peanutgallery_trinket.py` | stateful | TTL-in-turns expiry, constructor arg beyond the base two |
-| `live_context_compaction_trinket.py` | stateful | `conversation_prefix` placement, `_clear_all_state()` deletes a Valkey artifact |
 
 ## Summary
 

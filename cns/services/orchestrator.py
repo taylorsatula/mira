@@ -34,7 +34,6 @@ from config import config
 from cns.core.continuum import Continuum
 from cns.core.events import (
     ContinuumEvent,
-    ToolResultHistoryCommittedEvent,
     TurnCompletedEvent,
 )
 from clients.llm.events import (
@@ -360,11 +359,10 @@ class ContinuumOrchestrator:
 
         self._cached_content = None
         self._non_cached_content = None
-        self._conversation_prefix_items = ()  # Before history (set from event.conversation_prefix_items)
         self._post_history_items = ()  # After history, before HUD (domaindoc, BP4)
         self._notification_center = None
 
-        self._last_turn_usage: dict[str, int] = {}  # provider-reported tokens keyed {continuum_id: input_tokens}
+        self._last_turn_prompt_tokens: dict[str, int] = {}
 
         self.event_bus.subscribe('SystemPromptComposedEvent', self._handle_system_prompt_composed)
         self.event_bus.subscribe('SegmentCollapsedEvent', self._invalidate_on_segment_collapse)
@@ -459,42 +457,24 @@ class ContinuumOrchestrator:
                 if interaction is None or tool_call.id not in persisted_tool_ids:
                     continue
                 tool_result = interaction.result
-                is_retrieved_result = (
-                    interaction.tool_name == "continuum_tool"
-                    and interaction.arguments.get("operation") == "get_tool_result"
-                )
                 if isinstance(tool_result, list):
                     tool_result = json.dumps(tool_result)
-                if (
-                    not is_retrieved_result
-                    and isinstance(tool_result, str)
-                    and len(tool_result) > TOOL_RESULT_MAX_CHARS
-                ):
+                if isinstance(tool_result, str) and len(tool_result) > TOOL_RESULT_MAX_CHARS:
                     tool_result = _truncate_tool_result(
                         tool_result,
                         TOOL_RESULT_MAX_CHARS,
                         interaction.tool_name,
                     )
 
-                message_id = uuid4()
                 tool_metadata: MessageMetadata = {
                     "turn_id": str(turn_id),
                     "segment_id": segment_id,
                     "tool_name": interaction.tool_name,
                     "tool_arguments": interaction.arguments,
                 }
-                if is_retrieved_result:
-                    tool_metadata["tool_result_retrieved"] = True
-                    source_id = interaction.arguments.get("tool_result_id")
-                    if isinstance(source_id, str):
-                        tool_metadata["tool_result_source_id"] = source_id
-                elif not interaction.is_error and isinstance(tool_result, str):
-                    session_prefix = segment_id.replace("-", "")[:8]
-                    tool_metadata["tool_result_id"] = f"tr_{session_prefix}_{message_id.hex}"
-                    tool_metadata["tool_result_session_id"] = segment_id
 
                 messages.append(Message(
-                    id=message_id,
+                    id=uuid4(),
                     content=tool_result,
                     role="tool",
                     metadata=tool_metadata,
@@ -514,7 +494,6 @@ class ContinuumOrchestrator:
         self,
         continuum: Continuum,
         system_prompt: str,
-        active_turn_id: str | None = None,
     ) -> list[dict[str, object]]:
         from cns.core.events import ComposeSystemPromptEvent
         from working_memory.core import _compose_lock
@@ -522,7 +501,6 @@ class ContinuumOrchestrator:
         with _compose_lock:
             self._cached_content = None
             self._non_cached_content = None
-            self._conversation_prefix_items = ()
             self._post_history_items = ()
             self._notification_center = None
             self.event_bus.publish(ComposeSystemPromptEvent.create(
@@ -538,7 +516,6 @@ class ContinuumOrchestrator:
 
             cached_content = self._cached_content or ""
             non_cached_content = self._non_cached_content or ""
-            conversation_prefix_items = self._conversation_prefix_items or ()
             post_history_items = self._post_history_items or ()
             notification_center = self._notification_center or ""
 
@@ -554,15 +531,6 @@ class ContinuumOrchestrator:
                 "type": "text",
                 "text": "\n\n".join(all_system_parts),
             })
-
-        prefix_messages = [
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": item}],
-                "_is_scaffold": True,
-            }
-            for item in conversation_prefix_items
-        ]
 
         # Post-history messages are recomposed before every local tool follow-up
         # turn so tool mutations to domaindocs/reminders are visible immediately.
@@ -584,15 +552,12 @@ class ContinuumOrchestrator:
                 "content": item,
             })
 
-        messages = self.live_context_compaction_service.format_messages_for_api(
-            continuum, active_turn_id
-        )
+        messages = self.live_context_compaction_service.format_messages_for_api(continuum)
         current_user_msg = messages[-1]
         history_messages = messages[:-1]
 
         stable_messages = [
             {"role": "system", "content": system_blocks},
-            *prefix_messages,
             *history_messages,
             *post_history_messages,
         ]
@@ -609,8 +574,7 @@ class ContinuumOrchestrator:
             current_user_msg,
         ]
         logger.debug(
-            f"Injected {len(prefix_messages)} prefix msgs + "
-            f"{len(history_messages)} history msgs + "
+            f"Injected {len(history_messages)} history msgs + "
             f"{len(post_history_messages)} post-history msgs + "
             f"notification center ({len(notification_center)} chars)"
         )
@@ -848,7 +812,7 @@ class ContinuumOrchestrator:
         # terminal CompleteEvent carries usage accumulated across every step,
         # so this running total lets the accounting recover the last step's
         # own input tokens (the live context size) from that sum.
-        intermediate_input_tokens = 0
+        intermediate_prompt_tokens = 0
 
         for event in stream_events:
             # A tool invocation that has already started is allowed to finish.
@@ -1037,15 +1001,15 @@ class ContinuumOrchestrator:
                     usage = event.response.usage
                     if isinstance(event, ModelStepCompletedEvent):
                         # Intermediate step: usage is this step's own bill.
-                        intermediate_input_tokens += usage.input_tokens
-                        self._last_turn_usage[continuum_id] = usage.input_tokens
+                        intermediate_prompt_tokens += usage.total_input_tokens
+                        self._last_turn_prompt_tokens[continuum_id] = usage.total_input_tokens
                     else:
                         # Terminal event: usage is accumulated across every
                         # step of the turn. The compaction baseline must
                         # measure the turn's context size, so store the final
-                        # step's input tokens (last-value), not the sum.
-                        self._last_turn_usage[continuum_id] = (
-                            usage.input_tokens - intermediate_input_tokens
+                        # step's prompt size (last-value), not the sum.
+                        self._last_turn_prompt_tokens[continuum_id] = (
+                            usage.total_input_tokens - intermediate_prompt_tokens
                         )
                     cache_created = usage.cache_creation_input_tokens
                     cache_read = usage.cache_read_input_tokens
@@ -1219,18 +1183,16 @@ class ContinuumOrchestrator:
                 logger.info(f"Thinking: complexity={mem.subcortical_result.complexity} effort={effort_level}")
 
             def compose_messages() -> list[dict[str, object]]:
-                return self._compose_llm_messages(continuum, system_prompt, str(active_turn_id))
+                return self._compose_llm_messages(continuum, system_prompt)
 
             complete_messages = compose_messages()
             messages_for_llm = complete_messages
 
-            # Use last turn's actual provider-reported input tokens for compaction check.
-            # Segment collapse invalidation via _invalidate_on_segment_collapse event handler.
             continuum_id_str = str(continuum.id)
-            last_input = self._last_turn_usage.get(continuum_id_str)
+            last_prompt_tokens = self._last_turn_prompt_tokens.get(continuum_id_str)
             self._maybe_prefetch_context_compaction(
                 continuum_id=continuum_id_str,
-                input_tokens=last_input,
+                prompt_tokens=last_prompt_tokens,
             )
 
             overflow_attempt = 0
@@ -1387,18 +1349,6 @@ class ContinuumOrchestrator:
         continuum.add_tool_history(turn_messages)
         unit_of_work.add_messages(*turn_messages)
         unit_of_work.mark_metadata_updated()
-        committed_tool_messages = [
-            message for message in turn_messages
-            if message.role == "tool"
-        ]
-        if committed_tool_messages:
-            committed_event = ToolResultHistoryCommittedEvent.create(
-                continuum_id=continuum_id,
-                tool_messages=committed_tool_messages,
-            )
-            unit_of_work.add_post_commit_callback(
-                lambda event=committed_event: self._publish_events([event])
-            )
 
         # A stopped turn ends without a completed-turn event: subscribers
         # must not observe a halted turn as completed.
@@ -1434,13 +1384,11 @@ class ContinuumOrchestrator:
         assert isinstance(event, SystemPromptComposedEvent)
         self._cached_content = event.cached_content
         self._non_cached_content = event.non_cached_content
-        self._conversation_prefix_items = event.conversation_prefix_items
         self._post_history_items = event.post_history_items
         self._notification_center = event.notification_center
         logger.debug(
             f"Received system prompt: cached {len(event.cached_content)} chars, "
             f"non-cached {len(event.non_cached_content)} chars, "
-            f"{len(event.conversation_prefix_items)} prefix items, "
             f"{len(event.post_history_items)} post-history items, "
             f"notification center {len(event.notification_center)} chars"
         )
@@ -1718,26 +1666,27 @@ class ContinuumOrchestrator:
 
 
     def _invalidate_on_segment_collapse(self, event: "ContinuumEvent") -> None:
-        """Invalidate cached input-token baseline when segment collapse shrinks the message set."""
-        self._last_turn_usage.pop(event.continuum_id, None)
+        """Drop the prompt-size baseline and the segment's compaction report on segment collapse."""
+        self._last_turn_prompt_tokens.pop(event.continuum_id, None)
+        self.live_context_compaction_service.clear_report(event.user_id)
 
     def _maybe_prefetch_context_compaction(
         self,
         *,
         continuum_id: str,
-        input_tokens: int | None,
+        prompt_tokens: int | None,
     ) -> None:
-        """Speculatively pre-compute a context compaction brief so it can be injected with zero latency when ready."""
-        if input_tokens is None:
+        """Schedule a background compaction when the previous turn's full prompt size reached the trigger."""
+        if prompt_tokens is None:
             return
         try:
-            if not self.live_context_compaction_service.should_schedule(input_tokens):
+            if not self.live_context_compaction_service.should_schedule(prompt_tokens):
                 return
             scheduled = self.live_context_compaction_service.schedule(continuum_id)
             if scheduled:
                 logger.info(
-                    "Scheduled live context compaction: input_tokens=%d trigger=%d",
-                    input_tokens,
+                    "Scheduled live context compaction: prompt_tokens=%d trigger=%d",
+                    prompt_tokens,
                     config.api.compaction_trigger_tokens,
                 )
         except Exception:

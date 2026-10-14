@@ -25,7 +25,6 @@ from utils.timezone_utils import utc_now
 
 if TYPE_CHECKING:
     from cns.core.continuum import Continuum
-    from cns.core.message import Message
 
 @dataclass(frozen=True, kw_only=True)
 class ContinuumEvent:
@@ -109,28 +108,6 @@ class TurnCompletedEvent(ContinuumCheckpointEvent):
         )
 
 
-@dataclass(frozen=True, kw_only=True)
-class ToolResultHistoryCommittedEvent(ContinuumCheckpointEvent):
-    """Tool result messages committed to PostgreSQL and the hot Valkey cache."""
-
-    tool_messages: tuple[Message, ...]
-
-    @classmethod
-    def create(
-        cls,
-        continuum_id: str,
-        tool_messages: list[Message],
-    ) -> ToolResultHistoryCommittedEvent:
-        """Create a post-commit tool-result event for the current user."""
-        from utils.user_context import get_current_user_id
-
-        return cls(
-            continuum_id=continuum_id,
-            user_id=get_current_user_id(),
-            tool_messages=tuple(tool_messages),
-        )
-
-
 @dataclass(frozen=True)
 class ComposeSystemPromptEvent(WorkingMemoryEvent):
     """Request to compose the system prompt with current working memory state."""
@@ -155,7 +132,6 @@ class SystemPromptComposedEvent(WorkingMemoryEvent):
     """System prompt has been composed and is ready for use."""
     cached_content: str
     non_cached_content: str
-    conversation_prefix_items: tuple[str, ...]  # Each becomes assistant message before history
     post_history_items: tuple[str, ...]  # Each becomes assistant message after history (BP4)
     notification_center: str  # Dynamic content for sliding assistant message
 
@@ -165,7 +141,6 @@ class SystemPromptComposedEvent(WorkingMemoryEvent):
         continuum_id: str,
         cached_content: str,
         non_cached_content: str,
-        conversation_prefix_items: tuple[str, ...] = (),
         post_history_items: tuple[str, ...] = (),
         notification_center: str = ""
     ) -> SystemPromptComposedEvent:
@@ -179,7 +154,6 @@ class SystemPromptComposedEvent(WorkingMemoryEvent):
             occurred_at=utc_now(),
             cached_content=cached_content,
             non_cached_content=non_cached_content,
-            conversation_prefix_items=conversation_prefix_items,
             post_history_items=post_history_items,
             notification_center=notification_center
         )
