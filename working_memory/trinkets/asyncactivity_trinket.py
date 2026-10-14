@@ -38,7 +38,12 @@ class AsyncActivityTrinket(EventAwareTrinket):
 
         rows = db.select(
             "sidebar_activity",
-            where="status NOT IN ('dismissed', 'resolved')",
+            # phoneafriend rows carry the full consult response in summary
+            # (SidebarAgent._exit) — rendering them would echo every
+            # consult's answer as a feed line; the response belongs to the
+            # subagent_tool result, not the activity feed.
+            where="status NOT IN ('dismissed', 'resolved') "
+                  "AND interface_name != 'phoneafriend'",
             order_by="updated_at DESC",
         )
 

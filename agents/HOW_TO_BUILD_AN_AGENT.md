@@ -127,13 +127,15 @@ The agent's `complete_task` call is the **only** way to exit the loop. The base 
 |---------|---------------|---------------|
 | **Base class** | `agents/base.py:SidebarAgent` | ABC, loop mechanics, `_exit()`, trace capture |
 | **Prompt loading** | `agents/base.py:load_agent_prompt` | `config/prompts/agents/` file resolution |
-| **Dispatcher** | `agents/sidebar.py` | `WorkItem`, `SidebarTrigger` protocol, `_dispatch_decision()`, thread spawning |
+| **Dispatcher** | `agents/sidebar.py` | `WorkItem`, `SidebarTrigger` protocol, `_dispatch_decision()`, seam delegation |
+| **Spawn seam** | `agents/spawn.py` | The only thread spawner: process-global cap, pending/crash publishing |
+| **Spec table** | `agents/specs.py` | Per-type policy rows + the dispatch protocol + `load_agent_class` |
 | **Minimal agent** | `agents/implementations/whilethecatsaway_agent.py` | Fewest overrides — start here |
 | **Full-featured agent** | `agents/implementations/forage_agent.py` | `inherit_base_prompt=False`, completion hooks, overwatch, `_iteration_status()` |
 | **Multi-mode agent** | `agents/implementations/memory_curator_agent.py` | Mode Contract TypedDicts, `tool_schema_overrides`, `on_completion()` side effect |
 | **Restricted tool schema** | `tools/implementations/memory_tool.py:CURATOR_MEMORY_SCHEMA` | Narrowed `input_schema` handed to the agent |
 | **Sidebar tool** | `tools/implementations/sidebar_tool.py` | Scratchpad + `complete_task`, `sidebar_audit` table |
-| **Direct invocation** | `tools/implementations/forage_tool.py:_run_agent` | Spawning an agent from a tool (no dispatcher) |
+| **Direct invocation** | `agents/implementations/whilethecatsaway_agent.py:activate` | The dispatch protocol — a model-invoked agent spawned without the dispatcher, through the seam |
 | **Trigger** | `agents/triggers/memory_floor_trigger.py` | The only live trigger; use-day cadence, lazy `agent_class` |
 | **Scheduler wiring** | `utils/sidebar_jobs.py:register_sidebar_jobs` | Dispatcher construction + trigger registration |
 | **Timeouts/config** | `config/config.py:SidebarDispatcherConfig` | `agent_timeout_overrides` keyed by class name |
@@ -308,7 +310,7 @@ The receiving trinket must exist and be registered, or the event is dropped with
 | `_iteration_status(iteration)` | `None` | You want a per-turn system-prompt addendum. `forage_agent.py` renders a Unicode progress bar plus a wind-down directive so the agent consolidates before the cap. |
 | `get_heartbeat(iteration)` | `"Continue."` | The agent needs a different nudge between iterations. |
 | `get_overwatch_context(work_item)` | `""` | The observer needs domain context to judge an iteration. |
-| `on_overwatch_update(event_bus, work_item, iteration, summary)` | no-op | You want per-iteration progress in a trinket. `forage_agent.py` publishes `status='in_progress'` summaries to `ForageTrinket`. |
+| `on_overwatch_update(event_bus, work_item, iteration, summary)` | no-op | You want per-iteration progress in a trinket. `forage_agent.py` publishes `status='in_progress'` summaries to `SubagentResultsTrinket`. |
 
 ### Step 4c: Add an Overwatch (Optional)
 
@@ -367,7 +369,7 @@ class MyTrigger:
 - **Error handling distinction**: Return `[]` to signal "no work found" (not an error). Raise `Exception` only for actual failures (connection errors, programming bugs). The dispatcher lets exceptions propagate — if a trigger has a bug, operators need to know via error logs, not silent `[]` returns.
 - Store untrusted content as `"raw_content"` in the WorkItem context. Set `sanitize_untrusted_input = True` on the agent class to have the base class sanitize it before the LLM loop.
 - Make `item_id` **stable across polls** for the same logical work item -- it is the dedup key (`UNIQUE(interface_name, thread_id)` in `sidebar_activity`), and that uniqueness is **global across users**: the dispatcher keys in-flight work by `interface_name:item_id` on a process-global map, which is why every key shape below embeds `{user_id}`. Key it to the **entity**, not the cycle: a single-item trigger may key by cycle (`memory_floor_trigger.py` uses `floor_{user_id}_{activity_days}`), but a **multi-item** trigger emitting one WorkItem per entity must derive the key from the entity's own stable ID (`rsteward_{reminder_id}`, `folder:uid`) -- a cycle- or timestamp-keyed ID in a multi-item trigger re-dispatches every entity on every cycle and the dispatcher will happily run them all again.
-- The dispatcher caps at `MAX_ITEMS_PER_USER_PER_POLL = 5` and tracks in-flight work keyed `interface_name:item_id` against `max_concurrent_agents`. Returning 500 items does not run 500 agents -- a backlog drains over successive polls.
+- The dispatcher caps at `MAX_ITEMS_PER_USER_PER_POLL = 5`; in-flight work is tracked keyed `interface_name:item_id` against the process-global `max_concurrent_agents` in `agents/spawn.py` (every spawn site shares the cap — dispatcher, subagent_tool, collapse handler). Returning 500 items does not run 500 agents -- a backlog drains over successive polls.
 - Dedup records are not forever: terminal `sidebar_activity` rows are deleted by the dispatcher's 30-day cleanup (`_maybe_cleanup`). An entity whose item was terminal (e.g. `handled`) becomes re-dispatchable ~30 days later. For a janitor that is usually correct behavior; for an agent whose "done" must be permanent, the trigger itself must stop surfacing the entity (or the tool must record the tending separately).
 - **Physical-resource dedup**: when the entity is a file or other physical object, prefer an identity key that changes when the object genuinely changes — e.g. `{user_id}_{filename}_{mtime}` re-triages a re-dropped replacement but never the same file. Strongest form: make the agent's own action remove the entity from discovery (archiving a file out of the watched folder means future polls never see it again); the dedup record is then a backstop, not the mechanism.
 - **Pre-fetch cost shape**: when the trigger pre-extracts content into `raw_content` (see Step 3, limit 2), it pays that cost for every discovered item on every poll — including items the dispatcher will dedup-skip. Keep extraction CPU-cheap and bounded (never LLM); if extraction is expensive, discover bare first and let the agent fetch, accepting the restricted-schema tradeoff.
@@ -403,6 +405,25 @@ if not config.my_agent.enabled:
 ```
 
 The registration guard saves construction cost; the poll-time check honors runtime changes. One without the other is half the pattern.
+
+### Step 5b: Implement the Dispatch Protocol (If Model-Invocable)
+
+If the model can start your agent from the main conversation (via `subagent_tool`), skip the trigger and implement the dispatch protocol instead: `activate` / `continue_task` classmethods on the agent class plus one spec row. The full pattern — the classmethod shapes, the seam, the claim protocol, the capacity envelope — is the "Alternative: Model Invocation via the Dispatch Protocol" section below; the three live shapes are `whilethecatsaway_agent.py:activate` (minimal async), `forage_agent.py` (async + blocking + refine), and `phoneafriend_agent.py` (blocking-only with its own task store).
+
+The spec row is what makes the type invocable:
+
+```python
+# agents/specs.py
+"myagent": SubagentSpec(
+    agent_type="myagent", interface_name="my_interface", model_route="batch",
+    invocable=True, blocking_only=False, continuable=False,
+    publishes_pending=True, dismissable=True,
+    result_ttl_turns=8, error_ttl_turns=5,
+    agent_class_path="agents.implementations.my_agent:MyAgent",
+),
+```
+
+Every consumer reads its policy from the row: the tool's `agent_type` enum (invocable rows only), the unified results trinket's per-type lifecycle (the TTLs), the seam's pending/crash publishing (`publishes_pending`, the error TTL), and `subagent_tool`'s continue/dismiss switches (`continuable`, `dismissable`). Dispatcher-driven agents get a row too (with `invocable=False` — the dispatcher resolves its spec by `agent_class.agent_id` to route through the seam).
 
 ### Step 6: Add Configuration
 
@@ -522,52 +543,49 @@ class MyAgent(SidebarAgent):
 - Discrete-event agents (email, webhook) where every item needs handling
 - Directly invoked agents (forage) where the user explicitly requested work
 
-## Alternative: Direct Invocation (No Dispatcher)
+## Alternative: Model Invocation via the Dispatch Protocol (No Dispatcher)
 
-Not all agents need the dispatcher. If your agent is triggered by a **tool call** in the main conversation (like forage), skip the trigger and spawn directly:
+Not all agents need the dispatcher. If your agent is started by a **tool call** in the main conversation, do not hand-roll a thread — implement the dispatch protocol instead. `subagent_tool` reaches your agent through the spec table (`agents/specs.py:SUBAGENT_SPECS`) and two classmethods:
 
 ```python
-# In your tool's dispatch method
-import threading
-from contextvars import copy_context
+# In your agent class — the dispatch protocol (agents/specs.py documents it)
+@classmethod
+def activate(cls, tool_repo, event_bus, *, subject, context="", blocking=False):
+    """Start work. Async goes through the spawn seam; blocking runs run_blocking()."""
+    import uuid
+    from agents.sidebar import WorkItem
+    from agents.spawn import capacity_result, spawn_subagent
+    from agents.specs import SUBAGENT_SPECS
 
-from agents.implementations.my_agent import MyAgent
-from agents.sidebar import WorkItem
+    work_item = WorkItem(
+        item_id=str(uuid.uuid4()),
+        interface_name="my_interface",
+        context={"subject": subject, "context": context},
+    )
+    if not spawn_subagent(SUBAGENT_SPECS[cls.agent_id], work_item, event_bus,
+                           tool_repo=tool_repo):
+        return capacity_result()   # truthful at-cap failure, shared shape
+    return {"success": True, "task_id": work_item.item_id,
+            "message": "My agent dispatched for: '{subject}'. ..."}
 
-work_item = WorkItem(
-    item_id=task_id,
-    interface_name="my_interface",
-    context={"query": query, "context": context},
-)
-
-# copy_context() is mandatory: without it the thread loses app.current_user_id
-# and every RLS-scoped query inside the agent silently returns zero rows.
-ctx = copy_context()
-thread = threading.Thread(
-    target=ctx.run,
-    args=(self._run_agent, work_item),
-    daemon=True,
-)
-thread.start()
-
-
-def _run_agent(self, work_item) -> None:
-    """Background thread entry point."""
-    try:
-        agent = MyAgent(tool_repo=self.tool_repo)   # tool_repo is a required arg
-        agent.run(work_item, self.event_bus)        # two args, not three
-    except Exception as e:
-        self.logger.error(f"agent thread crashed: {e}", exc_info=True)
-        self._publish_failure(work_item.item_id, e)  # trinket must not hang in 'pending'
+@classmethod
+def continue_task(cls, tool_repo, event_bus, *, task_id, subject, context="", blocking=False):
+    """Resume/refuse. Return None when task_id is not your surface (the claim
+    protocol) — subagent_tool falls through to its generic not-found envelope."""
+    return None
 ```
 
-**See:** `forage_tool.py:_dispatch` / `_run_agent` for the live pattern, including the crash path that publishes a terminal trinket status.
+Rules of the protocol:
+- `spawn_subagent` is the only thread spawner: it copies the user context (without `copy_context()` the thread loses `app.current_user_id` and every RLS-scoped query inside the agent silently returns zero rows), enforces the process-global `max_concurrent_agents` cap across every spawn site, publishes the `pending` entry for `publishes_pending` specs, and publishes terminal `failed`/`ThreadCrash` if the thread dies. Never hand-roll a `threading.Thread` in a tool.
+- Blocking variants call `run_blocking()` directly on the caller's thread — no seam, no in-flight slot, bounded by `blocking_agent_timeout_seconds`.
+- Your classmethods own the WorkItem context shape, refusal prose, and result envelope; `subagent_tool` holds no per-type knowledge beyond the spec flags.
+- A spec row in `agents/specs.py:SUBAGENT_SPECS` is what makes the type invocable: `invocable=True` puts its `agent_type` in the tool's enum, `continuable`/`dismissable`/`publishes_pending`/TTLs drive the rest.
 
-Two constructor requirements that break silently if missed: the agent needs `tool_repo`, and `run()` takes `(work_item, event_bus)` -- the agent already holds the repo from construction. Your tool must be DI-injected with `ToolRepository` (and the event bus, or `WorkingMemory`) to have them to pass; see `tools/HOW_TO_BUILD_A_TOOL.md`.
+**See:** `agents/implementations/whilethecatsaway_agent.py:activate` (minimal async), `agents/implementations/forage_agent.py` (async + blocking + refine), `agents/implementations/phoneafriend_agent.py` (blocking-only with its own task store).
 
-Direct invocation still ends at the same `_exit()` -> `sidebar_activity` -> `on_completion()` chain as the dispatcher path, so dedup records and trinket publishing behave identically. The difference is only who creates the `WorkItem` and who owns the thread.
+Direct invocation still ends at the same `_exit()` -> `sidebar_activity` -> `on_completion()` chain as the dispatcher path, so dedup records and trinket publishing behave identically. The difference is only who creates the `WorkItem` and who owns the thread — and the thread is always the seam's.
 
-The pre-fetch pattern transfers here too, with one site change: there is no trigger, so **the spawning tool's thread is the pre-fetch site** — extract content into `raw_content` before constructing the `WorkItem`, exactly as a trigger would (the crash-path publishing below is the other half a trigger would have given you for free).
+The pre-fetch pattern transfers here too, with one site change: there is no trigger, so **your `activate` classmethod is the pre-fetch site** — extract content into `raw_content` before constructing the `WorkItem`, exactly as a trigger would (the seam's crash-path publishing is the other half a trigger would have given you for free).
 
 ## Security Considerations
 
@@ -722,7 +740,7 @@ Report the change as EXECUTED (what ran) or UNVERIFIED (why not, and which probe
 | Agent | Route | Iterations | Key patterns |
 |-------|------|-----------|--------------|
 | `whilethecatsaway_agent.py` | `batch` | 25 | **Start here.** Minimal: no sentry, no overwatch, no `_iteration_status`. Completion hooks only. |
-| `forage_agent.py` | `batch` | 20 | `inherit_base_prompt=False`, overwatch on `fast`, `_iteration_status()` progress bar, refinement branch in `build_initial_message()`, direct invocation from `forage_tool.py` |
+| `forage_agent.py` | `batch` | 20 | `inherit_base_prompt=False`, overwatch on `fast`, `_iteration_status()` progress bar, refinement branch in `build_initial_message()`, dispatch classmethods (async + blocking + refine) behind `subagent_tool` |
 | `memory_curator_agent.py` | `batch` | 8 | Two modes via `work_item.context['mode']` (Mode Contract TypedDicts, `ValueError` on unknown), `tool_schema_overrides` blocking `create_memory`, `on_completion()` side effect (`last_tended_at` stamp), short-vs-full memory ID asymmetry |
 
 | Trigger | Feeds | Cadence |

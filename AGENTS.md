@@ -23,7 +23,7 @@ directory whose map is missing is a defect.
 | Directory | Map owns |
 |---|---|
 | `agents/` | Sidebar-agent runtime: base-class loop mechanics, dispatcher, spawn paths |
-| `agents/implementations/` | Concrete agents (forage, while-the-cats-away, memory curator) and the Mode Contract |
+| `agents/implementations/` | Concrete agents (forage, while-the-cats-away, phone-a-friend, memory curator) and the Mode Contract |
 | `agents/triggers/` | Dispatcher work-item discovery triggers |
 | `auth/` | Passwordless identity, sessions, CSRF, API tokens, WebAuthn, account lifecycle |
 | `clients/` | External infrastructure clients: Vault, Postgres, Valkey, SQLite, embeddings, Lattice |

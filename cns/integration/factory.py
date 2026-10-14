@@ -160,13 +160,11 @@ class CNSIntegrationFactory:
             from working_memory.trinkets.manifest_trinket import ManifestTrinket
             from working_memory.trinkets.proactive_memory_trinket import ProactiveMemoryTrinket
             from working_memory.trinkets.domaindoc_trinket import DomaindocTrinket
-            from working_memory.trinkets.forage_trinket import ForageTrinket
-            from working_memory.trinkets.whilethecatsaway_trinket import WhileTheCatsAwayTrinket
+            from working_memory.trinkets.subagent_results_trinket import SubagentResultsTrinket
             from working_memory.trinkets.lora_trinket import LoraTrinket
             from working_memory.trinkets.persona_trinket import PersonaTrinket
             from working_memory.trinkets.location_trinket import LocationTrinket
             from working_memory.trinkets.asyncactivity_trinket import AsyncActivityTrinket
-            from working_memory.trinkets.memory_curator_trinket import MemoryCuratorTrinket
             from working_memory.trinkets.skills_catalog_trinket import SkillsCatalogTrinket
             from working_memory.trinkets.active_skills_trinket import ActiveSkillsTrinket
 
@@ -177,8 +175,7 @@ class CNSIntegrationFactory:
             ManifestTrinket(event_bus, self._working_memory)
             ProactiveMemoryTrinket(event_bus, self._working_memory)
             DomaindocTrinket(event_bus, self._working_memory)
-            ForageTrinket(event_bus, self._working_memory)
-            WhileTheCatsAwayTrinket(event_bus, self._working_memory)
+            SubagentResultsTrinket(event_bus, self._working_memory)
             LoraTrinket(event_bus, self._working_memory)
             # Persona is a second parallel system, not a replacement for the user
             # model above. It renders its own slot, so both inject in one prompt.
@@ -188,7 +185,6 @@ class CNSIntegrationFactory:
                 logger.info("Persona trinket disabled in config")
             LocationTrinket(event_bus, self._working_memory)
             AsyncActivityTrinket(event_bus, self._working_memory)
-            MemoryCuratorTrinket(event_bus, self._working_memory)
             SkillsCatalogTrinket(event_bus, self._working_memory)
             ActiveSkillsTrinket(event_bus, self._working_memory)
             # Boot collection of the global skills catalog — the one moment

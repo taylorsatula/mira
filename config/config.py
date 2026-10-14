@@ -328,7 +328,7 @@ class SidebarDispatcherConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="Enable the sidebar dispatcher polling loop")
     poll_interval_minutes: int = Field(default=1, description="Minutes between dispatcher poll cycles")
-    max_concurrent_agents: int = Field(default=3, ge=1, description="Maximum sidebar agent threads running simultaneously")
+    max_concurrent_agents: int = Field(default=8, ge=1, description="Maximum agent threads running simultaneously, process-global across every spawn site (dispatcher, subagent_tool, collapse handler) — enforced by agents/spawn.py")
     agent_timeout_seconds: int = Field(default=120, ge=1, description="Wall-clock seconds before a running sidebar agent is considered timed out")
     agent_iteration_timeout_seconds: int = Field(
         default=300, ge=1,
@@ -346,7 +346,7 @@ class SidebarDispatcherConfig(BaseModel):
         description="Per-agent wall-clock timeout overrides keyed by agent class name lowercased with the 'Agent' suffix stripped (e.g. ForageAgent -> 'forage')"
     )
     blocking_agent_timeout_seconds: int = Field(
-        default=120, ge=1,
+        default=420, ge=1,
         description=(
             "Wall-clock bound for blocking-mode agent runs (SidebarAgent.run_blocking): "
             "a blocking run executes inline on the caller's thread inside a turn, so "

@@ -36,8 +36,8 @@ const ASSET_VERSION = 'ui-20261012';
 // stem by dropping the `_tool` suffix (reminder_tool → reminders); a tool with
 // no icon file uses default.png.
 const TOOL_ICONS = new Set([
-	'contacts', 'continuum', 'default', 'domaindoc', 'email', 'forage',
-	'invokeother', 'maps', 'memory', 'phoneafriend', 'punchclock', 'reminders', 'web'
+	'contacts', 'continuum', 'default', 'domaindoc', 'email',
+	'invokeother', 'maps', 'memory', 'punchclock', 'reminders', 'web'
 ]);
 
 function toolIconSrc(toolName) {

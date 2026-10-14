@@ -2,12 +2,11 @@
 Sidebar Dispatcher -- Trigger protocol, WorkItem, and dispatch loop.
 
 Single APScheduler IntervalTrigger job. On each tick: iterates users with
-sidebar-eligible configs, iterates registered triggers, spawns agent
-threads with copied user context.
+sidebar-eligible configs, iterates registered triggers, and dispatches
+work items through the shared spawn seam (agents/spawn.py) with copied
+user context.
 """
 import logging
-import threading
-from contextvars import copy_context
 from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING
 
 from pydantic import BaseModel
@@ -72,13 +71,10 @@ class SidebarDispatcher:
         self,
         tool_repo: 'ToolRepository',
         event_bus: 'EventBus',
-        max_concurrent_agents: int,
     ):
         self.tool_repo = tool_repo
         self.event_bus = event_bus
-        self.max_concurrent_agents = max_concurrent_agents
         self._triggers: list[SidebarTrigger] = []
-        self._active_agents: dict[str, threading.Thread] = {}
         self._last_cleanup: dict[str, float] = {}
 
     def register_trigger(self, trigger: SidebarTrigger) -> None:
@@ -88,10 +84,6 @@ class SidebarDispatcher:
     def poll(self) -> None:
         """Single poll cycle. Called by APScheduler on each tick."""
         from utils.user_context import set_current_user_id, clear_user_context
-
-        self._active_agents = {
-            key: t for key, t in self._active_agents.items() if t.is_alive()
-        }
 
         users = self._get_eligible_users()
         if not users:
@@ -114,6 +106,7 @@ class SidebarDispatcher:
         """Check all triggers for a single user, with SQLite-backed dedup."""
         from utils.userdata_manager import get_user_data_manager
         from agents.base import ensure_activity_schema
+        from agents.spawn import is_in_flight
 
         db = get_user_data_manager(user_id)
         ensure_activity_schema(db)
@@ -129,9 +122,7 @@ class SidebarDispatcher:
                 if dispatched >= MAX_ITEMS_PER_USER_PER_POLL:
                     break
 
-                dispatch_key = f"{item.interface_name}:{item.item_id}"
-
-                if dispatch_key in self._active_agents:
+                if is_in_flight(item.interface_name, item.item_id):
                     continue
 
                 prior_run = self._get_prior_run(db, item)
@@ -147,7 +138,7 @@ class SidebarDispatcher:
                 else:
                     item.context['run_count'] = 1
 
-                if not self._spawn_agent(trigger, item, user_id, dispatch_key):
+                if not self._spawn_agent(trigger, item):
                     continue
                 trigger.on_dispatched(user_id, item.item_id)
                 dispatched += 1
@@ -186,36 +177,20 @@ class SidebarDispatcher:
         self,
         trigger: SidebarTrigger,
         item: WorkItem,
-        user_id: str,
-        dispatch_key: str,
     ) -> bool:
-        """Spawn agent in background thread with copied user context.
+        """Dispatch an item through the shared spawn seam.
 
-        Returns True if the agent was spawned, False if at cap.
+        Returns True if the agent was spawned, False if the process is at
+        the cap or the item is already in flight — either way the item is
+        left unmarked and rediscovered next poll.
         """
-        agent = trigger.agent_class(self.tool_repo)
+        from agents.spawn import spawn_subagent
+        from agents.specs import spec_for_agent_class
 
-        if len(self._active_agents) >= self.max_concurrent_agents:
-            return False
-
-        ctx = copy_context()
-
-        thread = threading.Thread(
-            target=ctx.run,
-            args=(agent.run, item, self.event_bus),
-            name=f"sidebar-{trigger.trigger_id}-{item.item_id[:8]}",
-            daemon=True,
+        spec = spec_for_agent_class(trigger.agent_class)
+        return spawn_subagent(
+            spec, item, self.event_bus, tool_repo=self.tool_repo
         )
-        thread.start()
-
-        self._active_agents[dispatch_key] = thread
-
-        run_count = item.context.get('run_count', 1)
-        logger.info(
-            f"Spawned {trigger.agent_class.agent_id} for "
-            f"{item.interface_name}:{item.item_id[:8]} (run {run_count})"
-        )
-        return True
 
     def _maybe_cleanup(self, db, user_id: str) -> None:
         """Delete old activity + scratchpad records, rate-limited per user."""

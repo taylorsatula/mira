@@ -106,8 +106,7 @@ def get_config():
 
 ESSENTIAL_TOOLS = [
     "web_tool", "invokeother_tool", "continuum_tool", "reminder_tool",
-    "memory_tool", "domaindoc_tool", "forage_tool", "sidebaragents_tool",
-    "email_tool", "phoneafriend_tool",
+    "memory_tool", "domaindoc_tool", "subagent_tool",
     # Host-access: the guardrailed shell tool is always loaded rather than
     # invokeother-loaded.
     "bash_tool",

@@ -256,9 +256,10 @@ def load_model_configs() -> None:
         )
 
     # D14 seeding constraint: `other` exists to consult an outside model. If
-    # it resolves to primary's model, phoneafriend_tool degenerates into
-    # self-review. Warn rather than fail — an operator with a single provider
-    # available must still be able to boot (O-3).
+    # it resolves to primary's model, the phone-a-friend consult
+    # (PhoneAFriendAgent via subagent_tool activate/continue) degenerates
+    # into self-review. Warn rather than fail — an operator with a single
+    # provider available must still be able to boot (O-3).
     if loaded["other"].model == loaded["primary"].model:
         logger.warning(
             "model_configs route 'other' is seeded to the same model as 'primary' (%s); "

@@ -249,8 +249,8 @@ class SegmentCollapsedEvent(ContinuumCheckpointEvent):
     Segment collapsed into manifest with summary generated.
 
     Subscribers:
-    - ForageTrinket: Clears all forage results when segment collapses
-      (prevents stale forage results from leaking into new conversation contexts)
+    - SubagentResultsTrinket: clears all subagent results when segment collapses
+      (prevents stale subagent results from leaking into new conversation contexts)
     """
     segment_id: str
     summary: str

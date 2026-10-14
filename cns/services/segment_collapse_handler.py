@@ -1510,10 +1510,7 @@ class SegmentCollapseHandler:
             logger.warning("tool_repo unavailable; skipping integration curator spawn")
             return
 
-        from agents.implementations.memory_curator_agent import MemoryCuratorAgent
         from agents.sidebar import WorkItem
-        from contextvars import copy_context
-        import threading
 
         seg_id = str(segment_id) if segment_id else "unknown"
         work_item = WorkItem(
@@ -1528,19 +1525,29 @@ class SegmentCollapseHandler:
         )
 
         try:
-            agent = MemoryCuratorAgent(tool_repo=self.tool_repo)
-            ctx = copy_context()
-            thread = threading.Thread(
-                target=ctx.run,
-                args=(agent.run, work_item, self.event_bus),
-                name=f"curator-integrate-{work_item.item_id[:24]}",
-                daemon=True,
+            from agents.spawn import spawn_subagent
+            from agents.specs import SUBAGENT_SPECS
+
+            spawned = spawn_subagent(
+                SUBAGENT_SPECS["memory_curator"],
+                work_item,
+                self.event_bus,
+                tool_repo=self.tool_repo,
             )
-            thread.start()
-            logger.info(
-                "Spawned MemoryCuratorAgent (integration) for segment %s, %d memories",
-                seg_id, len(new_memories),
-            )
+            if spawned:
+                logger.info(
+                    "Spawned MemoryCuratorAgent (integration) for segment %s, %d memories",
+                    seg_id, len(new_memories),
+                )
+            else:
+                # At cap or already in flight — the collapse chain proceeds;
+                # un-tended memories stay eligible for the floor trigger's
+                # NULL+age re-sample.
+                logger.info(
+                    "Integration curator spawn refused (at cap or already in flight) for segment %s; "
+                    "memories remain untended for floor re-sampling",
+                    seg_id,
+                )
         except Exception:
             # Curation is best-effort — never fail the collapse chain.
             logger.exception("Failed to spawn MemoryCuratorAgent (integration)")

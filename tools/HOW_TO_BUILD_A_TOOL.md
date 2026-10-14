@@ -117,9 +117,8 @@ Every tool needs these core patterns. Anchors name a file and a symbol; line num
 | **Response Formatting** | `contacts_tool.py:_format_contact` | `{"success": bool, "message": str, ...}` envelope |
 | **Error Handling** | `reminder_tool.py:_get_reminder_not_found_error` | Helpful errors listing available options |
 | **LLM Calls From a Tool** | `pager_tool.py` (`model_config="fast"`) | Route by name via `get_llm_provider()` |
-| | `phoneafriend_tool.py:OUTSIDE_MODEL_CONFIG` | Constructor-injected `LLMProvider` |
-| **Trinket Refresh From a Tool** | `forage_tool.py:_publish_event` | `event_bus.publish(UpdateTrinketEvent.create(...))` |
-| | `sidebaragents_tool.py` | `agents/base.py:_publish_trinket_refresh` |
+| **Trinket Refresh From a Tool** | `agents/spawn.py:publish_result` (the single producer-side publisher for the subagent results chain) | `event_bus.publish(UpdateTrinketEvent.create(...))` |
+| | `tools/implementations/subagent_tool.py` | `agents/base.py:_publish_trinket_refresh` |
 
 ### Specialized Patterns
 
@@ -142,7 +141,7 @@ Every tool needs these core patterns. Anchors name a file and a symbol; line num
 | **SSRF-Safe Requests** | `web_tool.py:_request_with_validated_redirects` | Per-hop validation + IP pinning |
 | **Content-Block Results** | `imagegen_tool.py` | Returning a list of provider content blocks instead of a dict |
 | **Restricted Agent Schema** | `memory_tool.py:CURATOR_MEMORY_SCHEMA` | Exporting a narrowed schema for sidebar agents |
-| **Spawning an Agent** | `forage_tool.py:_dispatch` / `_run_agent` | Daemon thread under `copy_context()` |
+| **Spawning an Agent** | `agents/spawn.py:spawn_subagent` (reached from a tool through the agent class's dispatch classmethods — `agents/specs.py` documents the protocol) | Daemon thread under `copy_context()`, process-global cap — never hand-roll a thread in a tool |
 
 ## Architecture Deep Dive
 
@@ -1306,7 +1305,7 @@ def _get_item_not_found_error(self, item_id: str) -> str:
 
 ### Dependency Injection
 
-**See `tools/repo.py:ToolRepository.get_tool`** for how injection works, and `forage_tool.py` / `sidebaragents_tool.py` for live consumers.
+**See `tools/repo.py:ToolRepository.get_tool`** for how injection works, and `tools/implementations/subagent_tool.py` for a live consumer.
 
 Injection is **signature-driven and required-params-only**: `get_tool()` inspects `__init__` and fills a parameter only when it has **no default** and its annotation name is one of the three below.
 
@@ -1331,7 +1330,7 @@ class MyTool(Tool):
 | `ToolRepository` | the repository itself | Invoking other tools |
 | `WorkingMemory` | the repo's `working_memory` (may be absent) | Publishing trinket updates |
 
-**The `Optional[X] = None` form is NOT injected.** `phoneafriend_tool.__init__(self, llm_provider: LLMProvider | None = None)` has a default, so DI skips it and the tool falls back to `get_llm_provider()` at call time. Writing `working_memory: Optional["WorkingMemory"] = None` and expecting injection gives you a permanently `None` attribute and a tool that silently never refreshes its trinket. Use a required param when you need the dependency; use a defaulted one only when you have a real fallback.
+**The `Optional[X] = None` form is NOT injected.** A defaulted param is skipped by DI, so a tool holding `working_memory: Optional["WorkingMemory"] = None` and expecting injection gets a permanently `None` attribute and silently never refreshes anything. Use a required param when you need the dependency; use a defaulted one only when you have a real fallback (and resolve it at call time, e.g. `get_llm_provider()`).
 
 Tool instances are **never cached** — `get_tool()` constructs a fresh instance per call under the current user context, so `__init__` runs often. Keep it cheap: no schema creation, no network, no LLM calls. Deferred table creation exists for exactly this reason.
 
@@ -1339,7 +1338,7 @@ If the repository was built without `working_memory`, a required `WorkingMemory`
 
 ### LLM Calls From a Tool
 
-For distillation, classification, or synthesis inside an operation (`pager_tool` distilling over-length messages, `web_tool` synthesizing long fetches, `phoneafriend_tool` consulting an outside model). Route by NAME on one of the five `model_configs` routes — never a model string, endpoint, or API key.
+For distillation, classification, or synthesis inside an operation (`pager_tool` distilling over-length messages, `web_tool` synthesizing long fetches). Route by NAME on one of the five `model_configs` routes — never a model string, endpoint, or API key. (A synchronous outside-model consult is no longer a tool-resident LLM call — `subagent_tool` delegates to `PhoneAFriendAgent`, a blocking sidebar agent on the fixed `other` route.)
 
 ```python
 from clients.llm_provider import get_llm_provider
@@ -1364,12 +1363,12 @@ if not text:
 | Import | `clients.llm_provider.get_llm_provider()` — or a **required** `LLMProvider` constructor param for DI |
 | Call | `generate_response(messages, *, model_config, ...)` — `model_config` is a required keyword; a missing route name raises at `_resolve_selection` |
 | Return | a `Result` object, **not** a dict — text comes out via `llm.extract_text_content(response).strip()` |
-| Empty response | `extract_text_content` can return empty — check and raise (see `phoneafriend_tool`) |
+| Empty response | `extract_text_content` can return empty — check and raise (see `agents/implementations/phoneafriend_agent.py:PhoneAFriendAgent._consult`, the preserved empty-consult-response `RuntimeError`) |
 | Failure | **propagates.** `LLMLifecycle` enforces provider timeouts and raises `ProviderStallError`; there is no fallback route. Wrap in `try` only to add context before re-raising, never to return a default |
 | `ContextOverflowError` | raised on context overflow if you need a specific message (`clients.llm_provider`) |
 | Route choice | high-frequency mechanical judgments on `fast`; semantic work stays on `primary`. Never `get_model_config()` by hand unless you need route metadata like the model name |
 
-**References:** `pager_tool.py` (init-hold + `try`/extract/strip), `phoneafriend_tool.py` (defaulted DI param + `or get_llm_provider()` fallback — the sanctioned use of the Optional form), `web_tool.py` (synthesis with `focus` handling).
+**References:** `pager_tool.py` (init-hold + `try`/extract/strip), `web_tool.py` (synthesis with `focus` handling).
 
 **Ordering when the LLM output is a garnish on a completed write.** Two sanctioned shapes, pick by what failure means. Pure distillation of a value you already have (pager's over-length message): wrap in `try` and fall back to truncation — the distilled text is cosmetic. Optional enrichment of a **persisted** write (an invoice note after the invoice is saved): persist the write first, then call; on LLM failure, raise an honest error stating the write succeeded and the garnish failed — never swallow, and never persist-half-then-rollback to "keep them atomic" when the write is the valuable part and the garnish is not.
 

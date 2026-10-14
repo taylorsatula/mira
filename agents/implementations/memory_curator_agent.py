@@ -277,7 +277,7 @@ class MemoryCuratorAgent(SidebarAgent):
             logger.exception("MemoryCuratorAgent: last_tended stamp failed")
 
     def _get_completion_trinket(self) -> str:
-        return 'MemoryCuratorTrinket'
+        return 'SubagentResultsTrinket'
 
     def _build_completion_context(
         self,
@@ -288,6 +288,7 @@ class MemoryCuratorAgent(SidebarAgent):
         ctx: dict[str, Any] = {
             'task_id': work_item.item_id,
             'status': status,
+            'agent_type': 'memory_curator',
             'mode': work_item.context.get('mode'),
             'summary': summary,
         }

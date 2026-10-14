@@ -15,7 +15,7 @@ A **trinket** is an event-driven component that owns exactly one named section o
 | Interaction | Active command execution | Passive observation and reporting |
 | Output | Result dict returned to the model | One `variable_name` section in the system prompt |
 | Lifetime | Fresh instance per `get_tool()` call | Process-global singleton, shared across all users |
-| Examples | Send email, search web | Inbox status, active reminders, forage results |
+| Examples | Send email, search web | Inbox status, active reminders, subagent results |
 
 For autonomous multi-step work with no user present, build a **sidebar agent** instead — see `agents/HOW_TO_BUILD_AN_AGENT.md` for the three-way comparison.
 
@@ -44,7 +44,7 @@ Build a trinket when you need to:
 | `EventAwareTrinket` | Stateless render, or state that survives segment collapse | `generate_content()` | Valkey persist/clear, self-registration, publish cycle |
 | `StatefulTrinket` | Turn-scoped state that must expire or reset on collapse | `generate_content()`, `_expire_items()`, `_clear_all_state()` | `current_turn` (per-user), `TurnCompletedEvent` subscription, `_refresh_content()` |
 
-Live split: `manifest`, `time_manager`, `location`, `persona`, `lora`, `proactive_memory`, `reminder_manager`, `domaindoc`, `asyncactivity` are plain; `email`, `forage`, `whilethecatsaway`, `memory_curator`, `peanutgallery` are stateful.
+Live split: `manifest`, `time_manager`, `location`, `persona`, `lora`, `proactive_memory`, `reminder_manager`, `domaindoc`, `asyncactivity`, `skills_catalog` are plain; `email`, `subagent_results`, `active_skills`, `peanutgallery` are stateful.
 
 ### Pattern 1: Basic Trinket Structure
 
@@ -109,7 +109,7 @@ self.working_memory.publish_trinket_update(
 
 ### Pattern 3: Custom Update Handling
 
-**See:** `email_trinket.py:handle_update_request` (snapshot store), `forage_trinket.py` (status state machine)
+**See:** `email_trinket.py:handle_update_request` (snapshot store), `subagent_results_trinket.py` (per-type status state machine)
 
 Ordering is load-bearing: **consume the event context first, then call `super()`** so the render sees the mutation. Rendering before mutating leaves the prompt one cycle behind the producer.
 
@@ -127,11 +127,11 @@ def handle_update_request(self, event) -> None:
     super().handle_update_request(event)
 ```
 
-Result-feed trinkets that key on `task_id` return `super().handle_update_request(event)` early when the key is absent — see `forage_trinket.py`, `memory_curator_trinket.py`, `whilethecatsaway_trinket.py`.
+Result-feed trinkets that key on `task_id` return `super().handle_update_request(event)` early when the key is absent — see `subagent_results_trinket.py`.
 
 ### Pattern 4: State Management
 
-**See:** `email_trinket.py:_inbox_snapshots`, `peanutgallery_trinket.py:_user_guidance`, `forage_trinket.py:_user_results`
+**See:** `email_trinket.py:_inbox_snapshots`, `peanutgallery_trinket.py:_user_guidance`, `subagent_results_trinket.py:_user_results`
 
 Trinket instances are **process-global singletons shared across every user**. All mutable state must be a dict keyed by the user-id contextvar — never a bare instance attribute, or user A's state renders into user B's prompt.
 
@@ -172,13 +172,13 @@ def generate_content(self, context: Dict[str, Any]) -> str:
 
 **Formatting rules:**
 - One root element named after the section; nested elements for structure
-- External content (email headers, fetched text) crosses `utils.untrusted_content.wrap_untrusted` — once per section around the whole external listing, never per field (`email_trinket.py`). Other user-controlled text is escaped before interpolation with `html.escape()` (`asyncactivity_trinket.py`). Result-feed trinkets currently interpolate `query`/`topic` unescaped — a known gap, not a license
+- External content (email headers, fetched text) crosses `utils.untrusted_content.wrap_untrusted` — once per section around the whole external listing, never per field (`email_trinket.py`). Other user-controlled text is escaped before interpolation with `html.escape()` (`asyncactivity_trinket.py`, `subagent_results_trinket.py` — every `subject`/`summary`/`result` interpolation)
 - Return `""` when there is genuinely nothing to show; the composer strips empty sections and `working_memory/trinkets/base.py` clears the stale Valkey field
 - Never wrap your own output in `---` separators or placement scaffolding — `composer.py` owns that
 
 ### Pattern 6: Caching
 
-**See:** `location_trinket.py`, `domaindoc_trinket.py`, `persona_trinket.py`, `lora_trinket.py` — the four that set it
+**See:** `location_trinket.py`, `domaindoc_trinket.py`, `persona_trinket.py`, `lora_trinket.py`, `skills_catalog_trinket.py` — the five that set it
 
 `cache_policy` is a **provider prompt-cache placement flag**, not a result cache. `composer.py:_route_section` sends `cache_policy=True` sections into `ComposedPrompt.cached_content` (the cache-eligible prefix) instead of `non_cached_content`.
 
@@ -267,7 +267,7 @@ def _format_timestamp(self, utc_timestamp: str) -> str:
 
 ### Pattern 10: Triggering Updates from Tools
 
-**See:** `forage_tool.py` (publishes `UpdateTrinketEvent` on the event bus), `sidebaragents_tool.py` (uses `agents/base.py:_publish_trinket_refresh`)
+**See:** `agents/spawn.py:publish_result` (the single producer-side publisher for the subagent results chain), `tools/implementations/subagent_tool.py` (uses `agents/base.py:_publish_trinket_refresh`)
 
 Two producer shapes, pick by what the tool already holds:
 
@@ -294,7 +294,7 @@ Working Memory injection into a tool is signature-driven: declare a required `wo
 ## Complete Example: Result-Feed Trinket
 
 A `StatefulTrinket` fed by a producer tool, with per-turn expiry. Mirrors
-`whilethecatsaway_trinket.py` / `forage_trinket.py` — the shape you want for any
+`subagent_results_trinket.py` — the shape you want for any
 "background task publishes results into the prompt" trinket.
 
 ```python
@@ -381,7 +381,7 @@ class MyTaskTrinket(StatefulTrinket):
         for task_id, r in results.items():
             lines.append(
                 f'<task id="{html.escape(task_id[:8])}" status="{r["status"]}">'
-                f'{html.escape(r["query"])}'
+                f'{html.escape(r["subject"])}'
             )
             if r['summary']:
                 lines.append(f'<summary>{html.escape(r["summary"])}</summary>')
@@ -393,7 +393,7 @@ class MyTaskTrinket(StatefulTrinket):
 Every line here is load-bearing against a real failure mode: per-user dict
 (cross-user leak), context-before-super (prompt lags a cycle), terminal-state
 guard (late overwatch update resurrects a finished task), `_expire_items` /
-`_clear_all_state` (state outlives its segment), `html.escape` (untrusted query
+`_clear_all_state` (state outlives its segment), `html.escape` (untrusted subject
 text into prompt XML).
 
 ## Development Workflow
@@ -535,8 +535,7 @@ a Valkey round-trip is unverified — `get_trinket_state()` is the check.
 | `asyncactivity_trinket.py` | plain | Reads SQLite per render (no in-memory state), `html.escape` |
 | `reminder_manager.py` | plain | Invokes a tool directly (`ReminderTool.run()`) |
 | `email_trinket.py` | stateful | Snapshot store, one `wrap_untrusted` boundary around the listing, `_expire_items()` returns `False` |
-| `forage_trinket.py` | stateful | Task-status state machine, terminal-state guard, per-iteration summary stacking |
-| `whilethecatsaway_trinket.py` | stateful | Same machine, all results TTL-expire, no dismiss path |
+| `subagent_results_trinket.py` | stateful | Per-type task-status state machine (spec-driven from `agents/specs.py`), terminal-state guard, per-iteration summary stacking, per-type TTL expiry, legacy-slot cleanup on first persist |
 | `peanutgallery_trinket.py` | stateful | TTL-in-turns expiry, constructor arg beyond the base two |
 
 ## Summary
