@@ -363,7 +363,7 @@ class ContinuumOrchestrator:
         self._post_history_items = ()  # After history, before HUD (domaindoc, BP4)
         self._notification_center = None
 
-        self._last_turn_usage: dict[str, int] = {}  # provider-reported tokens keyed {continuum_id: input_tokens}
+        self._last_turn_prompt_tokens: dict[str, int] = {}
 
         self.event_bus.subscribe('SystemPromptComposedEvent', self._handle_system_prompt_composed)
         self.event_bus.subscribe('SegmentCollapsedEvent', self._invalidate_on_segment_collapse)
@@ -829,7 +829,7 @@ class ContinuumOrchestrator:
         # terminal CompleteEvent carries usage accumulated across every step,
         # so this running total lets the accounting recover the last step's
         # own input tokens (the live context size) from that sum.
-        intermediate_input_tokens = 0
+        intermediate_prompt_tokens = 0
 
         for event in stream_events:
             # A tool invocation that has already started is allowed to finish.
@@ -1018,15 +1018,15 @@ class ContinuumOrchestrator:
                     usage = event.response.usage
                     if isinstance(event, ModelStepCompletedEvent):
                         # Intermediate step: usage is this step's own bill.
-                        intermediate_input_tokens += usage.input_tokens
-                        self._last_turn_usage[continuum_id] = usage.input_tokens
+                        intermediate_prompt_tokens += usage.total_input_tokens
+                        self._last_turn_prompt_tokens[continuum_id] = usage.total_input_tokens
                     else:
                         # Terminal event: usage is accumulated across every
                         # step of the turn. The compaction baseline must
                         # measure the turn's context size, so store the final
-                        # step's input tokens (last-value), not the sum.
-                        self._last_turn_usage[continuum_id] = (
-                            usage.input_tokens - intermediate_input_tokens
+                        # step's prompt size (last-value), not the sum.
+                        self._last_turn_prompt_tokens[continuum_id] = (
+                            usage.total_input_tokens - intermediate_prompt_tokens
                         )
                     cache_created = usage.cache_creation_input_tokens
                     cache_read = usage.cache_read_input_tokens
@@ -1205,13 +1205,11 @@ class ContinuumOrchestrator:
             complete_messages = compose_messages()
             messages_for_llm = complete_messages
 
-            # Use last turn's actual provider-reported input tokens for compaction check.
-            # Segment collapse invalidation via _invalidate_on_segment_collapse event handler.
             continuum_id_str = str(continuum.id)
-            last_input = self._last_turn_usage.get(continuum_id_str)
+            last_prompt_tokens = self._last_turn_prompt_tokens.get(continuum_id_str)
             self._maybe_prefetch_context_compaction(
                 continuum_id=continuum_id_str,
-                input_tokens=last_input,
+                prompt_tokens=last_prompt_tokens,
             )
 
             overflow_attempt = 0
@@ -1687,26 +1685,26 @@ class ContinuumOrchestrator:
 
 
     def _invalidate_on_segment_collapse(self, event: "ContinuumEvent") -> None:
-        """Invalidate cached input-token baseline when segment collapse shrinks the message set."""
-        self._last_turn_usage.pop(event.continuum_id, None)
+        """Drop the prompt-size baseline when segment collapse shrinks the message set."""
+        self._last_turn_prompt_tokens.pop(event.continuum_id, None)
 
     def _maybe_prefetch_context_compaction(
         self,
         *,
         continuum_id: str,
-        input_tokens: int | None,
+        prompt_tokens: int | None,
     ) -> None:
-        """Speculatively pre-compute a context compaction brief so it can be injected with zero latency when ready."""
-        if input_tokens is None:
+        """Schedule a background compaction when the previous turn's full prompt size reached the trigger."""
+        if prompt_tokens is None:
             return
         try:
-            if not self.live_context_compaction_service.should_schedule(input_tokens):
+            if not self.live_context_compaction_service.should_schedule(prompt_tokens):
                 return
             scheduled = self.live_context_compaction_service.schedule(continuum_id)
             if scheduled:
                 logger.info(
-                    "Scheduled live context compaction: input_tokens=%d trigger=%d",
-                    input_tokens,
+                    "Scheduled live context compaction: prompt_tokens=%d trigger=%d",
+                    prompt_tokens,
                     config.api.compaction_trigger_tokens,
                 )
         except Exception:

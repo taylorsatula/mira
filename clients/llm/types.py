@@ -126,7 +126,13 @@ class ThinkingConfig:
 
 @dataclass(frozen=True)
 class Usage:
-    """Normalized token usage for a provider response."""
+    """Normalized token usage for a provider response.
+
+    ``input_tokens`` counts only uncached prompt tokens; cache writes and
+    cache reads are reported separately and are not included in it. Every
+    dialect normalizes to this meaning, and cost accounting prices the three
+    fields independently.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
@@ -143,6 +149,11 @@ class Usage:
             value = getattr(self, field_name)
             if type(value) is not int or value < 0:
                 raise ValueError(f"Usage.{field_name} must be a non-negative integer")
+
+    @property
+    def total_input_tokens(self) -> int:
+        """Full prompt size: uncached input plus cache writes plus cache reads."""
+        return self.input_tokens + self.cache_creation_input_tokens + self.cache_read_input_tokens
 
     def __add__(self, other: "Usage") -> "Usage":
         if not isinstance(other, Usage):

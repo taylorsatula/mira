@@ -347,9 +347,9 @@ class LiveContextCompactionService:
         self._system_template = load_prompt("live_context_compaction_system.txt")
         self._user_template = load_prompt("live_context_compaction_user.txt")
 
-    def should_schedule(self, estimated_tokens: int) -> bool:
-        """Return True when the request reaches the configured compaction threshold."""
-        return estimated_tokens >= config.api.compaction_trigger_tokens
+    def should_schedule(self, prompt_tokens: int) -> bool:
+        """Return True when the previous turn's full prompt size reached the compaction trigger."""
+        return prompt_tokens >= config.api.compaction_trigger_tokens
 
     def schedule(self, continuum_id: str) -> bool:
         """

@@ -32,7 +32,7 @@ class ApiConfig(BaseModel):
     compaction_trigger_tokens: int = Field(
         default=225000,
         ge=1,
-        description="Estimated input-token count at which to trigger live context compaction.",
+        description="Previous turn's full prompt size in tokens (uncached input plus cache writes plus cache reads) at which to schedule live context compaction.",
     )
     compaction_raw_user_turns_to_preserve: int = Field(default=10, description="Number of recent user turns to preserve in raw format without compaction.")
 
