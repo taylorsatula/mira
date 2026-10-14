@@ -359,7 +359,6 @@ class ContinuumOrchestrator:
 
         self._cached_content = None
         self._non_cached_content = None
-        self._conversation_prefix_items = ()  # Before history (set from event.conversation_prefix_items)
         self._post_history_items = ()  # After history, before HUD (domaindoc, BP4)
         self._notification_center = None
 
@@ -495,7 +494,6 @@ class ContinuumOrchestrator:
         self,
         continuum: Continuum,
         system_prompt: str,
-        active_turn_id: str | None = None,
     ) -> list[dict[str, object]]:
         from cns.core.events import ComposeSystemPromptEvent
         from working_memory.core import _compose_lock
@@ -503,7 +501,6 @@ class ContinuumOrchestrator:
         with _compose_lock:
             self._cached_content = None
             self._non_cached_content = None
-            self._conversation_prefix_items = ()
             self._post_history_items = ()
             self._notification_center = None
             self.event_bus.publish(ComposeSystemPromptEvent.create(
@@ -519,7 +516,6 @@ class ContinuumOrchestrator:
 
             cached_content = self._cached_content or ""
             non_cached_content = self._non_cached_content or ""
-            conversation_prefix_items = self._conversation_prefix_items or ()
             post_history_items = self._post_history_items or ()
             notification_center = self._notification_center or ""
 
@@ -535,15 +531,6 @@ class ContinuumOrchestrator:
                 "type": "text",
                 "text": "\n\n".join(all_system_parts),
             })
-
-        prefix_messages = [
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": item}],
-                "_is_scaffold": True,
-            }
-            for item in conversation_prefix_items
-        ]
 
         # Post-history messages are recomposed before every local tool follow-up
         # turn so tool mutations to domaindocs/reminders are visible immediately.
@@ -565,15 +552,12 @@ class ContinuumOrchestrator:
                 "content": item,
             })
 
-        messages = self.live_context_compaction_service.format_messages_for_api(
-            continuum, active_turn_id
-        )
+        messages = self.live_context_compaction_service.format_messages_for_api(continuum)
         current_user_msg = messages[-1]
         history_messages = messages[:-1]
 
         stable_messages = [
             {"role": "system", "content": system_blocks},
-            *prefix_messages,
             *history_messages,
             *post_history_messages,
         ]
@@ -590,8 +574,7 @@ class ContinuumOrchestrator:
             current_user_msg,
         ]
         logger.debug(
-            f"Injected {len(prefix_messages)} prefix msgs + "
-            f"{len(history_messages)} history msgs + "
+            f"Injected {len(history_messages)} history msgs + "
             f"{len(post_history_messages)} post-history msgs + "
             f"notification center ({len(notification_center)} chars)"
         )
@@ -1200,7 +1183,7 @@ class ContinuumOrchestrator:
                 logger.info(f"Thinking: complexity={mem.subcortical_result.complexity} effort={effort_level}")
 
             def compose_messages() -> list[dict[str, object]]:
-                return self._compose_llm_messages(continuum, system_prompt, str(active_turn_id))
+                return self._compose_llm_messages(continuum, system_prompt)
 
             complete_messages = compose_messages()
             messages_for_llm = complete_messages
@@ -1401,13 +1384,11 @@ class ContinuumOrchestrator:
         assert isinstance(event, SystemPromptComposedEvent)
         self._cached_content = event.cached_content
         self._non_cached_content = event.non_cached_content
-        self._conversation_prefix_items = event.conversation_prefix_items
         self._post_history_items = event.post_history_items
         self._notification_center = event.notification_center
         logger.debug(
             f"Received system prompt: cached {len(event.cached_content)} chars, "
             f"non-cached {len(event.non_cached_content)} chars, "
-            f"{len(event.conversation_prefix_items)} prefix items, "
             f"{len(event.post_history_items)} post-history items, "
             f"notification center {len(event.notification_center)} chars"
         )
@@ -1685,8 +1666,9 @@ class ContinuumOrchestrator:
 
 
     def _invalidate_on_segment_collapse(self, event: "ContinuumEvent") -> None:
-        """Drop the prompt-size baseline when segment collapse shrinks the message set."""
+        """Drop the prompt-size baseline and the segment's compaction report on segment collapse."""
         self._last_turn_prompt_tokens.pop(event.continuum_id, None)
+        self.live_context_compaction_service.clear_report(event.user_id)
 
     def _maybe_prefetch_context_compaction(
         self,

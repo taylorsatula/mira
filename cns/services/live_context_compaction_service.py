@@ -1,9 +1,11 @@
 """
 Asynchronous live compaction for active-chat provider context.
 
-This service produces one Valkey-only frozen continuation brief for older
-messages in the active segment. Segment collapse remains the durable memory
-pipeline; this service only shapes future provider requests.
+This service keeps one rolling compaction report per active segment in
+Valkey. A background worker summarizes older messages into the report; each
+provider request then carries the report in place of the messages it covers.
+Segment collapse remains the durable memory pipeline; this service only
+shapes provider requests.
 """
 from __future__ import annotations
 
@@ -28,7 +30,7 @@ from cns.core.message import (
 )
 from cns.core.message_formatter import format_messages_for_api
 from utils.timezone_utils import format_utc_iso, parse_utc_time_string, utc_now
-from utils.user_context import get_current_user_id
+from utils.user_context import get_current_segment_id, get_current_user_id
 from config.config_manager import config
 
 if TYPE_CHECKING:
@@ -36,19 +38,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-LIVE_CONTEXT_COMPACTION_KEY_PREFIX = "live_context_compaction"
+LIVE_CONTEXT_COMPACTION_KEY_PREFIX = "live_context_compaction_report"
 LIVE_CONTEXT_COMPACTION_LOCK_PREFIX = "live_context_compaction_lock"
 LIVE_CONTEXT_COMPACTION_LOCK_TTL_SECONDS = 300
+TOOL_TEXT_TRUNCATION_LIMIT = 500
 
 
 @dataclass(frozen=True)
 class LiveContextCompactionArtifact:
-    """One frozen continuation brief for an active continuum."""
+    """The rolling compaction report for one active segment."""
 
-    continuum_id: str
+    segment_id: str
     covered_start: datetime
     covered_end: datetime
-    brief_text: str
+    report_text: str
     compaction_count: int
     updated_at: datetime
 
@@ -56,10 +59,10 @@ class LiveContextCompactionArtifact:
     def from_dict(cls, data: dict[str, Any]) -> "LiveContextCompactionArtifact":
         """Parse a Valkey JSON payload into a typed artifact."""
         return cls(
-            continuum_id=str(data["continuum_id"]),
+            segment_id=str(data["segment_id"]),
             covered_start=parse_utc_time_string(str(data["covered_start"])),
             covered_end=parse_utc_time_string(str(data["covered_end"])),
-            brief_text=str(data["brief_text"]),
+            report_text=str(data["report_text"]),
             compaction_count=int(data["compaction_count"]),
             updated_at=parse_utc_time_string(str(data["updated_at"])),
         )
@@ -67,10 +70,10 @@ class LiveContextCompactionArtifact:
     def to_dict(self) -> dict[str, object]:
         """Serialize the artifact to the canonical Valkey payload shape."""
         return {
-            "continuum_id": self.continuum_id,
+            "segment_id": self.segment_id,
             "covered_start": format_utc_iso(self.covered_start),
             "covered_end": format_utc_iso(self.covered_end),
-            "brief_text": self.brief_text,
+            "report_text": self.report_text,
             "compaction_count": self.compaction_count,
             "updated_at": format_utc_iso(self.updated_at),
         }
@@ -96,27 +99,27 @@ class LiveContextCompactionStore:
         self,
         *,
         user_id: str,
-        continuum_id: str,
+        segment_id: str,
         covered_start: datetime,
         covered_end: datetime,
-        brief_text: str,
+        report_text: str,
         prior_artifact: LiveContextCompactionArtifact | None,
     ) -> LiveContextCompactionArtifact:
         """
-        Replace the user's artifact with a single rolling continuation brief.
+        Replace the user's artifact with the segment's updated report.
 
         First compaction starts at count 1. Repeated compactions keep the
         original covered_start and increment compaction_count.
         """
         artifact = LiveContextCompactionArtifact(
-            continuum_id=continuum_id,
+            segment_id=segment_id,
             covered_start=(
                 prior_artifact.covered_start
                 if prior_artifact is not None
                 else covered_start
             ),
             covered_end=covered_end,
-            brief_text=brief_text,
+            report_text=report_text,
             compaction_count=(
                 prior_artifact.compaction_count + 1
                 if prior_artifact is not None
@@ -186,10 +189,10 @@ class LiveContextCompactionStore:
 
 
 
-def _wrap_brief(raw_brief: str, compaction_range: LiveCompactionRange) -> str:
-    """Wrap the LLM-generated brief in the standard compaction tag with header and recovery instruction."""
-    covered_start = format_utc_iso(compaction_range.artifact_covered_start)
-    covered_end = format_utc_iso(compaction_range.covered_end)
+def wrap_report(artifact: LiveContextCompactionArtifact) -> str:
+    """Render the stored report inside the compaction tag with its header and recovery instruction."""
+    covered_start = format_utc_iso(artifact.covered_start)
+    covered_end = format_utc_iso(artifact.covered_end)
     lines = [
         f'<mira:compacted_active_context covered_start="{covered_start}" covered_end="{covered_end}">',
         (
@@ -197,7 +200,7 @@ def _wrap_brief(raw_brief: str, compaction_range: LiveCompactionRange) -> str:
             "BECAUSE THE CONTEXT WINDOW LIMIT WAS BEING APPROACHED."
         ),
         (
-            f"This block is historical and frozen as of {covered_end}. "
+            f"This block is historical as of {covered_end}. "
             "Later visible messages are more recent and take precedence if they conflict with this block."
         ),
         "",
@@ -207,36 +210,21 @@ def _wrap_brief(raw_brief: str, compaction_range: LiveCompactionRange) -> str:
         f"start_time={covered_start}",
         f"end_time={covered_end}",
         "",
-        raw_brief,
+        artifact.report_text,
         "</mira:compacted_active_context>",
     ]
     return "\n".join(lines)
-
-TOOL_RESULT_TRUNCATION_LIMIT = 500
 
 
 def filter_messages_for_live_context(
     messages: Sequence[Message],
     artifact: LiveContextCompactionArtifact | None,
-    continuum_id: str,
-    active_turn_id: str | None = None,
 ) -> list[Message]:
     """
-    Return a request-local message list with compacted ordinary messages
-    omitted.
-
-    Messages are omitted when an artifact for this continuum covers their
-    timestamp. Segment boundaries and system notifications are always
-    preserved.
-
-    ``active_turn_id`` is vestigial: its only consumer was the in-flight
-    keepsleeping-heartbeat-turn exemption, removed with the heartbeat wake
-    cycle (2026-10-10). It is ignored here and threaded through no logic;
-    callers still pass it. Do not build on it — remove the chain (this
-    function, ``get_visible_messages``, ``format_messages_for_api``, and the
-    orchestrator call sites) in a dedicated cleanup change.
+    Return a request-local message list with the artifact's covered messages
+    omitted. Segment boundaries and system notifications are always kept.
     """
-    if artifact is None or artifact.continuum_id != continuum_id:
+    if artifact is None:
         return list(messages)
 
     return [
@@ -261,6 +249,7 @@ def _is_covered_ordinary_message(
 class LiveCompactionRange:
     """Selected DB-backed range for one live compaction run."""
 
+    segment_id: str
     new_range_start: datetime
     artifact_covered_start: datetime
     covered_end: datetime
@@ -272,8 +261,9 @@ def format_messages_for_live_compaction(messages: Sequence[Message]) -> str:
     """
     Format messages with plain XML role tags for the live compactor LLM.
 
-    The output intentionally contains no message IDs, timestamps, tool_call_id
-    attributes, or error-status attributes.
+    Assistant tool calls render with their arguments so the compactor sees
+    what was saved or set. The output intentionally contains no message IDs,
+    timestamps, tool_call_id attributes, or error-status attributes.
     """
     parts: list[str] = []
 
@@ -285,6 +275,8 @@ def format_messages_for_live_compaction(messages: Sequence[Message]) -> str:
 
         if message.role == "tool":
             content = _tool_result_text_for_compaction(message.content)
+        elif message.role == "assistant":
+            content = _assistant_text_for_compaction(message.content)
         else:
             content = _ordinary_message_text_for_compaction(message.content)
 
@@ -305,26 +297,47 @@ def _ordinary_message_text_for_compaction(content: str | list[ContentBlock]) -> 
     return " ".join(part for part in text_parts if part)
 
 
+def _assistant_text_for_compaction(content: str | list[ContentBlock]) -> str:
+    if isinstance(content, str):
+        return content
+    tool_calls = [
+        block for block in content
+        if isinstance(block, dict) and block.get("type") == "tool_call"
+    ]
+    other_blocks = [block for block in content if block not in tool_calls]
+    text = _ordinary_message_text_for_compaction(other_blocks)
+    call_texts = [
+        "[Used tool: {name} {arguments}]".format(
+            name=call.get("name", "unknown"),
+            arguments=_truncate_tool_text(
+                json.dumps(call.get("input", {}), ensure_ascii=False, default=str),
+                "Tool arguments",
+            ),
+        )
+        for call in tool_calls
+    ]
+    return " ".join(part for part in [text, *call_texts] if part)
+
+
 def _tool_result_text_for_compaction(content: str | list[ContentBlock]) -> str:
     if isinstance(content, str):
         text = content
     else:
-        preprocessed = preprocess_content_blocks(content)
-        text_parts = list(preprocessed.text_parts)
-        if preprocessed.image_count:
-            text_parts.insert(0, f"[{preprocessed.image_count} image(s) shared]")
-        text = " ".join(part for part in text_parts if part)
+        text = _ordinary_message_text_for_compaction(content)
+    return _truncate_tool_text(text, "Tool result")
 
-    if len(text) <= TOOL_RESULT_TRUNCATION_LIMIT:
+
+def _truncate_tool_text(text: str, label: str) -> str:
+    if len(text) <= TOOL_TEXT_TRUNCATION_LIMIT:
         return text
     return (
-        text[:TOOL_RESULT_TRUNCATION_LIMIT]
-        + f"\n[Tool result truncated to {TOOL_RESULT_TRUNCATION_LIMIT} chars for live compaction]"
+        text[:TOOL_TEXT_TRUNCATION_LIMIT]
+        + f"\n[{label} truncated to {TOOL_TEXT_TRUNCATION_LIMIT} chars for live compaction]"
     )
 
 
 class LiveContextCompactionService:
-    """Selects active-chat ranges and refreshes the rolling Valkey brief."""
+    """Selects active-segment ranges and refreshes the segment's rolling report."""
 
     def __init__(
         self,
@@ -387,7 +400,10 @@ class LiveContextCompactionService:
         try:
             self.compact_once(continuum_id)
         except Exception:
-            logger.error("Live context compaction failed", exc_info=True)
+            logger.error(
+                "Live context compaction failed; the previous report stays in use and the next turn over the trigger retries",
+                exc_info=True,
+            )
         finally:
             try:
                 self.store.release_lock(user_id, token)
@@ -410,23 +426,21 @@ class LiveContextCompactionService:
             messages=messages,
             model_config="batch",
         )
-        raw_brief = self.llm_provider.extract_text_content(response).strip()
-        if not raw_brief:
-            raise ValueError("Live context compactor returned an empty brief")
-        brief_text = _wrap_brief(raw_brief, compaction_range)
+        report_text = self.llm_provider.extract_text_content(response).strip()
+        if not report_text:
+            raise ValueError("Live context compactor returned an empty report")
 
-        user_id = get_current_user_id()
         artifact = self.store.store_replacement(
-            user_id=user_id,
-            continuum_id=continuum_id,
+            user_id=get_current_user_id(),
+            segment_id=compaction_range.segment_id,
             covered_start=compaction_range.artifact_covered_start,
             covered_end=compaction_range.covered_end,
-            brief_text=brief_text,
+            report_text=report_text,
             prior_artifact=compaction_range.prior_artifact,
         )
         logger.info(
-            "Stored live context compaction artifact for continuum %s through %s (count=%d)",
-            continuum_id,
+            "Stored live context compaction report for segment %s through %s (count=%d)",
+            compaction_range.segment_id,
             format_utc_iso(artifact.covered_end),
             artifact.compaction_count,
         )
@@ -439,9 +453,14 @@ class LiveContextCompactionService:
         if active_sentinel is None:
             logger.debug("No active segment found for live context compaction")
             return None
+        segment_id = active_sentinel.metadata.get("segment_id")
+        if not segment_id:
+            raise ValueError(
+                f"Active segment sentinel {active_sentinel.id} has no segment_id; cannot tag a compaction report"
+            )
 
         prior_artifact = self.store.get(user_id)
-        if prior_artifact is not None and prior_artifact.continuum_id != continuum_id:
+        if prior_artifact is not None and prior_artifact.segment_id != segment_id:
             self.store.clear(user_id)
             prior_artifact = None
 
@@ -474,56 +493,51 @@ class LiveContextCompactionService:
         if not compactable_messages:
             return None
 
-        covered_end = compactable_messages[-1].created_at
-        messages = self.continuum_repo.load_messages_for_live_compaction_range(
-            continuum_id=continuum_id,
-            user_id=user_id,
-            covered_start=new_range_start,
-            covered_end=covered_end,
-        )
-        messages = filter_messages_for_live_context(messages, None, str(continuum_id))
-        if not messages:
-            return None
-
         return LiveCompactionRange(
+            segment_id=segment_id,
             new_range_start=new_range_start,
             artifact_covered_start=artifact_covered_start,
-            covered_end=covered_end,
-            messages=messages,
+            covered_end=compactable_messages[-1].created_at,
+            messages=compactable_messages,
             prior_artifact=prior_artifact,
         )
 
-    def format_messages_for_api(
-        self,
-        continuum: Continuum,
-        active_turn_id: str | None = None,
-    ) -> list[dict[str, object]]:
-        """Return provider-formatted messages after live compaction filtering."""
-        visible_messages = self.get_visible_messages(continuum, active_turn_id)
-        return format_messages_for_api(visible_messages)
+    def format_messages_for_api(self, continuum: Continuum) -> list[dict[str, object]]:
+        """
+        Return provider-formatted history with the segment's report in front.
 
-    def get_visible_messages(
-        self,
-        continuum: Continuum,
-        active_turn_id: str | None = None,
-    ) -> list[Message]:
-        """Return request-visible messages without mutating the continuum."""
-        user_id = get_current_user_id()
+        The stored report is read once per call, so the covered-message filter
+        and the inserted report always agree. The report rides as an assistant
+        scaffold message, which the overflow fallback keeps intact.
+        """
+        artifact = self._current_artifact()
+        visible_messages = filter_messages_for_live_context(continuum.messages, artifact)
+        formatted = format_messages_for_api(visible_messages)
+        if artifact is None:
+            return formatted
+        report_message: dict[str, object] = {
+            "role": "assistant",
+            "content": [{"type": "text", "text": wrap_report(artifact)}],
+            "_is_scaffold": True,
+        }
+        return [report_message, *formatted]
+
+    def clear_report(self, user_id: str) -> None:
+        """Delete the user's stored report (segment collapse)."""
+        self.store.clear(user_id)
+
+    def _current_artifact(self) -> LiveContextCompactionArtifact | None:
         try:
-            artifact = self.store.get(user_id)
+            artifact = self.store.get(get_current_user_id())
         except Exception:
             logger.error(
-                "Live context compaction artifact unavailable; returning full continuum for this request",
+                "Live context compaction report unavailable; this request carries the full uncompacted segment",
                 exc_info=True,
             )
-            return list(continuum.messages)
-
-        return filter_messages_for_live_context(
-            continuum.messages,
-            artifact,
-            str(continuum.id),
-            active_turn_id,
-        )
+            return None
+        if artifact is None or artifact.segment_id != get_current_segment_id():
+            return None
+        return artifact
 
     def _build_compactor_messages(
         self,
@@ -540,7 +554,7 @@ class LiveContextCompactionService:
         if compaction_range.prior_artifact is not None:
             messages.append({
                 "role": "assistant",
-                "content": compaction_range.prior_artifact.brief_text,
+                "content": compaction_range.prior_artifact.report_text,
             })
         messages.append({"role": "user", "content": user_prompt})
         return messages

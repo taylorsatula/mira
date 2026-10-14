@@ -94,7 +94,9 @@ every session.
   jobs → announcement; `websocket_chat.close_all_connections()` awaited at
   shutdown; Valkey flush preserves the
   `pending_memories:`/`pending_memories_done:`/`pending_memories_attempts:`
-  prefixes — the durable record of user-confirmed memories), the pre-server
+  prefixes — the durable record of user-confirmed memories — and
+  `live_context_compaction_report:`, each active segment's compaction report
+  (`cns/services/AGENTS.md`)), the pre-server
   POST gate before bind, the conditional mounts: the federation router when
   `config.lattice.enabled`, the MCP sub-app when `config.system.mcp_enabled`,
   the unconditional browser-client page routes and `/assets` mount from

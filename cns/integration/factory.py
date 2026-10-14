@@ -166,7 +166,6 @@ class CNSIntegrationFactory:
             from working_memory.trinkets.persona_trinket import PersonaTrinket
             from working_memory.trinkets.location_trinket import LocationTrinket
             from working_memory.trinkets.asyncactivity_trinket import AsyncActivityTrinket
-            from working_memory.trinkets.live_context_compaction_trinket import LiveContextCompactionTrinket
             from working_memory.trinkets.memory_curator_trinket import MemoryCuratorTrinket
             from working_memory.trinkets.skills_catalog_trinket import SkillsCatalogTrinket
             from working_memory.trinkets.active_skills_trinket import ActiveSkillsTrinket
@@ -175,10 +174,6 @@ class CNSIntegrationFactory:
             # auto-registration. Trinkets self-register with working memory.
             TimeManager(event_bus, self._working_memory)
             ReminderManager(event_bus, self._working_memory)
-            LiveContextCompactionTrinket(
-                event_bus,
-                self._working_memory,
-            )
             ManifestTrinket(event_bus, self._working_memory)
             ProactiveMemoryTrinket(event_bus, self._working_memory)
             DomaindocTrinket(event_bus, self._working_memory)

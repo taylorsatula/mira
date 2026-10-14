@@ -132,7 +132,6 @@ class SystemPromptComposedEvent(WorkingMemoryEvent):
     """System prompt has been composed and is ready for use."""
     cached_content: str
     non_cached_content: str
-    conversation_prefix_items: tuple[str, ...]  # Each becomes assistant message before history
     post_history_items: tuple[str, ...]  # Each becomes assistant message after history (BP4)
     notification_center: str  # Dynamic content for sliding assistant message
 
@@ -142,7 +141,6 @@ class SystemPromptComposedEvent(WorkingMemoryEvent):
         continuum_id: str,
         cached_content: str,
         non_cached_content: str,
-        conversation_prefix_items: tuple[str, ...] = (),
         post_history_items: tuple[str, ...] = (),
         notification_center: str = ""
     ) -> SystemPromptComposedEvent:
@@ -156,7 +154,6 @@ class SystemPromptComposedEvent(WorkingMemoryEvent):
             occurred_at=utc_now(),
             cached_content=cached_content,
             non_cached_content=non_cached_content,
-            conversation_prefix_items=conversation_prefix_items,
             post_history_items=post_history_items,
             notification_center=notification_center
         )
