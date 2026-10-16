@@ -395,10 +395,12 @@ def create_local_session(
 ) -> RedirectResponse:
     """Bootstrap the single-mode local account and issue a browser session.
 
-    The only identity surface under `single` mode: first visit auto-provisions
-    `user@localhost` (adopting that row verbatim when an upgraded install
-    already holds it), mints a session cookie, and redirects back to `/chat`.
-    Refused elsewhere with the same 404 as `/signup`: one unauthenticated GET
+    The only identity surface under `single` mode: the session pins to the
+    install's ORIGINAL member account — the oldest member row, whatever its
+    email (the installer-created operator on current installs, the seeded
+    `user@localhost` on upgraded pre-multi-user ones) — and provisions the
+    `user@localhost` fixture only when no member account exists. Refused
+    elsewhere with the same 404 as `/signup`: one unauthenticated GET
     on a multi install would create a stray row alongside public signups.
     """
     if auth_mode() != "single":

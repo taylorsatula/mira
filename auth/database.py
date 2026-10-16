@@ -158,6 +158,24 @@ class AuthDatabase:
                 return None
             return UserRecord(**row)
 
+    def get_original_member_account(self) -> Optional[UserRecord]:
+        """The install's oldest member account — the operator's original identity — or None.
+
+        `subject_kind='member'` excludes demo accounts; `created_at` order makes the
+        ORIGINAL account win (the installer-created operator on current installs, the
+        seeded `user@localhost` on upgraded pre-multi-user ones), never a younger
+        fixture row provisioned beside it.
+        """
+        with self.session_manager.get_admin_session() as session:
+            row = session.execute_single(
+                f"SELECT {self._USER_RECORD_COLUMNS} FROM users "
+                "WHERE subject_kind = 'member' ORDER BY created_at LIMIT 1",
+                {}
+            )
+            if row is None:
+                return None
+            return UserRecord(**row)
+
     def update_user_login(self, user_id: str) -> bool:
         """Update user's last login timestamp."""
         with self.session_manager.get_admin_session() as session:

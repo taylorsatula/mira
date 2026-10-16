@@ -33,10 +33,16 @@ from .types import UserRecord, UserProfile, SessionData, CookieSettings
 logger = logging.getLogger(__name__)
 
 # Fixture identity for the auto-provisioned local account under `single`
-# mode (`GET /v0/auth/local/session`). This must never adopt a real person's
-# identity; `user@localhost` matches the row pre-multi-user installs seeded,
-# so an upgraded install adopts its existing data instead of provisioning a
-# second identity. The timezone and the account's first name are derived from
+# mode (`GET /v0/auth/local/session`). `create_local_session` pins the browser
+# session to the install's ORIGINAL member account — the oldest member row,
+# whatever its email: the account the installer created from the operator's
+# config email, or the `user@localhost` row pre-multi-user installs seeded.
+# The fixture is provisioned only when no member account exists at all.
+# Keying the bootstrap on this email instead re-splits identity at the first
+# browser visit on any install whose operator account carries a real email —
+# the browser lands in an empty fixture while the operator's history and
+# memory stay on the real account (witnessed live, 2026-10-16).
+# The timezone and the account's first name are derived from
 # this install's configured defaults (SystemConfig.timezone and
 # SystemConfig.local_session_first_name — the latter deploy-collected via
 # MIRA_LOCAL_SESSION_FIRST_NAME, defaulting to "Friend") rather than hardcoded
@@ -230,7 +236,10 @@ class AuthService:
 
         timezone = system_config.system.timezone
         first_name = system_config.system.local_session_first_name
-        user = self.db.get_user_by_email(LOCAL_SESSION_EMAIL)
+        # Pin to the original user: the oldest member account is the operator's
+        # identity — never the fixture row a younger bug may have provisioned
+        # beside it.
+        user = self.db.get_original_member_account()
         if user is None:
             user_id = self.db.create_user(
                 email=LOCAL_SESSION_EMAIL,
