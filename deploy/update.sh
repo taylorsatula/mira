@@ -886,8 +886,12 @@ print_header "Checking for your own changes"
 EXPORT_ROOT="$HOME"
 [ -d "$HOME/Desktop" ] && [ -w "$HOME/Desktop" ] && EXPORT_ROOT="$HOME/Desktop"
 FAILURE_KIND="preserve"
-# The lib's free-space refusal prints this caller's remedy.
+# The lib's free-space refusal prints this caller's remedy. The incoming
+# release tree (this script's first argument) is in hand here, so the export
+# classifies every operator file against it (absorbed / clean-apply /
+# both-changed / upstream-deleted).
 CUSTOM_EXPORT_REMEDY="run: mira update"
+CUSTOM_EXPORT_NEW_TREE="$TREE"
 export_custom_build "$APP_DIR" "$BASELINE" "$TAG" "$STAMP" "$EXPORT_ROOT"
 DRIFT_CATALOG="${APP_DIR}/logs/update-${STAMP}-venv-drift.txt"
 if [ -n "$CUSTOM_EXPORT_DIR" ]; then
