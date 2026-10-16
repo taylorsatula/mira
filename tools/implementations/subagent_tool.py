@@ -195,7 +195,7 @@ class SubagentTool(Tool):
                         "resolve",
                         "memory_inspect",
                         "memory_update",
-                        "memory_deprecate_all",
+                        "memory_deprecate",
                     ],
                     "description": (
                         "The action to perform. activate and continue start or "
@@ -265,6 +265,14 @@ class SubagentTool(Tool):
                         "this interface. Example: 'forage'."
                     ),
                 },
+                "memory_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": (
+                        "memory_deprecate only: one or more agent_memory ids "
+                        "to mark deprecated."
+                    ),
+                },
             },
             "required": ["operation"],
         },
@@ -322,9 +330,9 @@ class SubagentTool(Tool):
         elif operation == "memory_update":
             self._ensure_schema()
             return self._op_memory_update(kwargs)
-        elif operation == "memory_deprecate_all":
+        elif operation == "memory_deprecate":
             self._ensure_schema()
-            return self._op_memory_deprecate_all(kwargs)
+            return self._op_memory_deprecate(kwargs)
         else:
             raise ValueError(f"Unknown operation: {operation}")
 
@@ -657,29 +665,50 @@ class SubagentTool(Tool):
             "updated_rows": updated,
         }
 
-    def _op_memory_deprecate_all(
+    def _op_memory_deprecate(
         self, params: Dict[str, Any]
     ) -> Dict[str, Any]:
-        agent_type = params.get("agent_type") or params.get("agent_id")
-        if not agent_type:
+        raw = params.get("memory_ids")
+        if raw is None:
+            raw = params.get("memory_id")
+        if raw is None:
             raise ValueError(
-                "memory_deprecate_all requires agent_type"
+                "memory_deprecate requires memory_ids (list or single id)"
             )
+        if isinstance(raw, (str, int)):
+            ids = [raw]
+        elif isinstance(raw, list):
+            ids = list(raw)
+        else:
+            raise ValueError("memory_ids must be a list or single id")
+        if not ids:
+            raise ValueError("memory_ids must not be empty")
 
-        updated = self.db.update(
-            "agent_memory",
-            {
-                "status": "deprecated",
-                "updated_at": _sqlite_now(),
-            },
-            "agent_id = :agent_id",
-            {"agent_id": agent_type},
-        )
+        deprecated = 0
+        missing: list[Any] = []
+        for mid in ids:
+            try:
+                mid_int = int(mid)
+            except (TypeError, ValueError):
+                raise ValueError(f"invalid memory id: {mid!r}")
+            updated = self.db.update(
+                "agent_memory",
+                {
+                    "status": "deprecated",
+                    "updated_at": _sqlite_now(),
+                },
+                "id = :mid",
+                {"mid": mid_int},
+            )
+            if updated == 0:
+                missing.append(mid_int)
+            else:
+                deprecated += updated
         self._refresh_trinket()
         return {
             "success": True,
-            "agent_id": agent_type,
-            "deprecated_rows": updated,
+            "deprecated_rows": deprecated,
+            "missing_ids": missing,
         }
 
     # shared publishers

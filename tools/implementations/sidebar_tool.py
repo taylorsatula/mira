@@ -122,7 +122,10 @@ class SidebarTool(Tool):
                                 "description": (
                                     "The memory text. Plain prose, one durable "
                                     "fact, rule, or preference that future "
-                                    "runs of this agent should reuse."
+                                    "runs of this agent should reuse. Avoid "
+                                    "phrases or jargon that only make sense in "
+                                    "the current session; future agents will "
+                                    "have no context for them."
                                 ),
                             },
                             "justification": {
