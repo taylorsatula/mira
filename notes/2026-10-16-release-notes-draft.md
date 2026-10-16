@@ -221,8 +221,12 @@ database change and backs up first.
   macOS native gauntlet green in both passes (real install upgraded in
   place with memories surviving every hop, rollback witnessed under
   launchd, restore round trip).
-- [Release gate rows d & e — skip-chain and restore round trip — result
-  to be recorded here after the VM checks.]
+- Release gate rows d & e (skip-chain; restore round trip): exercised
+  during the update-mechanism verification campaign against this code —
+  a genuine pre-mechanism v2026.10.06-2.0 install updated in a single
+  hop to this tree (row d), and failed-step rollback plus restore round
+  trip witnessed on the platform batteries and under launchd on macOS
+  (row e). Not re-run against the tagged asset at cut time.
 - Known residuals: the bash-tool battery still carries the 8
   pre-existing interpreter-payload escapes (unchanged from the last
   release); terminals that derive their title from the running command
