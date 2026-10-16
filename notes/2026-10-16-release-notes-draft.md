@@ -246,3 +246,14 @@ updater-flow code changed).
   pre-existing interpreter-payload escapes (unchanged from the last
   release); terminals that derive their title from the running command
   may override the `:mira:` window title.
+
+## Rev 2026-10-16 (post-publish): sidebar agent memory
+
+The tag now points at 0bd8c36 (asset rebuilt and re-attached; same
+version, no database steps changed). Adds a coarse MEMORY.md-style agent
+memory: a single per-user agent_memory pool tagged by agent_id, push-loaded
+into sidebar agent prompts, written only at complete_task with a stored
+justification, plus main-context inspect/update/deprecate operations and a
+configurable too-many-memories alert in the subagent results trinket.
+
+- Known residuals: unchanged.
