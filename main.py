@@ -171,21 +171,12 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"cns_orchestrator initialization failed - cannot start MIRA: {e}") from e
     logger.info("CNS Orchestrator initialized as global singleton")
 
-    # Preserve-prefix list tracks its writers: auth/session.py writes `csrf:<digest>`
-    # beside `session:<digest>` and revoke deletes both, so flushing CSRF while keeping
-    # sessions 403s the first cookie-authenticated write after restart (O-10).
-    # `pending_memories*` (queue + `_done:`/`_attempts:` markers) exists nowhere else.
-    # `live_context_compaction_report:` holds each active segment's compaction report; flushed, the next request resends the full segment.
     logger.info("Flushing Valkey caches (preserving sessions, CSRF tokens, rate limits, pending memories and compaction reports)...")
-    from clients.valkey_client import get_valkey_client
+    from clients.valkey_client import BOOT_FLUSH_PRESERVE_PREFIXES, get_valkey_client
     try:
         valkey_client = get_valkey_client()
         flushed_count = valkey_client.flush_except_whitelist(
-            preserve_prefixes=[
-                "session:", "csrf:", "rate_limit:",
-                "pending_memories:", "pending_memories_done:", "pending_memories_attempts:",
-                "live_context_compaction_report:",
-            ]
+            preserve_prefixes=list(BOOT_FLUSH_PRESERVE_PREFIXES)
         )
     except Exception as e:
         logger.critical(f"Failed to flush Valkey caches on startup: {e}")

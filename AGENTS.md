@@ -43,6 +43,7 @@ directory whose map is missing is a defect.
 | `deploy/` | Host-metal and Docker deployment tooling |
 | `deploy/docker/scripts/` | Container bootstrap and supervision scripts |
 | `deploy/lib/` | Shared bash helper libraries, Vault state machine |
+| `deploy/migrations/` | Versioned and repeatable database steps, the generated BASELINE fingerprint table, and the step authoring contract |
 | `deploy/vm/` | VM spin-up, dev-build deploy, and sarcophagus restore toolkit: modes, transports, sarcophagus contract, reference-host recipes |
 | `docs/` | Operator documentation and process authorities: `REGISTER.md` (writing register for any text a model reads) and `AGENTS_MAP_RESEARCH.md` (research base behind the map law; the law lives in the `maintaining-agentsmd-maps` skill) |
 | `lt_memory/` | Long-term memory: storage, scoring, retrieval, linking, entity services |
@@ -94,11 +95,9 @@ every session.
   middleware stack, the global `APIError` → HTTP-status mapping, lifespan
   startup/shutdown ordering (LT_Memory factory → CNS graph → sidebar/release-check/failover-probe
   jobs → announcement; `websocket_chat.close_all_connections()` awaited at
-  shutdown; Valkey flush preserves the
-  `pending_memories:`/`pending_memories_done:`/`pending_memories_attempts:`
-  prefixes — the durable record of user-confirmed memories — and
-  `live_context_compaction_report:`, each active segment's compaction report
-  (`cns/services/AGENTS.md`)), the pre-server
+  shutdown; the Valkey flush keeps
+  `clients/valkey_client.py:BOOT_FLUSH_PRESERVE_PREFIXES` — owned by
+  `clients/AGENTS.md`), the pre-server
   POST gate before bind, the conditional mounts: the federation router when
   `config.lattice.enabled`, the MCP sub-app when `config.system.mcp_enabled`,
   the unconditional browser-client page routes and `/assets` mount from
@@ -124,9 +123,6 @@ every session.
 - `.env.example` — repo-root env-var template (container first-boot vars plus the runtime feature switches `config/config_manager.py` reads). Nothing loads it; the operative container contract is `deploy/.env.example` + `deploy/docker/scripts/init-mira.sh`.
 - `README.md`, `license.txt` — static repo documents;
   no runtime consumers.
-- `BREAKING.md` — transient breaking-release marker: its presence makes `mira update`
-  refuse the tree and print the manual path. Contract owned by `deploy/AGENTS.md`;
-  removed in the first release that is safe again.
 ## Critical Principles (Non-Negotiable)
 
 # NO MOCKS — verification doctrine lives in `tests/AGENTS.md`
@@ -140,7 +136,7 @@ Probe-ability is a design constraint from the first line of new code, not a veri
 - **Verify Contracts Before Building On Them**: verify an unfamiliar helper's or internal API's contract at the boundary you depend on — inputs, outputs, types, side effects, failure modes — with the smallest direct probe or existing reference usage before building on it. Most preventable slipups come from trusting names or remembered APIs.
 - **Evidence-Based Position Integrity**: form assessments from evidence and hold them under pushback. Do not adjust conclusions to match the human's apparent preference; when their proposal contradicts the assessment, push back and say why.
 - **Blunt Technical Communication**: reject technically unsound ideas directly — "bad", "infeasible" — and correct wrong assumptions about code or constraints immediately ("That's wrong"). After rejection or correction, provide the working alternative or the accurate facts.
-- **Plain Speech by Audience**: explanations written for the human operator lead in plain English — what the thing does, in ordinary words, symbols and metric names attached only if the subject is the code itself or the operator asks for them. Precision rules still govern artifacts (code, docs, commit messages) and any statement about specific files. Dense terminology in a human-facing explanation is a communication failure even when every word is accurate.
+- **Plain Speech by Audience**: explanations written for the human operator lead in plain English — what the thing does, in ordinary words, symbols and metric names attached only if the subject is the code itself or the operator asks for them. Precision rules still govern artifacts (code, docs, commit messages) and any statement about specific files. Dense terminology in a human-facing explanation is a communication failure even when every word is accurate. How to talk — clause shape, coined terms, and volley-over-dump — is owned by **Prose Discipline**.
 - **Concrete Code Communication**: name exact methods, files, and snippets — "the `extract_topic_changed_tag()` method that calls `tag_parser.extract_topic_changed()`", not "the tag processing logic". No vague referents.
 - **Numeric Precision**: no invented numbers. Qualitative language unless the figure comes from measurement, benchmark, requirement, or calculation.
 - **No Tech-Bro Evangelism**: describe work accurately — a feature is a feature, a fix is a fix. No "revolutionary"/"fundamental shift" framing or buzzwords.
@@ -188,6 +184,25 @@ These convert recurring failure modes into mandatory patterns. The banned forms 
 - **Retry Counters Never Gate Data on Infrastructure Failure**: attempt counters that trigger destructive or data-losing fallbacks (tombstones, abandons) count only failures the data caused; infrastructure/LLM outages are excluded. Three provider blips must not consume a data-bearing budget.
 - **Every Claimed Defense Has a Witness**: any sentence in this tree claiming something is "wrapped", "enforced", "atomic", or "verified" corresponds to a live path-probe. If writing the probe is impractical, delete the claim. Prose that promises an unwitnessed mechanism is where bugs hide longest.
 
+## Prose Discipline
+
+Binding wherever the session writes prose a reader must act on. The test is not density — legitimate compression exists; the test is whether a fresh reader can reconstruct the intent from what is within their reach. The reader's reach sets the ceiling: an agent reader holds exactly the documents you direct it to load and nothing else; a human reader holds the page and their own vocabulary — one read, often at speed. If the decode key lived only in your head at writing time, the text is a riddle, however simple the words look. This governs all model output — every word the session emits into context: subagent prompts, picker rows, questionnaires, tool results and narrator lines, commits and PRs, chat replies, and the interface prose in **LLM Caller Interface Design**.
+
+Talk normal, always — these two mandates go together. First, talk like a person, not a system writing documentation: full clauses with verbs, named actors, one parse per sentence. The compressed register is for maps and registers, not for a prompt, a picker row, or a chat reply. Second, volley instead of dumping: a long turn does convey more per round-trip, and there is a real latency gain — but the human reads pages of dumped text the way they read no text at all: they skim, lose the point, get confused, and decide badly. Say the one thing that matters now, let the human answer, then say the next. One turn, one point; a question beats an essay; a sentence beats a paragraph. When a dump is genuinely needed — a report, a sitrep, a picker — that is a deliberate artifact, not a chat turn, and it says so.
+
+The failure shapes to write against (fix inverted logic first — it is a bug, not a style item):
+- **Postposed aphorism** — "the current tree's own mechanisms lead, history suggests." Main claim and qualifier swap places; the reader parses twice. Fix: say the qualifier plainly ("...lead, and history only suggests").
+- **Coined term, no key** — "frequency conjunctions." A term the reader has never seen defined is noise to them. Fix: decode it into plain words or delete it, every time.
+- **Subjectless passive** — "`isolation: 'worktree'` rejected." Rejected by whom? A reader can take it as the tool rejecting the option when the truth is otherwise. Fix: name the actor.
+- **Compressed disjunction** — "gets a rotation sample or a different instrument." Two options indistinguishable as written. Fix: collapse to the real one and flag the collapse as an interpretation call.
+- **Noun pile** — "gates ready", "claiming a queue position." Verb and object fused into two words. Fix: restore the clause.
+- **Garden path** — "neither reads code to synthesize them." Parses two ways and one is nonsense. Fix: restate so only one parse exists.
+- **Metaphor before definition** — "below the surface," used three times, defined never. Fix: gloss at first use; later uses inherit the idiom.
+- **Ambiguous-polarity word** — "sanctioned mechanisms are exactly where violations recur." Sanction means approve and penalize; one reading inverts the rule. Fix: unambiguous synonym ("prescribed").
+- **Inverted logic** — "Anything outside the out-of-scope list is reverted." As written it reverts every in-scope change too, including the fix itself. Fix: repair the polarity and treat the line as a bug, not a style item.
+- **Telegraphic rule** — "traced on mechanism, suspected on trigger, unproven part named." The rule's applier must decode the rule before obeying it. Fix: full clauses with verbs.
+- **"The converse"** — "The converse costs nothing." Converse of what? Fix: name the opposite error before pricing it.
+
 ## Comment Discipline
 
 Binding in every session. Code cannot diverge from itself; a comment can, and a stale one suppresses the reading that would have corrected it. **One test:** could a reader recover this by reading the enclosing code and grepping what it references? Then write nothing. A comment earns its place only by carrying a fact the code cannot show — four kinds qualify, and you name the class:
@@ -220,7 +235,7 @@ These four are labels, not the whole set: the seven shapes a comment may carry, 
 Entry points: `tools/AGENTS.md`, `tools/implementations/AGENTS.md`, and the `tools/HOW_TO_BUILD_A_TOOL.md` walkthrough (siblings: `agents/HOW_TO_BUILD_AN_AGENT.md`, `working_memory/trinkets/HOW_TO_BUILD_A_TRINKET.md` — all kept aligned with the code they describe; a base-class contract change updates its guide in the same commit). Broad rules: single responsibility per tool; business logic lives in system prompts/working memory, not tools; user data via `self.user_data_path` / `self.db`; recovery guidance in error responses; verification is live probes (see the NO MOCKS pointer) — a tool touching a critical path ships with its path-probe.
 
 ### LLM Caller Interface Design
-All model-facing prose — system prompts, tool parameter descriptions, agent directives, trinket content — is an interface contract where imprecise language causes behavioral failures downstream. Every word constrains behavior: "literal string" not "text", "exact substring" not "pattern"; the reader is a language model that infers defaults from word choices. Ground descriptions in implementation behavior, not intent; drop jargon the caller lacks context for; state co-dependencies inline; if current wording would cause misuse, fix it.
+All model-facing prose — system prompts, tool parameter descriptions, agent directives, trinket content — is an interface contract where imprecise language causes behavioral failures downstream. Every word constrains behavior: "literal string" not "text", "exact substring" not "pattern"; the reader is a language model that infers defaults from word choices. Ground descriptions in implementation behavior, not intent; drop jargon the caller lacks context for; state co-dependencies inline; if current wording would cause misuse, fix it. The failure-shape checklist that governs all prose — model-facing and human-facing alike — is **Prose Discipline** below.
 
 ### Interface Design
 When calling code misuses an interface, fix the caller — never adapt the interface to accommodate misuse.

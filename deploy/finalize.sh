@@ -101,38 +101,11 @@ if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ] && [ "$OS" = "linux" ]; then
         PG_SERVICE=$(resolve_pg_unit || echo "postgresql.service")
         VALKEY_SERVICE=$(resolve_valkey_unit || echo "valkey.service")
 
-        sudo tee /etc/systemd/system/mira.service > /dev/null <<EOF
-[Unit]
-Description=MIRA - AI Assistant with Persistent Memory
-Documentation=https://github.com/taylorsatula/mira-OSS
-Requires=vault.service ${PG_SERVICE} ${VALKEY_SERVICE}
-After=vault.service ${PG_SERVICE} ${VALKEY_SERVICE} vault-unseal.service
-ConditionPathExists=/opt/mira/app/main.py
-
-[Service]
-Type=simple
-User=$MIRA_USER
-Group=$MIRA_GROUP
-WorkingDirectory=/opt/mira/app
-EnvironmentFile=/opt/mira/systemone.env
-Environment="VAULT_ADDR=http://127.0.0.1:8200"
-Environment="VAULT_ROLE_ID=$VAULT_ROLE_ID"
-Environment="VAULT_SECRET_ID=$VAULT_SECRET_ID"
-Environment="MIRA_LOG_DIR=/opt/mira/logs"
-ExecStart=/opt/mira/app/venv/bin/python3 /opt/mira/app/main.py
-# bash_tool restart_mira exits 75 after its graceful shutdown; on-failure
-# respawns it (contract owner: utils/self_restart.py)
-Restart=on-failure
-RestartSec=10
-TimeoutStartSec=60
-TimeoutStopSec=30
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=mira
-
-[Install]
-WantedBy=multi-user.target
-EOF
+        MIRA_UNIT_TMP="$(mktemp)"
+        render_mira_unit "$MIRA_USER" "$MIRA_GROUP" "$VAULT_ROLE_ID" "$VAULT_SECRET_ID" \
+            "$PG_SERVICE" "$VALKEY_SERVICE" > "$MIRA_UNIT_TMP"
+        install_host_file "$MIRA_UNIT_TMP" "$MIRA_UNIT_PATH" 644
+        rm -f "$MIRA_UNIT_TMP"
         echo -e "${CHECKMARK}"
 
         # Reload systemd and enable service
@@ -305,25 +278,15 @@ EOF
 fi
 
 # The `mira` command: the deployed TUI chat client on its own venv
-# (python.sh Step 5b), runnable from any directory — PYTHONPATH puts the
-# ui/tui/ package inside /opt/mira/app on sys.path so the user's cwd
-# does not matter.
-print_header "Step 15d: Terminal Chat Command (/usr/local/bin/mira)"
-MIRA_BIN=/usr/local/bin/mira
-echo -ne "${DIM}${ARROW}${RESET} Writing $MIRA_BIN... "
-sudo tee "$MIRA_BIN" >/dev/null <<'MIRA_CLI'
-#!/bin/sh
-# MIRA terminal chat client — deployed by finalize.sh. Talk to this
-# instance from any directory: `mira` (first run: mira --login --base-url
-# http://localhost:1993 --chat).
-export PYTHONPATH="/opt/mira/app${PYTHONPATH:+:$PYTHONPATH}"
-# -P: `python3 -m` prepends the CURRENT DIRECTORY to sys.path ahead of
-# PYTHONPATH, so `mira` run from inside a mira checkout silently resolved
-# ui/tui/ and utils/ (and read the checkout's VERSION) instead of the installed
-# tree. -P suppresses that prepend; the install tree wins regardless of cwd.
-exec /opt/mira/tui-venv/bin/python3 -P -m ui.tui "$@"
-MIRA_CLI
-sudo chmod 755 "$MIRA_BIN"
+# (python.sh Step 5b), runnable from any directory. The wrapper's content is
+# deploy/lib/host_artifacts.sh:render_mira_cli — deploy/update.sh rewrites it
+# from the same generator on every update.
+print_header "Step 15d: Terminal Chat Command (${MIRA_CLI_PATH})"
+echo -ne "${DIM}${ARROW}${RESET} Writing ${MIRA_CLI_PATH}... "
+MIRA_CLI_TMP="$(mktemp)"
+render_mira_cli > "$MIRA_CLI_TMP"
+install_host_file "$MIRA_CLI_TMP" "$MIRA_CLI_PATH"
+rm -f "$MIRA_CLI_TMP"
 echo -e "${CHECKMARK}"
 
 # Write one-time credential dump to user's home directory
@@ -539,7 +502,7 @@ else
         # Step 15b launcher written above is the start path.
         echo -e "  ${CYAN}→${RESET} Start MIRA: ${BOLD}/opt/mira/app/run.sh${RESET}"
         echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/${RESET}"
-        echo -e "  ${CYAN}→${RESET} After a reboot, unseal Vault first: ${BOLD}/opt/vault/unseal.sh${RESET}"
+        echo -e "  ${CYAN}→${RESET} After a reboot, unseal Vault first: ${BOLD}sudo /usr/local/sbin/mira-unseal.sh${RESET}"
     else
         echo -e "  ${CYAN}→${RESET} MIRA runs as a LaunchAgent: ${BOLD}com.mira.app${RESET} (starts at login)"
         echo -e "  ${CYAN}→${RESET} Open the web UI: ${BOLD}http://localhost:1993/${RESET}"
@@ -554,8 +517,6 @@ if [ "$OS" = "linux" ]; then
     sudo chmod 700 /opt/vault
     sudo find /opt/vault -type f -exec chmod 600 {} \;
     sudo find /opt/vault -type d -exec chmod 700 {} \;
-    # Ensure scripts remain executable by owner
-    sudo chmod 700 /opt/vault/unseal.sh 2>/dev/null || true
 elif [ "$OS" = "macos" ]; then
     chmod 700 /opt/vault
     find /opt/vault -type f -exec chmod 600 {} \;
@@ -599,7 +560,13 @@ fi
 
 # A renamed-aside database: this install runs against a fresh, empty
 # mira_service, so say where the old data went and how to bring it forward.
-if [ -n "${MIRA_PREVIOUS_DB:-}" ]; then
+if [ "${MIRA_DATA_CARRIED:-}" = "yes" ]; then
+    echo ""
+    echo -e "${BOLD}${GREEN}Your data was carried forward${RESET}"
+    print_info "This install runs on your existing database, upgraded in place —"
+    print_info "your messages, memories, and settings are here, and a backup taken before"
+    print_info "the upgrade is in /opt/mira/backups."
+elif [ -n "${MIRA_PREVIOUS_DB:-}" ]; then
     echo ""
     echo -e "${BOLD}${YELLOW}Your previous database was kept as ${MIRA_PREVIOUS_DB}${RESET}"
     print_info "This install runs against a new, empty mira_service — nothing was deleted."

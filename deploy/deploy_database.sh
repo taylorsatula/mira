@@ -13,9 +13,7 @@ echo "=== MIRA Database Deployment                                    ==="
 echo "==================================================================="
 echo ""
 
-# =====================================================================
 # STEP 1: Find PostgreSQL superuser
-# =====================================================================
 
 echo "Step 1: Detecting PostgreSQL superuser..."
 
@@ -39,9 +37,7 @@ else
     echo "✓ Using detected superuser: $SUPERUSER"
 fi
 
-# =====================================================================
 # STEP 2: Check if mira_service already exists
-# =====================================================================
 
 echo ""
 echo "Step 2: Checking for existing mira_service database..."
@@ -54,9 +50,7 @@ else
     echo "✓ No existing mira_service database found"
 fi
 
-# =====================================================================
 # STEP 3: Provision roles and database, then deploy clean schema
-# =====================================================================
 
 echo ""
 echo "Step 3: Provisioning roles and database..."
@@ -126,9 +120,16 @@ else
     exit 1
 fi
 
-# =====================================================================
+BOOTSTRAP_STATUS=0
+psql -U $SUPERUSER -h localhost -d mira_service -v ON_ERROR_STOP=1 -f "${SCRIPT_DIR}/bootstrap_adopt.sql" > /dev/null 2>&1 || BOOTSTRAP_STATUS=$?
+if [ $BOOTSTRAP_STATUS -eq 0 ]; then
+    echo "✓ Database ownership handed to mira_admin"
+else
+    echo "✗ Ownership bootstrap failed: psql -U $SUPERUSER -h localhost -d mira_service -v ON_ERROR_STOP=1 -f ${SCRIPT_DIR}/bootstrap_adopt.sql"
+    exit 1
+fi
+
 # STEP 5: Verify deployment
-# =====================================================================
 
 echo ""
 echo "Step 5: Verifying deployment..."
@@ -194,9 +195,11 @@ echo "   username: mira_dbuser"
 echo "   password: <mira_dbuser password>"
 echo ""
 echo "2. Update application config to use mira_service"
-echo "3. Start the application: python main.py"
+echo "3. Record the database's upgrade steps (from the code root, AppRole env exported):"
+echo "   PYTHONPATH=. venv/bin/python3 -P -m scripts.migrate migrate"
+echo "4. Start the application: python main.py"
 echo ""
-echo "4. The injection screen's System One model is app config only — no schema"
+echo "5. The injection screen's System One model is app config only — no schema"
 echo "   artifact and no Vault step here. Enable it with MIRA_INJECTION_SCREEN_ENABLED"
 echo "   (+ MIRA_SYSTEMONE_PROVIDER/ENDPOINT/MODEL); for a remote provider seed"
 echo "   Vault secret/mira/api_keys systemone_key=<token> manually."

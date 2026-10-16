@@ -2,10 +2,23 @@
 
 CLI:
 - ``update``            subcommand: update the deployed install in place
-  (resolve the newest published release, refuse breaking releases, rebuild
-  venvs, swap code, restart; exit 0/1). ``update --nightly`` updates to the
-  OSS repo's main HEAD instead. Runs before the chat client and
-  needs no endpoint store. Machine half: ``deploy/update.sh``.
+  (resolve the newest published release, rebuild
+  changed venvs, swap code, restart; exit 0/1/3). ``UPDATE_FLAGS``:
+  ``--nightly`` updates to the repo's main HEAD instead;
+  ``--rebuild-venvs`` forces both venvs to rebuild; ``--adopt-drifted``
+  lets the one-time database handover proceed on a database whose
+  structure matches no known release. Machine half:
+  ``deploy/update.sh``.
+- ``status``            subcommand: the install's last official install or
+  update and every change since, plus where its database stands
+  (``ui/tui/migrate.py``).
+- ``migrate [...]`` / ``restore <STAMP>`` / ``backup [--output DIR]``  the
+  database step runner (``scripts/migrate.py``) on the install's server venv,
+  arguments and exit code passed through unchanged; ``backup`` writes a full
+  backup of the install (database, Vault credentials, settings, service
+  config, program files, per-user tool data) into a directory you choose —
+  nothing on the install is touched.
+- These subcommands run before the chat client and need no endpoint store.
 - ``--config PATH``   override the endpoint-store path (default
   ``~/.config/mira-tui/config.json``); needed for live verification runs.
 - ``--login``         pre-run bootstrap: mint an API token against a MIRA
@@ -40,6 +53,8 @@ from pathlib import Path
 from .app import run as run_app
 from .endpoints import EndpointStore
 
+UPDATE_FLAGS = ("--nightly", "--rebuild-venvs", "--adopt-drifted")
+
 
 def _print_config_debug(store: EndpointStore) -> None:
     print(f"store path: {store.path}")
@@ -61,21 +76,39 @@ def _print_config_debug(store: EndpointStore) -> None:
 def main(argv: list[str] | None = None) -> int:
     args_list = list(sys.argv[1:] if argv is None else argv)
 
-    # `mira update` — the only subcommand; dispatched before argparse so the
-    # flag surface of the chat client stays untouched. It runs standalone:
-    # no endpoint store is loaded, no chat client starts. `--nightly` is
-    # its only flag: update to the OSS repo's main HEAD instead of the
-    # newest published release.
+    # Install-maintenance subcommands dispatch before argparse so the flag
+    # surface of the chat client stays untouched. They run standalone: no
+    # endpoint store is loaded, no chat client starts.
     if args_list and args_list[0] == "update":
         from .update import run_update
 
-        nightly = len(args_list) > 1 and args_list[1] == "--nightly"
-        return run_update(nightly=nightly)
+        flags = args_list[1:]
+        unknown = [flag for flag in flags if flag not in UPDATE_FLAGS]
+        if unknown:
+            print(
+                f"mira update: unknown option {unknown[0]} (supported: {', '.join(UPDATE_FLAGS)})",
+                file=sys.stderr,
+            )
+            return 1
+        return run_update(nightly="--nightly" in flags, rebuild_venvs="--rebuild-venvs" in flags,
+                          adopt_drifted="--adopt-drifted" in flags)
+    if args_list and args_list[0] in ("migrate", "restore", "backup"):
+        from .migrate import run_runner
+
+        return run_runner(args_list[0], args_list[1:])
+    if args_list and args_list[0] == "status":
+        from .migrate import run_status
+
+        if len(args_list) > 1:
+            print("mira status: takes no options", file=sys.stderr)
+            return 1
+        return run_status()
 
     parser = argparse.ArgumentParser(
         prog="mira",
         description="MIRA terminal chat client (streaming WebSocket chat with a bottom-pinned input bar over native scrollback). "
-        "Subcommand: `mira update` updates a deployed install in place.",
+        "Subcommands: `mira update` updates a deployed install in place; "
+        "`mira status` reports how the install differs from its last official update.",
     )
     parser.add_argument(
         "--config",

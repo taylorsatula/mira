@@ -62,6 +62,7 @@ if [ "$OS" = "linux" ] && [ "$DISTRO" = "debian" ]; then
             python${PYTHON_VER}-dev \
             libpq-dev \
             postgresql-server-dev-17 \
+            acl \
             unzip \
             wget \
             curl \
@@ -92,7 +93,7 @@ if [ "$OS" = "linux" ] && [ "$DISTRO" = "debian" ]; then
         # valkey-server + the contrib/postgresql version pins — see the
         # loud-branch comments above
         (sudo apt-get install -y \
-            build-essential cmake git python${PYTHON_VER}-venv python${PYTHON_VER}-dev libpq-dev \
+            build-essential cmake git python${PYTHON_VER}-venv python${PYTHON_VER}-dev libpq-dev acl \
             postgresql-server-dev-17 unzip wget curl postgresql-17 \
             postgresql-17-pgvector valkey-server \
             libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 \
@@ -165,6 +166,7 @@ elif [ "$OS" = "linux" ] && [ "$DISTRO" = "fedora" ]; then
             python3-devel \
             python3-pip \
             libpq-devel \
+            acl \
             postgresql17-server \
             postgresql17-contrib \
             postgresql17-devel \
@@ -197,7 +199,7 @@ elif [ "$OS" = "linux" ] && [ "$DISTRO" = "fedora" ]; then
         (sudo dnf install -y \
             "$DEV_TOOLS_GROUP" python3-devel python3-pip libpq-devel \
             postgresql17-server postgresql17-contrib postgresql17-devel pgvector_17 \
-            unzip wget curl valkey policycoreutils-python-utils \
+            unzip wget curl valkey policycoreutils-python-utils acl \
             atk at-spi2-atk at-spi2-core libXcomposite \
             nss nspr cups-libs alsa-lib mesa-libgbm libxkbcommon \
             libXdamage libXfixes libXrandr pango cairo > /dev/null 2>&1) &
@@ -276,6 +278,7 @@ elif [ "$OS" = "linux" ] && [ "$DISTRO" = "arch" ]; then
             postgresql \
             postgresql-libs \
             pgvector \
+            acl \
             valkey \
             nss \
             nspr \
@@ -297,7 +300,7 @@ elif [ "$OS" = "linux" ] && [ "$DISTRO" = "arch" ]; then
 
         (sudo pacman -S --noconfirm --needed \
             base-devel cmake git wget curl unzip \
-            python python-pip postgresql postgresql-libs pgvector valkey \
+            python python-pip postgresql postgresql-libs pgvector valkey acl \
             nss nspr at-spi2-core cups libdrm libxkbcommon \
             libxcomposite libxdamage libxfixes libxrandr \
             mesa pango cairo alsa-lib > /dev/null 2>&1) &
@@ -465,6 +468,11 @@ elif [ "$OS" = "linux" ]; then
     print_info "Then see docs/MANUAL_INSTALL.md for the remaining steps."
     exit 1
 fi
+
+# 17 is the floor because it is the one PostgreSQL major the container image
+# and the macOS keg ship; a Debian host whose port-5432 cluster is older would
+# otherwise take the schema on a server the backup tools cannot match.
+require_pg_floor 17
 
 print_success "System dependencies installed"
 

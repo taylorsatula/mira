@@ -68,11 +68,21 @@ for u in mira vault vault-unseal valkey; do
 done
 # /etc/valkey is root:valkey 0750 — $VM_USER cannot read it; go through sudo (passwordless in-VM)
 sudo -n cat /etc/valkey/valkey.conf > "$STAGE/systemd/valkey.conf"
+# vault-unseal.service execs /usr/local/sbin/mira-unseal.sh (root-owned 0700),
+# which lives outside /opt/vault — stage it with the unit or the injected
+# unit points at a missing file (extract-stage-vm.sh and inject-restore-vm.sh
+# change together). Pre-relocation captures carry the script inside vault.tar.gz.
+if [ -s /usr/local/sbin/mira-unseal.sh ]; then
+  sudo -n cat /usr/local/sbin/mira-unseal.sh > "$STAGE/systemd/mira-unseal.sh"
+fi
 # loud completeness check — a silent gap here broke the first production inject
 for f in mira vault vault-unseal valkey; do
   [ -s "$STAGE/systemd/$f.service" ] || { echo "FATAL: unit $f.service missing from stage" >&2; exit 1; }
 done
 [ -s "$STAGE/systemd/valkey.conf" ] || { echo "FATAL: valkey.conf missing from stage" >&2; exit 1; }
+if [ -s /usr/local/sbin/mira-unseal.sh ]; then
+  [ -s "$STAGE/systemd/mira-unseal.sh" ] || { echo "FATAL: mira-unseal.sh missing from stage" >&2; exit 1; }
+fi
 ls /etc/systemd/system/ | grep -E 'mira|vault|valkey' > "$STAGE/systemd/unit-list.txt"
 
 echo "== 6. home-ubuntu (ssh + instance credentials) =="

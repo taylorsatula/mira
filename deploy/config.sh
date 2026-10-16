@@ -118,24 +118,50 @@ if [ "$AVAILABLE_SPACE" -lt "$REQUIRED_SPACE" ]; then
 fi
 echo -e "${CHECKMARK}"
 
-# Check if installation already exists
+# Existing-install prompt, class-aware: an install carrying update.sh is a
+# REINSTALL (mira update is the normal path), a pre-floor one a MIGRATION —
+# the class decides what postgresql.sh offers (Rule, deploy/AGENTS.md).
 if [ -d "/opt/mira/app" ]; then
     echo ""
-    print_warning "Existing MIRA installation found at /opt/mira/app"
+    EXISTING_VERSION=""
+    [ -f "/opt/mira/app/VERSION" ] && EXISTING_VERSION="$(head -1 /opt/mira/app/VERSION 2>/dev/null)"
+    if [ -n "$EXISTING_VERSION" ]; then
+        print_warning "Existing MIRA installation found at /opt/mira/app (version: ${EXISTING_VERSION})"
+    else
+        print_warning "Existing MIRA installation found at /opt/mira/app"
+    fi
+    if [ -f "/opt/mira/app/deploy/update.sh" ]; then
+        EXISTING_KIND="reinstall"
+        CONTINUE_WORD="reinstall"
+        print_info "That install can update itself in place -- run: mira update"
+        print_info "(a reinstall is only needed when that refuses; its message says so)."
+        print_info "Continuing here is a REINSTALL: the program files at /opt/mira/app are replaced."
+    else
+        EXISTING_KIND="migration"
+        CONTINUE_WORD="migration"
+        print_info "That install predates in-place updates, so this is a MIGRATION: the program"
+        print_info "files at /opt/mira/app are replaced, and this install will offer to carry your"
+        print_info "data forward if it recognizes the shape of your database (it will show you the"
+        print_info "plan and ask before changing anything)."
+    fi
+    print_info "Your data is preserved: the database is renamed aside -- never deleted, its new"
+    print_info "name printed at the end -- Vault entries are copied aside, and the per-user data"
+    print_info "directory is kept. HOW_TO_MIGRATE_OLD_INSTALLS.txt (named in the end-of-install"
+    print_info "note) shows how to carry data forward when it is not done for you."
     if [ -n "$CONFIG_FILE" ]; then
         if [ "$YAML_overwrite_existing" = "yes" ]; then
-            print_info "Proceeding with overwrite (overwrite_existing: yes)"
+            print_info "Proceeding with the ${EXISTING_KIND} (overwrite_existing: yes)"
         else
             print_info "Installation cancelled (overwrite_existing: no)."
             exit 0
         fi
     else
-        read -p "$(echo -e ${YELLOW}This will OVERWRITE the existing installation. Continue? ${RESET})(y/n): " OVERWRITE
+        read -p "$(echo -e ${YELLOW}Continue with the ${CONTINUE_WORD}? ${RESET})(y/n): " OVERWRITE
         if [[ ! "$OVERWRITE" =~ ^[Yy](es)?$ ]]; then
             print_info "Installation cancelled."
             exit 0
         fi
-        print_info "Proceeding with overwrite..."
+        print_info "Proceeding with the ${EXISTING_KIND}..."
     fi
     echo ""
 fi

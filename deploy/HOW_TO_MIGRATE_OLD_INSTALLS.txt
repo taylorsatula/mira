@@ -1,9 +1,29 @@
 HOW TO MIGRATE AN OLD MIRA INSTALL
 ===================================
 
-For operators moving from an older MIRA (or pre-OSS fork) whose database
-shape no longer matches the current schema. You do NOT need to know what
-changed between versions. Your Pi agent does the archaeology.
+For operators moving from an old MIRA to 2.0 or later. A current installer
+tries to do this for you: when it finds your existing database it checks
+whether it recognizes the shape of your data, shows you the plan, and asks --
+answer Y and the migration happens as part of the install (a backup is taken
+first, and your model routes are set from the answers you gave in the
+install's interview). You only need this file when that did not happen:
+
+  - the installer said it did not recognize the shape of your database
+    (a pre-2.0 install, a fork, or a database changed outside MIRA), or
+  - you answered N, or the install ran unattended (`--config`: an in-place
+    migration never proceeds without your typed OK), or
+  - your old data is not on this machine at all (a dump or copy from
+    somewhere else).
+
+In every one of those cases the install kept your old database aside under a
+new name (printed at the end) and completed with a fresh, empty one -- nothing
+was deleted. This file moves the data from the kept database, or your dump or
+copy, into the fresh install. From the update-mechanism floor
+(v2026.10.06-2.0) on, `mira update` carries the database forward itself (it
+asks first, backs up, and puts everything back on failure).
+
+You do NOT need to know what changed between versions. Your Pi agent does the
+archaeology.
 
 Prereqs on your machine:
 

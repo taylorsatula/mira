@@ -9,13 +9,24 @@
 ARG BASE_IMAGE=mira-base:latest
 FROM ${BASE_IMAGE}
 
+# The source commit this image was built from: pass
+# --build-arg MIRA_REVISION=$(git rev-parse HEAD); an image built from a
+# release asset falls back to that asset's RELEASE_COMMIT below.
+ARG MIRA_REVISION=""
+
 # Labels
+LABEL org.opencontainers.image.revision="${MIRA_REVISION}"
 LABEL org.opencontainers.image.title="MIRA"
 LABEL org.opencontainers.image.description="MIRA - Memory-Integrated Reasoning Assistant"
-LABEL org.opencontainers.image.source="https://github.com/taylorsatula/mira-OSS"
+LABEL org.opencontainers.image.source="https://github.com/taylorsatula/mira"
 
 # Copy application code
 COPY --chown=mira:mira . /opt/mira/app/
+
+# Build record for the running image.
+RUN rev="${MIRA_REVISION:-$(cat /opt/mira/app/RELEASE_COMMIT 2>/dev/null || true)}" \
+    && printf 'revision=%s\nbuilt_at=%s\n' "${rev:-unrecorded}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        > /opt/mira/image-build.txt
 
 # Copy s6 service definitions
 COPY deploy/docker/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
@@ -48,8 +59,11 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
 # (userdata.db, artifacts, imagegen outputs) anchored by
 # utils/userdata_manager.py:base_dir — without a volume, container recreation
 # destroys it. init-mira.sh chowns it to mira on every start (volume
-# mountpoints come up root-owned and the app writes as mira).
-VOLUME ["/var/lib/postgresql/17/main", "/opt/vault", "/var/lib/valkey", "/home/mira/.cache/huggingface", "/opt/mira/app/data"]
+# mountpoints come up root-owned and the app writes as mira). /opt/mira/backups
+# holds the pre-upgrade backups the step runner takes; a bare VOLUME is
+# anonymous, so it persists across container recreation only when run with a
+# named mount (-v mira-backups:/opt/mira/backups, README).
+VOLUME ["/var/lib/postgresql/17/main", "/opt/vault", "/var/lib/valkey", "/home/mira/.cache/huggingface", "/opt/mira/app/data", "/opt/mira/backups"]
 
 # Use our custom entrypoint that handles first-boot, then hands off to s6
 ENTRYPOINT ["/init-mira.sh"]

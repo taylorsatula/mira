@@ -70,10 +70,17 @@ run_with_status() {
         fi
     else
         echo -ne "${DIM}${ARROW}${RESET} $msg... "
-        if "$@" > /dev/null 2>&1; then
+        local _rw_fail_out
+        _rw_fail_out="$(mktemp)"
+        if "$@" > "$_rw_fail_out" 2>&1; then
             echo -e "${CHECKMARK}"
+            rm -f "$_rw_fail_out"
         else
             echo -e "${ERROR}"
+            # A bare ✗ hides the reason — a failed command's stderr is the
+            # diagnosis (the postgresql.sh schema-apply precedent); show its tail.
+            tail -n 5 "$_rw_fail_out" >&2
+            rm -f "$_rw_fail_out"
             return 1
         fi
     fi

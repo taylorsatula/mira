@@ -14,9 +14,7 @@ source /opt/mira/app/deploy/lib/services.sh
 source /opt/mira/app/deploy/lib/embedding_config.sh
 LOUD_MODE=false
 
-# =============================================================================
 # First-Boot Detection
-# =============================================================================
 
 is_first_boot() {
     # Vault initialization creates init-keys.txt - its presence means we're configured
@@ -28,9 +26,7 @@ has_tty() {
     [ -t 0 ] && [ -t 1 ]
 }
 
-# =============================================================================
 # Environment Variable Configuration (non-interactive mode)
-# =============================================================================
 
 check_env_vars() {
     local missing=""
@@ -125,9 +121,7 @@ setup_from_env_vars() {
     print_info "  Provider Key: ****${CONFIG_PROVIDER_KEY: -4}"
 }
 
-# =============================================================================
 # Service Initialization
-# =============================================================================
 
 init_postgresql() {
     print_header "Initializing PostgreSQL"
@@ -201,6 +195,7 @@ EOF
     print_step "Applying database schema..."
     resolve_embedding_schema_args /opt/mira/venv/bin/python /opt/mira/app local "" "" ""
     sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 "${EMBEDDING_SCHEMA_ARGS[@]}" -f /opt/mira/app/deploy/mira_service_schema.sql
+    sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 -f /opt/mira/app/deploy/bootstrap_adopt.sql
 
     # Repoint all five seeded routes at the provider the wizard collected.
     # Postgres is running here, so the rewrite happens at once — there is no
@@ -351,9 +346,7 @@ EOF
     print_success "Vault initialized and secrets stored"
 }
 
-# =============================================================================
 # Main Entrypoint Logic
-# =============================================================================
 
 main() {
     echo ""
@@ -406,8 +399,8 @@ main() {
     # mountpoints — named or anonymous — come up root-owned, and the app
     # runs as mira, so fix ownership on every start. This mirrors the
     # /opt/vault ownership handling in init_vault above.
-    mkdir -p /opt/mira/app/data
-    chown mira:mira /opt/mira/app/data
+    mkdir -p /opt/mira/app/data /opt/mira/backups
+    chown mira:mira /opt/mira/app/data /opt/mira/backups
 
     # PostgreSQL data may sit on a named volume that comes up root-owned,
     # and postgres runs as the postgres user — fix ownership on every start,

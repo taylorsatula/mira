@@ -11,7 +11,9 @@
 --
 -- This is deliberately not a migration. It contains no compatibility DDL,
 -- embedded credentials, database creation, or default privileges.
--- mira-OSS 2.0 is a fresh install: 1.x -> 2.0 is a reinstall, not an upgrade.
+-- deploy/migrations/ carries an installed database forward; schema_migrations
+-- (created at the end of the grants block) is its ledger.
+-- MIRA 2.0 is a fresh install: 1.x -> 2.0 is a reinstall, not an upgrade.
 
 \if :{?embedding_provider}
 \if :{?embedding_model}
@@ -875,6 +877,20 @@ REVOKE EXECUTE ON FUNCTION can_read_global_memories() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION provision_baseline_persona() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION resolve_active_user_identity(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION active_user_identity(uuid) FROM PUBLIC;
+
+-- BEGIN GENERATED LEDGER DDL (utils/schema_migrations.py:ledger_ddl)
+CREATE TABLE schema_migrations (
+    revision    TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('versioned', 'repeatable')),
+    store       TEXT NOT NULL CHECK (store IN ('postgres', 'vault', 'env', 'valkey')),
+    checksum    TEXT NOT NULL,
+    applied_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    applied_by  TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL DEFAULT 0
+);
+GRANT SELECT ON schema_migrations TO mira_dbuser;
+-- END GENERATED LEDGER DDL
 
 -- ---------------------------------------------------------------------------
 -- Comments

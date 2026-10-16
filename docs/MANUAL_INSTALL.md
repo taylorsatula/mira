@@ -19,8 +19,8 @@ Other platforms need equivalent services and packages installed manually.
 Install and start:
 
 - PostgreSQL 17 or newer with the `pgvector` extension (the installer pins 17
-  where PGDG/Homebrew provide it; Arch uses the distro's current major — the
-  schema floor is 14)
+  where PGDG/Homebrew provide it; Arch uses the distro's current major —
+  backups need `pg_dump` of the same major, so 17 is the floor)
 - Valkey
 - HashiCorp Vault
 - Python 3.12 or newer (the installer prefers the newest available of
@@ -83,11 +83,12 @@ OpenAI-compatible endpoint pass `remote <endpoint_url> <model> <token>` and
 store the token in Vault as `secret/mira/api_keys` `embeddings_key`):
 
 ```bash
-createdb mira_service
 source deploy/lib/embedding_config.sh
 resolve_embedding_schema_args venv/bin/python "$PWD" local "" "" ""
 psql -d postgres -v ON_ERROR_STOP=1 -c "DO \$roles\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_admin') THEN CREATE ROLE mira_admin LOGIN PASSWORD 'changethisifdeployingpwd' BYPASSRLS; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_dbuser') THEN CREATE ROLE mira_dbuser LOGIN PASSWORD 'changethisifdeployingpwd'; END IF; END \$roles\$;"
+createdb -O mira_admin mira_service
 psql -U postgres -h localhost -d mira_service -v ON_ERROR_STOP=1 "${EMBEDDING_SCHEMA_ARGS[@]}" -f deploy/mira_service_schema.sql
+psql -U postgres -h localhost -d mira_service -v ON_ERROR_STOP=1 -f deploy/bootstrap_adopt.sql
 ```
 
 The `DO` block provisions the `mira_admin` and `mira_dbuser` roles the schema
@@ -96,6 +97,8 @@ both roles a LOGIN password (TCP connections use scram-sha-256, so a role with
 no password can never authenticate), and `mira_admin` gets `BYPASSRLS`.
 `ON_ERROR_STOP` makes `psql` exit nonzero on the first failing statement —
 without it, a failed `GRANT` or `CREATE POLICY` is reported as success.
+`bootstrap_adopt.sql` hands every MIRA object to `mira_admin`, so later
+upgrades run as `mira_admin` and never need the superuser.
 
 Vault stores service credentials and provider keys. The deploy scripts in `deploy/vault.sh` and `deploy/postgresql.sh` are the source of truth for the exact key names used by the automated path.
 
@@ -134,10 +137,17 @@ seed Vault manually to opt in.
 
 ## Running
 
-Once services, credentials, schema, and Python dependencies are in place:
+Once services, credentials, schema, and Python dependencies are in place,
+record the database's upgrade steps once (with the AppRole env exported, as
+for the server), then start MIRA:
 
 ```bash
+PYTHONPATH=. venv/bin/python -P -m scripts.migrate migrate --backups-dir ./backups --env-file ./systemone.env
 venv/bin/python main.py
 ```
 
-Deployed installs update themselves in place with `mira update` (non-breaking releases only; a release carrying `BREAKING.md` is refused and prints the manual path). The database stays greenfield either way: the schema installs into an empty database, and data salvage across a schema change is agent-run (`deploy/HOW_TO_MIGRATE_OLD_INSTALLS.txt`) — take a `pg_dump` first and never rely on the updater to carry data.
+MIRA refuses to start on a database that is not at its last upgrade step; if
+it does, run the `venv/bin/python -P -m scripts.migrate migrate` command above
+again and then start MIRA.
+
+Deployed installs update themselves in place with `mira update`: it shows what it will do and asks once before changing the database, takes a backup first, and puts the install back if anything fails; `mira restore <STAMP>` restores a backup. `mira status` shows the install's last official update, your own changes since, and where the database stands.

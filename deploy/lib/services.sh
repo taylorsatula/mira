@@ -27,6 +27,42 @@ port_probe_status() {
     return 2
 }
 
+# Runs a command with a wall-clock bound: coreutils `timeout` where it exists
+# (Linux), a background watcher otherwise (stock macOS ships no `timeout`).
+# Returns the command's status; a bound that fires returns nonzero.
+# Usage: run_bounded SECONDS CMD [ARGS...]
+run_bounded() {
+    local secs="$1"
+    shift
+    if command -v timeout > /dev/null 2>&1; then
+        timeout "$secs" "$@"
+        return $?
+    fi
+    "$@" &
+    local pid=$!
+    # The watcher's stdio goes to /dev/null so a caller capturing output with
+    # $(...) does not wait on the watcher's sleep.
+    ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null ) > /dev/null 2>&1 &
+    local watcher=$!
+    local rc=0
+    wait "$pid" || rc=$?
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    return "$rc"
+}
+
+# Prints the lowercase hex SHA-256 of a file: sha256sum on Linux, shasum on
+# macOS (each ships only one of them). Read from stdin so a path holding a
+# backslash or newline cannot change the output format.
+# Usage: file_sha256 FILE
+file_sha256() {
+    if command -v sha256sum > /dev/null 2>&1; then
+        sha256sum < "$1" | awk '{print $1}'
+    else
+        shasum -a 256 < "$1" | awk '{print $1}'
+    fi
+}
+
 # Capture sudo elevation ONCE, at install start, and make every later sudo call
 # silent. Homebrew clears the sudo credential timestamp on every touchpoint
 # (observed live on brew 7.0.7: `sudo -n true` fails immediately after any brew
@@ -40,8 +76,16 @@ port_probe_status() {
 # `sudo -k` first drops any cached ticket so the probe answers "is this account
 # NOPASSWD?" rather than "is a ticket still valid?". Idempotent: MIRA_SUDO_READY
 # short-circuits a second call.
+# Usage: acquire_sudo ["<why-line>" "<password-line>"] — the prompt pair is
+# caller-supplied so non-installer callers (the updater) name what their
+# elevation actually unlocks; it defaults to the installer's own pair, so the
+# installer's call sites pass no arguments and keep their wording.
 acquire_sudo() {
     [ "${MIRA_SUDO_READY:-}" = "yes" ] && return 0
+
+    local why="This installer needs sudo for system packages."
+    local note="Enter your password once — the rest of the install runs unattended."
+    [ "$#" -ge 2 ] && { why="$1"; note="$2"; }
 
     sudo -k 2>/dev/null || true
     if sudo -n true 2>/dev/null; then
@@ -57,8 +101,8 @@ acquire_sudo() {
     fi
 
     echo ""
-    print_info "This installer needs sudo for system packages."
-    print_info "Enter your password once — the rest of the install runs unattended."
+    print_info "$why"
+    print_info "$note"
     echo ""
 
     local pass="" attempts=0 primed="no"
@@ -149,10 +193,145 @@ cpu_count() {
 # Existence-based (systemctl cat), not distro-name-based: a wrong name in a
 # Requires= dependency makes systemd refuse to start mira.service.
 # Echoes the unit name; returns 1 when neither unit exists.
+# Prints "<major> <bindir>" of the PostgreSQL server MIRA uses, resolved per
+# platform family by what is installed (OS/DISTRO need not be set, so the
+# updater can call it): macOS the postgresql@17 keg; Debian the pg_lsclusters
+# row on port 5432, else the newest cluster; Fedora/RHEL /usr/pgsql-17, else
+# the newest /usr/pgsql-* (numeric major sort, like the Debian arm); Arch the
+# postgres on PATH. Returns 1 when none resolves.
+_pg_server_major_and_bindir() {
+    local prefix bindir major line
+    if [ "$(uname)" = "Darwin" ]; then
+        prefix="$(brew --prefix postgresql@17 2>/dev/null || true)"
+        [ -n "$prefix" ] && [ -x "${prefix}/bin/postgres" ] || return 1
+        bindir="${prefix}/bin"
+    elif command -v pg_lsclusters > /dev/null 2>&1; then
+        line="$(pg_lsclusters -h 2>/dev/null | awk '$3 == 5432 {print $1; exit}')"
+        [ -n "$line" ] || line="$(pg_lsclusters -h 2>/dev/null | awk '{print $1}' | sort -n | tail -1)"
+        [ -n "$line" ] || return 1
+        bindir="/usr/lib/postgresql/${line}/bin"
+    elif [ -x /usr/pgsql-17/bin/postgres ]; then
+        bindir="/usr/pgsql-17/bin"
+    elif ls -d /usr/pgsql-*/bin/postgres > /dev/null 2>&1; then
+        # Newest major wins, by numeric sort on the extracted major — the
+        # Debian arm's `sort -n | tail -1` semantics. Plain `ls` order is
+        # lexicographic, which picks e.g. pgsql-16 over an installed
+        # pgsql-18.
+        major="$(ls -d /usr/pgsql-*/bin/postgres | sed -e 's|^.*/pgsql-||' -e 's|/bin/postgres$||' | sort -n | tail -1)"
+        bindir="/usr/pgsql-${major}/bin"
+    elif command -v postgres > /dev/null 2>&1; then
+        bindir="$(dirname "$(command -v postgres)")"
+    else
+        return 1
+    fi
+    major="$("${bindir}/postgres" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1 | cut -d. -f1 || true)"
+    case "$major" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s %s\n' "$major" "$bindir"
+}
+
+# Prints the installed PostgreSQL server major and nothing else.
+# Usage: pg_major_installed
+pg_major_installed() {
+    local resolved
+    resolved="$(_pg_server_major_and_bindir)" || return 1
+    printf '%s\n' "${resolved%% *}"
+}
+
+# Prints the bin directory of the installed PostgreSQL server (psql, pg_dump,
+# pg_restore, createdb, dropdb of the matching major). Keg-only on macOS, so
+# callers prepend it to PATH rather than relying on PATH.
+# Usage: pg_bindir
+pg_bindir() {
+    local resolved
+    resolved="$(_pg_server_major_and_bindir)" || return 1
+    printf '%s\n' "${resolved#* }"
+}
+
+# Exits 1 with the plain-English remedy unless the installed server is at
+# least <floor>. 17 is the floor because it is the one major the container
+# image and the macOS keg ship — and pg_dump/pg_restore must match it.
+# Usage: require_pg_floor <floor>
+require_pg_floor() {
+    local floor="$1" major cluster
+    if ! major="$(pg_major_installed)"; then
+        print_error "No PostgreSQL server was found on this machine. Install PostgreSQL ${floor}, then re-run the installer."
+        exit 1
+    fi
+    if [ "$major" -ge "$floor" ]; then
+        return 0
+    fi
+    print_error "MIRA needs PostgreSQL ${floor} or newer; this machine has ${major}."
+    if [ "$(uname)" = "Darwin" ]; then
+        print_info "Install it: brew install postgresql@${floor}"
+    elif command -v pg_lsclusters > /dev/null 2>&1; then
+        cluster="$(pg_lsclusters -h 2>/dev/null | awk '$3 == 5432 {print $1 "/" $2; exit}')"
+        [ -n "$cluster" ] && print_info "The cluster on port 5432 is ${cluster}."
+        print_info "Install it: sudo apt-get install postgresql-${floor} postgresql-${floor}-pgvector"
+        [ -n "$cluster" ] && print_info "Move that cluster's data onto ${floor} (keeps your data): sudo pg_upgradecluster ${cluster%/*} ${cluster#*/}"
+    elif ls -d /usr/pgsql-* > /dev/null 2>&1; then
+        print_info "Install it: sudo dnf install postgresql${floor}-server postgresql${floor}-contrib pgvector_${floor}"
+    else
+        print_info "Install it: sudo pacman -Syu postgresql pgvector"
+    fi
+    print_info "Then re-run the installer."
+    exit 1
+}
+
+# Prints how this host can act as the PostgreSQL superuser, without prompting
+# or touching the sudo ticket: none (macOS, where the runner acts as the
+# current user with no elevation prefix — including when the bare default-port
+# psql probe cannot connect and superuser status cannot be checked; a
+# container's root), passwordless (Linux `sudo -n -u postgres` works),
+# interactive (Linux, a password is needed and stdin is a terminal),
+# unavailable (no way). The step runner's seam mirrors these arms
+# (utils/schema_migrations.py:superuser_prefix). Requires pg_bindir on PATH
+# on macOS.
+# Usage: seam_mode
+seam_mode() {
+    local answer
+    if [ "$(uname)" = "Darwin" ]; then
+        # Branch on the psql exit status, not stdout alone: empty stdout is
+        # either a genuine non-superuser answer or a failed connection (e.g.
+        # a non-default port/socket), and conflating them misclassifies a
+        # superuser host as unavailable and blocks consent-needing updates
+        # with a remedy a terminal cannot fix. Only a successful query
+        # returning non-"t" is the superuser-negative answer; macOS needs no
+        # elevation prompt, so a failed probe is none, not unavailable.
+        if answer="$(psql -X -d postgres -tAc "SELECT rolsuper FROM pg_roles WHERE rolname = current_user" 2>/dev/null)" \
+            && [ "$answer" != "t" ]; then
+            echo unavailable
+        else
+            echo none
+        fi
+        return 0
+    fi
+    if [ "$(id -u)" = "0" ]; then
+        echo none
+    elif sudo -n -u postgres psql --version > /dev/null 2>&1; then
+        echo passwordless
+    elif [ -t 0 ]; then
+        echo interactive
+    else
+        echo unavailable
+    fi
+}
+
+# Resolve the PostgreSQL systemd unit this host actually ships: the PGDG
+# (Fedora/RHEL) versioned unit for the installed server major
+# (postgresql-17.service, postgresql-18.service, ...) before the unversioned
+# postgresql.service that Debian/Arch ship — a major upgrade that removes the
+# old packages must not leave the resolver baking a unit that no longer
+# exists. Existence is probed with `systemctl cat`, never a distro-named
+# guess. Echoes the unit name; returns 1 when nothing resolves.
 resolve_pg_unit() {
-    if systemctl cat postgresql-17.service > /dev/null 2>&1; then
-        echo "postgresql-17.service"
-    elif systemctl cat postgresql.service > /dev/null 2>&1; then
+    local major
+    if major="$(pg_major_installed)"; then
+        if systemctl cat "postgresql-${major}.service" > /dev/null 2>&1; then
+            echo "postgresql-${major}.service"
+            return 0
+        fi
+    fi
+    if systemctl cat postgresql.service > /dev/null 2>&1; then
         echo "postgresql.service"
     else
         return 1

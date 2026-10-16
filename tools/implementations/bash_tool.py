@@ -768,7 +768,8 @@ def _load_app_tree() -> Optional[Tuple[str, FrozenSet[str]]]:
     (tests/protected/bash_guardrail_probe.py enforces that). The untracked names
     come from the installed `.git/info/exclude` — the generating source, never a
     transcribed list, so a code edit cannot widen what is deletable. Its
-    state-carrying entries are slash-anchored (deploy/python.sh), so git ignores
+    state-carrying entries are slash-anchored
+    (deploy/lib/state_preserve.sh:write_install_exclude), so git ignores
     them at top level only, matching this top-level reading; an unanchored entry
     would also hide a nested same-named directory from git while leaving it
     deletable here. No exclude file means no git and no undo, so the tree gets

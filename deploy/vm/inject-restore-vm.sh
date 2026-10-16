@@ -41,6 +41,13 @@ sudo -n systemctl stop vault-unseal vault 2>/dev/null || true
 sudo -n rm -rf /opt/vault
 sudo -n tar -C /opt -xzf "$SRC/vault.tar.gz"
 sudo -n chown -R "$VM_USER:$VM_USER" /opt/vault
+# The staged vault-unseal.service execs this path; without it a
+# bf85d1c+ sarcophagus restores a unit pointing at a missing file.
+# Pre-relocation stages have no file here and carry the script in vault.tar.gz.
+if [ -s "$SRC/systemd/mira-unseal.sh" ]; then
+  sudo -n install -o root -g root -m 700 "$SRC/systemd/mira-unseal.sh" /usr/local/sbin/mira-unseal.sh
+  sudo -n restorecon -F /usr/local/sbin/mira-unseal.sh 2>/dev/null || true
+fi
 sudo -n systemctl start vault vault-unseal
 
 echo "== 6. home (instance credentials; remapped to $VM_USER) =="

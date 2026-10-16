@@ -1,6 +1,6 @@
 # ui/ — the two MIRA chat clients: the browser pages the server serves, the standalone terminal client, and the cross-client contracts binding them
 
-Elsewhere: page controllers, the serving contract and boot file check, single-user page auth, cache-bust and theme twins — `ui/browser/AGENTS.md` · the JS modules, the one HTTP/WS transport, CSRF retry, chat-page load order, listener ownership — `ui/browser/assets/javascript/AGENTS.md` · every TUI invariant (single writer, single consumer, slash commands, endpoint store, login, update) — `ui/tui/AGENTS.md` · the full inbound frame union — `ui/tui/protocol.py` (the strict mirror) · the server side of every frame, route, and envelope — `cns/api/AGENTS.md` · session/CSRF mechanics and the token-minting routes — `auth/AGENTS.md` · the update machine-half and the breaking-release gate — `deploy/AGENTS.md` · how a feature was built — `git log` (`ui/tui/BUILD_PLAN.md`, `ui/tui/FRONTEND_PLAN.md` are historical design records; code is truth).
+Elsewhere: page controllers, the serving contract and boot file check, single-user page auth, cache-bust and theme twins — `ui/browser/AGENTS.md` · the JS modules, the one HTTP/WS transport, CSRF retry, chat-page load order, listener ownership — `ui/browser/assets/javascript/AGENTS.md` · every TUI invariant (single writer, single consumer, slash commands, endpoint store, login, update) — `ui/tui/AGENTS.md` · the full inbound frame union — `ui/tui/protocol.py` (the strict mirror) · the server side of every frame, route, and envelope — `cns/api/AGENTS.md` · session/CSRF mechanics and the token-minting routes — `auth/AGENTS.md` · the update machine-half — `deploy/AGENTS.md` · how a feature was built — `git log` (`ui/tui/BUILD_PLAN.md`, `ui/tui/FRONTEND_PLAN.md` are historical design records; code is truth).
 
 ## Rules
 
@@ -15,7 +15,7 @@ Elsewhere: page controllers, the serving contract and boot file check, single-us
 
 - `__init__.py` — package docstring only; no imports, no re-exports. `python3 -m ui.tui` resolves the `ui` package first, inside the TUI venv — the import-free rule above is load-bearing.
 - `browser/` — the served client: four page controllers, assets, serving/boot file check, single-user page auth, cache-bust twin — `ui/browser/AGENTS.md`.
-- `tui/` — the terminal client: strict frame mirror, turn state machine, single-writer screen, endpoint store, headless login, `mira update` — `ui/tui/AGENTS.md`.
+- `tui/` — the terminal client: strict frame mirror, turn state machine, single-writer screen, endpoint store, headless login, `mira update`/`backup` — `ui/tui/AGENTS.md`.
 
 ## Wiring
 

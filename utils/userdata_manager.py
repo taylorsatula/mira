@@ -19,6 +19,8 @@ from uuid import UUID
 
 from cryptography.fernet import Fernet
 
+from utils.userdata_migrations import run_userdata_migrations, stamp_userdata_head
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -84,6 +86,29 @@ _DOMAINDOC_DDL = {
 # notes in scratchpad, cleaned up by SidebarDispatcher._maybe_cleanup().
 # Created via agents.base.ensure_activity_schema() (CREATE ... IF NOT EXISTS);
 # sidebar_activity is also created at every user-DB open.
+_PAGER_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_pager_devices_user_id ON pager_devices(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pager_devices_active ON pager_devices(active)",
+    "CREATE INDEX IF NOT EXISTS idx_pager_trust_user_id ON pager_trust(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pager_trust_trusting_device ON pager_trust(trusting_device_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pager_messages_user_id ON pager_messages(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pager_messages_sender ON pager_messages(sender_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pager_messages_recipient ON pager_messages(recipient_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pager_messages_expires ON pager_messages(expires_at)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_pager_messages_external_id "
+    "ON pager_messages(user_id, external_message_id) WHERE external_message_id IS NOT NULL",
+)
+
+_DOMAINDOC_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_domaindocs_label ON domaindocs(label)",
+    "CREATE INDEX IF NOT EXISTS idx_domaindocs_enabled ON domaindocs(enabled)",
+    "CREATE INDEX IF NOT EXISTS idx_domaindocs_archived ON domaindocs(archived)",
+    "CREATE INDEX IF NOT EXISTS idx_sections_domaindoc ON domaindoc_sections(domaindoc_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sections_collapsed ON domaindoc_sections(domaindoc_id, collapsed)",
+    "CREATE INDEX IF NOT EXISTS idx_sections_parent ON domaindoc_sections(parent_section_id)",
+    "CREATE INDEX IF NOT EXISTS idx_versions_domaindoc ON domaindoc_versions(domaindoc_id)",
+)
+
 ACTIVITY_TABLE_DDL = """\
 CREATE TABLE IF NOT EXISTS sidebar_activity (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -187,31 +212,35 @@ class UserDataManager:
         return self.base_dir / "userdata.db"
     
     def _ensure_database(self):
-        """Ensure database exists and schemas are current.
-
-        Always runs schema initialization since CREATE TABLE IF NOT EXISTS
-        is idempotent. This ensures new tables are added to existing databases
-        when features are deployed.
-        """
-        if not self.db_path.exists():
+        """Ensure the database exists and its schema is at ``USERDATA_HEAD``."""
+        new_file = not self.db_path.exists()
+        if new_file:
             self.db_path.touch()
             logger.info(f"Created user database: {self.db_path}")
-        self._initialize_tool_schemas()
-    
-    def _initialize_tool_schemas(self):
-        """Initialize database schemas for all tools.
+        self._initialize_tool_schemas(new_file)
 
-        Schema ownership is intentionally inline while migrations are small and
-        additive. If user DB migrations become order-sensitive again, introduce
-        versioned migrations instead of growing this startup path.
+    def _initialize_tool_schemas(self, new_file: bool):
+        """
+        Tables (CREATE IF NOT EXISTS) → versioned steps (``utils/userdata_migrations.py``;
+        a new file is stamped at head instead, its tables already being today's) → indexes,
+        which may reference columns a step adds.
         """
         logger.info(f"Initializing tool schemas for user {self.user_id}")
 
         self._init_pager_schema()
-
         self._init_domaindoc_schema()
-
         self._init_contacts_schema()
+        self.connection.commit()
+
+        if new_file:
+            stamp_userdata_head(self.connection)
+        else:
+            run_userdata_migrations(self.connection, self._encrypt_value)
+
+        cursor = self.connection.cursor()
+        for index_sql in _PAGER_INDEXES + _DOMAINDOC_INDEXES:
+            cursor.execute(index_sql)
+        self.connection.commit()
 
         self._init_trigger_rules_schema()
 
@@ -287,190 +316,17 @@ class UserDataManager:
         )
         """
 
-        indexes_sql = [
-            "CREATE INDEX IF NOT EXISTS idx_pager_devices_user_id ON pager_devices(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_pager_devices_active ON pager_devices(active)",
-            "CREATE INDEX IF NOT EXISTS idx_pager_trust_user_id ON pager_trust(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_pager_trust_trusting_device ON pager_trust(trusting_device_id)",
-            "CREATE INDEX IF NOT EXISTS idx_pager_messages_user_id ON pager_messages(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_pager_messages_sender ON pager_messages(sender_id)",
-            "CREATE INDEX IF NOT EXISTS idx_pager_messages_recipient ON pager_messages(recipient_id)",
-            "CREATE INDEX IF NOT EXISTS idx_pager_messages_expires ON pager_messages(expires_at)",
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_pager_messages_external_id "
-            "ON pager_messages(user_id, external_message_id) WHERE external_message_id IS NOT NULL"
-        ]
-
         cursor.execute(devices_sql)
         cursor.execute(trust_sql)
         cursor.execute(messages_sql)
-
-        self._migrate_pager_schema(cursor)
-
-        for index_sql in indexes_sql:
-            cursor.execute(index_sql)
-
-        self.connection.commit()
-
-    def _migrate_pager_schema(self, cursor: sqlite3.Cursor) -> None:
-        """Add encrypted pager columns to existing per-user databases."""
-        cursor.execute("PRAGMA table_info(pager_devices)")
-        device_columns = {row[1] for row in cursor.fetchall()}
-
-        if "encrypted__name" not in device_columns:
-            cursor.execute("ALTER TABLE pager_devices ADD COLUMN encrypted__name TEXT")
-            logger.info("Migrated pager_devices: added encrypted__name column")
-        if "encrypted__description" not in device_columns:
-            cursor.execute("ALTER TABLE pager_devices ADD COLUMN encrypted__description TEXT")
-            logger.info("Migrated pager_devices: added encrypted__description column")
-
-        if "name" in device_columns:
-            rows = cursor.execute(
-                "SELECT id, name FROM pager_devices "
-                "WHERE name IS NOT NULL AND encrypted__name IS NULL"
-            ).fetchall()
-            for row in rows:
-                cursor.execute(
-                    "UPDATE pager_devices SET encrypted__name = :name WHERE id = :id",
-                    {"id": row["id"], "name": self._encrypt_value(row["name"])},
-                )
-        if "description" in device_columns:
-            rows = cursor.execute(
-                "SELECT id, description FROM pager_devices "
-                "WHERE description IS NOT NULL AND encrypted__description IS NULL"
-            ).fetchall()
-            for row in rows:
-                cursor.execute(
-                    "UPDATE pager_devices SET encrypted__description = :description WHERE id = :id",
-                    {"id": row["id"], "description": self._encrypt_value(row["description"])},
-                )
-
-        cursor.execute("PRAGMA table_info(pager_trust)")
-        trust_columns = {row[1] for row in cursor.fetchall()}
-        if "encrypted__trusted_name" not in trust_columns:
-            cursor.execute("ALTER TABLE pager_trust ADD COLUMN encrypted__trusted_name TEXT")
-            logger.info("Migrated pager_trust: added encrypted__trusted_name column")
-
-        if "trusted_name" in trust_columns:
-            rows = cursor.execute(
-                "SELECT id, trusted_name FROM pager_trust "
-                "WHERE trusted_name IS NOT NULL AND encrypted__trusted_name IS NULL"
-            ).fetchall()
-            for row in rows:
-                cursor.execute(
-                    "UPDATE pager_trust SET encrypted__trusted_name = :trusted_name WHERE id = :id",
-                    {"id": row["id"], "trusted_name": self._encrypt_value(row["trusted_name"])},
-                )
-        self.connection.commit()
 
     def _init_domaindoc_schema(self):
         """Initialize Domaindoc database schema for section-aware storage."""
         cursor = self.connection.cursor()
 
-        # Note: 'label' is the single identifier - used for both lookups and display
-        # Section-level storage (supports one level of nesting via parent_section_id)
-        # Version history (operation diffs)
-        # DDL lives in _DOMAINDOC_DDL (module level) - shared with the rebuild migration.
-
-        indexes_sql = [
-            "CREATE INDEX IF NOT EXISTS idx_domaindocs_label ON domaindocs(label)",
-            "CREATE INDEX IF NOT EXISTS idx_domaindocs_enabled ON domaindocs(enabled)",
-            "CREATE INDEX IF NOT EXISTS idx_domaindocs_archived ON domaindocs(archived)",
-            "CREATE INDEX IF NOT EXISTS idx_sections_domaindoc ON domaindoc_sections(domaindoc_id)",
-            "CREATE INDEX IF NOT EXISTS idx_sections_collapsed ON domaindoc_sections(domaindoc_id, collapsed)",
-            "CREATE INDEX IF NOT EXISTS idx_sections_parent ON domaindoc_sections(parent_section_id)",
-            "CREATE INDEX IF NOT EXISTS idx_versions_domaindoc ON domaindoc_versions(domaindoc_id)",
-        ]
-
+        # DDL lives in _DOMAINDOC_DDL (module level) — shared with the versions rebuild step.
         for ddl in _DOMAINDOC_DDL.values():
             cursor.execute(ddl)
-
-        # Run migrations for existing databases (must precede index creation
-        # since indexes may reference columns added by migrations)
-        self._migrate_domaindoc_schema(cursor)
-
-        for index_sql in indexes_sql:
-            cursor.execute(index_sql)
-
-        self.connection.commit()
-
-    def _migrate_domaindoc_schema(self, cursor: sqlite3.Cursor) -> None:
-        """Run schema migrations for domaindoc tables.
-
-        Handles adding new columns to existing databases and setting
-        appropriate defaults for existing data. Must run BEFORE index
-        creation since indexes may reference columns added here.
-        """
-        cursor.execute("PRAGMA table_info(domaindocs)")
-        domaindoc_columns = {row[1] for row in cursor.fetchall()}
-
-        if "archived" not in domaindoc_columns:
-            cursor.execute(
-                "ALTER TABLE domaindocs ADD COLUMN archived BOOLEAN DEFAULT FALSE"
-            )
-            self.connection.commit()
-            logger.info("Migrated domaindocs: added archived column")
-
-        cursor.execute("PRAGMA table_info(domaindoc_sections)")
-        section_columns = {row[1] for row in cursor.fetchall()}
-
-        if "pinned" not in section_columns:
-            cursor.execute(
-                "ALTER TABLE domaindoc_sections ADD COLUMN pinned BOOLEAN DEFAULT FALSE"
-            )
-            # Migrate: set pinned=TRUE for top-level sections that were previously
-            # always-expanded (sort_order=0 with no parent)
-            cursor.execute(
-                "UPDATE domaindoc_sections SET pinned = TRUE "
-                "WHERE sort_order = 0 AND parent_section_id IS NULL"
-            )
-            self.connection.commit()
-            logger.info("Migrated domaindoc_sections: added pinned column")
-
-        if "encrypted__summary" not in section_columns:
-            cursor.execute(
-                "ALTER TABLE domaindoc_sections ADD COLUMN encrypted__summary TEXT DEFAULT NULL"
-            )
-            self.connection.commit()
-            logger.info("Migrated domaindoc_sections: added encrypted__summary column")
-
-        self._migrate_domaindoc_versions_unique(cursor)
-
-    def _migrate_domaindoc_versions_unique(self, cursor: sqlite3.Cursor) -> None:
-        """Rebuild domaindoc_versions with per-section uniqueness.
-
-        Version numbering is per section (cns/api/actions.py:_record_version
-        numbers versions with MAX(version_num) filtered by section_id), so the
-        uniqueness constraint is (domaindoc_id, section_id, version_num); the
-        original (domaindoc_id, version_num) constraint rejected the second
-        section's version 1. SQLite cannot ALTER a table constraint, so the
-        table is rebuilt once when the old constraint is detected, copying
-        existing rows verbatim — no row is renumbered or rewritten.
-        """
-        cursor.execute("PRAGMA index_list(domaindoc_versions)")
-        for index_row in cursor.fetchall():
-            index_name = index_row[1]
-            is_unique = bool(index_row[2])
-            if not is_unique or '"' in index_name:
-                continue
-            cursor.execute(f'PRAGMA index_info("{index_name}")')
-            columns = tuple(row[2] for row in cursor.fetchall())
-            if columns != ("domaindoc_id", "version_num"):
-                continue
-            cursor.execute("ALTER TABLE domaindoc_versions RENAME TO domaindoc_versions_old")
-            cursor.execute(_DOMAINDOC_DDL["domaindoc_versions"])
-            cursor.execute(
-                "INSERT INTO domaindoc_versions "
-                "(id, domaindoc_id, section_id, version_num, operation, encrypted__diff_data, created_at) "
-                "SELECT id, domaindoc_id, section_id, version_num, operation, "
-                "encrypted__diff_data, created_at FROM domaindoc_versions_old ORDER BY id"
-            )
-            cursor.execute("DROP TABLE domaindoc_versions_old")
-            self.connection.commit()
-            logger.info(
-                "Migrated domaindoc_versions: uniqueness is now "
-                "(domaindoc_id, section_id, version_num) — per-section version numbering"
-            )
-            return
 
     def _init_contacts_schema(self):
         """Initialize ContactsTool database schema."""
@@ -491,23 +347,6 @@ class UserDataManager:
         )
         """
         cursor.execute(contacts_sql)
-        self._migrate_contacts_schema(cursor)
-        self.connection.commit()
-
-    def _migrate_contacts_schema(self, cursor: sqlite3.Cursor) -> None:
-        """Add optional contact fields to existing per-user databases."""
-        cursor.execute("PRAGMA table_info(contacts)")
-        contact_columns = {row[1] for row in cursor.fetchall()}
-        for column in (
-            "encrypted__street",
-            "encrypted__city",
-            "encrypted__state",
-            "encrypted__zip",
-            "encrypted__pager_address",
-        ):
-            if column not in contact_columns:
-                cursor.execute(f"ALTER TABLE contacts ADD COLUMN {column} TEXT")
-                logger.info("Migrated contacts: added %s column", column)
 
     def _init_trigger_rules_schema(self):
         """Initialize trigger_rules table for per-user sidebar trigger filters.

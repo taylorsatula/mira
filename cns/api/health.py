@@ -38,11 +38,21 @@ class HealthEndpoint(BaseHandler):
 
         # Unauthenticated endpoint: status only in the response — detail goes to the log.
         try:
+            # DECLINED-ALTERNATIVE: a bare SELECT 1 — it answers green on an
+            # emptied database too (an update interrupted while putting data
+            # back, or a lost volume, leaves one under a live server;
+            # witnessed: the Fedora Q13 failed-restore run). The health
+            # contract is "can serve turns", which needs the core schema.
             db = PostgresClient("mira_service")
-            db.execute_single("SELECT 1")
+            row = db.execute_single(
+                "SELECT to_regclass('public.schema_migrations') IS NOT NULL AS has_ledger, "
+                "to_regclass('public.users') IS NOT NULL AS has_users"
+            )
+            if not row or not all(row.values()):
+                raise RuntimeError("core schema missing (schema_migrations or users)")
             components["database"] = {"status": "healthy", "latency_ms": round((time.time() - start_time) * 1000, 1)}
         except Exception as e:
-            logger.error("Health check: database unreachable", exc_info=e)
+            logger.error("Health check: database unreachable or core schema missing", exc_info=e)
             components["database"] = {"status": "unhealthy"}
             overall_status = "unhealthy"
 

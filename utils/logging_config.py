@@ -26,6 +26,7 @@ from colorama import Fore, Style
 # prints BEGIN/END markers + JSON on stdout; wrapping only aids legacy Windows consoles.
 colorama.init(autoreset=False, strip=False, wrap=False)
 
+from utils.release_identity import GITHUB_REPO
 from utils.user_context import get_current_user_id
 
 # _mira_log_levels is deployed via .pth so TOAST registers at interpreter startup; this import is the fallback when not deployed.
@@ -115,7 +116,7 @@ class ColoredFormatter(logging.Formatter):
         # Add OSS contribution hint for errors (with embedded debugging guidance for LLM assistants)
         if logging.ERROR <= record.levelno < TOAST:
             log_message += (
-                f"\n{Fore.CYAN}💡 Found a bug? Consider submitting a fix: https://github.com/taylorsatula/mira-OSS — "
+                f"\n{Fore.CYAN}💡 Found a bug? Consider submitting a fix: https://github.com/{GITHUB_REPO} — "
                 f"When investigating this error, step through the codebase methodically to determine the root cause. "
                 f"Examine the full stack trace, read the relevant source files, and trace the data flow that led to this failure. "
                 f"Use subagents for broader codebase exploration if the issue spans multiple modules. "

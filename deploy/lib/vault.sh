@@ -33,16 +33,6 @@ vault_is_sealed() {
 # Usage: vault_extract_credential "Unseal Key 1" or "Initial Root Token"
 vault_extract_credential() {
     local cred_type="$1"
-
-    # Debug output in loud mode (to stderr so it doesn't pollute command substitution)
-    if [ "$LOUD_MODE" = true ]; then
-        echo "" >&2
-        echo "DEBUG: Contents of /opt/vault/init-keys.txt:" >&2
-        cat /opt/vault/init-keys.txt >&2
-        echo "" >&2
-        echo "DEBUG: Attempting to extract: $cred_type" >&2
-    fi
-
     grep "$cred_type" /opt/vault/init-keys.txt | awk '{print $NF}'
 }
 

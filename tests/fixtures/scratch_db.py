@@ -1,4 +1,4 @@
-"""Throwaway Postgres database: create, apply the shipped schema, drop WITH (FORCE).
+"""Throwaway Postgres database: create (owned by mira_admin), apply the shipped schema and the ownership bootstrap, drop WITH (FORCE).
 
 Spec: tests/fixtures/AGENTS.md. The schema is the real
 `deploy/mira_service_schema.sql`, never a transcription. The admin connection is
@@ -22,6 +22,7 @@ import psycopg
 
 _REPO = Path(__file__).resolve().parents[2]
 _SCHEMA = _REPO / "deploy/mira_service_schema.sql"
+_BOOTSTRAP = _REPO / "deploy/bootstrap_adopt.sql"
 
 # The schema's preconditions (its header, lines 4-11): mira_admin/mira_dbuser
 # must exist before the apply, and pgvector must be installed. deploy/postgresql.sh
@@ -83,8 +84,8 @@ def _embedding_args() -> List[str]:
     ]
 
 
-def _apply_schema(dbname: str, **conn_kwargs) -> None:
-    """Apply the shipped schema with psql — psycopg cannot send its meta-commands."""
+def _psql_file(dbname: str, sql_file: Path, extra_args: List[str], **conn_kwargs) -> None:
+    """Apply a shipped SQL file with psql as the superuser — psycopg cannot send psql meta-commands."""
     psql = shutil.which("psql")
     if psql is None:
         raise FileNotFoundError(
@@ -93,20 +94,30 @@ def _apply_schema(dbname: str, **conn_kwargs) -> None:
         )
     conninfo = psycopg.conninfo.make_conninfo(dbname=dbname, **conn_kwargs)
     result = subprocess.run(
-        [psql, "-X", "-v", "ON_ERROR_STOP=1", *_embedding_args(),
-         "-d", conninfo, "-f", str(_SCHEMA)],
+        [psql, "-X", "-v", "ON_ERROR_STOP=1", *extra_args,
+         "-d", conninfo, "-f", str(sql_file)],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
         raise RuntimeError(
-            f"psql apply of {_SCHEMA} failed (exit {result.returncode}):\n{result.stderr}"
+            f"psql apply of {sql_file} failed (exit {result.returncode}):\n{result.stderr}"
         )
+
+
+def _apply_schema(dbname: str, **conn_kwargs) -> None:
+    """Apply the shipped schema, then the ownership bootstrap every installer runs after it."""
+    _psql_file(dbname, _SCHEMA, _embedding_args(), **conn_kwargs)
+    _psql_file(dbname, _BOOTSTRAP, [], **conn_kwargs)
 
 
 @contextlib.contextmanager
 def scratch_database(prefix: str = "mira_probe", **conn_kwargs) -> Iterator[str]:
-    """Yield a fresh DB name provisioned from the shipped schema; drop it (FORCE) on exit.
+    """Yield a fresh DB name provisioned like an install; drop it (FORCE) on exit.
+
+    The database is owned by mira_admin and carries the shipped schema plus
+    `deploy/bootstrap_adopt.sql` — every object mira_admin-owned and the step
+    ledger present (empty), exactly the state the installers leave.
 
     `conn_kwargs` are local admin libpq kwargs for the superuser connection that
     creates and drops the database (e.g. `user="postgres", host="localhost"`). The
@@ -121,7 +132,7 @@ def scratch_database(prefix: str = "mira_probe", **conn_kwargs) -> Iterator[str]
     try:
         created_roles = _provision_roles(admin)
         _require_pgvector(admin)
-        admin.execute(f'CREATE DATABASE "{name}"')
+        admin.execute(f'CREATE DATABASE "{name}" OWNER mira_admin')
         _apply_schema(name, **conn_kwargs)
         yield name
     finally:

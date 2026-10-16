@@ -290,7 +290,9 @@ def run_pre_server_post(
     specs = [
         CheckSpec("configuration", True, _check_configuration),
         CheckSpec("vault", True, _check_vault),
+        CheckSpec("vault_secrets_manifest", True, _check_vault_secrets_manifest),
         CheckSpec("postgres_rls", True, _check_postgres_rls),
+        CheckSpec("schema_revision", True, _check_schema_revision),
         CheckSpec("valkey", True, _check_valkey),
         CheckSpec("embeddings", True, _check_embeddings),
         CheckSpec("injection_screen", True, _check_injection_screen),
@@ -511,6 +513,25 @@ def _check_configuration() -> dict[str, Any]:
     }
 
 
+def _check_vault_secrets_manifest() -> dict[str, Any]:
+    from clients.vault_client import (
+        REQUIRED_SECRET_MANIFEST,
+        check_required_secrets,
+        format_secret_gap,
+    )
+
+    gaps = check_required_secrets()
+    if gaps:
+        commands = format_secret_gap(gaps)
+        raise RuntimeError(
+            f"Vault is missing {len(gaps)} required setting(s). Add each one, then restart MIRA: {commands}"
+        )
+    return {
+        "paths_checked": len(REQUIRED_SECRET_MANIFEST),
+        "fields_checked": sum(len(fields) for fields in REQUIRED_SECRET_MANIFEST.values()),
+    }
+
+
 def _check_vault() -> dict[str, Any]:
     from clients.vault_client import (
         VaultClient,
@@ -606,6 +627,72 @@ def _check_vault() -> dict[str, Any]:
         "database_fields": ["service_url", "admin_url"],
         "service_fields": required_service_fields,
     }
+
+
+def _boot_refusal(message_id: str, **values: object) -> str:
+    """
+    The boot refusal for ``message_id``, naming a remedy this install can run.
+    ``operator_message`` ends the wrapper-era messages with ``mira update`` — runnable
+    wherever the /usr/local/bin/mira wrapper exists (deploy/finalize.sh is its
+    only writer) and a command-not-found everywhere else, e.g. the manual
+    install of docs/MANUAL_INSTALL.md, whose remedy is this tree's own
+    ``scripts.migrate`` command (-MANUAL twin id, same head). The wrapper is
+    looked up as the message is composed, so each install shape is told a
+    command it can actually run.
+    """
+    from utils.schema_migrations import operator_message
+
+    if os.path.exists("/usr/local/bin/mira"):
+        return operator_message(message_id, **values)
+    return operator_message(f"{message_id}-MANUAL", **values)
+
+
+def _check_schema_revision() -> dict[str, Any]:
+    """
+    The boot guard: refuse to serve unless the database is exactly at this
+    tree's last step. Read-only, as mira_dbuser; never runs a step (database
+    steps run only where a backup and a rollback exist — deploy/update.sh, the
+    installer, the container's mira-migrate oneshot).
+    """
+    from clients.postgres_client import PostgresClient
+    from utils.schema_migrations import StepOrderError, discover_steps, operator_message, order_steps
+
+    try:
+        chain = order_steps(discover_steps())
+    except StepOrderError as error:
+        raise RuntimeError(operator_message("S-BOOT-MISSING", missing=error.revision)) from error
+    # Presence probes run on one raw connection, not the pooled client: the pool
+    # registers pgvector on every connection, which raises on a database without
+    # the extension — exactly the empty shape these probes exist to name. Through
+    # the pool that shape died in 30 s of pool exhaustion and a raw traceback
+    # instead of the refusal (Q18's probe finding).
+    import psycopg
+    from clients.vault_client import get_database_url
+    with psycopg.connect(get_database_url("mira_service"), connect_timeout=5) as probe:
+        if not probe.execute("SELECT to_regclass('public.schema_migrations') IS NOT NULL").fetchone()[0]:
+            # No ledger. Two shapes reach here and only one of them is fixed by
+            # an update: a pre-mechanism install still has MIRA's tables (mira
+            # update adopts them); an empty database — an update interrupted
+            # while putting data back, or a lost volume — is fixed by a restore,
+            # and `mira update` would no-op on it because the interrupted update
+            # already stamped the version (live-witnessed: Q11 recovery A, Q16's
+            # interrupted-rollback observation).
+            has_mira_tables = probe.execute(
+                "SELECT count(*) > 0 FROM information_schema.tables WHERE table_schema = 'public'"
+            ).fetchone()[0]
+            if has_mira_tables:
+                raise RuntimeError(_boot_refusal("S-BOOT-UNPREPARED"))
+            raise RuntimeError(_boot_refusal("S-BOOT-EMPTY"))
+    db = PostgresClient("mira_service")
+    rows = db.execute_query("SELECT revision FROM schema_migrations WHERE kind = 'versioned'")
+    applied = {row["revision"] for row in rows}
+    ledger_head = max((int(revision) for revision in applied), default=0)
+    if ledger_head > chain.head:
+        raise RuntimeError(operator_message("S-BOOT-AHEAD", ledger_head=f"{ledger_head:04d}", tree_head=f"{chain.head:04d}"))
+    pending = [step.revision for step in chain.versioned if step.revision not in applied]
+    if pending:
+        raise RuntimeError(_boot_refusal("S-BOOT-BEHIND", ledger_head=f"{ledger_head:04d}", tree_head=f"{chain.head:04d}"))
+    return {"ledger_head": ledger_head, "tree_head": chain.head, "pending": len(pending)}
 
 
 def _check_postgres_rls() -> dict[str, Any]:

@@ -18,7 +18,7 @@ When generating a new segment summary, the model sees the previous five summarie
 The current summary format produces a 3-4 sentence memory trace, a two-sentence precis, a short display title, and a complexity score. The trace is for remembering; the other fields keep the conversation manifest useful without stuffing the full history back into the context window.
 
 ## Memory
-I have painstakingly designed Memory in MIRA so it can largely manage itself without human curation. You should not need to housekeep old memories (context rot). They [decay via formula](https://github.com/taylorsatula/mira-OSS/blob/main/lt_memory/scoring_formula.sql) unless they Earn Their Keep through access, explicit references, links to other memories and entities, or real temporal relevance. Decay runs on use-days rather than calendar days, so going on vacation does not make MIRA forget you.
+I have painstakingly designed Memory in MIRA so it can largely manage itself without human curation. You should not need to housekeep old memories (context rot). They [decay via formula](https://github.com/taylorsatula/mira/blob/main/lt_memory/scoring_formula.sql) unless they Earn Their Keep through access, explicit references, links to other memories and entities, or real temporal relevance. Decay runs on use-days rather than calendar days, so going on vacation does not make MIRA forget you.
 
 Memories are discrete synthesized information that is passively loaded into the context window through semantic similarity, entity hubs, memory traversal, filtering, and reranking. Most memory recall happens before Mira generates a response, so It does not have to first notice that something is missing and decide to search for it. Mira can still manually use memory_tool when It needs an explicit search, wants to create or link a memory, or needs exact control over what is being recalled.
 
@@ -121,7 +121,7 @@ This project would not be possible without the hard work and dedication of peopl
 ```bash
 curl -fsSL https://raw.githubusercontent.com/taylorsatula/mira/main/install.sh | bash
 ```
-That's it. The installer resolves the newest published release and runs that release's installer. Answer the configuration questions onscreen and provide the provider credentials or local-provider settings you want MIRA to use.
+That's it. The installer resolves the newest published release and runs that release's installer. Answer the configuration questions onscreen and provide the provider credentials or local-provider settings you want MIRA to use. If an older MIRA is already installed, the installer says what kind of situation it sees: an install that can update itself is pointed at `mira update`, and an older one is offered a migration — your data carried forward in place after the installer shows you the plan and you confirm — or, when the database's shape is not one it recognizes, a fresh install with the old database kept aside, never deleted.
 
 The first questions choose where MIRA's model calls go. The recommended path is **LunaRoute** — unlimited API usage for a flat fee, one key for everything ([lunaroute.com](https://lunaroute.com)) — which prefills chat, memory, embeddings, and the injection screen and asks only for that key. Choose "no" and the installer falls through to the full granular provider interview; choose local (llama-server) for an air-gapped install.
 
@@ -141,7 +141,7 @@ The script handles:
 8. Service verification (PostgreSQL, Valkey, Vault running and accessible)
 9. A litany of other configuration steps
 
-Deployed installs update themselves in place with `mira update` (non-breaking releases only; a release carrying `BREAKING.md` is refused and prints the manual path). The database stays greenfield either way: the schema installs into an empty database, and data salvage across a schema change is agent-run (`deploy/HOW_TO_MIGRATE_OLD_INSTALLS.txt`) — take a `pg_dump` first and never rely on the updater to carry data.
+Deployed installs update themselves in place with `mira update`: it shows what it will do and asks once before changing the database, takes a backup first, and puts the install back if anything fails; `mira restore <STAMP>` restores a backup. `mira status` shows the install's last official update, your own changes since, and where the database stands. A full backup of the install can be pulled at any time with `mira backup [--output DIR]` — database, credentials, settings, program files, and per-user data, written to a directory you choose without touching the running install.
 
 ## Injection Screen (optional)
 
@@ -230,13 +230,13 @@ Run interactively (setup wizard) or headless with environment variables:
 
 ```bash
 # Interactive setup
-docker run -it -v mira-data:/opt/vault -v mira-userdata:/opt/mira/app/data -v mira-pgdata:/var/lib/postgresql/17/main -v mira-valkey:/var/lib/valkey -p 1993:1993 mira:latest
+docker run -it -v mira-data:/opt/vault -v mira-userdata:/opt/mira/app/data -v mira-pgdata:/var/lib/postgresql/17/main -v mira-valkey:/var/lib/valkey -v mira-backups:/opt/mira/backups -p 1993:1993 mira:latest
 
 # Headless (non-interactive)
-docker run -e MIRA_PROVIDER_KEY=lr_xxx -v mira-data:/opt/vault -v mira-userdata:/opt/mira/app/data -v mira-pgdata:/var/lib/postgresql/17/main -v mira-valkey:/var/lib/valkey -p 1993:1993 mira:latest
+docker run -e MIRA_PROVIDER_KEY=lr_xxx -v mira-data:/opt/vault -v mira-userdata:/opt/mira/app/data -v mira-pgdata:/var/lib/postgresql/17/main -v mira-valkey:/var/lib/valkey -v mira-backups:/opt/mira/backups -p 1993:1993 mira:latest
 ```
 
-Vault data persists in the `mira-data` volume. User data (uploaded and generated files, per-user tool data) persists in the `mira-userdata` volume, conversations in the `mira-pgdata` volume, and Valkey state in the `mira-valkey` volume. Always re-create the container with the same named volumes — without them, recreating the container attaches fresh empty volumes and loses those files and every conversation.
+Vault data persists in the `mira-data` volume. User data (uploaded and generated files, per-user tool data) persists in the `mira-userdata` volume, conversations in the `mira-pgdata` volume, Valkey state in the `mira-valkey` volume, and the backups MIRA takes before each database upgrade in the `mira-backups` volume. Always re-create the container with the same named volumes — without them, recreating the container attaches fresh empty volumes and loses those files and every conversation.
 
 ## Chatting with MIRA in your browser
 

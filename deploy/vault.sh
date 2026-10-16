@@ -266,9 +266,24 @@ fi
 EOF
 echo -e "${CHECKMARK}"
 
-run_quiet chmod +x /opt/vault/unseal.sh
-
 if [ "$OS" = "linux" ]; then
+    # vault-unseal.service runs as root and /opt/vault is MIRA_USER-owned;
+    # a directory owner can replace any entry in it (no sticky bit), so a
+    # root-executed script must not live there. install(1) copies it out
+    # root-owned in one step.
+    sudo install -o root -g root -m 700 /opt/vault/unseal.sh /usr/local/sbin/mira-unseal.sh
+    sudo rm -f /opt/vault/unseal.sh
+    # bin_t is the executable type services need (same rule as the vault
+    # binary); the local rule overrides whatever default type the path
+    # carries, and local rules outrank policy-supplied ones. Without it the
+    # enable-only oneshot's first run — the first boot — could die 203/EXEC
+    # on an unlabeled-for-services path default.
+    if [ "$DISTRO" = "fedora" ] && command -v getenforce &> /dev/null; then
+        if [ "$(getenforce)" != "Disabled" ]; then
+            run_with_status "Labeling unseal script for SELinux (persistent)" \
+                bash -c "sudo semanage fcontext -a -t bin_t '/usr/local/sbin/mira-unseal\\.sh' 2>/dev/null || sudo semanage fcontext -m -t bin_t '/usr/local/sbin/mira-unseal\\.sh'; sudo restorecon -F /usr/local/sbin/mira-unseal.sh"
+        fi
+    fi
     echo -ne "${DIM}${ARROW}${RESET} Creating auto-unseal systemd service... "
     sudo tee /etc/systemd/system/vault-unseal.service > /dev/null <<'EOF'
 [Unit]
@@ -278,7 +293,7 @@ Requires=vault.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/vault/unseal.sh
+ExecStart=/usr/local/sbin/mira-unseal.sh
 RemainAfterExit=yes
 
 [Install]
@@ -290,6 +305,7 @@ EOF
     run_with_status "Enabling auto-unseal service" \
         sudo systemctl enable vault-unseal.service
 elif [ "$OS" = "macos" ]; then
+    run_quiet chmod +x /opt/vault/unseal.sh
     echo -ne "${DIM}${ARROW}${RESET} Installing auto-unseal launchd agent... "
     cat > "$HOME/Library/LaunchAgents/com.mira.vault.unseal.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

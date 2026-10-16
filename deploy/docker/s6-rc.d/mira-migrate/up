@@ -1,0 +1,1 @@
+/bin/bash /opt/mira/app/deploy/docker/scripts/mira-migrate.sh

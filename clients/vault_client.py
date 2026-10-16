@@ -12,6 +12,8 @@ Core principles:
 import json
 import os
 import logging
+from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Optional, Dict, TypedDict
 import hvac
 from hvac.exceptions import VaultError, InvalidPath, Unauthorized, Forbidden
@@ -237,6 +239,80 @@ def preload_secrets() -> None:
         raise RuntimeError(
             f"Failed to preload {len(failures)} secret group(s): {'; '.join(failures)}"
         )
+
+
+# Fields every install writes and the runtime cannot start without. Writers:
+# deploy/postgresql.sh Step 14 and deploy/docker/scripts/init-mira.sh:init_vault.
+# mira/api_keys names only subcortical_key: the chat-tier key's field depends
+# on the provider mode (provider_key or anthropic_key), and a container writes
+# neither — requiring one would park every install of the other kind.
+REQUIRED_SECRET_MANIFEST: Dict[str, tuple[str, ...]] = {
+    "mira/database": ("admin_url", "service_url", "username", "password"),
+    "mira/services": ("valkey_url", "app_url", "userdata_encryption_key"),
+    "mira/api_keys": ("subcortical_key",),
+}
+
+
+@dataclass(frozen=True)
+class SecretGap:
+    """A manifest field absent from Vault; path_exists says whether its secret exists at all."""
+
+    path: str
+    field: str
+    path_exists: bool
+
+
+def check_required_secrets() -> list[SecretGap]:
+    """
+    Every REQUIRED_SECRET_MANIFEST field absent from Vault ([] when none is).
+
+    Presence is the contract; values are validated by their readers.
+
+    Raises:
+        PermissionError, RuntimeError, ValueError: Vault unreachable, sealed,
+            unauthenticated, or misconfigured — an infrastructure failure is
+            never reported as a gap.
+    """
+    vault_client = _ensure_vault_client()
+    gaps: list[SecretGap] = []
+    for path, fields in REQUIRED_SECRET_MANIFEST.items():
+        try:
+            data = vault_client._read_secret_version(path)["data"]["data"]
+            exists = True
+        except InvalidPath:
+            data = {}
+            exists = False
+        except (Unauthorized, Forbidden) as e:
+            raise PermissionError(f"Access denied to secret '{path}': {e}") from e
+        except VaultError as e:
+            raise RuntimeError(f"Vault API error reading '{path}': {e}") from e
+        gaps.extend(SecretGap(path, field, exists) for field in fields if field not in data)
+    return gaps
+
+
+def format_secret_gap(gaps: Iterable[SecretGap]) -> str:
+    """The exact command(s) that fill the given gaps, "; "-joined.
+
+    A gap in a secret that exists is one `vault kv patch` per field
+    (patch merges, so the secret's other fields survive). A secret
+    missing altogether is a single `vault kv put` carrying every missing
+    field of that path — put replaces the whole secret, so one put per
+    field would erase the fixes before it.
+    """
+    by_path: dict[str, list[SecretGap]] = {}
+    for gap in gaps:
+        by_path.setdefault(gap.path, []).append(gap)
+    commands: list[str] = []
+    for path, path_gaps in by_path.items():
+        if all(gap.path_exists for gap in path_gaps):
+            commands.extend(
+                f"vault kv patch secret/{path} {gap.field}=<value>"
+                for gap in path_gaps
+            )
+        else:
+            fields = " ".join(f"{gap.field}=<value>" for gap in path_gaps)
+            commands.append(f"vault kv put secret/{path} {fields}")
+    return "; ".join(commands)
 
 
 class VaultHealthCheck(TypedDict, total=False):

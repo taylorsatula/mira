@@ -8,10 +8,10 @@
 # deploy/deploy-config.example.yml, fill in the placeholders, and run
 #   ./deploy/deploy.sh --config deploy-config.yml --loud
 #
-# --local installs the MIRA code from the CURRENT DIRECTORY (a mira-OSS
+# --local installs the MIRA code from the CURRENT DIRECTORY (a MIRA
 # checkout, typically with uncommitted dev changes) instead of downloading
-# the tagged release tarball from GitHub. Run it from the repo root:
-#   cd /path/to/mira-OSS && ./deploy/deploy.sh --config deploy-config.yml --local --loud
+# the tagged release asset from GitHub. Run it from the repo root:
+#   cd /path/to/mira && ./deploy/deploy.sh --config deploy-config.yml --local --loud
 # Untracked runtime junk the GitHub tarball never contains is excluded
 # (.git, venv, __pycache__, *.pyc, .env, data, logs, scratch); everything
 # else — including uncommitted modifications — is installed to /opt/mira/app
@@ -22,13 +22,10 @@
 #
 # In-place update: `mira update` (deployed installs, v2026.10.06-2.0+ floor:
 # the first release carrying this command)
-# updates non-breaking releases in place — resolve, gate, rebuild venvs, swap
-# code, restart (deploy/update.sh owns the mechanics). Breaking releases
-# carry BREAKING.md at the repo root; `mira update` refuses them and prints
-# the manual path (reinstall + agent-run history import). The database stays
-# greenfield either way: schema changes are never migrated by the updater —
-# data salvage across a schema change is agent-run
-# (deploy/HOW_TO_MIGRATE_OLD_INSTALLS.txt).
+# updates the install in place — resolve, ask before any database change,
+# rebuild changed venvs, swap code, run the database steps in
+# deploy/migrations/ with a backup first, restart, and put everything back on
+# failure (deploy/update.sh owns the mechanics).
 #
 # Options:
 #   --loud     Show verbose output during installation
@@ -49,7 +46,7 @@ set -e
 
 # Single source of truth for the release the installer deploys. All fetch
 # sites are pinned to this tag: the bootstrap clone below and python.sh's
-# installer tarball. Cut a release by moving this constant, then tagging and
+# release-asset download. Cut a release by moving this constant, then tagging and
 # publishing per deploy/RELEASE.md.
 RELEASE_TAG="v2026.10.06-2.0"
 export RELEASE_TAG
@@ -57,10 +54,11 @@ export RELEASE_TAG
 # Get the directory where this script lives
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ============================================================================
 # Bootstrap: Clone repo if running standalone
-# ============================================================================
-# If lib/output.sh doesn't exist, we were likely curl'd standalone - clone the repo
+# If lib/output.sh doesn't exist, we were likely curl'd standalone - clone the repo.
+# The repository is spelled literally here: a standalone deploy.sh has no
+# deploy/GITHUB_REPO beside it. deploy/lib/provenance.sh:build_release_artifact
+# refuses a release whose spelling here differs from that file.
 if [ ! -f "${SCRIPT_DIR}/lib/output.sh" ]; then
     echo "Cloning MIRA repository (release ${RELEASE_TAG})..."
     CLONE_DIR="/tmp/mira-install-$$"
@@ -69,7 +67,7 @@ if [ ! -f "${SCRIPT_DIR}/lib/output.sh" ]; then
     # the clone progress dump read as a failure to a first-time installer.
     if ! git -c advice.detachedHead=false clone --quiet --depth 1 \
             --branch "$RELEASE_TAG" \
-            https://github.com/taylorsatula/mira-OSS.git "$CLONE_DIR"; then
+            https://github.com/taylorsatula/mira.git "$CLONE_DIR"; then
         echo "Could not clone release ${RELEASE_TAG} — check your network, then re-run." >&2
         exit 1
     fi
@@ -99,26 +97,26 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# ============================================================================
 # Source shared libraries
-# ============================================================================
 source "${SCRIPT_DIR}/lib/output.sh"
+source "${SCRIPT_DIR}/lib/repo_identity.sh"
 source "${SCRIPT_DIR}/lib/services.sh"
+source "${SCRIPT_DIR}/lib/provenance.sh"
+source "${SCRIPT_DIR}/lib/venv_stamp.sh"
+source "${SCRIPT_DIR}/lib/state_preserve.sh"
+source "${SCRIPT_DIR}/lib/custom_export.sh"
+source "${SCRIPT_DIR}/lib/host_artifacts.sh"
 source "${SCRIPT_DIR}/lib/vault.sh"
 source "${SCRIPT_DIR}/lib/embedding_config.sh"
 source "${SCRIPT_DIR}/lib/context_window_config.sh"
 source "${SCRIPT_DIR}/lib/systemone_config.sh"
 
-# ============================================================================
 # Elevation
-# ============================================================================
 # Capture sudo once, up front, so the interview's occupied-port stops and every
 # later Homebrew-interleaved sudo call run without a second prompt.
 acquire_sudo
 
-# ============================================================================
 # Phase 1: Configuration Gathering
-# ============================================================================
 # config.sh handles:
 #   - Variable initialization (CONFIG_*, STATUS_*)
 #   - OS/distro detection
@@ -127,27 +125,21 @@ acquire_sudo
 #   - Configuration summary
 source "${SCRIPT_DIR}/config.sh"
 
-# ============================================================================
 # Phase 2: Pre-flight Validation
-# ============================================================================
 # preflight.sh handles:
 #   - System detection display
 #   - Root check
 #   - Sudo elevation
 source "${SCRIPT_DIR}/preflight.sh"
 
-# ============================================================================
 # Phase 3: System Dependencies
-# ============================================================================
 # dependencies.sh handles:
 #   - Package installation (apt/dnf/brew)
 #   - llama.cpp build & model download (offline/local mode only)
 #   - Sets: PYTHON_VER
 source "${SCRIPT_DIR}/dependencies.sh"
 
-# ============================================================================
 # Phase 4: Python & Application Setup
-# ============================================================================
 # python.sh handles:
 #   - Python verification
 #   - MIRA download and installation
@@ -157,9 +149,7 @@ source "${SCRIPT_DIR}/dependencies.sh"
 #   - Sets: PYTHON_CMD, MIRA_USER, MIRA_GROUP
 source "${SCRIPT_DIR}/python.sh"
 
-# ============================================================================
 # Phase 5: Vault Setup
-# ============================================================================
 # vault.sh handles:
 #   - Vault binary download/installation
 #   - Service configuration
@@ -167,9 +157,7 @@ source "${SCRIPT_DIR}/python.sh"
 #   - Sets: VAULT_ADDR (exported)
 source "${SCRIPT_DIR}/vault.sh"
 
-# ============================================================================
 # Phase 6: Database & Credentials
-# ============================================================================
 # postgresql.sh handles:
 #   - Starting services (macOS)
 #   - PostgreSQL readiness check
@@ -179,9 +167,7 @@ source "${SCRIPT_DIR}/vault.sh"
 #   - Vault credential storage
 source "${SCRIPT_DIR}/postgresql.sh"
 
-# ============================================================================
 # Phase 7: Finalization
-# ============================================================================
 # finalize.sh handles:
 #   - MIRA CLI wrapper script
 #   - Shell alias

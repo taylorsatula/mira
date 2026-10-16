@@ -2,7 +2,9 @@
 # Python verification, MIRA download, venv setup, dependencies, embedding model, Playwright
 # Source this file - do not execute directly
 #
-# Requires: lib/output.sh and lib/services.sh sourced first
+# Requires: lib/output.sh, lib/services.sh, lib/repo_identity.sh,
+#           lib/provenance.sh, lib/venv_stamp.sh, lib/state_preserve.sh, and
+#           lib/custom_export.sh sourced first
 # Requires: OS, PYTHON_VER, CONFIG_*, LOUD_MODE, RELEASE_TAG variables set
 # (RELEASE_TAG is defined and exported by deploy/deploy.sh — the single
 # source of truth for the release the installer deploys)
@@ -66,28 +68,33 @@ run_with_status "Creating /opt/mira/app directory" \
 
 # The code tree is a git repository: every install is one commit, so what MIRA
 # changes in its own tree is reviewable and revertible by the operator (`git
-# diff`, `git stash`, one command to undo). bash_tool reads this repository to
-# decide what inside the tree is editable
-# (tools/implementations/bash_tool.py:_load_app_tree). Uncommitted changes
-# present now are edits MIRA made that never went through a restart — stash
-# them (kept, never deleted) before the new payload replaces the tree.
-if [ -d /opt/mira/app/.git ] && [ -n "$(git -C /opt/mira/app status --porcelain --untracked-files=all 2>/dev/null)" ]; then
-    run_with_status "Stashing uncommitted code changes before reinstall" \
-        git -C /opt/mira/app stash push --include-untracked --quiet \
-            -m "uncommitted changes before reinstall $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# diff`, one command to undo). bash_tool reads this repository to decide what
+# inside the tree is editable (tools/implementations/bash_tool.py:_load_app_tree).
+# A reinstall over an existing tree first copies every file changed since the
+# last official install/update commit out to ~/Desktop (or ~), exactly as
+# `mira update` does — the clear below replaces them.
+if [ -d /opt/mira/app/.git ] && REINSTALL_BASELINE="$(official_baseline_commit /opt/mira/app 2>/dev/null)"; then
+    REINSTALL_EXPORT_ROOT="$HOME"
+    [ -d "$HOME/Desktop" ] && [ -w "$HOME/Desktop" ] && REINSTALL_EXPORT_ROOT="$HOME/Desktop"
+    # The lib's free-space refusal prints this caller's remedy, not the updater's.
+    CUSTOM_EXPORT_REMEDY="re-run deploy.sh"
+    if ! export_custom_build /opt/mira/app "$REINSTALL_BASELINE" "$RELEASE_TAG" \
+            "$(date -u +%Y%m%dT%H%M%SZ)" "$REINSTALL_EXPORT_ROOT"; then
+        print_error "MIRA could not save a safe copy of the files you changed in /opt/mira/app, so the reinstall stopped before touching anything."
+        exit 1
+    fi
+    if [ -n "$CUSTOM_EXPORT_DIR" ]; then
+        print_custom_alert "$CUSTOM_EXPORT_DIR" "$CUSTOM_EXPORT_COUNT"
+    fi
 fi
 
 # Clear any previous install's code before the new payload lands: a
 # retired module left behind by an overlay is imported at boot and parks
-# the POST gate. Host-local state the install payload never contains
-# (venv, .env, data, logs — the same set both install paths exclude) is
-# preserved; data/ holds per-user storage (utils/userdata_manager.py
-# base_dir) and venv/ is reused by Step 4. .git is preserved too: it holds
-# the install history and every stashed edit.
+# the POST gate. Host-local state (deploy/lib/state_preserve.sh:
+# MIRA_PRESERVE_NAMES — data/ holds per-user storage, venv/ is reused by
+# Step 4, .git holds the install history) is kept.
 run_with_status "Clearing previous install (code only)" \
-    sudo find /opt/mira/app -mindepth 1 -maxdepth 1 \
-        ! -name venv ! -name .env ! -name data ! -name logs ! -name .git \
-        -exec rm -rf {} +
+    clear_code_preserving_state /opt/mira/app --sudo
 
 if [ "${LOCAL_SOURCE:-false}" = "true" ]; then
     # --local: install from the repo checkout deploy.sh was invoked from
@@ -96,8 +103,8 @@ if [ "${LOCAL_SOURCE:-false}" = "true" ]; then
     LOCAL_SOURCE_DIR="${LOCAL_SOURCE_DIR:?--local requires the cwd captured by deploy.sh}"
     for f in main.py requirements.txt deploy/deploy.sh; do
         if [ ! -f "$LOCAL_SOURCE_DIR/$f" ]; then
-            print_error "--local: '$LOCAL_SOURCE_DIR' is not a mira-OSS checkout (missing $f)"
-            print_info "Run from the repo root: cd /path/to/mira-OSS && ./deploy/deploy.sh --local ..."
+            print_error "--local: '$LOCAL_SOURCE_DIR' is not a MIRA checkout (missing $f)"
+            print_info "Run from the repo root: cd /path/to/mira && ./deploy/deploy.sh --local ..."
             exit 1
         fi
     done
@@ -115,23 +122,36 @@ else
     cd /tmp
 
     # Pinned release tag: RELEASE_TAG (from deploy/deploy.sh) is the single
-    # source of truth; this is the deploy/RELEASE.md procedure, now wired.
-    # GitHub's tag archive extracts to mira-<tag without the leading "v">.
-    TARBALL="mira-${RELEASE_TAG#v}.tar.gz"
-    SRC_DIR="/tmp/mira-${RELEASE_TAG#v}"
+    # source of truth. The payload is the release asset built by
+    # deploy/lib/provenance.sh:build_release_artifact — one top-level
+    # mira-<version>/ directory carrying RELEASE_COMMIT. A missing asset is a
+    # hard failure; GitHub's auto-archive is never a substitute (it carries
+    # no RELEASE_COMMIT).
+    RELEASE_VERSION="${RELEASE_TAG#v}"
+    TARBALL="mira-${RELEASE_VERSION}.tar.gz"
+    SRC_DIR="/tmp/mira-${RELEASE_VERSION}"
+    RELEASE_ASSET_URL="https://github.com/$(mira_github_repo)/releases/download/${RELEASE_TAG}/${TARBALL}"
 
-    run_with_status "Downloading MIRA release ${RELEASE_TAG}" \
-        wget -q -O "$TARBALL" "https://github.com/taylorsatula/mira-OSS/archive/refs/tags/${RELEASE_TAG}.tar.gz"
+    if ! run_with_status "Downloading MIRA release ${RELEASE_TAG}" \
+            wget -q -O "$TARBALL" "$RELEASE_ASSET_URL"; then
+        print_error "Release ${RELEASE_TAG} has no downloadable asset ${TARBALL} (${RELEASE_ASSET_URL})."
+        exit 1
+    fi
 
     run_with_status "Extracting archive" \
         tar -xzf "$TARBALL" -C /tmp
 
     run_with_status "Copying files to /opt/mira/app" \
-        sudo cp -r "$SRC_DIR"/* /opt/mira/app/
+        bash -c "sudo tar -C '$SRC_DIR' -cf - . | sudo tar -C /opt/mira/app -xf -"
 
     # Clean up immediately after copying
     run_quiet rm -f "/tmp/$TARBALL"
     run_quiet rm -rf "$SRC_DIR"
+
+    if ! read_release_commit /opt/mira/app > /dev/null; then
+        print_error "The ${RELEASE_TAG} download carries no RELEASE_COMMIT record — not a MIRA release asset."
+        exit 1
+    fi
 fi
 
 run_with_status "Setting ownership to $MIRA_USER:$MIRA_GROUP" \
@@ -139,41 +159,38 @@ run_with_status "Setting ownership to $MIRA_USER:$MIRA_GROUP" \
 
 # Record this install as a commit. Runs as the service user, who owns the tree.
 #
-# .git/info/exclude — not .gitignore — names everything git must never track or
-# stash: it lives outside the editable tree, so a code edit cannot widen what a
-# stash sweeps up, and bash_tool reads its literal entries as the top-level
-# names it refuses to delete (nothing can restore them). Every runtime write
-# under the tree must land under one of these names, or the tree reads as dirty
-# and a stash sweeps that write up with real edits. State-carrying names are
-# slash-anchored — top level only — so git's ignore depth matches bash_tool's
-# top-level protection; an unanchored pattern would also hide a nested
-# same-named directory from git while leaving it deletable. Regenerable junk
-# stays unanchored (ignored at any depth, harmless to delete).
+# .git/info/exclude — not .gitignore — names everything git must never track:
+# it lives outside the editable tree, so a code edit cannot widen it, and
+# bash_tool reads its literal entries as the top-level names it refuses to
+# delete (contract: deploy/lib/state_preserve.sh:write_install_exclude).
 if [ ! -d /opt/mira/app/.git ]; then
     run_with_status "Initializing code history" \
         git -C /opt/mira/app init --quiet
 fi
 run_quiet git -C /opt/mira/app config user.name "MIRA"
 run_quiet git -C /opt/mira/app config user.email "mira@localhost"
-mkdir -p /opt/mira/app/.git/info
-cat > /opt/mira/app/.git/info/exclude <<'EXCLUDE'
-# Written by deploy/python.sh. Never tracked, never stashed, never deletable
-# through bash_tool. Edit deploy/python.sh, not this file. Slash-anchored
-# entries are protected at the TOP LEVEL only, matching bash_tool; unanchored
-# entries are ignored at any depth.
-/data/
-/venv/
-/.env
-/logs/
-/scratch/
-__pycache__/
-*.pyc
-.DS_Store
-EXCLUDE
-INSTALL_COMMIT_MSG="install ${RELEASE_TAG}"
+write_install_exclude /opt/mira/app
+
+# The install commit names the exact source commit: the checkout's HEAD for
+# --local (" local-dirty" when it had uncommitted changes), else the
+# release's RELEASE_COMMIT, else the tag as GitHub resolves it.
 if [ "${LOCAL_SOURCE:-false}" = "true" ]; then
-    INSTALL_COMMIT_MSG="${INSTALL_COMMIT_MSG} (local tree)"
+    INSTALL_SHA="$(resolve_local_sha "$LOCAL_SOURCE_DIR")" || INSTALL_SHA=""
+    INSTALL_LABEL_SUFFIX=" (local tree)"
+else
+    INSTALL_SHA="$(read_release_commit /opt/mira/app 2>/dev/null)" \
+        || INSTALL_SHA="$(resolve_release_sha "$RELEASE_TAG")" || INSTALL_SHA=""
+    INSTALL_LABEL_SUFFIX=""
 fi
+if [ -z "$INSTALL_SHA" ]; then
+    if [ "${LOCAL_SOURCE:-false}" = "true" ]; then
+        print_error "Could not determine which commit this install comes from: --local identifies the tree by its git history, and the git history of '$LOCAL_SOURCE_DIR' could not be read (is git on PATH, and is this a MIRA checkout?). Or drop --local to install the official ${RELEASE_TAG} release."
+    else
+        print_error "Could not determine which commit this install comes from (no RELEASE_COMMIT, and GitHub did not resolve ${RELEASE_TAG})."
+    fi
+    exit 1
+fi
+INSTALL_COMMIT_MSG="$(official_commit_message install "$RELEASE_TAG" "$INSTALL_SHA")${INSTALL_LABEL_SUFFIX}"
 run_with_status "Staging install in code history" \
     git -C /opt/mira/app add -A
 run_with_status "Recording install in code history" \
@@ -311,6 +328,8 @@ run_with_status "Upgrading TUI pip" \
     || print_warning "Could not upgrade the TUI pip; continuing with the bundled version"
 run_with_status "Installing TUI client dependencies" \
     /opt/mira/tui-venv/bin/python3 -m pip install -q -r /opt/mira/app/ui/tui/requirements.txt
+write_venv_stamp /opt/mira/tui-venv /opt/mira/app/ui/tui/requirements.txt \
+    "$(venv_base_python /opt/mira/tui-venv)" ""
 
 print_header "Step 6: Embedding Model Download"
 if [ "$CONFIG_EMBEDDING_PROVIDER" = "local" ]; then
@@ -443,3 +462,13 @@ else
     print_info "Basic HTTP requests and web search will still work"
     print_success "Playwright setup skipped"
 fi
+
+# The server venv build stamp records the inputs this venv was built from so
+# `mira update` rebuilds it only when they change (deploy/lib/venv_stamp.sh).
+# It is written LAST, after the Step 7 playwright install: a stamp written in
+# Step 5 would claim extras an interrupted install's venv lacks (the venv-stamp
+# rule; mirrors deploy/update.sh:build_venv, which stamps as its final act).
+SERVER_VENV_EXTRAS=""
+[ "$CONFIG_EMBEDDING_PROVIDER" = "local" ] && SERVER_VENV_EXTRAS="torch,sentence-transformers"
+[ "${CONFIG_INSTALL_PLAYWRIGHT}" = "yes" ] && SERVER_VENV_EXTRAS="${SERVER_VENV_EXTRAS},playwright"
+write_venv_stamp venv /opt/mira/app/requirements.txt "$(venv_base_python venv)" "$SERVER_VENV_EXTRAS"

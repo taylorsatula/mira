@@ -36,7 +36,7 @@ Elsewhere: the JS modules, the one transport, the client half of the turn protoc
 
 ## The page gate, anonymous GET to interactive
 
-An anonymous GET `/chat` never renders on the first response. The route dependency `auth_api.get_current_user_for_pages` finds no Bearer header and no `session` cookie and raises `_page_auth_failure`, which is mode-dependent: under `single` it is a 302 to `/v0/auth/local/session`; under `multi` it is the standard 401 JSON envelope, and that is the whole story for that install — mira-OSS ships no `/login/` page, so the operator's own sign-in surface is the entry point and the browser shows the envelope.
+An anonymous GET `/chat` never renders on the first response. The route dependency `auth_api.get_current_user_for_pages` finds no Bearer header and no `session` cookie and raises `_page_auth_failure`, which is mode-dependent: under `single` it is a 302 to `/v0/auth/local/session`; under `multi` it is the standard 401 JSON envelope, and that is the whole story for that install — MIRA ships no `/login/` page, so the operator's own sign-in surface is the entry point and the browser shows the envelope.
 
 The 302 target is the only identity surface under `single` (`auth/api.py:create_local_session`): it provisions `user@localhost` — adopting an existing row verbatim on an upgraded install — mints the `session` cookie, and 303s back to `/chat`. Ordering: the account row exists before the cookie is minted, and the cookie rides the second GET before any page JS runs, so the `MiraAPIClient` constructed at DOMContentLoaded opens a socket that authenticates on the first try (transport mechanics owned by the child map).
 

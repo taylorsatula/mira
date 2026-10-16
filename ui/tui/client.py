@@ -373,14 +373,22 @@ class MiraClient:
                     if sentinel_indices:
                         found_boundary = True
                         last = sentinel_indices[-1]  # newest sentinel in the page
+                        if page[last].metadata.get("status") == "collapsed":
+                            # The newest sentinel is itself collapsed: no active
+                            # segment has messages. Everything already fetched is
+                            # newer than it yet belongs to this same collapsed
+                            # segment — a newer segment would carry its own newer
+                            # sentinel, which this newest-to-oldest scan would have
+                            # found first — so none of those rows are session rows.
+                            if mode == "session_plus_summary":
+                                summary_sentinel = page[last]
+                            session_rows = []
+                            break
                         newer_pages = pages[:-1]  # every earlier page is newer than it
                         # Rows after the sentinel inside the boundary page are
                         # newer than the sentinel but OLDER than every previously
                         # fetched (newer) page, so they come first chronologically.
                         session_rows = page[last + 1 :] + _chronological(newer_pages)
-                        if page[last].metadata.get("status") == "collapsed":
-                            summary_sentinel = page[last]
-                            break  # newest sentinel is itself the newest collapsed one
                         if mode == "session_only":
                             break
                         # The newest sentinel is active/paused: the newest real

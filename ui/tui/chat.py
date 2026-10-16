@@ -335,9 +335,8 @@ class ChatSession:
         if self._available_update is not None:
             # Last on purpose: connection state and an active turn own the row
             # while present, and the notice reappears when the row frees up.
-            # `mira update` is the safe action: non-breaking releases update the
-            # install in place (data, Vault, and config untouched); breaking
-            # releases refuse and print the manual path.
+            # `mira update` is the safe action: it asks before any database
+            # change, backs up first, and puts the install back on failure.
             return Status(
                 f"MIRA {self._available_update} is available — run `mira update`",
                 "alert",

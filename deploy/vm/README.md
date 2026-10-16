@@ -24,7 +24,7 @@ any deployed VM, restore it onto any fresh one.
 Common flags (all scripts, env-equivalents in `lib.sh`): `--domain NAME`
 (default `ubuntu_vm`), `--vm-user U` (default `ubuntu`), `--snap-dir DIR`
 (sarcophagi root; default `$HOME/mira-snapshots`), `--vmimg-dir DIR`,
-`--template FILE`, `--xml FILE`, `--source DIR` (mira-OSS checkout to deploy —
+`--template FILE`, `--xml FILE`, `--source DIR` (MIRA checkout to deploy —
 defaults to the repo containing this toolkit, **including uncommitted changes**),
 `--config FILE` (deploy answers yml; default `deploy-config-dev-vm.yml`).
 

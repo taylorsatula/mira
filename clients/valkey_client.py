@@ -20,6 +20,20 @@ logger = logging.getLogger(__name__)
 _valkey_pool = None
 
 
+# Key prefixes that survive the startup flush (main.py lifespan) and the step
+# runner's ctx.invalidate_valkey (utils/schema_migrations.py). Each tracks its
+# writer: auth/session.py writes `csrf:<digest>` beside `session:<digest>` and
+# revoke deletes both, so flushing CSRF while keeping sessions 403s the first
+# cookie-authenticated write after restart (O-10); `pending_memories*` (queue +
+# `_done:`/`_attempts:` markers) exists nowhere else; flushing
+# `live_context_compaction_report:` makes the next request resend the full segment.
+BOOT_FLUSH_PRESERVE_PREFIXES: tuple[str, ...] = (
+    "session:", "csrf:", "rate_limit:",
+    "pending_memories:", "pending_memories_done:", "pending_memories_attempts:",
+    "live_context_compaction_report:",
+)
+
+
 class ValkeyClient:
     """
     Production Valkey client with fail-fast semantics for required infrastructure.

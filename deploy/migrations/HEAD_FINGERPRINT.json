@@ -1,0 +1,1966 @@
+{
+ "fingerprint": {
+  "constraints": {
+   "api_tokens.api_tokens_pkey": "PRIMARYKEYid",
+   "api_tokens.api_tokens_token_hash_key": "UNIQUEtoken_hash",
+   "api_tokens.api_tokens_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "continuums.continuums_id_user_id_key": "UNIQUEid,user_id",
+   "continuums.continuums_pkey": "PRIMARYKEYid",
+   "continuums.continuums_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "continuums.continuums_user_id_key": "UNIQUEuser_id",
+   "domain_knowledge_block_content.domain_knowledge_block_content_block_id_fkey": "FOREIGNKEYblock_idREFERENCESdomain_knowledge_blocksidONDELETECASCADE",
+   "domain_knowledge_block_content.domain_knowledge_block_content_block_id_key": "UNIQUEblock_id",
+   "domain_knowledge_block_content.domain_knowledge_block_content_pkey": "PRIMARYKEYid",
+   "domain_knowledge_blocks.domain_knowledge_blocks_pkey": "PRIMARYKEYid",
+   "domain_knowledge_blocks.domain_knowledge_blocks_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "domaindoc_shares.domaindoc_shares_check": "CHECKowner_user_id<>collaborator_user_id",
+   "domaindoc_shares.domaindoc_shares_collaborator_user_id_fkey": "FOREIGNKEYcollaborator_user_idREFERENCESusersidONDELETECASCADE",
+   "domaindoc_shares.domaindoc_shares_owner_user_id_domaindoc_label_collaborator_key": "UNIQUEowner_user_id,domaindoc_label,collaborator_user_id",
+   "domaindoc_shares.domaindoc_shares_owner_user_id_fkey": "FOREIGNKEYowner_user_idREFERENCESusersidONDELETECASCADE",
+   "domaindoc_shares.domaindoc_shares_pkey": "PRIMARYKEYid",
+   "domaindoc_shares.domaindoc_shares_status_check": "CHECKstatus=ANYARRAY['pending','accepted','rejected','revoked']",
+   "embedding_config.embedding_config_check": "CHECKprovider='local'ANDendpoint_urlISNULLANDapi_key_nameISNULLORprovider='remote'ANDendpoint_urlISNOTNULL",
+   "embedding_config.embedding_config_dimensions_check": "CHECKdimensions>=1ANDdimensions<=2000",
+   "embedding_config.embedding_config_model_check": "CHECKmodel<>''",
+   "embedding_config.embedding_config_pkey": "PRIMARYKEYsingleton",
+   "embedding_config.embedding_config_provider_check": "CHECKprovider=ANYARRAY['local','remote']",
+   "embedding_config.embedding_config_singleton_check": "CHECKsingleton",
+   "entities.entities_pkey": "PRIMARYKEYid",
+   "entities.entities_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "entities.entities_user_id_name_entity_type_key": "UNIQUEuser_id,name,entity_type",
+   "feedback_signals.feedback_signals_pkey": "PRIMARYKEYid",
+   "feedback_signals.feedback_signals_signal_type_check": "CHECKsignal_type=ANYARRAY['alignment','misalignment','contextual_pass']",
+   "feedback_signals.feedback_signals_strength_check": "CHECKstrength=ANYARRAY['strong','moderate','mild']",
+   "feedback_signals.feedback_signals_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "feedback_synthesis_tracking.feedback_synthesis_tracking_pkey": "PRIMARYKEYuser_id",
+   "feedback_synthesis_tracking.feedback_synthesis_tracking_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "global_memories.global_memories_importance_score_check": "CHECKimportance_score>=0ANDimportance_score<=1",
+   "global_memories.global_memories_pkey": "PRIMARYKEYid",
+   "global_usernames.global_usernames_pkey": "PRIMARYKEYusername",
+   "global_usernames.global_usernames_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "global_usernames.global_usernames_user_id_key": "UNIQUEuser_id",
+   "heartbeat_armed_users.heartbeat_armed_users_pkey": "PRIMARYKEYuser_id",
+   "heartbeat_armed_users.heartbeat_armed_users_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "magic_links.magic_links_pkey": "PRIMARYKEYid",
+   "magic_links.magic_links_token_hash_key": "UNIQUEtoken_hash",
+   "magic_links.magic_links_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "memories.memories_importance_score_check": "CHECKimportance_score>=0ANDimportance_score<=1",
+   "memories.memories_pkey": "PRIMARYKEYid",
+   "memories.memories_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "messages.messages_continuum_id_user_id_fkey": "FOREIGNKEYcontinuum_id,user_idREFERENCEScontinuumsid,user_idONDELETECASCADE",
+   "messages.messages_pkey": "PRIMARYKEYid",
+   "messages.messages_role_check": "CHECKrole=ANYARRAY['user','assistant','tool']",
+   "messages.messages_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "model_configs.model_configs_dialect_name_check": "CHECKdialect_name=ANYARRAY['anthropic','openai','openrouter','groq']",
+   "model_configs.model_configs_effort_check": "CHECKeffort=ANYARRAY['none','low','medium','high','xhigh','max']",
+   "model_configs.model_configs_max_tokens_check": "CHECKmax_tokens>0",
+   "model_configs.model_configs_name_check": "CHECKname=ANYARRAY['primary','fast','batch','assessment','other']",
+   "model_configs.model_configs_pkey": "PRIMARYKEYname",
+   "persona_revisions.persona_revisions_id_user_id_key": "UNIQUEid,user_id",
+   "persona_revisions.persona_revisions_parent_revision_id_user_id_fkey": "FOREIGNKEYparent_revision_id,user_idREFERENCESpersona_revisionsid,user_idONDELETERESTRICTDEFERRABLEINITIALLYDEFERRED",
+   "persona_revisions.persona_revisions_pkey": "PRIMARYKEYid",
+   "persona_revisions.persona_revisions_revision_number_check": "CHECKrevision_number>0",
+   "persona_revisions.persona_revisions_source_check": "CHECKsource=ANYARRAY['baseline','automatic','user','rollback']",
+   "persona_revisions.persona_revisions_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "persona_revisions.persona_revisions_user_id_revision_number_key": "UNIQUEuser_id,revision_number",
+   "persona_signals.persona_signals_consumed_by_revision_id_user_id_fkey": "FOREIGNKEYconsumed_by_revision_id,user_idREFERENCESpersona_revisionsid,user_idONDELETESETNULL",
+   "persona_signals.persona_signals_continuum_id_user_id_fkey": "FOREIGNKEYcontinuum_id,user_idREFERENCEScontinuumsid,user_idONDELETECASCADE",
+   "persona_signals.persona_signals_outcome_check": "CHECKoutcome=ANYARRAY['alignment','misalignment','contextual_pass']",
+   "persona_signals.persona_signals_pkey": "PRIMARYKEYid",
+   "persona_signals.persona_signals_strength_check": "CHECKstrength=ANYARRAY['strong','moderate','mild']",
+   "persona_signals.persona_signals_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "persona_state.persona_state_current_revision_id_user_id_fkey": "FOREIGNKEYcurrent_revision_id,user_idREFERENCESpersona_revisionsid,user_idONDELETERESTRICT",
+   "persona_state.persona_state_pkey": "PRIMARYKEYuser_id",
+   "persona_state.persona_state_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "usage_pricing.usage_pricing_pkey": "PRIMARYKEYname",
+   "user_activity_days.user_activity_days_message_count_check": "CHECKmessage_count>0",
+   "user_activity_days.user_activity_days_pkey": "PRIMARYKEYuser_id,activity_date",
+   "user_activity_days.user_activity_days_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "user_feedback.user_feedback_category_check": "CHECKcategory=ANYARRAY['feature_request','bug_report','confusion','praise','other']",
+   "user_feedback.user_feedback_pkey": "PRIMARYKEYid",
+   "user_feedback.user_feedback_user_id_fkey": "FOREIGNKEYuser_idREFERENCESusersidONDELETECASCADE",
+   "users.users_cumulative_activity_days_check": "CHECKcumulative_activity_days>=0",
+   "users.users_email_key": "UNIQUEemail",
+   "users.users_pkey": "PRIMARYKEYid",
+   "users.users_subject_kind_check": "CHECKsubject_kind=ANYARRAY['member','demo']",
+   "users.users_temperature_unit_check": "CHECKtemperature_unit=ANYARRAY['fahrenheit','celsius']"
+  },
+  "extensions": [
+   "pg_trgm",
+   "pgcrypto",
+   "vector"
+  ],
+  "functions": {
+   "active_user_identity(p_user_id uuid)": [
+    "TABLE(id uuid, email character varying, first_name character varying)",
+    true,
+    "79e5589b433ef6993b25817c28be9529",
+    "search_path=pg_catalog, public"
+   ],
+   "can_read_global_memories()": [
+    "boolean",
+    true,
+    "2aa335d0d7570e0ba7286dd854361315",
+    "search_path=pg_catalog, public"
+   ],
+   "embedding_config_refuse_change_with_vectors()": [
+    "trigger",
+    true,
+    "a1e224b92984e440763e6180e864b515",
+    "search_path=pg_catalog, public"
+   ],
+   "provision_baseline_persona()": [
+    "trigger",
+    false,
+    "61b8184978078691257c531c320581e0",
+    ""
+   ],
+   "resolve_active_user_identity(p_email text)": [
+    "TABLE(id uuid, email character varying, first_name character varying)",
+    true,
+    "7cfc6d18b1ee4b9d5f92718cfcef6b24",
+    "search_path=pg_catalog, public"
+   ],
+   "set_search_vector()": [
+    "trigger",
+    false,
+    "40b415a43d0862ef57c7df992f115406",
+    ""
+   ],
+   "set_updated_at()": [
+    "trigger",
+    false,
+    "04110e3085feec12fac5fdbffbd8fefd",
+    ""
+   ]
+  },
+  "grants": {
+   "active_user_identity(p_user_id uuid) mira_admin": [
+    "EXECUTE"
+   ],
+   "active_user_identity(p_user_id uuid) mira_dbuser": [
+    "EXECUTE"
+   ],
+   "api_tokens mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "api_tokens mira_dbuser": [
+    "DELETE",
+    "INSERT",
+    "SELECT",
+    "UPDATE"
+   ],
+   "can_read_global_memories() mira_admin": [
+    "EXECUTE"
+   ],
+   "can_read_global_memories() mira_dbuser": [
+    "EXECUTE"
+   ],
+   "continuums mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "continuums mira_dbuser": [
+    "DELETE",
+    "INSERT",
+    "SELECT",
+    "UPDATE"
+   ],
+   "domain_knowledge_block_content mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "domain_knowledge_block_content mira_dbuser": [
+    "DELETE",
+    "INSERT",
+    "SELECT",
+    "UPDATE"
+   ],
+   "domain_knowledge_block_content_id_seq mira_admin": [
+    "SELECT",
+    "UPDATE",
+    "USAGE"
+   ],
+   "domain_knowledge_blocks mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "domain_knowledge_blocks mira_dbuser": [
+    "DELETE",
+    "INSERT",
+    "SELECT",
+    "UPDATE"
+   ],
+   "domain_knowledge_blocks_id_seq mira_admin": [
+    "SELECT",
+    "UPDATE",
+    "USAGE"
+   ],
+   "domaindoc_shares mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "domaindoc_shares mira_dbuser": [
+    "DELETE",
+    "INSERT",
+    "SELECT"
+   ],
+   "domaindoc_shares.accepted_at mira_dbuser": [
+    "UPDATE"
+   ],
+   "domaindoc_shares.status mira_dbuser": [
+    "UPDATE"
+   ],
+   "embedding_config mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "embedding_config mira_dbuser": [
+    "SELECT"
+   ],
+   "embedding_config_refuse_change_with_vectors() mira_admin": [
+    "EXECUTE"
+   ],
+   "entities mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "entities mira_dbuser": [
+    "DELETE",
+    "INSERT",
+    "SELECT",
+    "UPDATE"
+   ],
+   "feedback_signals mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "feedback_signals mira_dbuser": [
+    "INSERT",
+    "SELECT",
+    "UPDATE"
+   ],
+   "feedback_synthesis_tracking mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "feedback_synthesis_tracking mira_dbuser": [
+    "INSERT",
+    "SELECT",
+    "UPDATE"
+   ],
+   "global_memories mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "global_memories_runtime mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "global_memories_runtime mira_dbuser": [
+    "SELECT"
+   ],
+   "global_usernames mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "global_usernames mira_dbuser": [
+    "INSERT",
+    "SELECT",
+    "UPDATE"
+   ],
+   "heartbeat_armed_users mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "magic_links mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "magic_links mira_dbuser": [
+    "DELETE",
+    "INSERT",
+    "SELECT",
+    "UPDATE"
+   ],
+   "memories mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "memories mira_dbuser": [
+    "DELETE",
+    "INSERT",
+    "SELECT",
+    "UPDATE"
+   ],
+   "messages mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "messages mira_dbuser": [
+    "DELETE",
+    "INSERT",
+    "SELECT",
+    "UPDATE"
+   ],
+   "model_configs mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "model_configs mira_dbuser": [
+    "SELECT"
+   ],
+   "persona_revisions mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "persona_revisions mira_dbuser": [
+    "INSERT",
+    "SELECT"
+   ],
+   "persona_signals mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "persona_signals mira_dbuser": [
+    "INSERT",
+    "SELECT"
+   ],
+   "persona_signals.consumed_by_revision_id mira_dbuser": [
+    "UPDATE"
+   ],
+   "persona_state mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "persona_state mira_dbuser": [
+    "INSERT",
+    "SELECT",
+    "UPDATE"
+   ],
+   "provision_baseline_persona() mira_admin": [
+    "EXECUTE"
+   ],
+   "resolve_active_user_identity(p_email text) mira_admin": [
+    "EXECUTE"
+   ],
+   "resolve_active_user_identity(p_email text) mira_dbuser": [
+    "EXECUTE"
+   ],
+   "set_search_vector() mira_admin": [
+    "EXECUTE"
+   ],
+   "set_updated_at() mira_admin": [
+    "EXECUTE"
+   ],
+   "usage_pricing mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "usage_pricing mira_dbuser": [
+    "SELECT"
+   ],
+   "user_activity_days mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "user_activity_days mira_dbuser": [
+    "DELETE",
+    "INSERT",
+    "SELECT",
+    "UPDATE"
+   ],
+   "user_feedback mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "user_feedback mira_dbuser": [
+    "INSERT"
+   ],
+   "users mira_admin": [
+    "DELETE",
+    "INSERT",
+    "MAINTAIN",
+    "REFERENCES",
+    "SELECT",
+    "TRIGGER",
+    "TRUNCATE",
+    "UPDATE"
+   ],
+   "users mira_dbuser": [
+    "SELECT",
+    "UPDATE"
+   ]
+  },
+  "indexes": {
+   "api_tokens_pkey": "CREATEUNIQUEINDEXapi_tokens_pkeyONpublic.api_tokensUSINGbtreeid",
+   "api_tokens_token_hash_key": "CREATEUNIQUEINDEXapi_tokens_token_hash_keyONpublic.api_tokensUSINGbtreetoken_hash",
+   "continuums_id_user_id_key": "CREATEUNIQUEINDEXcontinuums_id_user_id_keyONpublic.continuumsUSINGbtreeid,user_id",
+   "continuums_pkey": "CREATEUNIQUEINDEXcontinuums_pkeyONpublic.continuumsUSINGbtreeid",
+   "continuums_user_id_key": "CREATEUNIQUEINDEXcontinuums_user_id_keyONpublic.continuumsUSINGbtreeuser_id",
+   "domain_knowledge_block_content_block_id_key": "CREATEUNIQUEINDEXdomain_knowledge_block_content_block_id_keyONpublic.domain_knowledge_block_contentUSINGbtreeblock_id",
+   "domain_knowledge_block_content_pkey": "CREATEUNIQUEINDEXdomain_knowledge_block_content_pkeyONpublic.domain_knowledge_block_contentUSINGbtreeid",
+   "domain_knowledge_blocks_pkey": "CREATEUNIQUEINDEXdomain_knowledge_blocks_pkeyONpublic.domain_knowledge_blocksUSINGbtreeid",
+   "domaindoc_shares_owner_user_id_domaindoc_label_collaborator_key": "CREATEUNIQUEINDEXdomaindoc_shares_owner_user_id_domaindoc_label_collaborator_keyONpublic.domaindoc_sharesUSINGbtreeowner_user_id,domaindoc_label,collaborator_user_id",
+   "domaindoc_shares_pkey": "CREATEUNIQUEINDEXdomaindoc_shares_pkeyONpublic.domaindoc_sharesUSINGbtreeid",
+   "embedding_config_pkey": "CREATEUNIQUEINDEXembedding_config_pkeyONpublic.embedding_configUSINGbtreesingleton",
+   "entities_pkey": "CREATEUNIQUEINDEXentities_pkeyONpublic.entitiesUSINGbtreeid",
+   "entities_user_id_name_entity_type_key": "CREATEUNIQUEINDEXentities_user_id_name_entity_type_keyONpublic.entitiesUSINGbtreeuser_id,name,entity_type",
+   "feedback_signals_pkey": "CREATEUNIQUEINDEXfeedback_signals_pkeyONpublic.feedback_signalsUSINGbtreeid",
+   "feedback_synthesis_tracking_pkey": "CREATEUNIQUEINDEXfeedback_synthesis_tracking_pkeyONpublic.feedback_synthesis_trackingUSINGbtreeuser_id",
+   "global_memories_pkey": "CREATEUNIQUEINDEXglobal_memories_pkeyONpublic.global_memoriesUSINGbtreeid",
+   "global_usernames_pkey": "CREATEUNIQUEINDEXglobal_usernames_pkeyONpublic.global_usernamesUSINGbtreeusername",
+   "global_usernames_user_id_key": "CREATEUNIQUEINDEXglobal_usernames_user_id_keyONpublic.global_usernamesUSINGbtreeuser_id",
+   "heartbeat_armed_users_pkey": "CREATEUNIQUEINDEXheartbeat_armed_users_pkeyONpublic.heartbeat_armed_usersUSINGbtreeuser_id",
+   "idx_api_tokens_hash_active": "CREATEINDEXidx_api_tokens_hash_activeONpublic.api_tokensUSINGbtreetoken_hashWHERErevoked_atISNULL",
+   "idx_api_tokens_user_active": "CREATEINDEXidx_api_tokens_user_activeONpublic.api_tokensUSINGbtreeuser_idWHERErevoked_atISNULL",
+   "idx_api_tokens_user_name_active": "CREATEUNIQUEINDEXidx_api_tokens_user_name_activeONpublic.api_tokensUSINGbtreeuser_id,nameWHERErevoked_atISNULL",
+   "idx_domain_knowledge_blocks_user": "CREATEINDEXidx_domain_knowledge_blocks_userONpublic.domain_knowledge_blocksUSINGbtreeuser_id,domain_label",
+   "idx_domaindoc_shares_collaborator": "CREATEINDEXidx_domaindoc_shares_collaboratorONpublic.domaindoc_sharesUSINGbtreecollaborator_user_id,status",
+   "idx_domaindoc_shares_label": "CREATEINDEXidx_domaindoc_shares_labelONpublic.domaindoc_sharesUSINGbtreedomaindoc_label",
+   "idx_domaindoc_shares_owner": "CREATEINDEXidx_domaindoc_shares_ownerONpublic.domaindoc_sharesUSINGbtreeowner_user_id,status",
+   "idx_entities_name_trgm": "CREATEINDEXidx_entities_name_trgmONpublic.entitiesUSINGginnamegin_trgm_ops",
+   "idx_entities_user": "CREATEINDEXidx_entities_userONpublic.entitiesUSINGbtreeuser_id",
+   "idx_feedback_signals_section_id": "CREATEINDEXidx_feedback_signals_section_idONpublic.feedback_signalsUSINGbtreeuser_id,section_idWHERENOTsynthesized",
+   "idx_feedback_signals_unsynthesized": "CREATEINDEXidx_feedback_signals_unsynthesizedONpublic.feedback_signalsUSINGbtreeuser_idWHERENOTsynthesized",
+   "idx_feedback_signals_user_id": "CREATEINDEXidx_feedback_signals_user_idONpublic.feedback_signalsUSINGbtreeuser_id",
+   "idx_feedback_signals_user_type": "CREATEINDEXidx_feedback_signals_user_typeONpublic.feedback_signalsUSINGbtreeuser_id,signal_type",
+   "idx_global_memories_embedding_ivfflat": "CREATEINDEXidx_global_memories_embedding_ivfflatONpublic.global_memoriesUSINGivfflatembeddingvector_cosine_opsWITHlists='100'",
+   "idx_global_memories_search_vector": "CREATEINDEXidx_global_memories_search_vectorONpublic.global_memoriesUSINGginsearch_vector",
+   "idx_global_usernames_active": "CREATEINDEXidx_global_usernames_activeONpublic.global_usernamesUSINGbtreeusernameWHEREactive=true",
+   "idx_heartbeat_armed_wake": "CREATEINDEXidx_heartbeat_armed_wakeONpublic.heartbeat_armed_usersUSINGbtreeearliest_wake_at",
+   "idx_magic_links_user": "CREATEINDEXidx_magic_links_userONpublic.magic_linksUSINGbtreeuser_id",
+   "idx_memories_embedding_ivfflat": "CREATEINDEXidx_memories_embedding_ivfflatONpublic.memoriesUSINGivfflatembeddingvector_cosine_opsWITHlists='100'",
+   "idx_memories_floor_candidates": "CREATEINDEXidx_memories_floor_candidatesONpublic.memoriesUSINGbtreeimportance_score,last_tended_atWHEREis_archived=false",
+   "idx_memories_search_vector": "CREATEINDEXidx_memories_search_vectorONpublic.memoriesUSINGginsearch_vector",
+   "idx_memories_source_segment": "CREATEINDEXidx_memories_source_segmentONpublic.memoriesUSINGbtreesource_segment_idWHEREsource_segment_idISNOTNULL",
+   "idx_memories_user": "CREATEINDEXidx_memories_userONpublic.memoriesUSINGbtreeuser_id",
+   "idx_messages_active_segments": "CREATEINDEXidx_messages_active_segmentsONpublic.messagesUSINGbtreecontinuum_id,created_atWHEREmetadata->>'is_segment_boundary'='true'ANDmetadata->>'status'=ANYARRAY['active','paused']",
+   "idx_messages_continuum_time": "CREATEINDEXidx_messages_continuum_timeONpublic.messagesUSINGbtreecontinuum_id,created_at",
+   "idx_messages_live_segment_unique": "CREATEUNIQUEINDEXidx_messages_live_segment_uniqueONpublic.messagesUSINGbtreecontinuum_idWHEREmetadata->>'is_segment_boundary'='true'ANDmetadata->>'status'=ANYARRAY['active','paused']",
+   "idx_messages_segment_embedding": "CREATEINDEXidx_messages_segment_embeddingONpublic.messagesUSINGhnswsegment_embeddingvector_cosine_opsWHEREmetadata->>'is_segment_boundary'='true'ANDsegment_embeddingISNOTNULL",
+   "idx_messages_segment_metadata": "CREATEINDEXidx_messages_segment_metadataONpublic.messagesUSINGginmetadataWHEREmetadata->>'is_segment_boundary'='true'",
+   "idx_messages_tool_call": "CREATEINDEXidx_messages_tool_callONpublic.messagesUSINGbtreetool_call_idWHEREtool_call_idISNOTNULL",
+   "idx_messages_user": "CREATEINDEXidx_messages_userONpublic.messagesUSINGbtreeuser_id",
+   "idx_persona_revisions_user_time": "CREATEINDEXidx_persona_revisions_user_timeONpublic.persona_revisionsUSINGbtreeuser_id,revision_numberDESC",
+   "idx_persona_signals_unconsumed": "CREATEINDEXidx_persona_signals_unconsumedONpublic.persona_signalsUSINGbtreeuser_id,evaluated_atWHEREconsumed_by_revision_idISNULL",
+   "idx_persona_signals_user": "CREATEINDEXidx_persona_signals_userONpublic.persona_signalsUSINGbtreeuser_id,evaluated_at",
+   "idx_user_feedback_category_time": "CREATEINDEXidx_user_feedback_category_timeONpublic.user_feedbackUSINGbtreecategory,created_atDESC",
+   "idx_users_email_lower": "CREATEUNIQUEINDEXidx_users_email_lowerONpublic.usersUSINGbtreeloweremail",
+   "magic_links_pkey": "CREATEUNIQUEINDEXmagic_links_pkeyONpublic.magic_linksUSINGbtreeid",
+   "magic_links_token_hash_key": "CREATEUNIQUEINDEXmagic_links_token_hash_keyONpublic.magic_linksUSINGbtreetoken_hash",
+   "memories_pkey": "CREATEUNIQUEINDEXmemories_pkeyONpublic.memoriesUSINGbtreeid",
+   "messages_pkey": "CREATEUNIQUEINDEXmessages_pkeyONpublic.messagesUSINGbtreeid",
+   "model_configs_pkey": "CREATEUNIQUEINDEXmodel_configs_pkeyONpublic.model_configsUSINGbtreename",
+   "persona_revisions_id_user_id_key": "CREATEUNIQUEINDEXpersona_revisions_id_user_id_keyONpublic.persona_revisionsUSINGbtreeid,user_id",
+   "persona_revisions_pkey": "CREATEUNIQUEINDEXpersona_revisions_pkeyONpublic.persona_revisionsUSINGbtreeid",
+   "persona_revisions_user_id_revision_number_key": "CREATEUNIQUEINDEXpersona_revisions_user_id_revision_number_keyONpublic.persona_revisionsUSINGbtreeuser_id,revision_number",
+   "persona_signals_pkey": "CREATEUNIQUEINDEXpersona_signals_pkeyONpublic.persona_signalsUSINGbtreeid",
+   "persona_state_pkey": "CREATEUNIQUEINDEXpersona_state_pkeyONpublic.persona_stateUSINGbtreeuser_id",
+   "usage_pricing_pkey": "CREATEUNIQUEINDEXusage_pricing_pkeyONpublic.usage_pricingUSINGbtreename",
+   "user_activity_days_pkey": "CREATEUNIQUEINDEXuser_activity_days_pkeyONpublic.user_activity_daysUSINGbtreeuser_id,activity_date",
+   "user_feedback_pkey": "CREATEUNIQUEINDEXuser_feedback_pkeyONpublic.user_feedbackUSINGbtreeid",
+   "users_email_key": "CREATEUNIQUEINDEXusers_email_keyONpublic.usersUSINGbtreeemail",
+   "users_pkey": "CREATEUNIQUEINDEXusers_pkeyONpublic.usersUSINGbtreeid"
+  },
+  "policies": {
+   "api_tokens.api_tokens_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "continuums.continuums_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "domain_knowledge_block_content.domain_knowledge_block_content_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "block_idINSELECTdomain_knowledge_blocks.idFROMdomain_knowledge_blocksWHEREdomain_knowledge_blocks.user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "block_idINSELECTdomain_knowledge_blocks.idFROMdomain_knowledge_blocksWHEREdomain_knowledge_blocks.user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "domain_knowledge_blocks.domain_knowledge_blocks_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "domaindoc_shares.domaindoc_shares_collaborator_select_policy": [
+    "r",
+    [
+     "mira_dbuser"
+    ],
+    "collaborator_user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    null
+   ],
+   "domaindoc_shares.domaindoc_shares_collaborator_update_policy": [
+    "w",
+    [
+     "mira_dbuser"
+    ],
+    "collaborator_user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "collaborator_user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "domaindoc_shares.domaindoc_shares_owner_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "owner_user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "owner_user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "entities.entities_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "feedback_signals.feedback_signals_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "feedback_synthesis_tracking.feedback_synthesis_tracking_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "magic_links.magic_links_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "memories.memories_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "messages.messages_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "persona_revisions.persona_revisions_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "persona_signals.persona_signals_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "persona_state.persona_state_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "user_activity_days.user_activity_days_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "user_feedback.user_feedback_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "user_id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ],
+   "users.users_user_policy": [
+    "*",
+    [
+     "mira_dbuser"
+    ],
+    "id=NULLIFcurrent_setting'app.current_user_id',true,''",
+    "id=NULLIFcurrent_setting'app.current_user_id',true,''"
+   ]
+  },
+  "schema_privileges": [
+   "mira_dbuser USAGE"
+  ],
+  "sequence_attributes": {
+   "domain_knowledge_block_content_id_seq": [
+    1,
+    1,
+    2147483647,
+    1,
+    false,
+    "domain_knowledge_block_content.id"
+   ],
+   "domain_knowledge_blocks_id_seq": [
+    1,
+    1,
+    2147483647,
+    1,
+    false,
+    "domain_knowledge_blocks.id"
+   ]
+  },
+  "sequences": [
+   "domain_knowledge_block_content_id_seq",
+   "domain_knowledge_blocks_id_seq"
+  ],
+  "tables": {
+   "api_tokens": {
+    "columns": {
+     "created_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "expires_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "id": [
+      "uuid",
+      true,
+      "gen_random_uuid"
+     ],
+     "last_used_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "name": [
+      "character varying(100)",
+      true,
+      "'APIToken'"
+     ],
+     "revoked_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "token_hash": [
+      "character varying(64)",
+      true,
+      null
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "continuums": {
+    "columns": {
+     "created_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "id": [
+      "uuid",
+      true,
+      "gen_random_uuid"
+     ],
+     "metadata": [
+      "jsonb",
+      true,
+      "'{}'"
+     ],
+     "updated_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "domain_knowledge_block_content": {
+    "columns": {
+     "block_id": [
+      "integer",
+      true,
+      null
+     ],
+     "block_value": [
+      "text",
+      true,
+      null
+     ],
+     "id": [
+      "integer",
+      true,
+      "nextval'domain_knowledge_block_content_id_seq'"
+     ],
+     "letta_block_id": [
+      "character varying(255)",
+      false,
+      null
+     ],
+     "synced_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "domain_knowledge_blocks": {
+    "columns": {
+     "agent_id": [
+      "character varying(255)",
+      true,
+      null
+     ],
+     "block_description": [
+      "text",
+      true,
+      null
+     ],
+     "created_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "domain_label": [
+      "character varying(100)",
+      true,
+      null
+     ],
+     "domain_name": [
+      "character varying(255)",
+      true,
+      null
+     ],
+     "enabled": [
+      "boolean",
+      true,
+      "false"
+     ],
+     "id": [
+      "integer",
+      true,
+      "nextval'domain_knowledge_blocks_id_seq'"
+     ],
+     "updated_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "domaindoc_shares": {
+    "columns": {
+     "accepted_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "collaborator_user_id": [
+      "uuid",
+      true,
+      null
+     ],
+     "domaindoc_label": [
+      "text",
+      true,
+      null
+     ],
+     "id": [
+      "uuid",
+      true,
+      "gen_random_uuid"
+     ],
+     "invited_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "owner_user_id": [
+      "uuid",
+      true,
+      null
+     ],
+     "status": [
+      "text",
+      true,
+      "'pending'"
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "embedding_config": {
+    "columns": {
+     "api_key_name": [
+      "text",
+      false,
+      null
+     ],
+     "dimensions": [
+      "integer",
+      true,
+      null
+     ],
+     "endpoint_url": [
+      "text",
+      false,
+      null
+     ],
+     "model": [
+      "text",
+      true,
+      null
+     ],
+     "provider": [
+      "text",
+      true,
+      null
+     ],
+     "singleton": [
+      "boolean",
+      true,
+      "true"
+     ]
+    },
+    "row_security": [
+     false,
+     false
+    ]
+   },
+   "entities": {
+    "columns": {
+     "archived_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "created_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "embedding": [
+      "vector(<DIM>)",
+      false,
+      null
+     ],
+     "entity_type": [
+      "text",
+      true,
+      null
+     ],
+     "id": [
+      "uuid",
+      true,
+      "gen_random_uuid"
+     ],
+     "is_archived": [
+      "boolean",
+      true,
+      "false"
+     ],
+     "last_linked_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "link_count": [
+      "integer",
+      true,
+      "0"
+     ],
+     "name": [
+      "text",
+      true,
+      null
+     ],
+     "updated_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "feedback_signals": {
+    "columns": {
+     "continuum_id": [
+      "uuid",
+      true,
+      null
+     ],
+     "created_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "evidence": [
+      "text",
+      true,
+      null
+     ],
+     "extracted_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "id": [
+      "uuid",
+      true,
+      "gen_random_uuid"
+     ],
+     "section_id": [
+      "text",
+      true,
+      null
+     ],
+     "segment_id": [
+      "uuid",
+      true,
+      null
+     ],
+     "signal_type": [
+      "text",
+      true,
+      null
+     ],
+     "strength": [
+      "text",
+      true,
+      null
+     ],
+     "synthesized": [
+      "boolean",
+      true,
+      "false"
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "feedback_synthesis_tracking": {
+    "columns": {
+     "activity_days_at_last_synthesis": [
+      "integer",
+      true,
+      "0"
+     ],
+     "checkin_response": [
+      "text",
+      false,
+      null
+     ],
+     "last_synthesis_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "last_synthesis_output": [
+      "text",
+      false,
+      null
+     ],
+     "needs_checkin": [
+      "boolean",
+      true,
+      "false"
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "global_memories": {
+    "columns": {
+     "archived_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "created_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "embedding": [
+      "vector(<DIM>)",
+      false,
+      null
+     ],
+     "entity_links": [
+      "jsonb",
+      true,
+      "'[]'"
+     ],
+     "happens_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "id": [
+      "uuid",
+      true,
+      "gen_random_uuid"
+     ],
+     "importance_score": [
+      "numeric(5,3)",
+      true,
+      "1.0"
+     ],
+     "inbound_links": [
+      "jsonb",
+      true,
+      "'[]'"
+     ],
+     "is_archived": [
+      "boolean",
+      true,
+      "false"
+     ],
+     "outbound_links": [
+      "jsonb",
+      true,
+      "'[]'"
+     ],
+     "search_vector": [
+      "tsvector",
+      false,
+      null
+     ],
+     "text": [
+      "text",
+      true,
+      null
+     ],
+     "updated_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ]
+    },
+    "row_security": [
+     false,
+     false
+    ]
+   },
+   "global_usernames": {
+    "columns": {
+     "active": [
+      "boolean",
+      true,
+      "true"
+     ],
+     "created_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ],
+     "username": [
+      "character varying(20)",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     false,
+     false
+    ]
+   },
+   "heartbeat_armed_users": {
+    "columns": {
+     "earliest_wake_at": [
+      "text",
+      true,
+      null
+     ],
+     "updated_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     false,
+     false
+    ]
+   },
+   "magic_links": {
+    "columns": {
+     "created_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "email": [
+      "character varying(255)",
+      true,
+      null
+     ],
+     "expires_at": [
+      "timestamp with time zone",
+      true,
+      null
+     ],
+     "id": [
+      "uuid",
+      true,
+      "gen_random_uuid"
+     ],
+     "token_hash": [
+      "character varying(255)",
+      true,
+      null
+     ],
+     "used_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "memories": {
+    "columns": {
+     "access_count": [
+      "integer",
+      true,
+      "0"
+     ],
+     "activity_days_at_creation": [
+      "integer",
+      false,
+      null
+     ],
+     "activity_days_at_last_access": [
+      "integer",
+      false,
+      null
+     ],
+     "annotations": [
+      "jsonb",
+      true,
+      "'[]'"
+     ],
+     "archived_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "created_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "embedding": [
+      "vector(<DIM>)",
+      false,
+      null
+     ],
+     "entity_links": [
+      "jsonb",
+      true,
+      "'[]'"
+     ],
+     "expires_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "happens_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "id": [
+      "uuid",
+      true,
+      "gen_random_uuid"
+     ],
+     "importance_score": [
+      "numeric(5,3)",
+      true,
+      "0.5"
+     ],
+     "inbound_links": [
+      "jsonb",
+      true,
+      "'[]'"
+     ],
+     "is_archived": [
+      "boolean",
+      true,
+      "false"
+     ],
+     "last_accessed": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "last_tended_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "mention_count": [
+      "integer",
+      true,
+      "0"
+     ],
+     "outbound_links": [
+      "jsonb",
+      true,
+      "'[]'"
+     ],
+     "search_vector": [
+      "tsvector",
+      false,
+      null
+     ],
+     "source_segment_id": [
+      "uuid",
+      false,
+      null
+     ],
+     "text": [
+      "text",
+      true,
+      null
+     ],
+     "updated_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "messages": {
+    "columns": {
+     "content": [
+      "text",
+      true,
+      null
+     ],
+     "continuum_id": [
+      "uuid",
+      true,
+      null
+     ],
+     "created_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "id": [
+      "uuid",
+      true,
+      "gen_random_uuid"
+     ],
+     "is_error": [
+      "boolean",
+      true,
+      "false"
+     ],
+     "metadata": [
+      "jsonb",
+      true,
+      "'{}'"
+     ],
+     "role": [
+      "character varying(50)",
+      true,
+      null
+     ],
+     "segment_embedding": [
+      "vector(<DIM>)",
+      false,
+      null
+     ],
+     "tool_call_id": [
+      "text",
+      false,
+      null
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "model_configs": {
+    "columns": {
+     "api_key_name": [
+      "text",
+      true,
+      null
+     ],
+     "dialect_name": [
+      "text",
+      true,
+      null
+     ],
+     "effort": [
+      "text",
+      false,
+      null
+     ],
+     "endpoint_url": [
+      "text",
+      true,
+      null
+     ],
+     "max_tokens": [
+      "integer",
+      true,
+      null
+     ],
+     "model": [
+      "text",
+      true,
+      null
+     ],
+     "name": [
+      "text",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     false,
+     false
+    ]
+   },
+   "persona_revisions": {
+    "columns": {
+     "created_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "directives": [
+      "text",
+      true,
+      null
+     ],
+     "evidence_ids": [
+      "uuid[]",
+      true,
+      "'{}'"
+     ],
+     "id": [
+      "uuid",
+      true,
+      "gen_random_uuid"
+     ],
+     "parent_revision_id": [
+      "uuid",
+      false,
+      null
+     ],
+     "revision_number": [
+      "integer",
+      true,
+      null
+     ],
+     "source": [
+      "text",
+      true,
+      null
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "persona_signals": {
+    "columns": {
+     "behavioral_section": [
+      "text",
+      true,
+      null
+     ],
+     "consumed_by_revision_id": [
+      "uuid",
+      false,
+      null
+     ],
+     "continuum_id": [
+      "uuid",
+      true,
+      null
+     ],
+     "evaluated_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "evidence": [
+      "text",
+      true,
+      null
+     ],
+     "id": [
+      "uuid",
+      true,
+      "gen_random_uuid"
+     ],
+     "outcome": [
+      "text",
+      true,
+      null
+     ],
+     "segment_id": [
+      "uuid",
+      true,
+      null
+     ],
+     "strength": [
+      "text",
+      true,
+      null
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "persona_state": {
+    "columns": {
+     "created_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "current_revision_id": [
+      "uuid",
+      true,
+      null
+     ],
+     "latest_evaluated_segment_id": [
+      "uuid",
+      false,
+      null
+     ],
+     "refinement_checkpoint_activity_day": [
+      "integer",
+      true,
+      "0"
+     ],
+     "updated_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "usage_pricing": {
+    "columns": {
+     "cache_read_price_per_mtok": [
+      "numeric(10,6)",
+      false,
+      null
+     ],
+     "cache_write_price_per_mtok": [
+      "numeric(10,6)",
+      false,
+      null
+     ],
+     "effective_date": [
+      "date",
+      true,
+      "CURRENT_DATE"
+     ],
+     "input_price_per_mtok": [
+      "numeric(10,6)",
+      false,
+      null
+     ],
+     "name": [
+      "character varying(50)",
+      true,
+      null
+     ],
+     "output_price_per_mtok": [
+      "numeric(10,6)",
+      false,
+      null
+     ]
+    },
+    "row_security": [
+     false,
+     false
+    ]
+   },
+   "user_activity_days": {
+    "columns": {
+     "activity_date": [
+      "date",
+      true,
+      null
+     ],
+     "first_message_at": [
+      "timestamp with time zone",
+      true,
+      null
+     ],
+     "message_count": [
+      "integer",
+      true,
+      "1"
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "user_feedback": {
+    "columns": {
+     "category": [
+      "text",
+      true,
+      null
+     ],
+     "created_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "description": [
+      "text",
+      true,
+      null
+     ],
+     "id": [
+      "uuid",
+      true,
+      "gen_random_uuid"
+     ],
+     "user_id": [
+      "uuid",
+      true,
+      null
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   },
+   "users": {
+    "columns": {
+     "created_at": [
+      "timestamp with time zone",
+      true,
+      "now"
+     ],
+     "cumulative_activity_days": [
+      "integer",
+      true,
+      "0"
+     ],
+     "daily_manipulation_last_run": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "deletion_requested_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "demo_expires_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "demo_start_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "email": [
+      "character varying(255)",
+      true,
+      null
+     ],
+     "first_name": [
+      "character varying(100)",
+      false,
+      null
+     ],
+     "id": [
+      "uuid",
+      true,
+      "gen_random_uuid"
+     ],
+     "is_active": [
+      "boolean",
+      true,
+      "true"
+     ],
+     "last_activity_date": [
+      "date",
+      false,
+      null
+     ],
+     "last_login_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "last_name": [
+      "character varying(100)",
+      false,
+      null
+     ],
+     "memory_manipulation_enabled": [
+      "boolean",
+      true,
+      "true"
+     ],
+     "portrait": [
+      "text",
+      false,
+      null
+     ],
+     "portrait_generated_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "purge_deadline": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "soft_deleted_at": [
+      "timestamp with time zone",
+      false,
+      null
+     ],
+     "subject_kind": [
+      "text",
+      true,
+      "'member'"
+     ],
+     "temperature_unit": [
+      "character varying(20)",
+      true,
+      "'fahrenheit'"
+     ],
+     "timezone": [
+      "character varying(100)",
+      true,
+      null
+     ],
+     "webauthn_credentials": [
+      "jsonb",
+      true,
+      "'{}'"
+     ]
+    },
+    "row_security": [
+     true,
+     false
+    ]
+   }
+  },
+  "triggers": {
+   "continuums.continuums_updated_at": "CREATETRIGGERcontinuums_updated_atBEFOREUPDATEONpublic.continuumsFOREACHROWEXECUTEFUNCTIONset_updated_at",
+   "embedding_config.embedding_config_locked_once_vectors_exist": "CREATETRIGGERembedding_config_locked_once_vectors_existBEFOREDELETEORUPDATEONpublic.embedding_configFOREACHROWEXECUTEFUNCTIONembedding_config_refuse_change_with_vectors",
+   "entities.entities_updated_at": "CREATETRIGGERentities_updated_atBEFOREUPDATEONpublic.entitiesFOREACHROWEXECUTEFUNCTIONset_updated_at",
+   "global_memories.global_memories_search_vector": "CREATETRIGGERglobal_memories_search_vectorBEFOREINSERTORUPDATEOFtextONpublic.global_memoriesFOREACHROWEXECUTEFUNCTIONset_search_vector",
+   "global_memories.global_memories_updated_at": "CREATETRIGGERglobal_memories_updated_atBEFOREUPDATEONpublic.global_memoriesFOREACHROWEXECUTEFUNCTIONset_updated_at",
+   "memories.memories_search_vector": "CREATETRIGGERmemories_search_vectorBEFOREINSERTORUPDATEOFtextONpublic.memoriesFOREACHROWEXECUTEFUNCTIONset_search_vector",
+   "memories.memories_updated_at": "CREATETRIGGERmemories_updated_atBEFOREUPDATEONpublic.memoriesFOREACHROWEXECUTEFUNCTIONset_updated_at",
+   "persona_state.persona_state_updated_at": "CREATETRIGGERpersona_state_updated_atBEFOREUPDATEONpublic.persona_stateFOREACHROWEXECUTEFUNCTIONset_updated_at",
+   "users.users_provision_baseline_persona": "CREATETRIGGERusers_provision_baseline_personaAFTERINSERTONpublic.usersFOREACHROWEXECUTEFUNCTIONprovision_baseline_persona"
+  },
+  "views": {
+   "global_memories_runtime": "SELECTid,text,embedding,search_vector,importance_score,created_at,updated_at,happens_at,entity_links,inbound_links,outbound_links,is_archived,archived_atFROMglobal_memoriesWHEREcan_read_global_memories;"
+  }
+ },
+ "fingerprint_sha256": "f55f1174ec80253381a3d64ae0790f31c42b3fba3aa9e4ac44197c9122eba4c9"
+}

@@ -78,7 +78,7 @@ ENV PYTHONUNBUFFERED=1
 # Labels
 LABEL org.opencontainers.image.title="MIRA Base"
 LABEL org.opencontainers.image.description="MIRA base image - system packages, Python deps, ML models"
-LABEL org.opencontainers.image.source="https://github.com/taylorsatula/mira-OSS"
+LABEL org.opencontainers.image.source="https://github.com/taylorsatula/mira"
 
 # Install runtime dependencies and services
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -121,6 +121,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 \
     libasound2t64 \
     libatspi2.0-0 \
+    # take_backup grants the postgres user read of its dump with setfacl
+    # whenever the runner is not postgres itself (utils/schema_migrations.py)
+    # — in here that is every backup (the runner is root, seam sudo -u postgres);
+    # the same reason dependencies.sh installs acl on every distro
+    acl \
     # Utilities
     jq \
     && rm -rf /var/lib/apt/lists/* \

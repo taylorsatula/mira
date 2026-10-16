@@ -106,7 +106,7 @@ if [ -f "$HERE/README.md" ]; then
     echo
     echo "> **Sarcophagus extracted $(date '+%Y-%m-%d %H:%M %Z') by deploy/vm/extract.sh."
     echo "> Facts: SNAPSHOT-FACTS.txt (authoritative). Contents contract + restore"
-    echo "> instructions: deploy/vm/README.md in the mira-OSS repo. EDIT THIS HEADER"
+    echo "> instructions: deploy/vm/README.md in the MIRA repo. EDIT THIS HEADER"
     echo "> into a real orientation (what changed since the previous sarcophagus).**"
   } > "$DEST/README-RESTORE.md"
 fi

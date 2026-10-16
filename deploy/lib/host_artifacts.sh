@@ -1,0 +1,96 @@
+# deploy/lib/host_artifacts.sh
+# Generators for the files MIRA installs outside its code tree, shared by the
+# installer (deploy/finalize.sh) and the updater (deploy/update.sh) so an
+# update rewrites them exactly as a fresh install would.
+# Source this file - do not execute directly. render_mira_unit calls
+# mira_github_repo (repo_identity.sh).
+
+MIRA_CLI_PATH="/usr/local/bin/mira"
+MIRA_UNIT_PATH="/etc/systemd/system/mira.service"
+
+# Prints the /usr/local/bin/mira wrapper: the TUI chat client on its own venv,
+# runnable from any directory.
+# Usage: render_mira_cli
+render_mira_cli() {
+    cat <<'MIRA_CLI'
+#!/bin/sh
+# MIRA terminal chat client — written by deploy/lib/host_artifacts.sh
+# (install and every update). Talk to this instance from any directory:
+# `mira` (first run: mira --login --base-url http://localhost:1993 --chat).
+export PYTHONPATH="/opt/mira/app${PYTHONPATH:+:$PYTHONPATH}"
+# -P: `python3 -m` prepends the CURRENT DIRECTORY to sys.path ahead of
+# PYTHONPATH, so `mira` run from inside a mira checkout silently resolved
+# ui/tui/ and utils/ (and read the checkout's VERSION) instead of the installed
+# tree. -P suppresses that prepend; the install tree wins regardless of cwd.
+exec /opt/mira/tui-venv/bin/python3 -P -m ui.tui "$@"
+MIRA_CLI
+}
+
+# Writes <content-file> to <target> (default mode 755) when the bytes differ.
+# Returns 0 written or already equal, 1 failed.
+# Usage: install_host_file <content-file> <target> [<mode>]
+install_host_file() {
+    local content="$1" target="$2" mode="${3:-755}"
+    if [ -f "$target" ] && cmp -s "$content" "$target"; then
+        return 0
+    fi
+    if [ -w "$(dirname "$target")" ] && { [ ! -e "$target" ] || [ -w "$target" ]; }; then
+        cp "$content" "$target" && chmod "$mode" "$target"
+    else
+        sudo cp "$content" "$target" && sudo chmod "$mode" "$target"
+    fi
+}
+
+# Prints the systemd unit for the MIRA server.
+# Usage: render_mira_unit <user> <group> <vault-role-id> <vault-secret-id> <pg-unit> <valkey-unit>
+render_mira_unit() {
+    local user="$1" group="$2" role_id="$3" secret_id="$4" pg_unit="$5" valkey_unit="$6"
+    cat <<MIRA_UNIT
+[Unit]
+Description=MIRA - AI Assistant with Persistent Memory
+Documentation=https://github.com/$(mira_github_repo)
+Requires=vault.service ${pg_unit} ${valkey_unit}
+After=vault.service ${pg_unit} ${valkey_unit} vault-unseal.service
+ConditionPathExists=/opt/mira/app/main.py
+
+[Service]
+Type=simple
+User=${user}
+Group=${group}
+WorkingDirectory=/opt/mira/app
+EnvironmentFile=/opt/mira/systemone.env
+Environment="VAULT_ADDR=http://127.0.0.1:8200"
+Environment="VAULT_ROLE_ID=${role_id}"
+Environment="VAULT_SECRET_ID=${secret_id}"
+Environment="MIRA_LOG_DIR=/opt/mira/logs"
+ExecStart=/opt/mira/app/venv/bin/python3 /opt/mira/app/main.py
+# bash_tool restart_mira exits 75 after its graceful shutdown; on-failure
+# respawns it (contract owner: utils/self_restart.py)
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mira
+
+[Install]
+WantedBy=multi-user.target
+MIRA_UNIT
+}
+
+# Prints the unit this host should have, from the installed unit's User/Group,
+# the current AppRole files, and the PostgreSQL/Valkey units this host ships —
+# the same inputs finalize.sh used. Returns 1 when any input is unreadable.
+# Requires services.sh (resolve_pg_unit, resolve_valkey_unit).
+# Usage: render_current_mira_unit
+render_current_mira_unit() {
+    local user group role_id secret_id
+    user="$(sed -n 's/^User=//p' "$MIRA_UNIT_PATH")"
+    group="$(sed -n 's/^Group=//p' "$MIRA_UNIT_PATH")"
+    role_id="$(cat /opt/vault/role-id.txt 2>/dev/null)" || return 1
+    secret_id="$(cat /opt/vault/secret-id.txt 2>/dev/null)" || return 1
+    [ -n "$user" ] && [ -n "$group" ] && [ -n "$role_id" ] && [ -n "$secret_id" ] || return 1
+    render_mira_unit "$user" "$group" "$role_id" "$secret_id" \
+        "$(resolve_pg_unit || echo postgresql.service)" "$(resolve_valkey_unit || echo valkey.service)"
+}

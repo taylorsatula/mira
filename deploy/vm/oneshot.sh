@@ -15,7 +15,7 @@
 #   oneshot.sh [flags] <sarcophagus-name-or-path> [--fresh]
 #   flags: --host U@H | --ip ADR | --vm-pass PW | --domain NAME | --vm-user U
 #          --snap-dir DIR | --vmimg-dir DIR | --template FILE | --xml FILE
-#          --source DIR (mira-OSS checkout; default: the repo containing this
+#          --source DIR (MIRA checkout; default: the repo containing this
 #          script) | --config FILE (deploy config yml)
 #
 # Sarcophagus: a name under --snap-dir (remote mode: the HOST's snap dir, it is
@@ -62,7 +62,7 @@ hostfs() {
 
 echo "== 0. preflight =="
 [ -f "$SRC/main.py" ] && [ -f "$SRC/deploy/deploy.sh" ] \
-  || { echo "FATAL: --source '$SRC' is not a mira-OSS checkout" >&2; exit 1; }
+  || { echo "FATAL: --source '$SRC' is not a MIRA checkout" >&2; exit 1; }
 [ -f "$CONFIG" ] || { echo "FATAL: deploy config missing: $CONFIG" >&2; exit 1; }
 SARC=$(resolve_sarc "$SARC")
 echo "mode: $([ "$IS_LIBVIRT" = 1 ] && echo "libvirt $([ -n "$REMOTE_HOST" ] && echo remote || echo local)" || echo "plain-ssh $VMIP")  domain/user: $DOMAIN/$VM_USER"
@@ -114,8 +114,8 @@ echo "== 2. ssh bootstrap (VM at $IP) =="
 bootstrap_ssh
 
 echo "== 3. push worktree + config =="
-vmssh "$IP" 'rm -rf ~/mira-OSS && mkdir ~/mira-OSS'
-tar -C "$SRC" --exclude=.git -czf - . | vmstream "$IP" 'tar -C ~/mira-OSS -xzf -'
+vmssh "$IP" 'rm -rf ~/mira && mkdir ~/mira'
+tar -C "$SRC" --exclude=.git -czf - . | vmstream "$IP" 'tar -C ~/mira -xzf -'
 vmcp_to "$IP" "$CONFIG" 'deploy-config.yml'
 echo "pushed $(du -sh "$SRC" | cut -f1) + config"
 
@@ -125,7 +125,7 @@ echo "== 4. deploy (dev build; log: VM /tmp/deploy.log) =="
 # DROP DATABASE otherwise — that collision is what the 2>/dev/null would hide.
 turn_lock_gate || exit 1
 vmssh "$IP" 'sudo -n systemctl stop mira 2>/dev/null; sudo -n -u postgres psql -qc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='\''mira_service'\'' AND pid <> pg_backend_pid()" >/dev/null 2>&1; sudo -n -u postgres psql -qc "DROP DATABASE IF EXISTS mira_service" >/dev/null 2>&1; true' >/dev/null
-vmssh "$IP" 'rm -f /tmp/deploy.exit /tmp/deploy.log; nohup bash -c "cd ~/mira-OSS && ./deploy/deploy.sh --config ~/deploy-config.yml --local --loud > /tmp/deploy.log 2>&1; echo \$? > /tmp/deploy.exit" >/dev/null 2>&1 & echo started'
+vmssh "$IP" 'rm -f /tmp/deploy.exit /tmp/deploy.log; nohup bash -c "cd ~/mira && ./deploy/deploy.sh --config ~/deploy-config.yml --local --loud > /tmp/deploy.log 2>&1; echo \$? > /tmp/deploy.exit" >/dev/null 2>&1 & echo started'
 T0=$(date +%s)
 while [ "$(vmssh "$IP" 'test -f /tmp/deploy.exit && cat /tmp/deploy.exit || echo running')" = "running" ]; do
   [ $(( $(date +%s) - T0 )) -gt 3600 ] && { echo "FATAL: deploy exceeded 60 min" >&2; vmssh "$IP" 'tail -20 /tmp/deploy.log'; exit 1; }
