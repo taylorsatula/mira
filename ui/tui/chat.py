@@ -55,7 +55,7 @@ from .client import (
     TurnStopped,
 )
 from .history import replay_blocks
-from .screen import Interrupt, Intent, Live, Quit, Screen, Status, Submit, ToggleThinking
+from .screen import Interrupt, Intent, Live, Quit, Screen, Status, Submit, SubmitNow, ToggleThinking
 from .text import ReplyStream, display_lines
 
 
@@ -221,6 +221,7 @@ class ChatSession:
         self._in_flight: _InFlight | None = None
         self._turn: _Turn | None = None
         self._halt_on_start = False  # Ctrl+C before turn_started: halt on arrival
+        self._interrupting_for_send = False  # Ctrl+Enter halted the turn: send the queue at its end, don't restore it
         self._deferred: list[str] = []  # proactive content held until the turn ends
         self._show_thinking = False  # Ctrl+T view toggle; forward-looking, no replay of what streamed while off
         self._flow = transcript.Flow()  # spacing between scrollback blocks across emits
@@ -317,9 +318,9 @@ class ChatSession:
             if turn.halt_requested:
                 return Status("stopping…", "busy", turn.started)
             text = {
-                "replying": "MIRA is replying… · Ctrl+C clears input / stops",
-                "thinking": "MIRA is thinking… · Ctrl+C clears input / stops",
-                "tool": f"running {turn.tool_name}… · Ctrl+C clears input / stops",
+                "replying": "MIRA is replying… · Ctrl+C clears input / stops · Ctrl+Enter interrupts and sends",
+                "thinking": "MIRA is thinking… · Ctrl+C clears input / stops · Ctrl+Enter interrupts and sends",
+                "tool": f"running {turn.tool_name}… · Ctrl+C clears input / stops · Ctrl+Enter interrupts and sends",
             }[turn.activity]
             return Status(text, "busy", turn.started)
         if flight is not None:
@@ -399,6 +400,8 @@ class ChatSession:
         match item:
             case Submit(text=raw):
                 return await self._on_submit(raw)
+            case SubmitNow(text=raw):
+                return await self._on_submit(raw, interrupt=True)
             case Interrupt():
                 return await self._on_interrupt()
             case Quit():
@@ -477,7 +480,7 @@ class ChatSession:
         return False
 
 
-    async def _on_submit(self, raw: str) -> bool:
+    async def _on_submit(self, raw: str, interrupt: bool = False) -> bool:
         text = raw.strip()
         if not text:
             if self._conn == "disconnected":
@@ -516,6 +519,18 @@ class ChatSession:
                     await self._reconnect()
                 elif self._conn == "connected" and not self._busy():
                     await self._send_next()
+                elif interrupt and self._turn is not None:
+                    # Ctrl+Enter mid-turn: end the turn so the message goes out
+                    # as soon as the server confirms the halt, instead of
+                    # queueing behind whatever MIRA was doing.
+                    self._interrupting_for_send = True
+                    await self._emit(
+                        self._meta(transcript.notice("stopping this reply to send your message"))
+                    )
+                    if not self._turn.halt_requested:
+                        await self._halt(self._turn)
+                    else:
+                        self._refresh()
                 else:
                     self._refresh()
         return False
@@ -580,6 +595,7 @@ class ChatSession:
             return False
         turn = self._turn
         if turn is not None:
+            self._interrupting_for_send = False  # a Ctrl+C halt means restore, not send
             if not turn.halt_requested:
                 await self._halt(turn)
             return False
@@ -783,6 +799,7 @@ class ChatSession:
             )
         self._restore_unsent()
         self._turn = None
+        self._interrupting_for_send = False
         self._conn = "disconnected"
         blocks.extend(self._take_deferred())
         if not self._quitting and self._auto_reconnect is None:
@@ -981,12 +998,14 @@ class ChatSession:
     async def _end_reply(self, turn: _Turn, bodies: list[Text]) -> None:
         """Common tail of every turn end: the last rows and the bottom border
         of MIRA's box, deferred proactives, then the queue — back to the box
-        after a user halt, otherwise the next message is sent."""
+        after a Ctrl+C halt, otherwise the next message is sent."""
+        interrupting = self._interrupting_for_send
+        self._interrupting_for_send = False
         self._turn = None
         blocks = self._in_box(turn, *bodies)
         blocks.append(transcript.mira_close())
         blocks.extend(self._take_deferred())
-        if turn.halt_requested and self._outbox:
+        if turn.halt_requested and self._outbox and not interrupting:
             self._restore_unsent()
             blocks.append(transcript.notice("queued messages returned to the input box"))
         await self._emit(*blocks)

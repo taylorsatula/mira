@@ -102,6 +102,13 @@ class Submit:
 
 
 @dataclass(frozen=True)
+class SubmitNow:
+    """Ctrl+Enter: submit, interrupting the active turn so it sends now."""
+
+    text: str
+
+
+@dataclass(frozen=True)
 class Interrupt:
     pass
 
@@ -116,7 +123,7 @@ class ToggleThinking:
     pass
 
 
-Intent = Submit | Interrupt | Quit | ToggleThinking
+Intent = Submit | SubmitNow | Interrupt | Quit | ToggleThinking
 
 
 def _console() -> Console:
@@ -517,6 +524,13 @@ class Screen:
         @kb.add("enter")
         def _submit(event) -> None:
             self._post(Submit(self._input.buffer.text))
+
+        # Only distinguishable where the terminal can send Ctrl+Enter as its
+        # own key (kitty protocol / CSI-u terminals); elsewhere it arrives as
+        # Enter and the plain submit path runs.
+        @kb.add("c-enter")
+        def _submit_now(event) -> None:
+            self._post(SubmitNow(self._input.buffer.text))
 
         @kb.add("escape", "enter")
         @kb.add("c-j")
