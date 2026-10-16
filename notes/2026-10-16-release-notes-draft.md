@@ -227,6 +227,21 @@ database change and backs up first.
   hop to this tree (row d), and failed-step rollback plus restore round
   trip witnessed on the platform batteries and under launchd on macOS
   (row e). Not re-run against the tagged asset at cut time.
+## Rev 2026-10-16 (post-publish): custom-build export classification
+
+The tag now points at 702a2de (asset rebuilt and re-attached; same
+version, no database steps changed). RESTORE_MY_CUSTOM_BUILD.txt now
+tags every changed or added file against the release being installed
+(absorbed / clean-apply / both-changed / upstream-deleted), marks
+config/ and tools/ files operator-only (MIRA's guardrail refuses
+agent edits there, so those restores end with the operator), and
+states that collaborating with the operator on ambiguous restores is
+expected, not a fallback — the restoring agent may lack the
+conversation that explains the release's redesign, and forcing an old
+version back over it is worse than no restore. Gate rows a-c
+re-verified at build time; rows d and e unchanged (no migration or
+updater-flow code changed).
+
 - Known residuals: the bash-tool battery still carries the 8
   pre-existing interpreter-payload escapes (unchanged from the last
   release); terminals that derive their title from the running command
