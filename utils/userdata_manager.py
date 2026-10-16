@@ -140,6 +140,22 @@ SCRATCHPAD_INDEX_DDL = """\
 CREATE INDEX IF NOT EXISTS idx_scratchpad_thread
 ON scratchpad(thread_id)"""
 
+AGENT_MEMORY_TABLE_DDL = """\
+CREATE TABLE IF NOT EXISTS agent_memory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT NOT NULL,
+    encrypted__content TEXT NOT NULL,
+    encrypted__justification TEXT NOT NULL,
+    source_thread_id TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+)"""
+
+AGENT_MEMORY_INDEX_DDL = """\
+CREATE INDEX IF NOT EXISTS idx_agent_memory_agent
+ON agent_memory(agent_id, status)"""
+
 
 class UserDataManager:
     """
@@ -248,6 +264,9 @@ class UserDataManager:
         # from first boot, before any agent has run.
         self._init_sidebar_activity_schema()
 
+        # Agent-coarse-memory table: one pool per user, tagged by agent_id.
+        self._init_agent_memory_schema()
+
         logger.info("Tool schemas initialized successfully")
 
     def _init_sidebar_activity_schema(self):
@@ -259,6 +278,17 @@ class UserDataManager:
         cursor = self.connection.cursor()
         cursor.execute(ACTIVITY_TABLE_DDL)
         cursor.execute(ACTIVITY_INDEX_DDL)
+        self.connection.commit()
+
+    def _init_agent_memory_schema(self):
+        """Create the per-user agent_memory table at every DB open.
+
+        One pool per user, tagged by agent_id; adding/removing an agent
+        does not change the table shape.
+        """
+        cursor = self.connection.cursor()
+        cursor.execute(AGENT_MEMORY_TABLE_DDL)
+        cursor.execute(AGENT_MEMORY_INDEX_DDL)
         self.connection.commit()
     
     def _init_pager_schema(self):

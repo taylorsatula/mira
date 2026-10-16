@@ -107,6 +107,43 @@ class SidebarTool(Tool):
                         "status is 'escalated'."
                     ),
                 },
+                "memories": {
+                    "type": "array",
+                    "description": (
+                        "Memories to store at completion. Write only durable, "
+                        "cross-run facts with justification; one-off context "
+                        "must not be stored. Optional, default none."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": (
+                                    "The memory text. Plain prose, one durable "
+                                    "fact, rule, or preference that future "
+                                    "runs of this agent should reuse."
+                                ),
+                            },
+                            "justification": {
+                                "type": "string",
+                                "description": (
+                                    "Why this memory is worth keeping. Stored "
+                                    "for audit/depuration and never shown to "
+                                    "the agent as prompt content."
+                                ),
+                            },
+                            "source_thread_id": {
+                                "type": "string",
+                                "description": (
+                                    "Optional originating thread id; defaults "
+                                    "to this run's thread id."
+                                ),
+                            },
+                        },
+                        "required": ["content", "justification"],
+                    },
+                },
             },
             "required": ["operation"],
         },
@@ -221,10 +258,47 @@ class SidebarTool(Tool):
             },
         )
 
+        # Store durable memories supplied at completion. The justification
+        # is persisted alongside the content for later hygiene/audit, but
+        # never shown to the agent when the memory is (re)injected.
+        stored = 0
+        raw_memories = params.get("memories")
+        if raw_memories is not None:
+            if not isinstance(raw_memories, list):
+                raise ValueError("memories must be a list")
+            for item in raw_memories:
+                if not isinstance(item, dict):
+                    raise ValueError(
+                        "each memory must be an object with content and "
+                        "justification"
+                    )
+                content = (item.get("content") or "").strip()
+                justification = (item.get("justification") or "").strip()
+                if not content:
+                    raise ValueError("memory content is required")
+                if len(justification) < 10:
+                    raise ValueError(
+                        "memory justification must be at least 10 "
+                        "characters"
+                    )
+                source_tid = item.get("source_thread_id") or thread_id
+                self.db.insert(
+                    "agent_memory",
+                    {
+                        "agent_id": agent_id,
+                        "encrypted__content": content,
+                        "encrypted__justification": justification,
+                        "source_thread_id": source_tid,
+                        "status": "active",
+                    },
+                )
+                stored += 1
+
         return {
             "completed": True,
             "interface_name": interface_name,
             "thread_id": thread_id,
             "status": status,
             "summary": summary,
+            "memories_stored": stored,
         }

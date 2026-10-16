@@ -193,6 +193,9 @@ class SubagentTool(Tool):
                         "dismiss",
                         "inspect",
                         "resolve",
+                        "memory_inspect",
+                        "memory_update",
+                        "memory_deprecate_all",
                     ],
                     "description": (
                         "The action to perform. activate and continue start or "
@@ -313,6 +316,15 @@ class SubagentTool(Tool):
         elif operation == "resolve":
             self._ensure_schema()
             return self._op_resolve(kwargs)
+        elif operation == "memory_inspect":
+            self._ensure_schema()
+            return self._op_memory_inspect(kwargs)
+        elif operation == "memory_update":
+            self._ensure_schema()
+            return self._op_memory_update(kwargs)
+        elif operation == "memory_deprecate_all":
+            self._ensure_schema()
+            return self._op_memory_deprecate_all(kwargs)
         else:
             raise ValueError(f"Unknown operation: {operation}")
 
@@ -567,6 +579,108 @@ class SubagentTool(Tool):
 
         self._refresh_trinket()
         return {"success": True, "thread_id": task_id, "action": "resolved"}
+
+    # agent memory management (main context surface)
+
+    def _op_memory_inspect(
+        self, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        agent_type = params.get("agent_type") or params.get("agent_id")
+        if not agent_type:
+            raise ValueError("memory_inspect requires agent_type")
+
+        rows = self.db.select(
+            "agent_memory",
+            where="agent_id = :agent_id",
+            params={"agent_id": agent_type},
+            order_by="created_at DESC",
+        )
+        items = []
+        for row in rows:
+            items.append(
+                {
+                    "id": row.get("id"),
+                    "agent_id": row.get("agent_id"),
+                    "content": row.get("encrypted__content"),
+                    "justification": row.get("encrypted__justification"),
+                    "status": row.get("status"),
+                    "source_thread_id": row.get("source_thread_id"),
+                    "created_at": row.get("created_at"),
+                    "updated_at": row.get("updated_at"),
+                }
+            )
+        return {"items": items, "count": len(items)}
+
+    def _op_memory_update(
+        self, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        memory_id = params.get("memory_id")
+        if memory_id is None:
+            raise ValueError("memory_update requires memory_id")
+
+        data: Dict[str, Any] = {}
+        if params.get("content") is not None:
+            content = str(params["content"]).strip()
+            if not content:
+                raise ValueError("content cannot be empty")
+            data["encrypted__content"] = content
+        if params.get("justification") is not None:
+            justification = str(params["justification"]).strip()
+            if not justification:
+                raise ValueError("justification cannot be empty")
+            data["encrypted__justification"] = justification
+        if params.get("status") is not None:
+            status = str(params["status"])
+            if status not in ("active", "deprecated"):
+                raise ValueError("status must be active or deprecated")
+            data["status"] = status
+        if not data:
+            raise ValueError(
+                "memory_update requires at least one updatable field"
+            )
+        data["updated_at"] = _sqlite_now()
+
+        updated = self.db.update(
+            "agent_memory",
+            data,
+            "id = :mid",
+            {"mid": int(memory_id)},
+        )
+        if updated == 0:
+            raise ValueError(
+                f"memory_update failed: memory {memory_id} not found"
+            )
+        self._refresh_trinket()
+        return {
+            "success": True,
+            "memory_id": int(memory_id),
+            "updated_rows": updated,
+        }
+
+    def _op_memory_deprecate_all(
+        self, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        agent_type = params.get("agent_type") or params.get("agent_id")
+        if not agent_type:
+            raise ValueError(
+                "memory_deprecate_all requires agent_type"
+            )
+
+        updated = self.db.update(
+            "agent_memory",
+            {
+                "status": "deprecated",
+                "updated_at": _sqlite_now(),
+            },
+            "agent_id = :agent_id",
+            {"agent_id": agent_type},
+        )
+        self._refresh_trinket()
+        return {
+            "success": True,
+            "agent_id": agent_type,
+            "deprecated_rows": updated,
+        }
 
     # shared publishers
 

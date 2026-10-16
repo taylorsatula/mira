@@ -481,6 +481,14 @@ class SidebarAgent(ABC):
         if self.inherit_base_prompt:
             parts.append(load_agent_prompt("base_system.txt"))
         parts.append(agent_prompt)
+
+        # Push the agent's durable memory into context every run; the model
+        # never has to fetch it. Content only; justification stays stored
+        # and is surfaced solely for audit/hygiene.
+        memory_block = self._load_agent_memory()
+        if memory_block:
+            parts.append(memory_block)
+
         # A matched user trigger rule's prompt (attached by
         # rule_filter.apply_trigger_rules as context['rule_prompt']) is
         # appended here — the single consumption point, so every agent
@@ -514,6 +522,39 @@ class SidebarAgent(ABC):
         if len(raw) > 8000:
             raw = raw[:8000] + "\n[truncated]"
         work_item.context["sanitized_content"] = screen_untrusted(raw, work_item.interface_name)
+
+    def _load_agent_memory(self) -> str | None:
+        """Load active memory rows for this agent into a prompt block."""
+        try:
+            from utils.user_context import get_current_user_id
+            from utils.userdata_manager import get_user_data_manager
+
+            db = get_user_data_manager(get_current_user_id())
+            rows = db.select(
+                'agent_memory',
+                where="agent_id = :agent_id AND status = 'active'",
+                params={'agent_id': self.agent_id},
+                order_by='created_at DESC',
+            )
+            entries: list[str] = []
+            total = 0
+            for row in rows:
+                content = row.get('encrypted__content')
+                if not isinstance(content, str) or not content.strip():
+                    continue
+                if total + len(content) > 8000:
+                    break
+                entries.append(content.strip())
+                total += len(content)
+            if not entries:
+                return None
+            body = '\n\n'.join(f"- {entry}" for entry in entries)
+            return "# Agent Memory\n\n" + body
+        except Exception:
+            logger.debug(
+                "%s: Agent memory load failed", self.agent_id, exc_info=True
+            )
+            return None
 
     def _get_all_tool_names(self) -> list[str]:
         """sidebar_tool is always included; subclass tools are appended."""
