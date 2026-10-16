@@ -252,6 +252,10 @@ EOF
                     MIRA_HEALTHY=1
                     break
                 fi
+                # 30 s silent, then a countdown notice every 60 s until the deadline.
+                if [ $((i % 12)) -eq 6 ]; then
+                    echo -ne "${DIM}still waiting (waiting $(((120 - i) * 5)) more seconds)${RESET} "
+                fi
                 sleep 5
             done
             if [ "$MIRA_HEALTHY" = 1 ]; then

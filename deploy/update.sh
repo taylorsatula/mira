@@ -86,7 +86,9 @@ HEALTH_URL="http://127.0.0.1:1993/v0/api/health"
 # HEALTHCHECK start-period (deploy/docker/Dockerfile), headroom for a
 # bare-metal boot that loads models from disk and runs the POST gate; a
 # boot that cannot report healthy in 10 minutes is a failure, not a slow
-# start, and rolls back.
+# start, and rolls back. After the first 30 s the poll prints a
+# "still waiting (waiting N more seconds)" countdown every 60 s, so a
+# parked boot reads as progress toward the deadline, not a silent hang.
 HEALTH_POLL_ROUNDS=120
 HEALTH_POLL_INTERVAL_SECONDS=5
 CANONICAL="no"
@@ -307,6 +309,10 @@ wait_healthy() {
             && printf '%s' "$body" | grep -q "\"version\":\"${version}\""; then
             echo -e "${CHECKMARK} ${DIM}(after ~$((i * HEALTH_POLL_INTERVAL_SECONDS))s)${RESET}"
             return 0
+        fi
+        # 30 s silent, then a countdown notice every 60 s until the deadline.
+        if [ $((i % 12)) -eq 6 ]; then
+            echo -ne "${DIM}still waiting (waiting $(((HEALTH_POLL_ROUNDS - i) * HEALTH_POLL_INTERVAL_SECONDS)) more seconds)${RESET} "
         fi
         sleep "$HEALTH_POLL_INTERVAL_SECONDS"
     done
