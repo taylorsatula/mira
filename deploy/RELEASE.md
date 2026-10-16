@@ -3,7 +3,7 @@
 Plain-English overview for maintainers: `docs/MAINTAINER_UPGRADE_GUIDE.md`.
 
 The installer is wired to the release asset: `deploy/deploy.sh` defines the
-constant `RELEASE_TAG` (currently `v2026.10.06-2.0`) and exports it, and
+constant `RELEASE_TAG` (currently `v2026.10.16-2.1`) and exports it, and
 `deploy/python.sh` downloads that release's asset instead of the main branch.
 `RELEASE_TAG` is the switch: cut a stable release by moving that one constant
 in `deploy/deploy.sh`, tagging the repo, building the asset, and publishing.
