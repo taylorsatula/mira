@@ -193,6 +193,9 @@ class SubagentTool(Tool):
                         "dismiss",
                         "inspect",
                         "resolve",
+                        "memory_inspect",
+                        "memory_update",
+                        "memory_deprecate",
                     ],
                     "description": (
                         "The action to perform. activate and continue start or "
@@ -262,6 +265,14 @@ class SubagentTool(Tool):
                         "this interface. Example: 'forage'."
                     ),
                 },
+                "memory_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": (
+                        "memory_deprecate only: one or more agent_memory ids "
+                        "to mark deprecated."
+                    ),
+                },
             },
             "required": ["operation"],
         },
@@ -313,6 +324,15 @@ class SubagentTool(Tool):
         elif operation == "resolve":
             self._ensure_schema()
             return self._op_resolve(kwargs)
+        elif operation == "memory_inspect":
+            self._ensure_schema()
+            return self._op_memory_inspect(kwargs)
+        elif operation == "memory_update":
+            self._ensure_schema()
+            return self._op_memory_update(kwargs)
+        elif operation == "memory_deprecate":
+            self._ensure_schema()
+            return self._op_memory_deprecate(kwargs)
         else:
             raise ValueError(f"Unknown operation: {operation}")
 
@@ -567,6 +587,129 @@ class SubagentTool(Tool):
 
         self._refresh_trinket()
         return {"success": True, "thread_id": task_id, "action": "resolved"}
+
+    # agent memory management (main context surface)
+
+    def _op_memory_inspect(
+        self, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        agent_type = params.get("agent_type") or params.get("agent_id")
+        if not agent_type:
+            raise ValueError("memory_inspect requires agent_type")
+
+        rows = self.db.select(
+            "agent_memory",
+            where="agent_id = :agent_id",
+            params={"agent_id": agent_type},
+            order_by="created_at DESC",
+        )
+        items = []
+        for row in rows:
+            items.append(
+                {
+                    "id": row.get("id"),
+                    "agent_id": row.get("agent_id"),
+                    "content": row.get("encrypted__content"),
+                    "justification": row.get("encrypted__justification"),
+                    "status": row.get("status"),
+                    "source_thread_id": row.get("source_thread_id"),
+                    "created_at": row.get("created_at"),
+                    "updated_at": row.get("updated_at"),
+                }
+            )
+        return {"items": items, "count": len(items)}
+
+    def _op_memory_update(
+        self, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        memory_id = params.get("memory_id")
+        if memory_id is None:
+            raise ValueError("memory_update requires memory_id")
+
+        data: Dict[str, Any] = {}
+        if params.get("content") is not None:
+            content = str(params["content"]).strip()
+            if not content:
+                raise ValueError("content cannot be empty")
+            data["encrypted__content"] = content
+        if params.get("justification") is not None:
+            justification = str(params["justification"]).strip()
+            if not justification:
+                raise ValueError("justification cannot be empty")
+            data["encrypted__justification"] = justification
+        if params.get("status") is not None:
+            status = str(params["status"])
+            if status not in ("active", "deprecated"):
+                raise ValueError("status must be active or deprecated")
+            data["status"] = status
+        if not data:
+            raise ValueError(
+                "memory_update requires at least one updatable field"
+            )
+        data["updated_at"] = _sqlite_now()
+
+        updated = self.db.update(
+            "agent_memory",
+            data,
+            "id = :mid",
+            {"mid": int(memory_id)},
+        )
+        if updated == 0:
+            raise ValueError(
+                f"memory_update failed: memory {memory_id} not found"
+            )
+        self._refresh_trinket()
+        return {
+            "success": True,
+            "memory_id": int(memory_id),
+            "updated_rows": updated,
+        }
+
+    def _op_memory_deprecate(
+        self, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        raw = params.get("memory_ids")
+        if raw is None:
+            raw = params.get("memory_id")
+        if raw is None:
+            raise ValueError(
+                "memory_deprecate requires memory_ids (list or single id)"
+            )
+        if isinstance(raw, (str, int)):
+            ids = [raw]
+        elif isinstance(raw, list):
+            ids = list(raw)
+        else:
+            raise ValueError("memory_ids must be a list or single id")
+        if not ids:
+            raise ValueError("memory_ids must not be empty")
+
+        deprecated = 0
+        missing: list[Any] = []
+        for mid in ids:
+            try:
+                mid_int = int(mid)
+            except (TypeError, ValueError):
+                raise ValueError(f"invalid memory id: {mid!r}")
+            updated = self.db.update(
+                "agent_memory",
+                {
+                    "status": "deprecated",
+                    "updated_at": _sqlite_now(),
+                },
+                "id = :mid",
+                {"mid": mid_int},
+            )
+            if updated == 0:
+                missing.append(mid_int)
+            else:
+                deprecated += updated
+        self._refresh_trinket()
+        return {
+            "success": True,
+            "deprecated_rows": deprecated,
+            "missing_ids": missing,
+        }
 
     # shared publishers
 
