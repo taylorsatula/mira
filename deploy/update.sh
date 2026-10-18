@@ -81,7 +81,7 @@ TUI_VENV="${MIRA_TUI_VENV:-/opt/mira/tui-venv}"
 MIRA_ROOT="$(dirname "$APP_DIR")"
 BACKUPS_DIR="${MIRA_ROOT}/backups"
 ENV_FILE="${MIRA_ROOT}/systemone.env"
-HEALTH_URL="http://127.0.0.1:1993/v0/api/health"
+HEALTH_URL="http://127.0.0.1:1993/v1/api/health"
 # 600 s for status=healthy AND the new VERSION: 5x the container image's 120 s
 # HEALTHCHECK start-period (deploy/docker/Dockerfile), headroom for a
 # bare-metal boot that loads models from disk and runs the POST gate; a

@@ -1,11 +1,11 @@
 /**
  * talkto_mira — pi extension exposing the talkto_mira tool: a model-callable
- * complete chat turn with a deployed MIRA instance over POST /v0/api/chat.
+ * complete chat turn with a deployed MIRA instance over POST /v1/api/chat.
  *
  * This is agent-to-MIRA, not a human frontend: the model calls it to consult
  * or check in with the user's persistent AI companion, and every call leaves a
  * footprint in MIRA's permanent history. The server-side counterpart for
- * non-pi MCP clients is the /v0/mcp endpoint (cns/api/mcp.py, opt-in via
+ * non-pi MCP clients is the /v1/mcp endpoint (cns/api/mcp.py, opt-in via
  * MIRA_MCP_ENABLED); pi uses this native tool instead and needs no flag.
  *
  * Credentials come from the MIRA TUI endpoint store
@@ -137,7 +137,7 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
       const { baseUrl, apiKey } = resolveEndpoint();
-      const url = `${baseUrl.replace(/\/$/, "")}/v0/api/chat`;
+      const url = `${baseUrl.replace(/\/$/, "")}/v1/api/chat`;
       const abort = AbortSignal.any([signal, AbortSignal.timeout(READ_TIMEOUT_MS)]);
 
       let response: Response;

@@ -1242,7 +1242,7 @@ def _check_playwright_service() -> dict[str, Any]:
 
 
 def _check_http_health(base_url: str) -> dict[str, Any]:
-    payload = _http_get_json(base_url, "/v0/api/health", timeout_seconds=5)
+    payload = _http_get_json(base_url, "/v1/api/health", timeout_seconds=5)
     if not payload.get("success"):
         raise RuntimeError(f"Health endpoint returned unsuccessful payload: {payload}")
     data = payload.get("data") or {}
@@ -1265,7 +1265,7 @@ def _check_http_diagnostics(base_url: str) -> dict[str, Any]:
     diagnostics_token = get_service_config("diagnostics_token")
     payload = _http_get_json(
         base_url,
-        "/v0/api/health/threads",
+        "/v1/api/health/threads",
         timeout_seconds=5,
         headers={"X-MIRA-Diagnostics-Token": diagnostics_token},
     )

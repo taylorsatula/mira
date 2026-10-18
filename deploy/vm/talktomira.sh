@@ -5,7 +5,7 @@
 #
 # Handles the whole boilerplate: resolves the VM's current DHCP address,
 # opens a local session, mints an API token (CSRF dance included), sends the
-# message to /v0/api/chat, and prints the reply text. Long turns block their
+# message to /v1/api/chat, and prints the reply text. Long turns block their
 # HTTP call — we wait up to 15 min and stream nothing back until it lands.
 #
 # Environment overrides:
@@ -74,14 +74,14 @@ BASE="http://${VM_IP}:1993"
 JAR=$(mktemp)
 trap 'rm -f "$JAR"' EXIT
 
-curl -s --max-time 10 -c "$JAR" "$BASE/v0/auth/local/session" >/dev/null
+curl -s --max-time 10 -c "$JAR" "$BASE/v1/auth/local/session" >/dev/null
 
-CSRF=$(curl -s --max-time 10 -b "$JAR" -c "$JAR" -X POST "$BASE/v0/auth/csrf" \
+CSRF=$(curl -s --max-time 10 -b "$JAR" -c "$JAR" -X POST "$BASE/v1/auth/csrf" \
     | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["csrf_token"])')
 
 TOKEN=$(curl -s --max-time 10 -b "$JAR" -H "X-CSRF-Token: $CSRF" \
     -H 'Content-Type: application/json' \
-    -d "{\"name\":\"talktomira-cli-$(date +%s)\"}" -X POST "$BASE/v0/auth/api-tokens" \
+    -d "{\"name\":\"talktomira-cli-$(date +%s)\"}" -X POST "$BASE/v1/auth/api-tokens" \
     | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["token"])')
 
 PAYLOAD=$(MSG_B64="$MSG_B64" python3 -c '
@@ -91,13 +91,13 @@ print(json.dumps({"message": base64.b64decode(os.environ["MSG_B64"]).decode()}))
 if [[ "$RAW" = "yes" ]]; then
     curl -s --max-time 900 -H "Authorization: Bearer $TOKEN" \
         -H 'Content-Type: application/json' -d "$PAYLOAD" \
-        -X POST "$BASE/v0/api/chat"
+        -X POST "$BASE/v1/api/chat"
     echo
 else
     echo "waiting for reply (long turns block; up to 15 min)..." >&2
     curl -s --max-time 900 -H "Authorization: Bearer $TOKEN" \
         -H 'Content-Type: application/json' -d "$PAYLOAD" \
-        -X POST "$BASE/v0/api/chat" \
+        -X POST "$BASE/v1/api/chat" \
     | python3 -c '
 import sys, json
 r = json.load(sys.stdin)

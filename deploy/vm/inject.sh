@@ -79,7 +79,7 @@ done < "$SARC/SNAPSHOT-FACTS.txt"
 echo "== cleanup staging =="
 vmssh "$IP" "rm -rf $STAGE /tmp/inject-restore-vm.sh"
 
-H=$(vmssh "$IP" 'curl -s --max-time 10 http://127.0.0.1:1993/v0/api/health || true')
+H=$(vmssh "$IP" 'curl -s --max-time 10 http://127.0.0.1:1993/v1/api/health || true')
 echo "$H" | grep -q '"status":"healthy"' && echo "  PASS health: $H" || { echo "  FAIL health: $H"; FAIL=1; }
 if [ "$FAIL" = 0 ]; then
   echo "== DONE: MIRA restored from $SARC — healthy, facts verified =="

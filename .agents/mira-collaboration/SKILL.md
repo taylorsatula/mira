@@ -36,7 +36,7 @@ At session end, force a collapse through the actions API instead of walking away
 
 ## Technical mechanics
 
-- Transport: WebSocket `/v0/ws/chat`; first frame `{"type":"auth"}` with the session cookie from `GET /v0/auth/local/session`. Messages: `{"type":"message","message_id":"<uuid>","content":"..."}`. Deltas arrive as `content` on `assistant_delta` frames; the final reply also rides `turn_complete.response` with `tools_used` and timing.
+- Transport: WebSocket `/v1/ws/chat`; first frame `{"type":"auth"}` with the session cookie from `GET /v1/auth/local/session`. Messages: `{"type":"message","message_id":"<uuid>","content":"..."}`. Deltas arrive as `content` on `assistant_delta` frames; the final reply also rides `turn_complete.response` with `tools_used` and timing.
 - Set client patience from the first measured turn and never disconnect mid-generation — a client disconnect cancels the turn server-side and its in-flight work is lost. Local 27B-class thinking models run 90–400 seconds per turn.
 - Mid-turn tool loading fires a "continue with the original task" scaffold that can produce a second final reply; your client only sees the last one. After an anomalous turn, read the messages table instead of resending — user messages persist even when replies fail.
 - Timestamps in the messages table are microsecond-precision; exact-equality comparisons against millisecond literals return nothing. Query with ranges.

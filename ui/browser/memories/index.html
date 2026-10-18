@@ -296,7 +296,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return numeric.toLocaleString();
     }
 
-    // Memory rows from GET /v0/api/data?type=memories carry inbound_links /
+    // Memory rows from GET /v1/api/data?type=memories carry inbound_links /
     // outbound_links as arrays of {uuid, type, reasoning, created_at}.
     function normalizeMemory(item) {
         return {

@@ -4,8 +4,8 @@
  * PURPOSE:
  * Domaindocs are user-defined documents MIRA loads into context while enabled.
  * DomainKnowledgeManager wraps the `domain_knowledge` action domain
- * (POST /v0/api/actions) and the `domaindocs` data type
- * (GET /v0/api/data?type=domaindocs). Any number of domaindocs can be enabled.
+ * (POST /v1/api/actions) and the `domaindocs` data type
+ * (GET /v1/api/data?type=domaindocs). Any number of domaindocs can be enabled.
  *
  * CONSUMERS:
  * - Chat page: core.js calls initDomainKnowledge(apiClient), which wires the

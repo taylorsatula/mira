@@ -9,14 +9,14 @@ commit.
 
 Bootstrap chain (server contracts, verified live):
 
-1. ``GET /v0/auth/local/session`` — single-mode instances auto-provision the
+1. ``GET /v1/auth/local/session`` — single-mode instances auto-provision the
    local account and answer 303 + ``Set-Cookie: session=<token>`` (zero
    credentials). Multi-mode answers 404 → fall to the magic-link flow:
-   prompt email, ``POST /v0/auth/magic-link``, prompt the emailed token,
-   ``POST /v0/auth/verify`` → ``data.session_token``.
-2. ``POST /v0/auth/csrf`` (session as cookie AND Bearer header — the header
+   prompt email, ``POST /v1/auth/magic-link``, prompt the emailed token,
+   ``POST /v1/auth/verify`` → ``data.session_token``.
+2. ``POST /v1/auth/csrf`` (session as cookie AND Bearer header — the header
    takes precedence server-side) → ``data.csrf_token``.
-3. ``POST /v0/auth/api-tokens`` (session + ``x-csrf-token`` header) → 201,
+3. ``POST /v1/auth/api-tokens`` (session + ``x-csrf-token`` header) → 201,
    ``data.token`` — the only place the raw token ever appears.
 4. Write the token into the store; never print it (last resort: if the store
    cannot be written, print it with a warning rather than lose it silently).
@@ -30,11 +30,11 @@ from .endpoints import EndpointConfig, EndpointStore
 
 _TIMEOUT = httpx.Timeout(15.0)
 _TOKEN_NAME = "mira-tui"
-_LOCAL_SESSION_PATH = "/v0/auth/local/session"
-_MAGIC_LINK_PATH = "/v0/auth/magic-link"
-_VERIFY_PATH = "/v0/auth/verify"
-_CSRF_PATH = "/v0/auth/csrf"
-_API_TOKENS_PATH = "/v0/auth/api-tokens"
+_LOCAL_SESSION_PATH = "/v1/auth/local/session"
+_MAGIC_LINK_PATH = "/v1/auth/magic-link"
+_VERIFY_PATH = "/v1/auth/verify"
+_CSRF_PATH = "/v1/auth/csrf"
+_API_TOKENS_PATH = "/v1/auth/api-tokens"
 
 
 class LoginError(Exception):
@@ -45,17 +45,17 @@ class LoginError(Exception):
 
 
 def magic_link_payload(email: str) -> dict[str, str]:
-    """Body for POST /v0/auth/magic-link (MagicLinkRequest)."""
+    """Body for POST /v1/auth/magic-link (MagicLinkRequest)."""
     return {"email": email}
 
 
 def verify_payload(token: str) -> dict[str, str]:
-    """Body for POST /v0/auth/verify (MagicLinkVerifyRequest)."""
+    """Body for POST /v1/auth/verify (MagicLinkVerifyRequest)."""
     return {"token": token}
 
 
 def api_token_payload(name: str = _TOKEN_NAME, expires_in_days: int | None = None) -> dict[str, object]:
-    """Body for POST /v0/auth/api-tokens (APITokenCreateRequest)."""
+    """Body for POST /v1/auth/api-tokens (APITokenCreateRequest)."""
     return {"name": name, "expires_in_days": expires_in_days}
 
 

@@ -756,7 +756,7 @@ What `run()` returns is interpreted by `cns/services/tool_loop.py`, not passed t
 | `dict` | `json.dumps`-ed into the tool result |
 | `dict` with `"success": False` | Additionally treated as a **reported error** by the circuit breaker |
 | `list` | Passed through verbatim as provider content blocks — only `imagegen_tool` does this (image + text blocks with a compressed replay copy) |
-| `dict` with `_image_artifact` = `{file_id, alt_text}` | Consumed by `cns/services/orchestrator.py` to emit `![alt](/v0/api/images/{file_id})` into the user stream |
+| `dict` with `_image_artifact` = `{file_id, alt_text}` | Consumed by `cns/services/orchestrator.py` to emit `![alt](/v1/api/images/{file_id})` into the user stream |
 | raised exception | Propagates to the tool loop; log before raising so the cause is in server logs |
 
 Do not invent other underscore-prefixed result keys without a consumer — they are a contract with `cns/services/`, not a naming convention.

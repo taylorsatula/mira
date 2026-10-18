@@ -1,7 +1,7 @@
 """MCP check-in endpoint: a one-tool Model Context Protocol surface over the
 existing chat turn path.
 
-main.py mounts this at /v0/mcp only when ``config.system.mcp_enabled`` is set
+main.py mounts this at /v1/mcp only when ``config.system.mcp_enabled`` is set
 (strict ``MIRA_MCP_ENABLED=1``), and imports this module lazily inside that
 flag branch — disabled mode constructs nothing MCP-related at boot: no SDK
 import, no app, no session manager.
@@ -9,7 +9,7 @@ import, no app, no session manager.
 Design contract (owned by ``mcp/AGENTS.md`` at the repo root):
 
 - One tool: ``check_in(message, image?, image_type?, document?, document_type?)``.
-- No turn logic lives here. The tool self-calls ``POST /v0/api/chat`` on this
+- No turn logic lives here. The tool self-calls ``POST /v1/api/chat`` on this
   process's own listener, forwarding the client's Authorization header
   verbatim — the real endpoint performs authentication, user-context
   installation, the per-user request lock, validation, and the commit. One
@@ -105,7 +105,7 @@ async def _check_in(
         raise RuntimeError("check_in invoked outside an authenticated MCP request")
 
     # Async, not sync: a sync tool would hold a limiter token while waiting for another — deadlocking the sync pool at saturation.
-    url = f"{_self_call_base_url()}/v0/api/chat"
+    url = f"{_self_call_base_url()}/v1/api/chat"
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(_CHAT_CONNECT_TIMEOUT_S, read=_CHAT_READ_TIMEOUT_S)
@@ -227,7 +227,7 @@ class _AuthGate:
             await run_in_threadpool(auth_service.validate_session, token, False) is None
             and await run_in_threadpool(auth_service.validate_api_token, token) is None
         ):
-            logger.warning("MCP /v0/mcp rejected a request with an invalid or expired token")
+            logger.warning("MCP /v1/mcp rejected a request with an invalid or expired token")
             await _send_unauthorized(send, "Invalid or expired token.")
             return
 
@@ -239,7 +239,7 @@ class _AuthGate:
 
 
 def mount(app) -> None:
-    """Build and mount the MCP endpoint at /v0 (final path: /v0/mcp).
+    """Build and mount the MCP endpoint at /v1 (final path: /v1/mcp).
 
     Called by main.py only when config.system.mcp_enabled is set. The SDK is
     imported here (not at module top) so importing this module alone does not
@@ -262,6 +262,6 @@ def mount(app) -> None:
             enable_dns_rebinding_protection=False
         ),
     )
-    app.mount("/v0", _AuthGate(inner_app))
+    app.mount("/v1", _AuthGate(inner_app))
     app.state.mcp_session_manager = server.session_manager
-    logger.info("MCP endpoint mounted at /v0/mcp (tool: check_in)")
+    logger.info("MCP endpoint mounted at /v1/mcp (tool: check_in)")

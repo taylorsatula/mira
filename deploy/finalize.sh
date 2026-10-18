@@ -248,7 +248,7 @@ EOF
             echo -ne "${DIM}${ARROW}${RESET} Waiting for MIRA to become healthy... "
             MIRA_HEALTHY=0
             for i in $(seq 1 120); do
-                if curl -sf http://127.0.0.1:1993/v0/api/health 2>/dev/null | grep -q '"status":"healthy"'; then
+                if curl -sf http://127.0.0.1:1993/v1/api/health 2>/dev/null | grep -q '"status":"healthy"'; then
                     MIRA_HEALTHY=1
                     break
                 fi

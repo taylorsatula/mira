@@ -28,7 +28,7 @@ owns the living contracts.
 | History default | Everything from the active session + the most recent session summary; configurable in /settings. |
 | Follow-ups during a turn | **Outbox queue**: input stays live; queued messages visible in a dock widget; undo-until-sent via key command (pull back into editor); auto-send one at a time as each terminal frame arrives. Server enforces one active turn per *user* (`UserRequestLock`, `TURN_BUSY`), so queuing is the only correct client behavior. |
 | Pages | Only `/settings` (endpoint CRUD + select, history-fetch mode, thinking toggle). **No** /memory, /toolfeedback, or other secondary pages. |
-| Streaming | WS turn protocol (preferred over sync POST /v0/api/chat). |
+| Streaming | WS turn protocol (preferred over sync POST /v1/api/chat). |
 | Design language | botwithmemory web UI: black background, mono font, cyan active-state / green thinking / red alerts, `You:` / `MIRA:` colored sender labels, tool calls as ASCII trees (`├─`/`└─` param/result lines) with state transitions (running → collapsed → expandable), "Where we left off last session:" header for pre-session context. |
 
 ## 2. File structure
@@ -54,7 +54,7 @@ tui/
 
 ## 3. Server protocol (all verified in `cns/api/websocket_chat.py` + `cns/api/data.py`)
 
-### WebSocket — `ws(s)://<base>/v0/ws/chat`
+### WebSocket — `ws(s)://<base>/v1/ws/chat`
 - First frame within 10 s: `{"type":"auth","token":"<api token>"}` → `{"type":"auth_success","user_id":...}`. Auth errors → `protocol_error` (AUTH_TIMEOUT / AUTH_REQUIRED / AUTH_FAILED). Token can be a session token or API token.
 - Send: `{"type":"message","message_id":<uuid4>,"content":str(1..100_000),"include_thinking":bool, ("image","image_type") XOR ("document","document_type")}` — attachments mutually exclusive, skipped in v1.
 - Send: `{"type":"halt","turn_id":...}` (stop active turn → `turn_stopped` reason "halt"); `{"type":"ping"}` → `pong`.
@@ -63,11 +63,11 @@ tui/
 - Reconnect recovery pattern (from web core.js): re-fetch one history page (limit 50), rebuild the interrupted turn from the first user row.
 
 ### REST — Bearer token
-- `GET /v0/api/data?type=history&limit=N[&before=<cursor>][&message_type=regular|all]` → `{"messages":[...],"meta":{"has_more":bool,"next_before":"<opaque>"}}`. Keyset pagination ONLY — `offset` and `search` are rejected server-side. Pages come oldest→newest; keep fetching with `meta.next_before` while `has_more`.
+- `GET /v1/api/data?type=history&limit=N[&before=<cursor>][&message_type=regular|all]` → `{"messages":[...],"meta":{"has_more":bool,"next_before":"<opaque>"}}`. Keyset pagination ONLY — `offset` and `search` are rejected server-side. Pages come oldest→newest; keep fetching with `meta.next_before` while `has_more`.
 - Message shape: `{id, role, content, timestamp, metadata, tool_call_id, is_error}`.
 - **Sessions = segments.** Sentinels arrive inline among history messages: `metadata.is_segment_boundary='true'`, `status: active|paused|collapsed`. A **collapsed sentinel's `content` IS the session summary** (`metadata.display_title`, `segment_end_time`); the active sentinel has `content='[Segment in progress]'`. `message_type=regular` includes sentinels and excludes system notifications + keepsleeping heartbeats.
 - Default load recipe: paginate newest→oldest until crossing the newest **collapsed** sentinel → render it as the SegmentSummaryBanner, then everything after it chronologically = active session. Handle "no collapsed sentinel within fetch window" gracefully (active session only). Modes: `session_plus_summary` (default) | `session_only` | `all` (page until has_more=false, oldest-first rendering).
-- Auth: API tokens cannot be self-minted (`POST /v0/auth/api-tokens` needs a browser session + CSRF). /settings instructs: paste the raw token from the web settings page (shown once at mint). Bearer needs no CSRF; no rate limiting on these routes.
+- Auth: API tokens cannot be self-minted (`POST /v1/auth/api-tokens` needs a browser session + CSRF). /settings instructs: paste the raw token from the web settings page (shown once at mint). Bearer needs no CSRF; no rate limiting on these routes.
 
 ## 4. Event-bus architecture (from pi's proven structure)
 
@@ -98,7 +98,7 @@ tui/
 
 - Fresh deploy-only dev VM on the libvirt host (<user>@<libvirt-host>), all five routes live on lunaroute (glm-5.3 / glm-5.3-flash family), healthy, ~152 s deploy. VM sits on the host's NAT: reach it from the dev machine via tunnel:
   `ssh -L 1993:<vm-nat-ip>:1993 <user>@<libvirt-host>` → base URL `http://localhost:1993`.
-- Minted API token for this instance: `<redacted 2026-09-26: instance decommissioned, token dead>`. **Note:** the fresh instance's history is nearly empty (one probe message, no collapsed segments yet). For summary-banner verification either (a) collapse the active segment via `POST /v0/api/actions {"domain":"continuum","action":"collapse_segment"}` with the Bearer token, then chat more to open a new segment, or (b) restore the 1079-message v4 sarcophagus with `oneshot.sh mlfactory_v4_mira --fresh` on the host.
+- Minted API token for this instance: `<redacted 2026-09-26: instance decommissioned, token dead>`. **Note:** the fresh instance's history is nearly empty (one probe message, no collapsed segments yet). For summary-banner verification either (a) collapse the active segment via `POST /v1/api/actions {"domain":"continuum","action":"collapse_segment"}` with the Bearer token, then chat more to open a new segment, or (b) restore the 1079-message v4 sarcophagus with `oneshot.sh mlfactory_v4_mira --fresh` on the host.
 - Verification battery (Tier 2, live, NO MOCKS): boot gate = app connects + auths + renders; probes = history load (all modes), streaming turn with a tool call, context_reset handling, follow-up queue + undo-until-sent, halt, endpoint switching reloads history, auth-failure path (bad token → clear error), proactive_message rendering (if a heartbeat breakout can be coaxed). Adversarial pass: second agent re-derives the diff.
 
 ## 7. Repo rules that bind this build

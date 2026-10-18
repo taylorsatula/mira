@@ -98,7 +98,7 @@ sudo -n systemctl start mira
 
 echo "== 10. health poll (no fixed sleeps) =="
 for i in $(seq 1 150); do
-  H=$(curl -s --max-time 5 http://127.0.0.1:1993/v0/api/health || true)
+  H=$(curl -s --max-time 5 http://127.0.0.1:1993/v1/api/health || true)
   echo "$H" | grep -q '"status":"healthy"' && { echo "HEALTHY after ~$((i * 2))s: $H"; exit 0; }
   sleep 2
 done

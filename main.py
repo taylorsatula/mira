@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI):
     logger.info("====================")
 
     # Two-mode identity bootstrap: `single` auto-provisions its local account
-    # lazily through GET /v0/auth/local/session on first visit; `multi`
+    # lazily through GET /v1/auth/local/session on first visit; `multi`
     # bootstraps through public signup and magic links. Neither mode seeds
     # anything at boot.
     logger.info(f"Auth mode: {auth_mode()}")
@@ -247,7 +247,7 @@ async def lifespan(app: FastAPI):
 
     # Lattice federation is first-class but opt-in via config.lattice.enabled.
     # When enabled it must work or the service aborts startup loudly; when
-    # disabled nothing is imported and the /v0/api/federation router stays unmounted.
+    # disabled nothing is imported and the /v1/api/federation router stays unmounted.
     if config.lattice.enabled:
         logger.info("Initializing Lattice federation username resolver...")
         try:
@@ -276,7 +276,7 @@ async def lifespan(app: FastAPI):
         logger.info("Lattice federation disabled (enable via config.lattice.enabled=true)")
 
 
-    # MCP /v0/mcp (mounted in create_app only when config.system.mcp_enabled):
+    # MCP /v1/mcp (mounted in create_app only when config.system.mcp_enabled):
     # mounted sub-apps receive no lifespan events, so the MCP session manager's
     # task group is entered here — once per process — and closed at the very
     # end of shutdown below.
@@ -284,7 +284,7 @@ async def lifespan(app: FastAPI):
     mcp_manager = getattr(app.state, "mcp_session_manager", None)
     if mcp_manager is not None:
         await mcp_stack.enter_async_context(mcp_manager.run())
-        logger.info("MCP /v0/mcp session manager running (check_in tool available)")
+        logger.info("MCP /v1/mcp session manager running (check_in tool available)")
 
     logger.info("MIRA startup complete")
     
@@ -482,23 +482,23 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
     
-    app.include_router(health.router, prefix="/v0/api", tags=["health"])
-    app.include_router(update.router, prefix="/v0/api", tags=["update"])  # Public update check
+    app.include_router(health.router, prefix="/v1/api", tags=["health"])
+    app.include_router(update.router, prefix="/v1/api", tags=["update"])  # Public update check
     # The auth surface mounts unconditionally in both modes; every caller
     # authenticates through the shared credential ladder (session cookie →
     # issued API token).
-    app.include_router(auth_api.router, prefix="/v0/auth", tags=["auth"])
-    app.include_router(chat_api.router, prefix="/v0/api", tags=["chat"])
-    app.include_router(data.router, prefix="/v0/api", tags=["data"])
-    app.include_router(actions.router, prefix="/v0/api", tags=["actions"])
-    app.include_router(tool_config.router, prefix="/v0/api", tags=["tool_config"])
-    app.include_router(trigger_rules.router, prefix="/v0/api", tags=["trigger_rules"])
-    app.include_router(files_api.router, prefix="/v0/api", tags=["files"])
-    app.include_router(location.router, prefix="/v0/api", tags=["location"])
-    app.include_router(heartbeat_api.router, prefix="/v0/api", tags=["heartbeat"])
-    app.include_router(websocket_chat.router, prefix="/v0", tags=["websocket"])  # /v0/ws/chat
+    app.include_router(auth_api.router, prefix="/v1/auth", tags=["auth"])
+    app.include_router(chat_api.router, prefix="/v1/api", tags=["chat"])
+    app.include_router(data.router, prefix="/v1/api", tags=["data"])
+    app.include_router(actions.router, prefix="/v1/api", tags=["actions"])
+    app.include_router(tool_config.router, prefix="/v1/api", tags=["tool_config"])
+    app.include_router(trigger_rules.router, prefix="/v1/api", tags=["trigger_rules"])
+    app.include_router(files_api.router, prefix="/v1/api", tags=["files"])
+    app.include_router(location.router, prefix="/v1/api", tags=["location"])
+    app.include_router(heartbeat_api.router, prefix="/v1/api", tags=["heartbeat"])
+    app.include_router(websocket_chat.router, prefix="/v1", tags=["websocket"])  # /v1/ws/chat
     if config.lattice.enabled:
-        app.include_router(federation_api.router, prefix="/v0/api", tags=["federation"])
+        app.include_router(federation_api.router, prefix="/v1/api", tags=["federation"])
 
     # MCP check-in endpoint (opt-in, config.system.mcp_enabled — default off).
     # Lazy import: disabled mode constructs nothing MCP-related at boot — no
@@ -518,7 +518,7 @@ def create_app() -> FastAPI:
     # Browser client (ui/browser/) — page routes, root meta files, and the
     # /assets static mount. It is a single-user-mode surface: pages gate
     # behind get_current_user_for_pages, so under `single` an unauthenticated
-    # visit round-trips through /v0/auth/local/session and its cookie, and
+    # visit round-trips through /v1/auth/local/session and its cookie, and
     # under `multi` a page request gets the standard 401 envelope (mira-OSS
     # has no /login/ page). Root meta files and /assets carry no user data
     # and stay public so a gated page can still load its own JS/CSS.

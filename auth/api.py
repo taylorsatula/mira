@@ -192,7 +192,7 @@ async def get_current_user(
     a CSRF token for writes); server-to-server clients present an issued API
     token in the Authorization header. There is no static process-global key:
     under `single` mode the local account obtains its session through
-    `GET /v0/auth/local/session` exactly as multi-mode accounts do.
+    `GET /v1/auth/local/session` exactly as multi-mode accounts do.
 
     Returns SessionData for session-based auth, APITokenContext for API tokens.
     Raises HTTPException with standard error format on failure.
@@ -1103,13 +1103,13 @@ def _page_auth_failure() -> HTTPException:
 
     mira-OSS ships no `/login/` page (the CRM web redesign is omitted).
     Under `single` the auth surface itself bootstraps the session:
-    `/v0/auth/local/session` provisions the local account, mints a cookie,
+    `/v1/auth/local/session` provisions the local account, mints a cookie,
     and bounces back to `/chat`. Under `multi` there is nothing to redirect
     to yet, so the page request fails with the standard 401 envelope and the
     operator's own sign-in surface is the entry point.
     """
     if auth_mode() == "single":
-        return HTTPException(status_code=302, headers={"Location": "/v0/auth/local/session"})
+        return HTTPException(status_code=302, headers={"Location": "/v1/auth/local/session"})
     return _auth_http_exception(AuthError("UNAUTHORIZED", "Authentication required"), 401)
 
 

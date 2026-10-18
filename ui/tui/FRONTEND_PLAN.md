@@ -95,7 +95,7 @@ first after any context compaction**, then the orientation list at the bottom.
 
 - `<libvirt-host>` is the libvirt HOST, not the VM. The
   MIRA VM is a libvirt guest at `<vm-nat-ip>` (NAT, reachable only
-  via the host). Port 1993 open there; health is `GET /v0/api/health`
+  via the host). Port 1993 open there; health is `GET /v1/api/health`
   (healthy, deployed version string `2026.06.25`).
 - Orchestrator tunnel: `ssh -fN -o ExitOnForwardFailure=yes -L
   19930:<vm-nat-ip>:1993 <user>@<libvirt-host>` → base URL `http://127.0.0.1:19930`
@@ -127,7 +127,7 @@ first after any context compaction**, then the orientation list at the bottom.
 ### Live VM probe plan (step 4 — run when the user says the VM is up)
 
 1. Reachability: `nc -z -G 3 <vm-nat-ip> 1993` from the host, then
-   `GET /v0/api/health` through the tunnel.
+   `GET /v1/api/health` through the tunnel.
 2. Token into a SCRATCH store (never `~/.config/mira-tui/config.json`):
    `python3 -m tui --config <scratchpad>/live/store.json --login --base-url
    http://127.0.0.1:19930 --save-as devvm` (single-mode → zero prompts;
@@ -204,7 +204,7 @@ first after any context compaction**, then the orientation list at the bottom.
   `<mira:my_emotion>`) and possibly think blocks. Client must filter, including
   tags split across deltas and spanning lines.
 - `entry_id` = one provider step; a new entry starts after tool calls. Synthetic
-  file-artifact text (`📎 **[name](/v0/api/files/…)** (size)`) arrives as text.
+  file-artifact text (`📎 **[name](/v1/api/files/…)** (size)`) arrives as text.
 - `turn_complete.response` = tag-parsed clean text (my_emotion preserved). It
   can contain text that was **never streamed**: blank-after-tool-error fallback
   (`orchestrator.py` ~L1319–1330). Rule: display `response` only if the stream

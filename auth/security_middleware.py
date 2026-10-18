@@ -32,7 +32,7 @@ What must change before strict can become the default
    nothing may widen `script-src`, `connect-src` or `frame-src` for one.
 
 `Permissions-Policy` allows `geolocation` for this origin only: the browser client's
-`location.js` asks for the user's position and POSTs it to `/v0/api/location`. Camera
+`location.js` asks for the user's position and POSTs it to `/v1/api/location`. Camera
 and microphone stay denied.
 """
 

@@ -113,7 +113,7 @@ every session.
 - `requirements.txt` — dependency pins; the optional block's visibility to
   `Dockerfile.base` is owned by `deploy/AGENTS.md`.
 - `VERSION` — release identity string, read by `utils/release_identity.py:get_current_version`
-  and reported by `/health` and `/v0/api/update_status` (`cns/api/AGENTS.md`,
+  and reported by `/health` and `/v1/api/update_status` (`cns/api/AGENTS.md`,
   `utils/AGENTS.md`).
 - `install.sh` — stable installer entrypoint. Resolves the newest published
   release from GitHub's `releases/latest` redirect, fetches that tag's

@@ -5,7 +5,7 @@
 set -e
 
 # Check MIRA health endpoint
-RESPONSE=$(curl -sf http://localhost:1993/v0/api/health 2>/dev/null || echo '{"data":{"status":"error"}}')
+RESPONSE=$(curl -sf http://localhost:1993/v1/api/health 2>/dev/null || echo '{"data":{"status":"error"}}')
 
 # Extract status
 STATUS=$(echo "$RESPONSE" | jq -r '.data.status // "error"')

@@ -358,7 +358,7 @@ def chat_endpoint(
     # turn is in flight (the gauge holds it back until quiescence — mechanism
     # owner: utils/self_restart.py). The response dict is built; hypercorn's
     # graceful shutdown drains this in-flight request before the process
-    # exits. This is also the MCP check-in's turn end: /v0/mcp's check_in
+    # exits. This is also the MCP check-in's turn end: /v1/mcp's check_in
     # tool rides this endpoint.
     trigger_restart_if_pending()
     return response.to_dict()

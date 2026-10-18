@@ -12,12 +12,12 @@
  * - Rendering the Tools settings page
  *
  * API INTEGRATION (all through MiraAPIClient._httpRequest):
- * - GET /v0/api/actions/tools - List configurable tools
- * - GET /v0/api/actions/tools/{tool} - Get tool config
- * - GET /v0/api/actions/tools/{tool}/schema - Get JSON Schema
- * - PUT /v0/api/actions/tools/{tool} - Update config
- * - POST /v0/api/actions/tools/{tool}/validate - Validate config without saving
- * - DELETE /v0/api/actions/tools/{tool} - Reset to defaults
+ * - GET /v1/api/actions/tools - List configurable tools
+ * - GET /v1/api/actions/tools/{tool} - Get tool config
+ * - GET /v1/api/actions/tools/{tool}/schema - Get JSON Schema
+ * - PUT /v1/api/actions/tools/{tool} - Update config
+ * - POST /v1/api/actions/tools/{tool}/validate - Validate config without saving
+ * - DELETE /v1/api/actions/tools/{tool} - Reset to defaults
  */
 
 class ToolConfigManager {
@@ -27,14 +27,14 @@ class ToolConfigManager {
     }
 
     _toolPath(toolName) {
-        return `/v0/api/actions/tools/${encodeURIComponent(toolName)}`;
+        return `/v1/api/actions/tools/${encodeURIComponent(toolName)}`;
     }
 
     /**
      * Fetch list of all configurable tools
      */
     async fetchTools() {
-        const data = await this.apiClient._httpRequest('/v0/api/actions/tools');
+        const data = await this.apiClient._httpRequest('/v1/api/actions/tools');
         this.tools = data.tools;
         return this.tools;
     }

@@ -7,7 +7,7 @@
  * a consent modal explaining what location access does. On consent, queries
  * browser geolocation and POSTs coordinates to the backend.
  *
- * POST /v0/api/location {latitude, longitude} (cns/api/location.py).
+ * POST /v1/api/location {latitude, longitude} (cns/api/location.py).
  *
  * DEPENDENCIES:
  * - core.js (window.miraAPI, created on DOMContentLoaded before this module's init)
@@ -89,7 +89,7 @@
 
     async function submitLocation(latitude, longitude) {
         try {
-            await window.miraAPI._httpRequest('/v0/api/location', {
+            await window.miraAPI._httpRequest('/v1/api/location', {
                 method: 'POST',
                 body: JSON.stringify({ latitude, longitude })
             });

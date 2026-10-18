@@ -2633,7 +2633,7 @@ html[data-theme="light"] .session-status-content {
    FILE DOWNLOAD LINKS (Code Execution)
    ======================================== */
 
-#response_content a[href*="/v0/api/files/"] {
+#response_content a[href*="/v1/api/files/"] {
     display: inline-flex;
     align-items: center;
     gap: 0.4em;
@@ -2645,7 +2645,7 @@ html[data-theme="light"] .session-status-content {
     transition: background 0.15s, border-color 0.15s;
 }
 
-#response_content a[href*="/v0/api/files/"]:hover {
+#response_content a[href*="/v1/api/files/"]:hover {
     background: rgba(255, 255, 255, 0.1);
     border-color: rgba(255, 255, 255, 0.25);
 }

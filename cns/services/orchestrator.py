@@ -911,7 +911,7 @@ class ContinuumOrchestrator:
                     if image_artifact and stream and stream_callback:
                         alt = image_artifact.get("alt_text", "Generated image")
                         fid = image_artifact["file_id"]
-                        image_tag = f"\n\n![{alt}](/v0/api/images/{fid})\n\n📥 [Download full resolution](/v0/api/files/{fid})\n\n"
+                        image_tag = f"\n\n![{alt}](/v1/api/images/{fid})\n\n📥 [Download full resolution](/v1/api/files/{fid})\n\n"
                         synthetic_text = image_tag
                 except (json.JSONDecodeError, KeyError, TypeError):
                     pass
@@ -967,7 +967,7 @@ class ContinuumOrchestrator:
                         size_str = f"{size / (1024 * 1024):.1f} MB"
 
                     safe_display = event.filename.replace('[', '\\[').replace(']', '\\]')
-                    download_link = f"\n\n\ud83d\udcce **[{safe_display}](/v0/api/files/{event.file_id})** ({size_str})\n\n"
+                    download_link = f"\n\n\ud83d\udcce **[{safe_display}](/v1/api/files/{event.file_id})** ({size_str})\n\n"
 
                     synthetic_text = download_link
 

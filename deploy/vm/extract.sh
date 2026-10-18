@@ -33,7 +33,7 @@ DEST="$SNAP_DIR/$NAME"
 
 echo "== preflight: health + turn gate =="
 IP=$(vmip)
-H=$(vmssh "$IP" 'curl -s --max-time 8 http://127.0.0.1:1993/v0/api/health || true')
+H=$(vmssh "$IP" 'curl -s --max-time 8 http://127.0.0.1:1993/v1/api/health || true')
 echo "$H" | grep -q '"status":"healthy"' || { echo "FATAL: mira not healthy: $H" >&2; exit 1; }
 turn_lock_gate || exit 1
 

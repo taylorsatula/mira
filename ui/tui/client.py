@@ -438,14 +438,14 @@ class MiraClient:
     async def fetch_available_update(self) -> str | None:
         """Newest release name when the server has a verdict that one exists.
 
-        One REST read of `/v0/api/update_status`, the server's cached daily
+        One REST read of `/v1/api/update_status`, the server's cached daily
         release check. Returns None for every non-answer — no verdict yet, a
         server too old to have the route (404), a transport failure, or a
         malformed body — because the notice is advisory and must never surface
         as a chat error. Only an explicit `update_available` with a version
         string is reported, so a notice is never shown on a guess.
         """
-        url = self._config.base_url.rstrip("/") + "/v0/api/update_status"
+        url = self._config.base_url.rstrip("/") + "/v1/api/update_status"
         try:
             async with httpx.AsyncClient(timeout=UPDATE_STATUS_TIMEOUT) as http:
                 response = await http.get(
@@ -465,7 +465,7 @@ class MiraClient:
         return latest
 
     async def post_action(self, domain: str, action: str, data: dict) -> dict:
-        """POST /v0/api/actions; return the success envelope's ``data`` dict.
+        """POST /v1/api/actions; return the success envelope's ``data`` dict.
 
         Raises ClientError carrying the server's own code and message on any
         non-2xx status, a 2xx body that is the standard error envelope
@@ -475,7 +475,7 @@ class MiraClient:
         payloads are server-owned and heterogeneous, so wording drift must
         degrade a notice, never raise ProtocolError on an advisory surface.
         """
-        url = self._config.base_url.rstrip("/") + "/v0/api/actions"
+        url = self._config.base_url.rstrip("/") + "/v1/api/actions"
         try:
             async with httpx.AsyncClient(timeout=ACTIONS_TIMEOUT) as http:
                 response = await http.post(
@@ -538,7 +538,7 @@ class MiraClient:
                 "BAD_BASE_URL",
                 f"base_url {base!r} must start with http:// or https://",
             )
-        return ws_base.rstrip("/") + "/v0/ws/chat"
+        return ws_base.rstrip("/") + "/v1/ws/chat"
 
     async def _fail_auth(self, code: str, message: str) -> None:
         """Surface an auth failure on the queue, then raise. Never returns."""
@@ -715,7 +715,7 @@ class MiraClient:
         }
         if before is not None:
             params["before"] = before
-        url = self._config.base_url.rstrip("/") + "/v0/api/data"
+        url = self._config.base_url.rstrip("/") + "/v1/api/data"
         try:
             async with httpx.AsyncClient(timeout=HTTP_PAGE_TIMEOUT) as http:
                 response = await http.get(

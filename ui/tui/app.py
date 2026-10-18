@@ -60,7 +60,7 @@ No endpoint is configured yet. Three ways to set up:
 3. To mint the API token by hand, drive the same headless auth API chain
   option 1 uses (scripted end-to-end in deploy/vm/talktomira.sh):
   log in (auto local session, or emailed magic-link on multi-user), then
-  POST /v0/auth/csrf, then POST /v0/auth/api-tokens — the raw token is
+  POST /v1/auth/csrf, then POST /v1/auth/api-tokens — the raw token is
   shown once at mint time.
 Then rerun: python3 -m ui.tui"""
 

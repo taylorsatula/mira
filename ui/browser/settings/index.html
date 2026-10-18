@@ -341,7 +341,7 @@
 					<h4 style="margin-top: 30px; margin-bottom: 15px;">Usage</h4>
 					<div style="background: rgba(0, 0, 0, 0.3); padding: 15px; border-radius: 8px; font-family: monospace; font-size: 13px;">
 						<p style="margin-bottom: 10px;">Use your token as a Bearer token in the Authorization header:</p>
-						<pre style="margin: 0; color: #0bf;">curl -X POST <span id="api-host"></span>/v0/api/chat \
+						<pre style="margin: 0; color: #0bf;">curl -X POST <span id="api-host"></span>/v1/api/chat \
   -H "Authorization: Bearer YOUR_TOKEN_HERE" \
   -H "Content-Type: application/json" \
   -d '{"message": "Hello MIRA"}'</pre>
@@ -421,7 +421,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 	// ---- Trigger Rules (Automations) ----
 
-	// Trigger specs published by GET /v0/api/triggers/rules: [{trigger_id, filterable_fields}].
+	// Trigger specs published by GET /v1/api/triggers/rules: [{trigger_id, filterable_fields}].
 	let triggerSpecs = [];
 
 	function renderTriggerSelects() {
@@ -453,7 +453,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		const list = document.getElementById('trigger-rules-list');
 
 		try {
-			const response = await miraAPI._httpRequest('/v0/api/triggers/rules');
+			const response = await miraAPI._httpRequest('/v1/api/triggers/rules');
 			triggerSpecs = response.triggers;
 			renderTriggerSelects();
 			const rules = response.rules;
@@ -510,7 +510,7 @@ document.addEventListener('DOMContentLoaded', () => {
 					const editor = btn.closest('.rule-prompt-editor');
 					const newPrompt = editor.querySelector('.rule-prompt-textarea').value.trim();
 					try {
-						await miraAPI._httpRequest(`/v0/api/triggers/rules/${ruleId}`, {
+						await miraAPI._httpRequest(`/v1/api/triggers/rules/${ruleId}`, {
 							method: 'PUT',
 							body: JSON.stringify({ prompt: newPrompt || null }),
 						});
@@ -535,7 +535,7 @@ document.addEventListener('DOMContentLoaded', () => {
 				btn.addEventListener('click', async () => {
 					const ruleId = btn.dataset.ruleId;
 					try {
-						await miraAPI._httpRequest(`/v0/api/triggers/rules/${ruleId}`, {
+						await miraAPI._httpRequest(`/v1/api/triggers/rules/${ruleId}`, {
 							method: 'PUT',
 							body: JSON.stringify({ prompt: null }),
 						});
@@ -552,7 +552,7 @@ document.addEventListener('DOMContentLoaded', () => {
 					const ruleId = btn.dataset.ruleId;
 					const currentlyEnabled = btn.dataset.enabled === 'true';
 					try {
-						await miraAPI._httpRequest(`/v0/api/triggers/rules/${ruleId}`, {
+						await miraAPI._httpRequest(`/v1/api/triggers/rules/${ruleId}`, {
 							method: 'PUT',
 							body: JSON.stringify({ enabled: !currentlyEnabled }),
 						});
@@ -569,7 +569,7 @@ document.addEventListener('DOMContentLoaded', () => {
 					const ruleId = btn.dataset.ruleId;
 					if (!confirm('Delete this rule?')) return;
 					try {
-						await miraAPI._httpRequest(`/v0/api/triggers/rules/${ruleId}`, {
+						await miraAPI._httpRequest(`/v1/api/triggers/rules/${ruleId}`, {
 							method: 'DELETE',
 						});
 						loadTriggerRules();
@@ -608,7 +608,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		try {
-			await miraAPI._httpRequest('/v0/api/triggers/rules', {
+			await miraAPI._httpRequest('/v1/api/triggers/rules', {
 				method: 'POST',
 				body: JSON.stringify({
 					trigger_id: triggerId,
@@ -634,7 +634,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		const list = document.getElementById('trigger-conflicts-list');
 
 		try {
-			const response = await miraAPI._httpRequest('/v0/api/triggers/conflicts');
+			const response = await miraAPI._httpRequest('/v1/api/triggers/conflicts');
 			const conflicts = response.conflicts;
 
 			if (conflicts.length === 0) {
@@ -1165,12 +1165,12 @@ document.addEventListener('DOMContentLoaded', () => {
 		await loadLora();
 	};
 
-	// API Token Management (GET/POST/DELETE /v0/auth/api-tokens)
+	// API Token Management (GET/POST/DELETE /v1/auth/api-tokens)
 	async function loadTokens() {
 		const tokenList = document.getElementById('token-list');
 
 		try {
-			const response = await miraAPI._httpRequest('/v0/auth/api-tokens');
+			const response = await miraAPI._httpRequest('/v1/auth/api-tokens');
 			const tokens = response.tokens;
 			if (tokens.length === 0) {
 				tokenList.innerHTML = '<p style="color: var(--text-inline-dim);">No API tokens created yet.</p>';
@@ -1197,7 +1197,7 @@ document.addEventListener('DOMContentLoaded', () => {
 					if (!confirm('Revoke this token? This cannot be undone.')) return;
 
 					try {
-						await miraAPI._httpRequest(`/v0/auth/api-tokens/${encodeURIComponent(tokenId)}`, {
+						await miraAPI._httpRequest(`/v1/auth/api-tokens/${encodeURIComponent(tokenId)}`, {
 							method: 'DELETE',
 						});
 						loadTokens();
@@ -1239,7 +1239,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		try {
-			const response = await miraAPI._httpRequest('/v0/auth/api-tokens', {
+			const response = await miraAPI._httpRequest('/v1/auth/api-tokens', {
 				method: 'POST',
 				body: JSON.stringify({ name, expires_in_days }),
 			});

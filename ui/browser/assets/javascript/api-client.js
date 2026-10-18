@@ -14,7 +14,7 @@
  *   (main.py flattens auth HTTPException details so the code is at error.code).
  *
  * Auth is the HttpOnly `session` cookie (single-user auto-login). Cookie
- * writes to /v0/api* and /v0/auth* carry X-CSRF-Token.
+ * writes to /v1/api* and /v1/auth* carry X-CSRF-Token.
  *
  * Load order: before core.js, which constructs the chat page's instance.
  */
@@ -22,7 +22,7 @@
 (() => {
     'use strict';
 
-    const CSRF_PATH = '/v0/auth/csrf';
+    const CSRF_PATH = '/v1/auth/csrf';
     const CSRF_RETRY_CODES = new Set(['CSRF_INVALID', 'CSRF_REQUIRED']);
 
     // Server rejects content outside 1..100_000 characters (MessageFrame) with an
@@ -107,7 +107,7 @@
     class MiraAPIClient {
         constructor() {
             this.baseURL = window.location.origin;
-            this.wsURL = this.baseURL.replace(/^http/, 'ws') + '/v0/ws/chat';
+            this.wsURL = this.baseURL.replace(/^http/, 'ws') + '/v1/ws/chat';
 
             this._authenticated = false;
             this._loggedOut = false;
@@ -138,7 +138,7 @@
 
                 validateToken: async () => {
                     try {
-                        await this._httpRequest('/v0/auth/session');
+                        await this._httpRequest('/v1/auth/session');
                     } catch (error) {
                         // 401 already ran clearToken (logout event) inside _httpRequest.
                         if (error instanceof MiraHttpError && error.status === 401) {
@@ -190,7 +190,7 @@
             };
 
             this.actions = {
-                executeAction: (domain, action, data = {}) => this._httpRequest('/v0/api/actions', {
+                executeAction: (domain, action, data = {}) => this._httpRequest('/v1/api/actions', {
                     method: 'POST',
                     body: JSON.stringify({ domain, action, data })
                 })
@@ -204,7 +204,7 @@
                             query.append(key, String(value));
                         }
                     }
-                    return this._httpRequest(`/v0/api/data?${query.toString()}`);
+                    return this._httpRequest(`/v1/api/data?${query.toString()}`);
                 }
             };
 
@@ -682,7 +682,7 @@
             const method = (options.method || 'GET').toUpperCase();
             const path = endpoint.split('?')[0];
             const csrfProtected = method !== 'GET' && method !== 'HEAD' && (
-                path.startsWith('/v0/api') || (path.startsWith('/v0/auth') && path !== CSRF_PATH)
+                path.startsWith('/v1/api') || (path.startsWith('/v1/auth') && path !== CSRF_PATH)
             );
 
             let csrfToken = csrfProtected ? await this._ensureCsrfToken() : null;
@@ -690,7 +690,7 @@
 
             if (csrfProtected && result.status === 403 && CSRF_RETRY_CODES.has(result.error.code)) {
                 // The server keeps one CSRF token per session and every
-                // POST /v0/auth/csrf replaces it, so another tab's fetch
+                // POST /v1/auth/csrf replaces it, so another tab's fetch
                 // invalidates this tab's copy. Refetch and retry exactly once.
                 // Server-side alternative: make auth/session.py:generate_csrf_token
                 // get-or-create (atomic SET NX) so concurrent tabs share one token

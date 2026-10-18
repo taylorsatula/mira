@@ -33,7 +33,7 @@ from .types import UserRecord, UserProfile, SessionData, CookieSettings
 logger = logging.getLogger(__name__)
 
 # Fixture identity for the auto-provisioned local account under `single`
-# mode (`GET /v0/auth/local/session`). `create_local_session` pins the browser
+# mode (`GET /v1/auth/local/session`). `create_local_session` pins the browser
 # session to the install's ORIGINAL member account — the oldest member row,
 # whatever its email: the account the installer created from the operator's
 # config email, or the `user@localhost` row pre-multi-user installs seeded.
@@ -345,7 +345,7 @@ class AuthService:
 
         The link target — `<app_url>/verify-magic-link` — is the path the
         sign-in UI is expected to occupy; the API contract that consumes the
-        token is `POST /v0/auth/verify`. The token appears only in this
+        token is `POST /v1/auth/verify`. The token appears only in this
         composed message, never in a log line.
         """
         minutes = max(1, config.MAGIC_LINK_EXPIRY // 60)

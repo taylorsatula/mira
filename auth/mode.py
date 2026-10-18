@@ -6,7 +6,7 @@ mira-OSS ships to single-user installs and to multi-user installs from one tree,
 and the two need different bootstrap.
 
     single  (DEFAULT) One local account auto-provisioned by the local-session
-                      endpoint (`GET /v0/auth/local/session`) on first visit.
+                      endpoint (`GET /v1/auth/local/session`) on first visit.
                       Session-stack auth (Valkey sessions, CSRF) with no public
                       account creation; no email transport needed.
     multi             Full multi-user: signup, magic links, sessions, API tokens,

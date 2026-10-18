@@ -100,19 +100,19 @@ real orientation and regenerating the manifest.
 ```bash
 # inside the VM: http://127.0.0.1:1993 — from the caller: http://<vm-ip>:1993
 JAR=$(mktemp)
-curl -s -c $JAR http://127.0.0.1:1993/v0/auth/local/session            # session cookie
-CSRF=$(curl -s -b $JAR -c $JAR -X POST http://127.0.0.1:1993/v0/auth/csrf \
+curl -s -c $JAR http://127.0.0.1:1993/v1/auth/local/session            # session cookie
+CSRF=$(curl -s -b $JAR -c $JAR -X POST http://127.0.0.1:1993/v1/auth/csrf \
        | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["csrf_token"])')
 TOKEN=$(curl -s -b $JAR -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
-        -d '{"name":"agent"}' -X POST http://127.0.0.1:1993/v0/auth/api-tokens \
+        -d '{"name":"agent"}' -X POST http://127.0.0.1:1993/v1/auth/api-tokens \
         | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["token"])')
 curl -s --max-time 900 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-     -d '{"message":"hello"}' -X POST http://127.0.0.1:1993/v0/api/chat
+     -d '{"message":"hello"}' -X POST http://127.0.0.1:1993/v1/api/chat
 # reply: data.response, data.metadata.{tools_used,surfaced_memories,processing_time_ms}
 ```
 
 Cookie-auth POSTs need `X-CSRF-Token`; Bearer does not. Probe health first:
-`GET /v0/api/health`.
+`GET /v1/api/health`.
 
 ## Gotchas — hard-won, all encoded in the code; do not "simplify" them away
 

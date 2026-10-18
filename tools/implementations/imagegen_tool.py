@@ -510,7 +510,7 @@ class ImageGenerationTool(Tool):
         """Publish an image to the user.
 
         Returns _image_artifact which the orchestrator converts to an inline
-        markdown image tag (![caption](/v0/api/images/{file_id})).
+        markdown image tag (![caption](/v1/api/images/{file_id})).
         """
         if not image_id:
             raise ValueError("'image_id' is required for publish operation")

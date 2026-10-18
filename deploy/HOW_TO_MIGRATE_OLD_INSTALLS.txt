@@ -28,7 +28,7 @@ archaeology.
 Prereqs on your machine:
 
   1. A fresh MIRA installed and healthy (deploy/deploy.sh; check
-     /v0/api/health returns "healthy" first).
+     /v1/api/health returns "healthy" first).
   2. Your old data, in ONE of these forms:
        - a pg_dump custom-format dump of the old mira_service DB, or
        - a filesystem copy / tarball of the old install, or

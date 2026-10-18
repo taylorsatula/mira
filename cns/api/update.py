@@ -141,7 +141,7 @@ def update_status_endpoint(
     it at startup and every 24 h.
 
     Anonymous callers are rejected: the endpoint is mounted under the
-    authenticated `/v0/api` surface, and the notice is a per-install fact a
+    authenticated `/v1/api` surface, and the notice is a per-install fact a
     session or API token is already required to read anything else with.
     """
     return get_update_status()
