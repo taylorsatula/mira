@@ -1,9 +1,22 @@
 """
-SQLite-based reminder tool for managing scheduled reminders with complete user isolation.
+Reminders in per-user SQLite, with optional contact links and a user/internal
+category split.
 
-This tool stores all reminder data in user-specific SQLite databases, ensuring perfect
-multi-tenant isolation through automatic user-scoped queries. Integrates with
-the user's contacts by storing contact UUID references.
+`_parse_date` resolves an exact local wall time (`YYYY-MM-DDTHH:MM:SS`, no
+offset) with daylight-saving strictness before the lenient phrase ladder runs:
+`normalize_exact_local_wall_time` plus `local_datetime_to_utc_iso` raise on a
+wall time that occurs twice or not at all, so the model gets the ambiguity
+message it needs in order to ask the user which time was meant. Only phrases
+like "tomorrow" or "in 3 weeks" fall through to the ladder.
+
+Rescheduling and snoozing reopen a completed reminder, because active views
+load `completed = 0` and a rescheduled row left completed would never resurface.
+`_check_duplicate_reminder` returns the existing row for a retry that repeats
+the title and the due time within the same minute window. An id-addressed
+operation on a missing row raises `ReminderNotFoundError`, a ValueError
+subclass, rather than returning `success: False`, so the caller can map absence
+to a 404; `_mark_completed` re-reads the row after writing and raises when the
+update did not persist.
 """
 
 import inspect

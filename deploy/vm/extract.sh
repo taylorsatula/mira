@@ -49,6 +49,7 @@ echo "== pull =="
 mkdir -p "$DEST"
 ssh_dir_copy() {  # recursive pull through the appropriate transport
   local ip="$1"
+  # ACCEPTED-RESIDUAL: this branch guards nothing — both arms fall through to the scp below; scp's -J already covers the jump.
   if [ -n "$JUMP" ] && [ "$IS_LIBVIRT" = 0 -o -n "$REMOTE_HOST" ]; then
     :  # scp handles -J via ProxyJump below
   fi

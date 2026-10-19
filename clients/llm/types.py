@@ -1,4 +1,18 @@
-"""Provider-neutral LLM request and result types."""
+"""The neutral contract every dialect translates to and from: request, result, tools, usage, reasoning.
+
+Every dataclass here is frozen and validates in `__post_init__`, so a
+malformed value fails where it was built rather than on the wire — a blank
+model, a non-positive `max_tokens`, an unknown `stop_reason` or effort, a tool
+schema that is not an object schema. Two field meanings carry money: `Usage.
+input_tokens` counts only uncached prompt tokens (cache writes and reads ride
+their own fields, and pricing charges the three independently), and
+`ReasoningArtifact` keeps unsigned display blocks and provider round-trip
+signatures as separate projections of one ordered entry list, so a writer that
+reorders one breaks the pairing of the other. `EffortLevel` and
+`DeliberationLevel` are two literals that must stay in step; the import-time
+check over `EFFORT_LEVEL_ORDER` fails the process rather than letting a clamp
+raise later.
+"""
 
 from __future__ import annotations
 

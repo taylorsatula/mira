@@ -1,11 +1,15 @@
 """
-Auto-generate one-sentence summaries for DomainDoc sections.
+One-sentence summaries for DomainDoc sections, stored on the section record.
 
-When a DomainDoc section is created or updated (via tool or web UI), this service
-generates a brief summary and stores it directly on the section record.
+`update_section_summary` is called by both DomaindocTool and the web UI after a
+section is written, generating the summary on the `fast` route and storing it in
+`domaindoc_sections.encrypted__summary`. The DomainDoc trinket renders its
+section index from these stored summaries, so no separate index is maintained.
 
-The Section Index is rendered dynamically by the domaindoc trinket from these
-stored summaries - no separate index storage needed.
+Two bounds keep the call cheap and non-blocking: content is truncated before it
+reaches the prompt, and every failure is swallowed with a warning, because the
+summary is a derived convenience and must never block the section save that
+triggered it.
 """
 import logging
 from typing import Optional

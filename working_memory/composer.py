@@ -1,8 +1,25 @@
 """
-System Prompt Composer
+System prompt composition: section collection, placement, and assembly.
 
-Handles in-memory composition of system prompts by collecting
-sections from trinkets and assembling them in a defined order.
+Trinkets hand sections to `add_section`; `compose()` renders them into the four
+prompt surfaces the orchestrator consumes. Placement comes from
+`SECTION_LAYOUT`, where every slot name maps to exactly one of `system`,
+`post_history`, or `notification`, and `cache_policy` then splits the `system`
+placement into a cached and a non-cached string. A section whose name is
+missing from the layout still reaches the model — it is appended to `system`
+with a warning — so a new trinket works without editing this file, but a
+section registered under a name that already sits in the layout is routed to
+that slot's placement instead of `system`.
+
+`add_section` drops empty content outright and `compose()` re-checks, so a
+trinket emitting whitespace contributes no section and raises nothing. The
+three placements leave as three separate prompt surfaces: notification sections
+are frame-wrapped into a `<mira:hud>` block and returned as their own assistant
+message (the empty string when there are no parts), post-history items become
+assistant messages after history, and only the cached and non-cached content
+reaches the system string. One `_sections` dict serves the whole process: the
+composer carries no user dimension, and serializing concurrent composes is the
+caller's job.
 """
 import logging
 import re

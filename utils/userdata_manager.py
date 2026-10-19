@@ -1,9 +1,29 @@
 """
-User data management module for per-user SQLite databases with session-based encryption.
+Per-user SQLite store (``data/users/{user_id}/userdata.db``) with transparent
+field encryption, plus the DDL for every tool table MIRA ships.
 
-Connection management: Each UserDataManager owns a single persistent SQLite connection
-(created lazily on first access). Instances are cached per-user to avoid redundant
-connection creation. Connections are cleaned up on session collapse or process shutdown.
+Encryption is driven by the column-name prefix: any column named
+``encrypted__*`` holds a Fernet token over the JSON value, encrypted on insert
+and update and decrypted on select, so a reader gets plaintext from ``select``
+and never decrypts again (a second ``_decrypt_dict`` on a plaintext row raises
+``InvalidToken``). The key is ``derive_session_key(user_id)`` — HMAC-SHA256
+over the user id, keyed by the Vault ``userdata_encryption_key`` — so one
+user's file is unreadable with another user's key.
+
+Open order is load-bearing: tables (``CREATE ... IF NOT EXISTS``) → the
+versioned steps in ``utils/userdata_migrations.py`` (a file created fresh is
+stamped at head instead) → ``_PAGER_INDEXES``/``_DOMAINDOC_INDEXES``. An index
+over a column a step adds, created before the steps run, fails on every file
+older than that step.
+
+Every connection sets ``PRAGMA foreign_keys=ON`` (per connection in SQLite: it
+is off by default, which quietly disables every ``ON DELETE CASCADE``) and uses
+``INTEGER PRIMARY KEY AUTOINCREMENT`` ids so a deleted row's id is never
+reissued to new content.
+
+One manager instance per user, cached process-wide under ``_manager_cache_lock``,
+each owning one persistent connection; ``clear_manager_cache`` closes it and
+runs when that user's segment collapses.
 """
 
 import base64
@@ -521,6 +541,9 @@ class UserDataManager:
         self.create_table('credentials', schema)
 
 
+# CROSS-FILE-COUPLING: scripts/export_user_bundle.py reimplements this
+# derivation plus _create_fernet by hand; a change here without the same change
+# there exports every encrypted__ value as an UNDECRYPTABLE__ null.
 def derive_session_key(user_id: str) -> bytes:
     """Derive per-user encryption key from the Vault-backed master key."""
     from clients.vault_client import get_service_config

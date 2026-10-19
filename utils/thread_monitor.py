@@ -1,8 +1,22 @@
 """
-Thread monitoring and debugging utilities.
+Thread and operation monitoring for diagnosing hangs.
 
-Provides detailed logging and monitoring for thread operations to diagnose
-hanging issues in the application.
+Operations are registered by name against the running thread
+(``start_operation``/``end_operation``); the registry keeps the start time, the
+caller's context and the stack trace at start, which is the only record of
+how a thread got somewhere once it is stuck. Two thresholds classify a
+finished operation: over ``SLOW_OPERATION_THRESHOLD`` it logs a warning, over
+``STUCK_OPERATION_THRESHOLD`` an error — and an operation still open past the
+stuck threshold is what ``get_stuck_operations`` reports.
+
+Consumers: ``wrap_scheduled_job`` (``utils/scheduled_task_monitor.py``) brackets
+every scheduled job with it, ``MonitoredThreadPoolExecutor`` brackets each
+submitted task and polls for stuck futures, and the health diagnostics call
+``dump_thread_states`` for the on-demand dump.
+
+``start_periodic_monitoring`` starts a daemon thread that dumps state on
+interval. The dump is written to a temp file as well as logged because a
+stuck process's journal is often the only thing still readable.
 """
 
 import threading

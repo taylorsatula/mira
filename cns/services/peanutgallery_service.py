@@ -1,11 +1,17 @@
 """
-Peanut Gallery metacognitive observer service.
+Peanut Gallery observer: periodic metacognitive guidance injected into the HUD.
 
-Orchestrates the Peanut Gallery observation system:
-- Triggers every N turns (fire-and-forget async)
-- Uses the TurnCompletedEvent continuum snapshot as its evidence source
-- Runs observer evaluation on current-session evidence
-- Applies guidance results into HUD
+`PeanutGalleryService` subscribes to `TurnCompletedEvent` and fires on every
+`PG_TRIGGER_INTERVAL`th segment turn, running the observation on a copied-context
+executor so it never blocks the reply. It is fire-and-forget: observation
+failures are logged and swallowed, because a failed observation must not affect a
+turn that already completed.
+
+The model's `action_type` is the whole contract between the two halves:
+`_apply_result` handles `noop` and the three guidance types
+(`concern`/`coaching`/`initiative`), and anything else drops with a warning. A new
+action type must land here and in the trinket's rendering, or the guidance is
+silently discarded.
 """
 import contextvars
 import logging

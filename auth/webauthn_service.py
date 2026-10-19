@@ -1,5 +1,28 @@
-"""
-WebAuthn service for biometric authentication.
+"""Passkey ceremonies: options generation, verification, and the classification of their failures.
+
+Each ceremony is a pair of calls. The options generator stores a challenge in
+Valkey under `webauthn_challenge:` with a short TTL; the verifier retrieves it
+with `getdel_json`, so the challenge is consumed one-shot and a replayed response
+finds none and fails as `invalid_challenge`. Any path that stores a challenge
+with a plain `json_set_with_expiry` reopens replay.
+
+Challenges are keyed differently per ceremony because the user is known at
+different moments. Registration and the email-keyed login key by user id. A
+discoverable login has no user yet, so it keys by an opaque `challenge_id` the
+client echoes back on completion, and the user is then identified from the
+credential's userHandle.
+
+`_is_server_config_validation_error` is the load-bearing split in the error
+taxonomy. An origin or RP-ID mismatch compares the client's data against server
+configuration and means `APP_URL` is wrong, so it raises `internal_error`; every
+other `WebAuthnException` means the client-supplied credential could not be
+validated and raises `invalid_credential`. Collapsing the two reports a broken
+deployment as every user's client error. The check matches the library's message
+text; wording drift in a future `webauthn` release silently reclassifies a server
+fault as `invalid_credential` rather than crashing.
+
+`rp_id` and the expected origin both derive from `config.APP_URL` (`localhost`
+special-cased), so both move together with that one Vault value.
 """
 
 import json

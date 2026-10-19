@@ -1,10 +1,14 @@
 """
-Heartbeat API -- inspect and manage briefs (wake-ups with missions).
+Brief inspection and cancellation: wake-ups with missions, one user's own.
 
-Per-user briefs surface for the future web frontend: GET endpoints
-enumerate and fetch briefs; POST cancel kills a brief by id. Authenticated
-per-user like every other router (get_current_user); a user only ever sees
-their own briefs.
+Reads enumerate and fetch rows out of `heartbeat_tool`'s per-user store. Cancel
+rides `HeartbeatTool().run("cancel", ...)` — the tool's real entry point —
+rather than opening the table directly, so the tool's state rules stay the only
+ones in force. The read path imports the tool's private `ensure_briefs_table` and
+`_brief_row_public`, so a rename in the tool is a rename here in the same commit.
+
+Authenticated per user like every router in this directory: a caller only ever
+sees its own briefs.
 """
 import logging
 from typing import Any, Optional

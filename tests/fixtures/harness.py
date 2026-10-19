@@ -1,7 +1,11 @@
-"""Claim-free probe harness: run named checks, print a terminal marker, exit nonzero on failure.
+"""Claim-free probe harness: run named checks, print a terminal marker, return the exit code.
 
-Spec: tests/fixtures/AGENTS.md. Holds no behavior assertion and touches no
-infrastructure — the callable passed to `check` is the thing that touches reality.
+`finish()` returns 0 only when every recorded check passed and at least one ran;
+any FAIL, or a probe that recorded nothing at all, yields 1 — a vacuous probe
+fails. The module holds no behavior assertion and touches no infrastructure: the
+callable passed to `check` is the thing that touches reality. `check` catches
+`Exception` only, so a `SystemExit` raised inside a check ends the process
+instead of being recorded as a FAIL.
 """
 from __future__ import annotations
 

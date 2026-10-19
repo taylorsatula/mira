@@ -1,14 +1,22 @@
 """
-Continuum search tool for finding relevant messages in continuum history.
+Conversation-history search over the continuum: segment summaries, segment
+precis, time-bounded messages, and single-message expansion.
 
-This tool provides multi-tier search capability:
-1. Default: Hybrid vector + BM25 search on segment summaries for efficient retrieval
-2. Scoped message search within specific time boundaries from segment results
-3. Legacy: Direct BM25 full-text search on messages (requires timescope)
+A summary search runs one hybrid query over the collapsed segment-boundary
+rows: a vector pass on `segment_embedding` (HNSW index) joined to a BM25 pass
+over the summary stored in `content`, combined into a single score weighted by
+`hybrid_vector_weight` and normalized with tanh. Entity names the caller
+supplies boost that score rather than filtering results. Message-level search
+only ever runs inside an explicit start/end window — there is no unbounded
+message search — and a segment result hands back the `time_boundaries` that
+message search and expansion expect.
 
-Results use progressive disclosure - segment summaries contain synthesized information
-from entire conversation segments. MIRA can then search within specific segments
-using the provided time boundaries for detailed information.
+Every temporal parameter is read through `_parse_model_wall_time`: a value
+carrying no offset is the user's local wall time, because the only clock the
+model is shown is the `<current_datetime>` trinket rendered in that zone, while
+a value carrying `+00:00` or `Z` is honoured exactly — which is what makes the
+documented verbatim copy-through of `time_boundaries` safe. An embedding
+failure is reported as a failed search, never as an empty result set.
 """
 
 import logging

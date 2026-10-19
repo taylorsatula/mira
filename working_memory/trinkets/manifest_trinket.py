@@ -1,4 +1,17 @@
-"""Manifest trinket for displaying conversation segment manifest in system prompt."""
+"""
+Renders the conversation segment manifest grouped by the user's calendar day.
+
+Segments come from `ManifestQueryService.get_segments` and are bucketed into
+`TODAY` / `YESTERDAY` / a `%b %d` label computed in the user's timezone, then
+emitted oldest-first inside each bucket. An active segment renders as
+"{start} - ACTIVE"; a collapsed one as a start-end range.
+
+Two broad `except` clauses here degrade a bad timestamp or an unreadable
+timezone preference into the display labels `'UTC'` and `"[Unknown]"`. That is
+safe for a label the model reads as context and unsafe anywhere a timestamp
+feeds a decision: the fallback turns an unparsed time into a plausible one
+with no error.
+"""
 import logging
 from collections import OrderedDict
 from datetime import timedelta

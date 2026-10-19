@@ -1,8 +1,32 @@
 """
-ForageAgent -- Background research agent on the SidebarAgent base class.
+ForageAgent -- background research on the SidebarAgent base, and the only
+type whose `continue` refines a completed briefing.
 
-Publishes to the unified SubagentResultsTrinket via
-_get_completion_trinket() and _build_completion_context() overrides.
+`build_initial_message` reads `subject`, `context`, and `previous_result`
+from the work item; when `previous_result` is present the run is a
+refinement of an earlier briefing, and that briefing is handed in as the
+starting material so the agent deepens rather than repeats it. `activate`
+and `continue_task` both build their work item through `_work_item`, which
+writes `previous_result` only when there is one.
+
+`continue_task` is the refine path: it claims a task_id against the results
+trinket, refuses with a reason when the entry is still running or ended
+without a result, and on a usable success entry dismisses that entry
+(`publish_result`) before respawning -- so a refine never leaves two live
+entries for one line of research under different ids. It returns None when
+the task_id is not an active forage entry, which is the claim protocol's
+"not mine" answer.
+
+Blocking runs (`_run_blocking`) rewrite the instance's `max_iterations` from
+`config.subagent_tool.forage_blocking_max_iterations` before `run_blocking`:
+the class's own cap is calibrated against the background wall-clock budget,
+and a blocking call inheriting it can outlive the caller's turn. The progress
+bar `_iteration_status` renders rescales with the rewritten cap.
+
+Completions publish to the unified results trinket through
+`_get_completion_trinket` and `_build_completion_context`; `on_overwatch_update`
+publishes the per-iteration `in_progress` entry, and a failed publish is
+swallowed at debug so a trinket problem never ends a run.
 """
 import logging
 from typing import Any, TYPE_CHECKING

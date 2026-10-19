@@ -1,8 +1,22 @@
 """
-Message value objects for CNS.
+Message value objects: the content-block union, the metadata inventory, and
+the digest preprocessing every summarizer shares.
 
-Immutable message representations that capture the essential business logic
-without external dependencies. Timezone handling follows UTC-everywhere approach.
+A `Message` is frozen at the attribute layer only. `metadata` is an ordinary
+mutable dict and so is every block in a list-valued `content`, so two holders
+of one `Message` observe each other's in-place writes and `with_metadata` is
+the copy path — the one to use when a stamp must stay local.
+
+`to_dict`/`from_dict` are the Valkey hot-cache round-trip, and the cache is
+their only caller. A field added to the dataclass but omitted from either
+method vanishes from every message at the next cache read. Postgres is not
+the same path: the repository builds `Message` directly and reconstitutes
+content by the persisted `content_type` identity tag, never by `from_dict`.
+
+`preprocess_content_blocks` produces the one digest that summarizers,
+extractors, and the portrait pipelines read. Reasoning display text reaches
+it; provider-serialized `thinking` / `redacted_thinking` payloads are skipped
+by name and never reach a digest that gets rendered or embedded.
 """
 from __future__ import annotations
 

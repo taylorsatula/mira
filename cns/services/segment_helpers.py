@@ -1,8 +1,19 @@
 """
-Segment helper utilities for managing segment boundary sentinels.
+Sentinel construction and display formatting for conversation segments.
 
-Segments are represented as sentinel messages in the messages table with
-metadata.is_segment_boundary = True, following the same pattern as session boundaries.
+A segment is a sentinel message in `messages` carrying
+`metadata.is_segment_boundary = True`. `create_segment_boundary_sentinel` writes
+the opening half of that metadata (status, `segment_id`, turn counters,
+`last_turn_at`, `tools_used`) and `collapse_segment_sentinel` writes the
+collapsed half (summary in content, `precis`, `display_title`, complexity,
+embedding). This module is the vocabulary's writer: the timeout sweep, the
+manifest query, the tier selection in `cns/core/segment_cache_loader.py`, and
+the display formatters are its readers, so a new metadata key lands here and in
+every reader in the same commit.
+
+A sentinel's `created_at` is the first message's timestamp minus one
+microsecond, so chronological ordering places the boundary before the messages
+it brackets without relying on insertion order.
 """
 import logging
 from typing import List, Optional

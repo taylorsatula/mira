@@ -1,7 +1,23 @@
 """
-Monitoring wrapper for scheduled tasks to diagnose hanging issues.
+Wraps a scheduled job with timing, history accounting and stuck-thread
+diagnosis.
 
-Wraps scheduled tasks with detailed logging and timeout detection.
+Every run increments a per-job counter set and records last/max duration via
+``get_job_stats``. An optional timeout runs the job on a single-worker
+executor and waits with a bound: on expiry the job is accounted as a timeout,
+the future is cancelled, and a thread dump is written — a running Python thread
+cannot be killed, so the dump is the diagnosis, and the executor is shut down
+with ``wait=False`` because ``shutdown(wait=True)`` would block forever on the
+exact thread that is stuck.
+
+Timeout accounting distinguishes two cases from the same exception, because
+Python 3.11+ aliases ``concurrent.futures.TimeoutError`` to the builtin: a
+``TimeoutError`` raised by the job body itself reaches the monitor's handler,
+and when the future is already done the body's own exception is re-raised so it
+counts as a job failure rather than a monitor timeout.
+
+A run longer than a minute logs a warning; past five minutes a thread dump is
+written to a temp file.
 """
 
 import logging

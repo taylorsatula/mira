@@ -17,6 +17,19 @@ Dedup: item_id is stable per activity-day cycle (floor_{user_id}_{activity_days}
 so the dispatcher's sidebar_activity table skips re-dispatch after the first
 successful floor run that day. A failed run is not retried (max_retries=0); the
 next due activity day re-samples.
+
+Three declarations span files and move in one commit: the `mode` context key
+(built here, rendered by FloorContext in the curator agent), the `memories`
+list (built here, pre-fetched so the agent judges without a search round
+trip), and FILTERABLE_FIELDS = ("mode",) — the only scalar string key, which
+is what the rules API validates a rule's `field` against and what rule_filter
+matches. `memories` is a list, so it is not matchable and stays undeclared.
+
+LTMemoryDB is constructed once in __init__ (the trigger instance lives for the
+process; a per-poll construct would rebuild the session manager every tick),
+while agent_class stays a lazy property so registering the trigger does not
+pull MemoryCuratorAgent's tool chain — hybrid embeddings, Valkey — into
+utils/sidebar_jobs.py's import path.
 """
 import logging
 

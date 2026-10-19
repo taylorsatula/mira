@@ -1,18 +1,28 @@
 """
-OpenStreetMap geocoding client (Nominatim + Overpass API).
+OpenStreetMap geocoding client: Nominatim forward/reverse/lookup plus an
+Overpass nearby query. No API key required; no in-tree consumer today, so
+nothing exercises it and nothing breaks when it changes.
 
-Shared HTTP layer for all OpenStreetMap-based location queries in MIRA
-(maps_tool, weather_tool). No API key required.
+Public-instance policy is enforced here rather than trusted to callers: a
+process-wide throttle holds the whole process to at most one request per
+second, and every request carries an identifying ``USER_AGENT``. Overpass is
+retried across ``OVERPASS_URLS`` for the two failure modes those instances
+actually produce — a read timeout, and an HTTP-200 body carrying an error
+``remark``; plain HTTP errors are left to ``utils/http_client``, which retries
+the same instance in place and then surfaces the error.
 
-Public-instance usage policy constraints (https://operations.osmfoundation.org/policies/nominatim/):
-- Maximum 1 request/second (enforced here via a process-wide rate limiter)
-- Requests must send an identifying User-Agent
-
-Place IDs: MIRA encodes an OpenStreetMap element as "<T><osm_id>" where T is
-N (node), W (way), or R (relation) — e.g. "N123456789". This is the format
-accepted by the Nominatim /lookup endpoint and by maps_tool's place_details
-operation.
+MIRA encodes an OpenStreetMap element as a type letter plus the OSM id
+(N/W/R, for example N123456789), the format the Nominatim /lookup endpoint
+accepts; a malformed or unknown place id raises rather than returning an empty
+detail dict.
 """
+
+# ACCEPTED-RESIDUAL: no in-tree consumer. The two tools this was built for
+# (maps_tool, weather_tool) were retired, and cns/api/location.py deliberately
+# issues its own Nominatim request instead (its docstring says why: it does not
+# want this client's process-wide throttle). Kept because the OSM id encoding
+# and the rate-limit contract are correct and cheap to hold; a new consumer
+# should use this module rather than re-implement the policy.
 
 import logging
 import random

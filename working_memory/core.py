@@ -1,8 +1,35 @@
 """
-Event-driven working memory core.
+The working-memory coordinator: the event-driven compose round-trip.
 
-Coordinates trinkets and system prompt composition through CNS events.
-All operations are synchronous - events are published and handled immediately.
+`__init__` subscribes four bus handlers. A `ComposeSystemPromptEvent` enters
+`_handle_compose_prompt`, which personalizes the base prompt, clears the
+composer, publishes one `UpdateTrinketEvent` per registered trinket, then
+composes the accumulated sections and publishes `SystemPromptComposedEvent`.
+Each update is routed by `_handle_update_trinket` to the trinket named by
+`target_trinket`; the trinket answers with a `TrinketContentEvent`, which
+`_handle_trinket_content` adds to the composer. The whole compose path runs
+synchronously on the publisher's thread under the module-level
+`_compose_lock` — a re-entrant lock, because that thread takes it again inside
+each nested handler. A section arriving after `compose()` has run misses this
+prompt.
+
+`_handle_update_trinket` catches every trinket exception, logs it, and
+returns: one failing trinket loses its section for that compose while the turn
+still runs. `publish_trinket_update` is the externally callable refresh path,
+and it is a logged no-op until the user's first compose records a continuum
+id. `get_trinket_state` and `get_all_trinket_states` read the
+`trinkets:{user_id}` hash back; a field holding invalid JSON is logged and
+reported as absent, which the API layer turns into a not-found.
+
+`_flush_stateful_trinkets` runs on `SegmentCollapsedEvent` and clears three
+stores per `StatefulTrinket` in a fixed order — `_clear_all_state()`, then
+`clear_user_turn(user_id)`, then `_clear_from_valkey()` — then calls
+`invalidate_portrait(user_id)`. A skipped in-memory clear renders prior-segment
+items into the next segment; a skipped Valkey clear leaves pre-collapse content
+served to the API reads. `invalidate_trinket` reaches a trinket's Valkey cache
+for another user by swapping the user contextvar to that user, calling
+`_clear_from_valkey()`, and restoring the previous value in a `finally` — the
+only path in this module that rewrites the contextvar.
 """
 import json
 import logging

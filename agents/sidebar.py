@@ -1,10 +1,28 @@
 """
-Sidebar Dispatcher -- Trigger protocol, WorkItem, and dispatch loop.
+Sidebar dispatcher -- the trigger protocol, the work item, and the poll loop.
 
-Single APScheduler IntervalTrigger job. On each tick: iterates users with
-sidebar-eligible configs, iterates registered triggers, and dispatches
-work items through the shared spawn seam (agents/spawn.py) with copied
-user context.
+`WorkItem` is the contract between the two halves of this directory: a trigger
+produces one per piece of discovered work, keyed by an `item_id` that stays
+stable across polls, and the agent run consumes its `context`. `SidebarTrigger`
+is structural, with no base class to inherit: `check_for_new_items` returns
+candidate work and nothing else, because the dispatcher alone decides what
+actually runs.
+
+`SidebarDispatcher.poll` is one APScheduler tick. It resolves eligible users
+(active recently, plus anyone holding an armed heartbeat brief), sets the user
+contextvar per user, and walks the registered triggers. `_dispatch_decision` is
+the whole dedup rule: no prior row dispatches, a terminal status skips forever,
+and a `failed` row retries only while `run_count` is still within the agent
+class's `max_retries`. `_get_prior_run` reads back just the two fields that rule
+needs, so the `prior_run` handed to the agent is not a copy of the row.
+
+Two bounds live here. `MAX_ITEMS_PER_USER_PER_POLL` caps dispatches per trigger
+per user per tick, and `_maybe_cleanup` deletes old activity rows — which is what
+makes a long-finished item discoverable again later.
+
+A trigger that raises aborts the rest of that user's triggers for the tick: the
+per-user handler logs it and moves to the next user, so one broken trigger hides
+every trigger ordered after it for the users it breaks on.
 """
 import logging
 from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING

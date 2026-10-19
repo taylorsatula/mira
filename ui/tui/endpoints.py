@@ -4,6 +4,10 @@
 Fail-fast: a corrupt file raises ValueError naming the path and the parse
 error — never a silent reset. Every write re-applies 0600 so a umask change
 or an editor swap cannot leave credentials world-readable.
+
+The constructor reads nothing: it records the path and starts empty, so a
+caller that asks for an endpoint without calling ``load()`` first reports
+"no endpoints configured" on a store that has them.
 """
 
 from __future__ import annotations

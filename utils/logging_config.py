@@ -1,11 +1,20 @@
 """
-MIRA logging configuration: custom log levels and colored terminal output.
+MIRA logging configuration: the TOAST level, colored output, the filters that
+add context and remove secrets, and the opt-in Anthropic SDK tracing.
 
-Registers the TOAST custom level (60) and provides ColoredFormatter for
-color-coded terminal output.
+TOAST (60) is "the system itself is speaking": always-visible structural
+lifecycle events (server start/stop, infrastructure connections, a passing boot
+gate). The deploy-installed ``_mira_log_levels`` .pth registers the level before
+app code runs; this module re-registers it idempotently at import so a bare
+process (a probe, a CLI) still has ``logger.toast``.
 
-TOAST: "The system itself is speaking." Always-visible structural lifecycle
-events: server start/stop, infrastructure connections, configuration loaded.
+Two filters are wired into root logging by ``setup_colored_root_logging``:
+``UserContextFilter`` injects ``user_id`` from the contextvar into every record,
+and ``CredentialRedactionFilter`` scrubs passwords and credential-bearing
+conninfo out of ``psycopg.pool`` log messages on the logger itself, so no handler
+(journal, file, stdout) ever sees plaintext. Message content and full SDK request
+bodies are logged only when ``config.system.anthropic_sdk_content_logging`` is
+enabled — default OFF attaches no file handler and creates no log file.
 """
 
 import json

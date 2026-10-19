@@ -1,28 +1,26 @@
 /**
- * UI.JS - Visual Effects & User Interface Components
+ * UI.JS — everything on the chat page that moves or changes appearance: the
+ * tool badge, the response status badge, the send animations, the loading
+ * wave, and the attachment and queue popover state.
  *
- * PURPOSE:
- * Manages the visual effects, animations, and UI component states of the chat
- * page — everything the user sees moving, animating, or changing appearance.
+ * Mechanisms a caller must know:
+ * - `updateToolIndicator` is idempotent on the (toolName, phase) pair: a repeat
+ *   of the pair returns without touching the badge. Its timers are
+ *   module-level, so every path that changes the badge clears them first, and
+ *   `resetBadges` (run on each send) drops a label the last turn left behind.
+ * - `showLoadingScreen` stores a stop function and a per-run Symbol on the
+ *   loading screen element. `_stopLoading` returns without clearing the screen
+ *   once a newer run owns it, so a late stop from an abandoned turn cannot kill
+ *   a fresh wave.
+ * - The status badge has two homes: the toolbar variant appears when a reply
+ *   outlives STATUS_BADGE_DECISION_DELAY_MS, and the response variant replaces
+ *   it at completion. Both exist only as timers in this file.
  *
- * RESPONSIBILITIES:
- * - Tool indicator (toolbar badge driven by `tool` frames via core.js)
- * - Visual feedback animations (plunger launch, text dissolve/projectile)
- * - Loading screen wave animation
- * - Attachment popover and queue indicator UI state
- * - Response status badge lifecycle (in-progress → complete)
+ * ASSET_VERSION is the cache-bust tag every page repeats on its asset URLs; the
+ * page side of that pairing is ui/browser/AGENTS.md's.
  *
- * DEPENDENCIES:
- * - core.js: AppState, elements
- * - messaging.js: streamingState (status badge timing), renderQueuedMessages, clearAttachment, escapeHtml
- *
- * DEPENDENTS:
- * - core.js (updateToolIndicator, updateQueueIndicator)
- * - messaging.js (animations, loading screen, badges, ASSET_VERSION)
- * - events.js (popover toggles, attachment UI)
- *
- * LOAD ORDER:
- * After core.js, before messaging.js.
+ * Load order: after core.js, before messaging.js, which calls the animations
+ * and reads ASSET_VERSION.
  */
 
 // Cache-bust tag shared with the page's static asset URLs.

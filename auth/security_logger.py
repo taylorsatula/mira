@@ -1,5 +1,17 @@
-"""
-Security event logging with sanitized data.
+"""Structured security-event logging that never records a usable credential or address.
+
+`SecurityLogger.log_event` is the single place that decides what identifying data
+leaves the process for an auth event: the email is partially masked by
+`_sanitize_email` (enough of the local part to spot a pattern, never the whole
+address), the user agent is truncated, and fields the caller left unset are
+dropped instead of being logged as `None`. Success logs at info, failure at
+warning.
+
+The `auth.*` event names passed as `event_type` are the review surface for
+authentication traffic — grep `log_event(` to enumerate them. `details` is
+forwarded unmodified, so a caller that puts a raw address or a token in it
+bypasses the masking entirely; that dict is the one field this module cannot
+sanitize for you.
 """
 
 import logging

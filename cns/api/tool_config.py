@@ -1,9 +1,22 @@
 """
-Tool Configuration API endpoints.
+Tool-configuration CRUD: list, get, schema, PUT, POST validate, DELETE reset.
 
-Provides RESTful endpoints for managing user-specific tool configurations.
-Tools with registered Pydantic config classes are automatically discoverable
-and configurable through these endpoints.
+Routes here are sync so Starlette threads their blocking Postgres and Valkey
+work, and each one sets the real HTTP status on the injected `Response` per catch
+instead of folding errors into a 200 envelope — the client for this surface
+branches on status.
+
+Three contracts a caller must keep. Only a tool's own `validate_config` override
+is a live check: the base class method is a no-op, so `_call_tool_validation`
+compares `__func__` against the base and the response's `live_validation` field
+says whether a connection test actually ran — reporting a schema check as one
+lies to the operator. Secret and public config are written in a single SQLite
+transaction, so a failed config write rolls the secret back with it. And an
+essential tool cannot be stored as disabled, because startup force-enables it
+and the write would never take effect.
+
+Nothing leaves without `redact_tool_config` or `strip_secret_fields`: a
+credential returned once cannot be un-returned.
 """
 
 import logging

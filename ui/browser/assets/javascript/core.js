@@ -1,34 +1,26 @@
 /**
- * CORE.JS - Application Foundation
+ * CORE.JS — the chat page's foundation: shared state, the DOM cache, the API
+ * client with its turn-independent listeners, startup, and segment collapse.
  *
- * PURPOSE:
- * Root module of the chat page. Defines shared application state (AppState),
- * caches DOM element references (elements), constructs the API client, wires
- * the client's global listeners, and runs the startup sequence.
+ * `AppState` and `elements` are top-level `const`s. Sibling <script> tags share
+ * one global lexical scope, so later modules read them directly and they are
+ * not properties of `window`; `elements` is captured once, at eval time, so an
+ * id added to the page after this file runs is invisible to every module.
  *
- * WHAT GOES HERE:
- * - Application-level state properties (AppState)
- * - DOM element references needed across modules (elements)
- * - API client construction and page-wide frame listeners
- * - Startup sequencing that must run before other modules
+ * `initializeAPIClient` installs the listeners that outlive a turn: `tool`
+ * frames mapped through TOOL_INDICATOR_STATES to ui.js's badge,
+ * `proactive_message` to messaging.js, the Retry Send indicator on connect and
+ * disconnect, and the interrupted-reply restore scheduled after reconnect.
+ * messaging.js adds one listener per turn and removes it in the same turn, so a
+ * second copy of a turn listener in that array would handle every frame twice.
  *
- * WHAT DOESN'T GO HERE:
- * - UI-specific logic (animations, visual effects) → ui.js
- * - Message handling and rendering → messaging.js
- * - History features → history.js
- * - Event listeners and handlers → events.js
+ * `Functions.collapseSegment` starts the continuum action and the collapse
+ * animation together and reports the outcome only once both have finished:
+ * `collapsed: false` means the server deferred the collapse behind an in-flight
+ * turn, and `result.message` is its explanation — rendering the success text
+ * there would claim a collapse that did not happen.
  *
- * DEPENDENCIES:
- * - MiraAPIClient (api-client.js), loaded before this file
- * - Called at startup, defined by later scripts: updateQueueIndicator,
- *   updateToolIndicator (ui.js); loadLastSessionResponse, showResponse,
- *   assembleTurnContent, handleProactiveMessage (messaging.js);
- *   setupEventListeners, setupDelegatedEvents (events.js);
- *   initDomainKnowledge (domain-knowledge.js); collapseAnimation
- *   (collapse-animation.js)
- *
- * LOAD ORDER:
- * After api-client.js, before every other application module.
+ * Load order: after api-client.js, before every other chat module.
  */
 
 // ========================================

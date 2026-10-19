@@ -1,8 +1,29 @@
 """
-Database access layer for LT_Memory system.
+The storage gateway: every statement that inserts or updates `memories` and
+`entities`, plus the reads shared across the retrieval paths. `hybrid_search`
+and `hub_discovery` issue their own read statements against the same tables,
+so SQL in this package is not confined to this file.
 
-Single source of truth for all database operations. Returns Pydantic models
-for type safety. Uses raw SQL for performance and clarity.
+`_resolve_user_id()` decides whose rows a statement can see: an explicit
+`user_id` wins, the ambient contextvar is next, and with neither it raises
+`ValueError` instead of querying. Row visibility is the database's RLS policy,
+so a method that skips the resolver does not widen the result — it returns zero
+rows, which reads downstream as "nothing stored", and that is why the resolver
+raises rather than falling back. `get_users_with_memory_enabled()` is the one
+method on an admin (BYPASSRLS) session.
+
+`update_memory()` wraps the `_JSONB_MEMORY_FIELDS` columns in `Jsonb()`; a raw
+list or dict for one of those columns is the only reason that frozenset
+exists — the driver cannot adapt it alone. Every parameter used inside a
+variadic jsonb function here carries an explicit cast, because Postgres cannot
+infer one and fails the statement at parse time.
+
+`_SCORING_FORMULA_SQL` is read from `scoring_formula.sql` once at import and
+interpolated into `_recalculate_importance_scores()`.
+
+`apply_pin_boost`, `get_memories_by_segment_id`, and the `transaction()`
+context manager have no caller in this repo; re-activating one needs a real
+consumer, not just a signature that looks useful.
 """
 import logging
 import json

@@ -1,9 +1,23 @@
 """
-User model synthesizer for the user model pipeline.
+User model synthesis: assessment signals in, a section-anchored user model out.
 
-Synthesizes assessment signals into a descriptive user model: observations about the
-user anchored to system prompt sections. Includes a critic validation loop that
-catches observation laundering, personality labels, and internal contradictions.
+The critic loop is two gates, in this order: `_validate_section_anchors` is a
+code check against the system prompt's assessable sections, and only then does
+`_validate_with_critic` ask the LLM critic. An anchor the prompt does not define
+is therefore never left for the critic to catch, and an unparseable critic
+verdict fails closed rather than counting as a pass.
+
+Exhaustion raises `CriticExhaustedError` instead of publishing the last
+candidate. That is a distinct status on purpose: the caller's except path skips
+`mark_synthesized`, `mark_signals_synthesized`, and the check-in consume, so the
+signals and the user's check-in feedback survive for a later retry. The consume
+itself is deferred to after the LLM call, the critic loop, and XML parsing all
+succeed — any raise before that point leaves the check-in response intact.
+
+The synthesis system prompt carries section examples filled from
+`get_assessable_section_ids`, never hand-written, so the example the model
+imitates cannot drift from the vocabulary the checker enforces; fewer than two
+assessable sections raises at prompt load.
 """
 import logging
 import re

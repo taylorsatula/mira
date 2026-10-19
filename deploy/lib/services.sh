@@ -1,9 +1,26 @@
 # deploy/lib/services.sh
-# Service management and filesystem helper functions
+# Host mechanics whose implementation differs per platform and per service
+# manager: port probing, bounded command runs, file hashing, sudo elevation,
+# launchd reloads, PostgreSQL server/unit and Valkey unit resolution, service
+# start/stop, pip installs, and the models-list prefill.
 # Source this file - do not execute directly
 #
 # Requires: lib/output.sh sourced first
 # Requires: OS variable set for db/db_user checks
+#
+# Each platform-varying operation has exactly one entry point here rather than
+# a per-caller reimplementation, because the obvious cheap spelling gets the
+# wrong answer on some supported host: lsof alone misses stock Debian/Fedora
+# images (only ss is guaranteed), a bare `timeout` does not exist on macOS, a
+# bare `pg_dump` is missing or older than the server (the macOS keg is not on
+# PATH; a Debian host can carry several majors), and a distro-named systemd
+# unit breaks `Requires=` on any host that spells it differently. A caller
+# that hand-rolls its own probe reintroduces exactly those failures.
+#
+# acquire_sudo, ensure_sudo, and require_pg_floor exit 1 instead of returning
+# nonzero: an install that cannot elevate, or cannot find a PostgreSQL server
+# above the floor, has no remaining useful step, and a nonzero return would
+# let the phase continue under `set -e` without failing it.
 
 # Port occupancy probe — the single sanctioned mechanism for every caller.
 # Tool ladder: lsof → ss → netstat. lsof is guaranteed on macOS; ss (iproute2)
@@ -355,6 +372,11 @@ resolve_valkey_unit() {
 # Check if something exists with consistent pattern
 # Usage: check_exists TYPE TARGET [EXTRA]
 # Types: file, dir, command, package, db, db_user, service_systemctl, service_brew
+#
+# ACCEPTED-RESIDUAL: the dir, command, db, and db_user arms have no caller in
+# the deploy tree — only file, package, service_systemctl, and service_brew
+# are reached. Left in place rather than deleted mid-stream; do not read their
+# presence as evidence of a caller.
 check_exists() {
     local type="$1"
     local target="$2"
@@ -486,6 +508,9 @@ stop_service() {
 
 # Write file only if content has changed
 # Usage: write_file_if_changed FILEPATH CONTENT
+#
+# ACCEPTED-RESIDUAL: no caller anywhere in the deploy tree. install_host_file
+# (host_artifacts.sh) is the write-only-when-bytes-differ path callers use.
 write_file_if_changed() {
     local target_file="$1"
     local content="$2"

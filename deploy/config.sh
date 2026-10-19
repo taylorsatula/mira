@@ -84,8 +84,9 @@ detect_system_timezone() {
 SYSTEM_TIMEZONE="$(detect_system_timezone)"
 
 # --config <file>: parse and apply the declarative config, bypassing the
-# interview entirely. Fails before sudo is requested on unfilled __SET_ME__
-# placeholders, duplicate/unknown/missing keys, or bad enum values.
+# interview entirely. Fails on unfilled __SET_ME__ placeholders,
+# duplicate/unknown/missing keys, or bad enum values — after deploy.sh's
+# acquire_sudo, so the sudo prompt comes first.
 if [ -n "$CONFIG_FILE" ]; then
     source "${SCRIPT_DIR}/lib/config_file.sh"
     parse_yaml_config "$CONFIG_FILE"

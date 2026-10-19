@@ -1,9 +1,20 @@
 """
-System prompt section parser for the user model pipeline.
+System prompt section vocabulary: the one parser every section-anchored
+pipeline derives its valid IDs from.
 
-Extracts section IDs and content from the system prompt XML structure.
-Used by both assessment extraction and user model synthesis to establish
-the canonical vocabulary of section IDs that flows end-to-end.
+`get_assessable_sections` returns only top-level sections — a nested tag inside
+one is excluded by containment, so `<memory_refs>` inside `<output_directives>`
+is not a section — minus the blocklist (`user`, `environment`, which hold runtime
+data rather than contract).
+
+`validate_section_anchors` is the single check for the anchor hazard: it matches
+the attribute region order-independently, so attribute-order drift cannot bypass
+it, and it raises naming every invalid anchor plus the full valid set. It owns
+only anchors that exist and are wrong — a tag with no `section` attribute at all
+is a malformed-model problem for the parsers, not this check's.
+
+`anonymize_prompt` is what lets the assessor judge behavior against the contract
+without seeing who the user is.
 """
 import re
 from dataclasses import dataclass

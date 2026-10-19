@@ -13,6 +13,16 @@
 # ("") means the same as the interview's Enter: a lunaroute-gateway tier reuses
 # the chat key, anything else proceeds with a PLACEHOLDER_* value (the final
 # banner explains the Vault fixup).
+#
+# parse_yaml_config validates; apply_yaml_config is what makes the file mean
+# anything, because every later phase reads CONFIG_* / STATUS_* and cannot
+# tell this path from the interview. A key that parses and validates but has
+# no arm in apply_yaml_config therefore succeeds at parse time and silently
+# changes nothing.
+#
+# CROSS-FILE-COUPLING: apply_yaml_config calls is_lunaroute_full_service,
+# which is defined in the sourcer deploy/config.sh, not here. Sourced into any
+# other host, the key-reuse arms fail at call time.
 
 YAML_SEEN_KEYS=""
 

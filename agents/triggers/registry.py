@@ -12,6 +12,19 @@ There is deliberately no second, hand-maintained table anywhere: adding a
 class to TRIGGER_CLASSES makes it dispatchable AND rule-addressable in the
 same change; removing one makes the API reject its trigger_id in the same
 change.
+
+A trigger class declares its own rule surface as FILTERABLE_FIELDS. The read
+here uses `getattr(cls, "FILTERABLE_FIELDS", ())`, so a class that omits the
+attribute registers with zero addressable fields and raises nothing — its
+trigger_id is accepted by the rules API and every field on it is rejected.
+An empty tuple is a deliberate declaration (heartbeat: its payload is a list
+of briefs, nothing scalar to match), not an omission.
+
+Imports both trigger modules at module level, so this module's import cost is
+the triggers' top-level cost; that is why each trigger keeps its heavy imports
+inside methods. `_validate_registry()` runs at import and raises on a
+duplicate `trigger_id` or `interface_name`, either of which would otherwise
+shadow one trigger in the dispatcher and key-collide rules in the API.
 """
 from dataclasses import dataclass
 
@@ -52,8 +65,12 @@ def registered_trigger_specs() -> list[TriggerSpec]:
 
 
 def _validate_registry() -> None:
-    """Fail loud on duplicate identity keys — a duplicate would silently
-    shadow one trigger in the dispatcher and key-collide rules in the API."""
+    """Raise at import on duplicate identity keys.
+
+    A duplicate `trigger_id` or `interface_name` would otherwise shadow one
+    trigger in the dispatcher's list while both write the same dedup key, and
+    route one trigger's rules onto another's work items.
+    """
     trigger_ids = [s.trigger_id for s in registered_trigger_specs()]
     interface_names = [s.interface_name for s in registered_trigger_specs()]
     if len(set(trigger_ids)) != len(trigger_ids):

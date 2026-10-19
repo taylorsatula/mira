@@ -1,8 +1,19 @@
 """
-Factory for creating and managing LT_Memory service instances.
+Construction and lifecycle for the memory services: one process-wide
+`LTMemoryFactory` holding the DB gateway, the retrieval services, and the
+extraction pipeline objects, built from the four infrastructure dependencies
+given on the first call.
 
-Replaces global singleton pattern with explicit dependency management,
-enabling easier testing and clearer lifecycle control.
+`_init_services()` constructs in dependency order and records each service in
+`_service_init_order`, which `cleanup()` walks in reverse; a service added to
+the construction order without that append never has its `cleanup()` called at
+shutdown. Later calls to `get_lt_memory_factory()` take no arguments and return
+the existing instance, so the four dependencies are required exactly once.
+
+`on_memories_stored` starts as None and is registered after construction by
+the segment-collapse handler. `lt_memory` never imports `agents/`; this
+attribute is the seam the curator spawn crosses, and readers of it must
+tolerate None.
 """
 import logging
 from typing import Optional

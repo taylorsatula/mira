@@ -10,6 +10,11 @@
 # The delta is computed from list_cleared_files (what the clear destroys)
 # against the baseline tree, never from git's tracked/untracked view —
 # .gitignore must not hide a file from the save.
+#
+# export_custom_build must run before the code clear: it reads the operator's
+# files out of the live tree, so after the clear there is nothing left to
+# compute the delta from. A failed export removes its partial directory and
+# returns 1, and the caller is expected to stop with the install unchanged.
 
 # Subjects deploy/lib/provenance.sh:official_commit_message writes, plus the
 # pre-provenance forms (`install <tag>`, `install <tag> (local tree)`) the

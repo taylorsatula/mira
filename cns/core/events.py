@@ -1,18 +1,26 @@
 """
-Domain events for CNS.
+The domain event taxonomy: frozen events and the `create()` factories.
 
-Immutable event objects that represent state changes in the continuum domain.
-Events enable loose coupling between components.
+Four category bases partition what can happen in the continuum:
+`MessageEvent` (user and AI content, which kicks off the processing chain),
+`ToolEvent`, `WorkingMemoryEvent` (prompt composition, trinket content) and
+`ContinuumCheckpointEvent` (turn completion, segment lifecycle). Land a new
+event in one of them. A fifth category is warranted only by a kind of system
+interaction none of the four can hold; one-off event classes inside an
+existing category are the cheap move.
 
-Event Categories:
-- MessageEvent: Everything between user and AI, kicks off the processing chain
-- ToolEvent: Tool execution, enabling, disabling, errors
-- WorkingMemoryEvent: Manager updates, content changes, trinket operations
-- ContinuumCheckpointEvent: Turn completion, segment lifecycle, system coordination
+Every event carries `continuum_id`, `user_id`, `event_id`, and `occurred_at`
+on the frozen base. Every concrete `create()` resolves `user_id` from the
+user-context contextvar, so publishing from a bare thread raises rather than
+emitting an ownerless event. `SegmentTimeoutEvent.create` is the deliberate
+exception and takes `user_id` as a parameter: the timeout sweep and the
+queued manual-collapse path both run off the request context, where
+`get_current_user_id()` raises RuntimeError.
 
-Future events should fit into these categories. Only create new categories if there's
-a fundamentally different type of system interaction that doesn't fit the above.
-Resist the urge to create one-off events - adapt existing categories instead.
+Subscriptions register by class name as a plain string, and the bus
+validates each one against this module's subclass walk — so a renamed class
+with stale string subscriptions fails at graph construction instead of
+stranding its publishers with zero subscribers.
 """
 from __future__ import annotations
 

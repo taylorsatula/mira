@@ -1,23 +1,39 @@
 """
-MemoryCuratorAgent -- Agentic memory-graph curation on the SidebarAgent base.
+MemoryCuratorAgent -- agentic memory-graph curation on the SidebarAgent base.
 
-Replaces the programmatic batch-LLM judgment paths (relationship typing,
-consolidation verdict, entity GC verdict) with a single agent that makes all
-memory-graph judgment decisions: linking, merging, and (floor mode) archiving.
-
-One class, two modes, selected per work-item via work_item.context['mode']:
-  - 'integration': a segment just collapsed; tend each new memory (link / merge
-    / stand-alone) before the user's next conversation. Spawned directly at the
-    collapse hook (forage-style).
+One class, two modes, selected per work item by `work_item.context['mode']`:
+  - 'integration': a segment just collapsed; tend each new memory (link /
+    merge / stand-alone) before the user's next conversation. Spawned at the
+    collapse hook.
   - 'floor': a random sample of low-value memories not tended in a while;
     triage each (archive / salvage). Dispatcher-driven on a use-day cadence.
 
-The agent is the SOLE link typer: deterministic discovery emits typeless
-candidate hints; this agent writes every typed relationship. It can NEVER
-create memories (create_memory is excluded from its tool schema) -- preventing
-manufactured silt.
+`get_agent_prompt` and `build_initial_message` raise ValueError on any other
+mode, which the base `run()` turns into a 'failed' exit -- a mis-keyed producer
+fails loud instead of running the wrong rubric.
 
-See agents/HOW_TO_BUILD_AN_AGENT.md and the v2 memory-graph curation plan.
+The context shapes are the TypedDicts in this module (`CandidateRef`,
+`NewMemory`, `IntegrationContext`, `FloorMemory`, `FloorContext`): producers
+populate exactly those fields. `candidate_hints` is keyed by the new memory's
+full UUID string, and a mismatch renders "(none)" for every hint without
+raising. Two identity forms ride the shapes on purpose: a discovery-side
+`CandidateRef.memory_id` is a SHORT id (resolvable by memory_tool only while
+unambiguous), while `NewMemory`/`FloorMemory` memory_ids are FULL UUID strings,
+because `on_completion` stamps `last_tended_at` from them and a short id is an
+irreversible prefix. `_build_integration_message` and `_build_floor_message`
+render both per memory -- the short form as the display heading, the full form
+as the identity to hand memory_tool.
+
+This agent types every link it writes: deterministic discovery hands it
+typeless candidate hints and leaves the classification to the judgment here.
+It never creates memories -- `CURATOR_MEMORY_SCHEMA` excludes `create_memory`
+-- so curation cannot manufacture silt.
+
+`on_completion` stamps `last_tended_at` only on `status == 'success'`; that
+stamp is what the floor trigger samples against, so a failed run leaving
+memories un-tended is correct (they age back in through the never-tended
+branch). A stamp failure is swallowed with a log line: it must never report a
+successful curation run as failed.
 """
 import logging
 from typing import Any, TypedDict, TYPE_CHECKING

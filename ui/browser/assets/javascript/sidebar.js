@@ -1,11 +1,18 @@
 /**
- * SIDEBAR.JS - App Sidebar Navigation for All Pages
+ * SIDEBAR.JS — navigation chrome on all four pages: desktop collapse persisted
+ * in localStorage `mira-sidebar-collapsed`, the mobile drawer with its swipe,
+ * focus trap and Escape close, and the History, Pause and Wrap Up buttons.
  *
- * Handles desktop collapse/expand (persisted via localStorage),
- * mobile toggle/close, swipe gestures, keyboard navigation,
- * focus trapping, and the action buttons: History (all pages), and on the
- * chat page Pause/Unpause (inactivity-warning.js) and Wrap Up
- * (core.js Functions.collapseSegment).
+ * The file itself has no dependencies, which is what lets every page load it.
+ * Its chat-page wiring does have them: the pause button subscribes to
+ * `window.inactivityWarningManager` and the History button calls
+ * `window.InlineHistory`, both defined by scripts that load after this one, so
+ * that wiring waits for DOMContentLoaded. Reading either at eval time would
+ * throw and end this file's execution there.
+ *
+ * Collapse state is applied without animation on load and with animation on
+ * every later toggle; `?history=1` arriving from another page is consumed here
+ * and replaced out of the URL.
  */
 (function() {
 	'use strict';

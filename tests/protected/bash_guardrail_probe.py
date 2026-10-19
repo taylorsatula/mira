@@ -29,9 +29,10 @@ This probe CANNOT execute a command string. Three independent guarantees:
    is not defended against in principle.
 
 2. The probe only ever calls the module-level pure function
-   _validate_command(command, root[, cwd]) -> None, which is regex matching,
-   posixpath string arithmetic, and raise. It never instantiates
-   BashTool and never calls run(), _run(), _run_background() or _ssh().
+   _validate_command(command, root, cwd, skip_permissions=, blocked=,
+   audit_log=) -> None, which is regex matching, posixpath string arithmetic,
+   and raise. It never instantiates BashTool and never calls run(), _run(),
+   _run_background() or _ssh().
 
 3. A static self-check walks _validate_command's bytecode with dis and asserts
    every LOAD_GLOBAL/LOAD_NAME resolves either to an allowlisted pure builtin
@@ -72,6 +73,10 @@ matrix (entries refuse in BOTH modes and `*` crosses slashes, spaces, quotes,
 and newlines), and the both-modes matrix (persistence respellings, newline
 chains, the bypass audit log, and guardrail self-edits refused in default and
 skip mode alike; heredocs, comments, and the editing skill's patterns allowed).
+DESTRUCTIVE and BENIGN are the parity baseline: a change aimed at one mode adds
+its cases to that mode's table and leaves the default corpus standing, because
+every other matrix is judged relative to it, and editing it in place silently
+redefines what "no regression" means on this battery.
 Every verdict passes AUDIT_LOG as the handlers do. Handler-level behavior — the
 config hard gate on
 `dangerous_skip_permissions_enabled`, the guardrail_bypass.log audit line, and

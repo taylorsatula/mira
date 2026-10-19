@@ -1,12 +1,19 @@
 """
-File serving endpoints for code execution artifacts and tool-generated images.
+Artifact serving: downloaded tool files and inline tool images.
 
-Serves files from data/users/{user_id}/artifacts/{file_id}/ that were eagerly
-downloaded from Anthropic during response processing. Security layers:
-1. Auth gate (Depends(get_current_user)) scopes to user's directory
-2. file_id regex validation (alphanumeric + hyphen/underscore only)
-3. Path traversal guard (resolved path must stay within base_dir)
-4. Safe headers (Content-Disposition varies by endpoint)
+Each artifact is a directory under `data/users/{user_id}/artifacts/{file_id}/`
+holding a `.bin` body beside a `.meta` sidecar written during response
+processing. Four layers stand between a request and those bytes: the auth
+dependency scopes the path to the caller's own directory, `file_id` is
+regex-validated, the resolved path is re-checked as a child of the artifact
+directory, and the stored MIME type is trusted for nothing — `/images` renders
+inline only for `INLINE_IMAGE_MIME_TYPES` and sends `nosniff`, while any other
+stored type is forced to an octet-stream attachment, so a stored `text/html`
+cannot execute as stored XSS. `/files` is always an attachment.
+
+The provider-supplied filename passes through `FILENAME_SAFE_PATTERN` before it
+reaches a `Content-Disposition` header, and both routes send
+`Cache-Control: no-store`.
 """
 import json
 import re

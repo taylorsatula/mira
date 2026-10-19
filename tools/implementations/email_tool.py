@@ -1,9 +1,29 @@
 """
-Email Tool - Email account access and management via IMAP/SMTP.
+IMAP/SMTP access to the user's own mailbox, plus an audit trail of every
+state-changing action.
 
-This tool provides a clean interface to email functionality, with a focus on
-allowing the LLM to intelligently categorize and handle emails based on content
-rather than rigid pattern matching.
+Two independent guards protect the IMAP command line, and both are required.
+Mailbox names are quoted as RFC 3501 quoted-strings (`_quote_mailbox`) because
+imaplib joins arguments with spaces and quotes nothing. Separately, any string
+that reaches a command — the caller's folder, email_id, sender, subject, and
+dates, plus the configured folder names — is rejected outright on a carriage
+return or line feed (`_reject_crlf`): an embedded newline ends the command
+line and the remainder executes as a fresh tagged command inside the user's
+authenticated session, which quoting alone does not prevent. Search criteria
+escape their quoted-string specials for the same reason.
+
+Reads use BODY.PEEK so that fetching a message never silently sets \\Seen;
+marking read is its own operation. A server NO is reported as a failure, never
+as an empty result. Each of the seven operations in `_MUTATING_OPERATIONS`
+requires a `reasoning` string, and every attempt — success, partial, failure —
+lands in the per-user `email_action_audit` table with its target and reasoning
+encrypted at rest.
+
+The steps after a send are best-effort and say so: a failed APPEND to the Sent
+folder or a missed \\Answered flag returns success with an explicit warning and
+records the audit row as partial, because the message has already left.
+A missing drafts folder raises rather than letting imaplib default the APPEND
+to INBOX.
 """
 import email
 import email.header
@@ -1937,6 +1957,7 @@ class EmailTool(Tool):
             pass  # Suppress errors during destruction
 
 
+# ACCEPTED-RESIDUAL: dead — `rg 'create_email_tool'` matches this definition only; every path constructs EmailTool through ToolRepository.get_tool.
 def create_email_tool():
     """
     Factory function to create and initialize an EmailTool instance.

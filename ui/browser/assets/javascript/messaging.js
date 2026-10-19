@@ -35,6 +35,13 @@
  * - domain-knowledge.js: window.domainManager
  * - External: marked, DOMPurify
  *
+ * FILTER LITERALS: THINK_OPEN and THINK_CLOSE, declared below the header, hold
+ * the raw tag bytes, and every hold-back test below compares candidates against
+ * them character by character. A copy whose angle brackets arrived
+ * HTML-escaped matches nothing, and the failure is silent: the model's
+ * reasoning renders as reply text and tags show where text should have been
+ * withheld.
+ *
  * LOAD ORDER:
  * After core.js and ui.js, before history.js.
  */
@@ -1101,6 +1108,8 @@ function completeTurn(result) {
 		appendDisplayText(filterReplyText(result.response));
 	}
 
+	// CROSS-FILE-COUPLING: tools/implementations/domaindoc_tool.py's tool name must stay
+	// `domaindoc_tool`, or this literal stops matching and the domain list never refreshes.
 	if (result.toolsUsed.includes('domaindoc_tool')) {
 		window.domainManager.fetchDomains().catch((error) => {
 			console.error('Domain list refresh after domaindoc_tool failed; the popover shows the previous list:', error);

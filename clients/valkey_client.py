@@ -1,8 +1,22 @@
 """
 Unified Valkey client for system-wide use.
 
-Combines auth operations (async) and working memory operations (sync).
-Uses Vault for configuration with fail-fast semantics.
+Three clients over one configuration: a sync text client (`_client`), a sync
+binary client (`valkey_binary`, no UTF-8 decoding — numpy arrays and other raw
+bytes), and an async client (`valkey`). The URL and password come from Vault,
+and construction pings, so the process cannot start against a dead cache.
+
+The guarded writes are the reason this module exists: `compare_and_set`,
+`compare_and_delete`, `compare_and_expire`, `set_if_counter_matches`,
+`getdel`/`getdel_json`, `increment_with_expiry`, and `delete_and_increment` each
+run as one server-side EVAL, so no writer can land between a check and the
+write it authorizes. A call site that reads a key and then writes it races
+exactly that way — put the guard here instead. `json_set` at a `$.field` path
+is a read-modify-write, not atomic.
+
+A TLS URL scheme (`rediss://`, `valkeys://`) raises at construction: this
+client implements no TLS, so honoring the scheme would open a plaintext
+connection while appearing encrypted.
 """
 
 import json

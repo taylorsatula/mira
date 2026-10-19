@@ -1,11 +1,17 @@
 """
-LoRA trinket for injecting user model observations into the system prompt.
+Renders the user model, plus check-in guidance when a debrief is pending.
 
-Reads the user model from feedback_synthesis_tracking.last_synthesis_output
-and renders it as contextual knowledge about the user. The user model is
-descriptive (observations about the user), not prescriptive (instructions to Mira).
+Content is the latest synthesis output held by `FeedbackTracker`, parsed with
+attribute-keyed regexes: each `<mira:observation>` and `<mira:topic>` is read
+by its attribute names, so a synthesizer that reorders attributes cannot drop
+entries. A single unparseable entry is logged with the consequence — that
+entry is omitted from the prompt this compose — and the rest still render.
 
-When needs_checkin is true, also renders check-in guidance for behavioral debrief.
+The whole user model vanishing is the costly failure, so zero parsed
+observations from a non-empty document logs a warning that names it. Check-in
+mode additionally emits the `<mira:checkin_response>` protocol instructions;
+the orchestrator parses that tag back out, so its wording and the extractor's
+tag are one contract.
 """
 import logging
 import re

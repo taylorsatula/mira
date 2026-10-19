@@ -1,6 +1,6 @@
 #!/bin/bash
-# deploy/vm/make-base-template.sh — EXPERIMENTAL (not yet exercised end-to-end;
-# (the reference base template was built by hand) — build a frozen
+# deploy/vm/make-base-template.sh — EXPERIMENTAL (not yet exercised
+# end-to-end; the reference base template was built by hand) — build a frozen
 # default-state base template for oneshot.sh from an Ubuntu cloud image.
 #
 # Prerequisites: libvirt, qemu-utils, and cloud-localds (cloud-image-utils) or
@@ -14,6 +14,13 @@
 # passwordless sudo, qemu-guest-agent, openssh — i.e. exactly the surface
 # oneshot.sh's bootstrap needs. MIRA itself is NOT installed here; oneshot
 # deploys it fresh every time.
+#
+# Two ways this builder fails quietly. The local-only guard reads IS_LIBVIRT
+# before finish_flags runs, so --ip slips past it and the build then proceeds
+# against whatever virsh the caller has, or dies with a virsh error that names
+# neither the flag nor the mode; only an explicit --host is refused. And
+# --arch arm64 builds an arm64 disk that base-vm.xml's x86_64 skeleton and
+# qemu-system-x86_64 emulator path cannot boot.
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$HERE/lib.sh"

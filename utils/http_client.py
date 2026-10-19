@@ -1,21 +1,27 @@
 """
-Centralized HTTP client module with automatic retry logic for transient errors.
-This module provides drop-in replacements for httpx components with built-in retry support.
+Retrying HTTP clients: drop-in ``httpx`` replacements that retry transient
+failures, plus the IP-pinned transport the SSRF boundary connects through.
 
-Usage:
-    from utils import http_client
-    
-    # Instead of httpx.Client()
-    client = http_client.Client()
-    
-    # Instead of httpx.get()
-    response = http_client.get("https://api.example.com/data")
-    
-    # Exceptions work the same way
-    try:
-        response = client.get(url)
-    except http_client.HTTPStatusError as e:
-        handle_error(e)
+Retry rules, and the reason each shape is safe:
+
+- Status retries cover 429/502/503/504/529 and apply to idempotent verbs only.
+  A POST/PATCH that returns a retryable status may already have landed, so it
+  is never retried on status unless the client is constructed with
+  ``retry_non_idempotent=True`` — an opt-in for callers whose non-idempotent
+  requests are pure inference queries that cannot duplicate an effect.
+- Connect errors and connect timeouts retry for every verb: the request never
+  reached the server, so repetition cannot duplicate anything.
+- Read timeouts and other request errors propagate immediately; a request that
+  may have been processed is not silently re-sent.
+- Streaming retries only connection establishment, and only through the
+  module-level ``stream()``: a ``Client.stream`` context manager is entered by
+  the caller, outside any frame that could catch the connect error, so that
+  method deliberately carries no retry.
+
+``pinned_request`` issues a request whose TCP connection targets a
+pre-validated IP while TLS SNI and certificate verification still use the
+hostname; the transport refuses a connection for any other hostname, so a
+caller cannot silently fall back to fresh DNS resolution.
 """
 
 import logging

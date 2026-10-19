@@ -1,8 +1,14 @@
 """
-Text sanitization utilities for safe message content processing.
+Minimal sanitization for message content: the transforms that keep a message
+from breaking a downstream system, and nothing more.
 
-Provides minimal, performant functions to ensure messages won't break
-system components, without unnecessary overhead.
+String content gets null bytes removed and invalid UTF-8 replaced (JSON encoding
+requires valid UTF-8). Multimodal arrays are sanitized only in their text parts:
+an ``image_url`` block keeps its payload untouched, and a block that is not a
+dict or whose ``image_url`` is not a dict is dropped with a warning. Length is
+deliberately not enforced here — the API layer owns the message cap, so a
+sanitizer that also truncated would hide a too-large message instead of
+rejecting it.
 """
 import logging
 from typing import Union, List, Dict, Any

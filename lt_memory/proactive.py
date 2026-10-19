@@ -1,15 +1,18 @@
 """
-Proactive memory surfacing for CNS integration.
+Memory surfacing for a chat turn: the call the CNS makes with the turn's query
+expansion embedding and the entities the subcortical layer extracted.
 
-Provides intelligent memory search using pre-computed subcortical embeddings,
-hub-based entity discovery, and automatic inclusion of linked memories for
-context enrichment.
+Two pools are fetched concurrently on a pool whose worker contexts are copied
+— hybrid similarity search, and entity-driven hub discovery — then merged,
+debut-boosted for memories too new to have entity links, penalized when
+something supersedes them, extended with their linked memories, and reranked
+by link type. Everything before the merge ranks; nothing before it persists.
 
-The surfacing flow combines two retrieval paths:
-1. Similarity Pool: Traditional hybrid search (BM25 + vector similarity)
-2. Hub-Derived Pool: Entity-driven discovery (entity → memories → hubs → memories)
-
-These pools are merged to provide comprehensive memory coverage.
+The importance caps near the top of this file are imported by the orchestrator
+and the subcortical layer rather than restated there, so the three agree on one
+budget. Access tracking runs after the result list is final and logs rather
+than raising: it is enrichment, and a search must not fail because a counter
+update did.
 """
 import logging
 from concurrent.futures import ThreadPoolExecutor

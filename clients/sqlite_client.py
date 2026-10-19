@@ -1,8 +1,15 @@
 """
-SQLite client with explicit connection management and dict-style results.
+Dead: raw unencrypted SQLite over a caller-supplied path.
 
-Simple tool storage with raw SQL for performance
-and explicit memory management.
+No module in the tree uses this client — `clients/__init__.py` imports it and
+nothing calls it — and it must not be built on: per-user tool storage is the
+encrypted store in `utils/userdata_manager.py`. This client also has no
+row-level security and does no user scoping, so it returns whatever the given
+`db_path` holds; in Postgres that isolation is a database property, and here
+there is none.
+
+One fresh connection per call, no pooling, and `get_sqlite_client` caches one
+instance per path in `_client_cache`.
 """
 
 import sqlite3

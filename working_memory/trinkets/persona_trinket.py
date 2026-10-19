@@ -1,4 +1,11 @@
-"""Inject the current Persona behavioral directives into MIRA's system prompt."""
+"""
+Renders the current Persona revision's directives into their own prompt slot.
+
+`PersonaRepository.get_current_revision` returns the revision in force; only
+its `directives` text is rendered, so the surrounding revision record never
+reaches the model. Empty directives render the slot empty, which removes it
+from the prompt entirely.
+"""
 
 from __future__ import annotations
 

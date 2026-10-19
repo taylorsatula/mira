@@ -1,8 +1,17 @@
 """
-Vector operations for LT_Memory system.
+Embeddings and similarity: the layer between the install's embeddings provider
+and the DB gateway.
 
-Handles embedding generation and storage through the install's embeddings provider.
-Singleton service that wraps the embeddings provider and database access.
+Two encoders, never interchangeable. Stored text is embedded with
+`encode_deep` at storage time and a text query with `encode_realtime`; dedup
+compares a candidate document against stored documents and so uses
+`encode_deep` too. Mixing them compares vectors from two spaces — no error,
+every similarity quietly wrong. A caller handing over an embedding it computed
+elsewhere goes through `find_similar_by_embedding`, which raises when the
+vector's length is not the provider's `dimensions` rather than letting the
+cast fail at Postgres.
+
+`update_memory_embedding` has no caller in this repo.
 """
 import logging
 import numpy as np

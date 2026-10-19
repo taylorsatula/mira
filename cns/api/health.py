@@ -1,7 +1,19 @@
 """
-Health API endpoint - basic system health checks.
+Health probes: public liveness plus token-gated thread diagnostics.
 
-Simple health monitoring for database, basic system status.
+`GET /health` is unauthenticated, so its response carries status and component
+names only — detail goes to the log — and its database probe requires the core
+schema (`schema_migrations` and `users`) rather than a bare `SELECT 1`, which
+answers green on a database whose tables were emptied. An unreachable database
+or a missing core schema returns 503.
+
+`GET /health/threads` and `GET /health/thread-dump` require the Vault
+`diagnostics_token`; a token that is not configured returns 503 instead of
+skipping the check. Both read in-memory monitors only, which is why they are
+async while every other route in this directory is sync.
+
+`_PROCESS_START` is captured at import during app assembly, so `uptime_seconds`
+is this process's age, not the host's.
 """
 import logging
 import secrets

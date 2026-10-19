@@ -1,17 +1,38 @@
 """
-Segment collapse handler for processing timeout events.
+Segment collapse: the pipeline that turns an open segment into durable memory.
 
-Handles SessionTimeoutEvent by:
-1. Finding the segment boundary sentinel
-2. Loading segment messages
-3. Generating summary with embedding (Continuity Engine)
-4. Updating sentinel metadata
-5. Triggering downstream processing (memory extraction, domain updates)
-6. Extracting feedback signals (DIY reinforcement loop)
-7. Running pattern synthesis if use-day threshold reached (every 7 use-days)
-8. Portrait synthesis if use-day threshold reached (every 10 use-days)
-9. Evaluating MIRA against the behavioral contract and refining Persona (parallel
-   to 6-7 by D1: the user model describes the user, Persona prescribes to MIRA)
+`collapse_segment` has three entrants — the scheduled timeout (through
+`handle_timeout`, the bus wrapper that swallows so dispatch is never unwound),
+the manual collapse endpoint in `cns/api` (exceptions propagate there and come
+back as HTTP errors), and the deferred manual collapse consumed at the next
+`TurnCompletedEvent`. All three share one mutual-exclusion claim:
+`_claim_collapse` is a single UPDATE that flips the sentinel to 'collapsing'
+only while it is active/paused or a previous claim is older than
+`COLLAPSE_CLAIM_STALE_MINUTES`. A claimant that gets zero rows must abort. The
+stale branch is the crash-recovery path — a process death between claim and
+save must not strand a segment.
+
+The sentinel save is the line that splits failure policy, and moving a stage
+across it changes that stage's failure semantics without any other edit:
+
+- Before the save, failures propagate: summary plus embedding (a missing
+  `<mira:display_title>` raises into the attempt budget) and the Persona pass.
+  Persistent breakage counts toward `MAX_COLLAPSE_ATTEMPTS` and surfaces as the
+  force-tombstone.
+- After the save, every stage tolerates and logs: the pending-memory drain,
+  extraction submission, the feedback loop, then portrait synthesis. A failure
+  flags `downstream_failed` on the sentinel and the collapse still stands,
+  because nothing re-matches a sentinel already saved 'collapsed'.
+- The drain runs first among the downstream stages: those Valkey queues are the
+  sole durable record of memories the user was told were saved.
+- The manifest publish sits in `finally`, so a downstream failure still
+  invalidates the manifest cache.
+
+The pre-save re-read guard aborts when `last_turn_at` moved or the status left
+active/paused/collapsing, which is how an interleaving turn survives. Entry
+clears the user contextvar before setting it: `set_current_user_id` merges into
+the existing context, and the timeout sweep collapses users sequentially on one
+thread, so a missing clear leaks the previous user's cached fields.
 """
 from __future__ import annotations
 

@@ -1,8 +1,18 @@
 """
-Manifest query service for retrieving conversation segment data.
+Manifest rows for the segment list: sentinel metadata, Valkey-cached.
 
-Provides segment data for manifest display with Valkey caching
-and event-driven invalidation. Formatting is handled by ManifestTrinket.
+`get_segments` queries the segment sentinels and caches the result per user for
+`MANIFEST_CACHE_TTL`; `_handle_manifest_updated` deletes that key, which is why
+every path that changes the segment set publishes `ManifestUpdatedEvent`.
+
+The Valkey cache is optional infrastructure, so both a read and a write failure
+fall through to the database with a warning — a cache outage must not take the
+manifest down with it. `get_manifest_query_service` raises before the factory has
+built the singleton, so a caller that runs earlier than boot fails loudly
+instead of querying half-built state.
+
+A sentinel in the transient 'collapsing' state is reported as 'active': the
+claim lasts seconds, and the segment is still open while it runs.
 """
 from __future__ import annotations
 

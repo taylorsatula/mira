@@ -1,96 +1,121 @@
-# config/prompts/ — all LLM prompt templates and the single loader that serves them
-
-Elsewhere: route names and model resolution — `clients/llm/AGENTS.md` · the system prompt whose sections anchor the user-model family — `config/AGENTS.md`; extracting/validating those section ids — `cns/services/AGENTS.md` (`system_prompt_parser.py`) · the screen's reveal, band, and fail-closed mechanics — `utils/AGENTS.md` (`untrusted_content.py`) · when each prompt fires (events, schedules, triggers) — the owning pipeline map named in its card · full template text — the file itself · why a prompt reads as it does — `git log`.
-
-## Rules
-
-- Placeholder pairs: every `{var}`/`{{var}}` in a template pairs with exactly one call-site fill — the cards name each. `.replace()` fills (used wherever the surrounding template carries literal JSON braces) leave an orphaned placeholder in front of the model as literal `{var}` text, no error anywhere; `.format()` raises `KeyError` at first use for a placeholder the call stopped filling, but stays silent when the call passes a key the template no longer carries. Template edit and call site move in the same commit.
-- Output formats are parser twins: each template's model-output contract is parsed by named code — `<mira:precis>`/`<mira:display_title>`/`<mira:complexity>` by `utils/tag_parser.py:TagParser` (complexity regex accepts exactly `0.5|1|2|3`; any other value offered in a prompt silently degrades to the default 2 in `cns/services/summary_generator.py`), persona tags by regexes in `cns/services/persona_service.py` (omitted tag → `PersonaParseError`), critic verdicts by `cns/services/user_model_synthesizer.py` (unparseable verdict fails closed, never auto-publishes), `{"merges": …}` by `lt_memory/entity_merge.py:_extract_json`. Change a prompt's output shape only with its parser in the same commit — drift surfaces as parse failures or silently dropped tags.
-- Only three templates load optional (`required=False`): `thinking_block_instructions.txt`, `synthesis_summary_system.txt`, `synthesis_summary_user.txt` — absent, their features degrade, not the boot. Every other file here is load-bearing: missing or empty-after-strip raises `FileNotFoundError` at consumer construction or first call — the load site decides (`cns/api/actions.py`'s rewrite worker, `lt_memory/entity_merge.py`, and the pending-entities extract load inside call-scope functions, so an emptied file there survives boot and fails the first call) — and `untrusted_content_directive.txt` loads at module import (`utils/untrusted_content.py`), so an emptied file fails the boot itself. The two `*_qwen_*` extraction variants are the only files no code loads.
-- The section-anchor vocabulary flows from one source: `get_assessable_section_ids(config.system_prompt)` (`cns/services/system_prompt_parser.py`) fills `{example_section_a}`/`{example_section_b}` into `lora_refinement_system.txt` and `user_model_synthesis_system.txt` at load, fills `{section_id_list}` at call time, and `validate_section_anchors()` enforces the same vocabulary on every `<mira:observation section="…">` before storage. Rename a system-prompt section without this corpus and the model imitates dead anchors — output rejected at save (`cns/services/user_model_synthesizer.py`, `cns/services/lora_service.py`, `cns/api/actions.py` user-model `update`).
+# config/prompts/ — the model-facing prompt corpus and the single loader that serves it
 
 ## Files
 
-- `__init__.py` — re-exports `load_prompt` only; both import spellings live in the wild (`from config.prompts import load_prompt`, `from config.prompts.loader import load_prompt`).
-- `loader.py` — the sanctioned loader: `load_prompt(filename, required=True)` — `.txt`-only, traversal-checked, resolved against `_PROMPTS_DIR` never cwd, `.strip()`-ed, missing-or-empty raising `FileNotFoundError` when required, subdirectory paths allowed. No other module may open a file here; the full consumer set is `rg 'load_prompt\('`.
-- `subcortical_system.txt` — the per-turn retrieval filter: `<entities>`, `<relevant_passages>` (exact `mem_`-prefixed passage ids), `<query_expansion>` (2-4 phrases, first = resolved current topic), `<complexity>`. Loaded by `cns/services/subcortical.py`, route `fast`; output parsed there into pinned ids + expansion.
-- `subcortical_user.txt` — `{conversation_turns}`, `{previous_memories}`, `{user_message}`, `.replace()`-filled by `cns/services/subcortical.py`.
-- `segment_summary_system.txt` — the Continuity Engine: first-person trace (3-4 sentences, hard cap), `<mira:precis>` (exactly 2), `<mira:display_title>` (≤8 words), `<mira:complexity>` (0.5|1|2|3); `{current_time}` filled per call by `cns/services/summary_generator.py`, route `batch`. Missing display_title → ValueError → the collapse handler's retry/circuit-breaker owns it.
-- `segment_summary_user.txt` — `{previous_summaries}`, `{conversation_text}`, `{tools_used}`.
-- `synthesis_summary_system.txt` — merges partial traces into one summary; complexity scale here 1|2|3, no 0.5. Optional load.
-- `synthesis_summary_user.txt` — `{chunk_summaries}`, `{tools_used}`; optional twin — absent pair disables synthesis.
-- `memory_extraction_system.txt` — the live extraction contract: JSON array of memories; `entities` PERSON|ORG|PRODUCT|PLACE; `related_memory_ids` mem_-prefixed short ids + ≤3-word bond; `happens_at`/`expires_at` written as the user's local wall time, never converted to UTC. Parser twin: `lt_memory/processing/memory_processor.py`, route `batch`.
-- `memory_extraction_user.txt` — `{formatted_messages}`: html-escaped `<user>`/`<assistant>` turns built by `lt_memory/processing/extraction_engine.py`.
-- `memory_extraction_system_qwen_experimental.txt` — dead: no call site loads it. Re-activation means pointing `extraction_engine.py:_load_prompts` at it; do not build on it.
-- `memory_extraction_system_qwen_v2.txt` — dead: same grep, same re-activation path; do not build on it. Consistently uses bare 8-char ids — the live remap tolerates either form.
-- `pending_memory_entities_system.txt` — entity tagging of user-confirmed pending memories; `{OUTPUT_FORMAT_EXAMPLE}` replaced by the code constant `_PENDING_ENTITY_FORMAT_EXAMPLE` in `cns/services/segment_collapse_handler.py`, route `batch` — the example is generated, never transcribed. pending_id echo contract: each input id exactly once, none invented.
-- `pending_memory_entities_user.txt` — `{memories}`: html-escaped `<memory pending_id="…">` lines; a tagging failure never loses a memory — the consumer isolates it.
-- `entity_merge_system.txt` — trigram-match dedup judge: `{"merges": [{"canonical": "<8-char-id>", "merge": […]}]}`, same-type merges only, false-positive groups omitted entirely. Parsed by `lt_memory/entity_merge.py:_extract_json`, route `fast`.
-- `entity_merge_user.txt` — `{groups}`: `Group N:` blocks of id/name/type/links entries; ids remapped through the caller's short-to-full map.
-- `live_context_compaction_system.txt` — the segment's rolling compaction report: fixed labeled-bullet sections, TOOLS USED as valid JSON; a prior report arrives as an assistant message and is updated and extended with existing text kept verbatim; memories saved and reminders set in the range carry forward under Commitments made; `{covered_end}` `.replace()`-filled into the system prompt itself by `cns/services/live_context_compaction_service.py`, route `batch`.
-- `live_context_compaction_user.txt` — `{new_history}` inside `<begin_new_history>` (assistant tool calls render with their arguments); the service wraps the stored report and places it in front of visible history.
-- `repulsion_rewriter_system.txt` — register-conditional de-telling rewriter (TECHNICAL/RELATIONAL/PHILOSOPHICAL/CREATIVE): same claims, arguments, and conclusions; assistant-shaped expression removed, register preserved.
-- `repulsion_rewriter_user.txt` — `{user_message}`, `{ai_response}`, `{matched_tells}`; loaded by `cns/api/actions.py` (`_REWRITER_*` module constants), route `batch`, rewrite worker pool.
-- `peanutgallery_system.txt` — the Tuning Fork observer: exactly one of `<mira:noop/>` or `<mira:peanutgallery type="concern|coaching|initiative" [severity="critical"]>`; priority concern > coaching > initiative > noop. Route `fast`.
-- `peanutgallery_user.txt` — `{formatted_messages}`, `{execution_trace}` (`.replace()`-filled by `cns/services/peanutgallery_model.py`); guidance lands in working memory via `cns/services/peanutgallery_service.py`.
-- `assessment_extraction_system.txt` — third-party behavioral judge over one segment: `<mira:assessment>` of `<mira:section>` + `<mira:signal type="alignment|misalignment|contextual_pass" strength="strong|moderate|mild">`; `{{THINKING_BLOCK_INSTRUCTIONS}}` replaced by `cns/services/assessment_extractor.py` with the optional file's text or the empty string. Route `assessment`.
-- `assessment_extraction_user.txt` — `{anonymized_system_prompt}` (via `anonymize_prompt`), `{user_model_observations}`, `{section_id_list}`, `{conversation_text}` (turns as `<user>`/`<assistant>`/`<tool>`/`` `thinking` ``).
-- `thinking_block_instructions.txt` — how to weigh `` `thinking` `` traces when evaluating; the only template injected into another; optional — absent, injected as empty string.
-- `user_model_synthesis_system.txt` — synthesizer: `<mira:user_model>` of `<mira:observation section=… confidence=…>` + `<changelog>`, `<mira:checkin>` capped at 2 topics; `{example_section_a}`/`{example_section_b}` filled at load from the section vocabulary (Rule above). Route `batch`.
-- `user_model_synthesis_user.txt` — `{section_id_list}`, `{current_user_model}`, `{assessment_signals}`.
-- `user_model_critic_system.txt` — quality gate over candidate user models: `<mira:critic_review status="pass|fail">` + `<mira:issue type="observation_laundering|personality_label|internal_contradiction" section=…>`. Loaded by two flows — synthesis (`cns/services/user_model_synthesizer.py`) and feedback refinement (`cns/services/lora_service.py`): a wording change hits both.
-- `user_model_critic_user.txt` — `{section_id_list}`, `{candidate_user_model}`; an unparseable verdict fails closed.
-- `lora_refinement_system.txt` — user-feedback reviser of the stored user model: minimal edit, `<mira:user_model>` output, anchors restricted to the valid list, removals honored outright; `{example_section_a}`/`{example_section_b}` filled at load from the section vocabulary (Rule above). No user template — the user message is code-built in `cns/services/lora_service.py`.
-- `persona_evaluation_system.txt` — segment judge of MIRA's behavior against the behavioral contract + current Persona: `<mira:persona_evaluation>` of `<mira:signal section=… outcome=… strength=…>`; empty `<mira:persona_evaluation/>` when nothing was tested.
-- `persona_evaluation_user.txt` — `{behavioral_contract}`, `{current_persona}`, `{conversation}`.
-- `persona_refinement_system.txt` — the Persona editor: `<mira:persona>` plain-text directive set; doubles as the system prompt for manual refinement. Parsed by regex in `cns/services/persona_service.py` — an omitted tag raises `PersonaParseError`.
-- `persona_refinement_user.txt` — evidence-driven revision: `{current_persona}`, `{evidence}`, `{critic_feedback}`.
-- `persona_manual_refinement_user.txt` — user-instructed revision (smallest complete edit; the instruction is authoritative but never stored as user knowledge): `{current_persona}`, `{user_instructions}`, `{critic_feedback}` — no system twin of its own.
-- `persona_critic_system.txt` — candidate-directive validator: `<mira:persona_review status="pass|fail">` + `<mira:issue>`; five pass conditions (behavioral control, no user facts, concrete, non-contradictory, non-restating).
-- `persona_critic_user.txt` — `{candidate_persona}`.
-- `portrait_synthesis_system.txt` — biographical profiler for the "User Context" section: matter-of-fact 4-5 sentences (~100-150 words), no lists. Route `batch`.
-- `portrait_synthesis_user.txt` — `{segment_summaries}`.
-- `portrait_refinement_system.txt` — portrait reviser on user feedback: minimal edit, length 4-5 sentences preserved. No user template — code-built message in `cns/services/portrait_service.py`; output feeds the Valkey preview-before-save flow.
-- `domaindoc_summary_system.txt` — TOC one-sentence summaries (max 100 chars), route `fast`; a summary failure is tolerated-and-logged — the section flow proceeds without it.
-- `domaindoc_summary_user.txt` — `{section_header}`, `{content}` (content truncated by `cns/services/domaindoc_summary_service.py`).
-- `behavioral_primer.txt` — a rehearsal user-correction dialogue injected into the session cache once collapsed history exists. Gotcha: parsed by `cns/core/segment_cache_loader.py` splitting on `---`, first line `[user]`/`[assistant]` = role, remainder = content — any other shape silently becomes garbage messages.
-- `untrusted_content_directive.txt` — the treat-as-data sentence placed inside every `wrap_untrusted` boundary (`_WRAPPER_DIRECTIVE`, loaded at module import by `utils/untrusted_content.py`). Gotcha: looks zero-length (no trailing newline) but is required — empty-after-strip fails the boot at import.
-- `injection_screen/overrides_instructions.txt` — tier-1 question: text trying to change how an AI assistant behaves (instructions, identity, role, task), hidden or decoded forms included.
-- `injection_screen/requests_action.txt` — tier-1 question: orders addressed to an assistant (send, delete, buy, open, run, call a tool), including claimed-preapproved and standing orders.
-- `injection_screen/requests_disclosure.txt` — tier-1 question: requests to reveal system prompt, memories, conversation, credentials, or private user details, disguised as story/hypothetical/test.
-- `injection_screen/requests_deception.txt` — tier-1 question: requests to mislead the assistant's user (omissions, planted claims, secret-keeping, distrust, storing claims about the user).
-- `injection_screen/claims_false_authority.txt` — tier-1 question: forged authority over the assistant — its user, itself, its developers, system notices, tool results, role-labeled transcripts, chat markup.
-- `injection_screen/exfiltration_channel.txt` — tier-1 question: data-out through links, image addresses, or message destinations the assistant is asked to fill or render.
-- `injection_screen/escalation_system.txt` — the tier-2 judge for content tier 1 could not classify: manipulation taxonomy + not-manipulation carve-outs; `{verdict_format}` replaced with the code-built `<verdict>reject</verdict> or <verdict>pass</verdict>`.
-- `injection_screen/escalation_user.txt` — `{suspicions}` (per-kind uncertainty scores), `{content}`.
-- `injection_screen/revealed_text_header.txt` — the header line placed above decoded hidden/encoded text in the reveal step.
-- `agents/base_system.txt` — the sidebar-agent loop contract: "Continue." as the keep-working signal, `sidebar_tool complete_task` the only finish; loaded only under `agents/base.py`'s `inherit_base_prompt` gate (default `True`) — every concrete agent sets `False`, so it reaches no live prompt (the loop contract is enforced by `agents/base.py` code regardless; a new agent leaving the default re-activates it; editing it changes no current agent).
-- `agents/forage_system.txt` — forage research protocol: three-phase search (perimeter map, entity drill, slop bypass) with a mandatory Phase-2 drill before exit; anti-fabrication exit language. Loaded by `agents/implementations/forage_agent.py`.
-- `agents/heartbeat_agent_system.txt` — the heartbeat gate: bail/check/dispatch per brief, outcomes bailed|false|fired, `wake_in_seconds` minimum 60, one report per brief. Loaded by `agents/implementations/heartbeat_agent.py`.
-- `agents/phoneafriend_system.txt` — the outside-voice consult: independence contract (sees only the inquiry and the thread's prior turns, never MIRA's context), and the load-bearing instruction that `complete_task`'s summary carries the full response — it is the only channel out of a blocking run. Loaded by `agents/implementations/phoneafriend_agent.py`.
-- `agents/whilethecatsaway_system.txt` — idle-time curiosity research: `web_tool`/`memory_tool`/`continuum_tool`, store-as-you-go `create_memory`, `[pending_id] description` completion ledger. Loaded by `agents/implementations/whilethecatsaway_agent.py`.
-- `agents/memory_curator_integration.txt` — curator INTEGRATION mode (post-collapse): merge/link/stand-alone per new memory; the seven link types; candidate-hint `bond` passed through onto the link.
-- `agents/memory_curator_floor.txt` — curator FLOOR mode (low-score triage): archive/salvage/leave; cannot create or reword memories; leave is the rare case. Mode choice in `agents/implementations/memory_curator_agent.py`.
+**The loader**
+
+- `__init__.py` — package marker re-exporting `load_prompt`; reads no template. Nothing to open here.
+- `loader.py` — the one sanctioned template read. Open it before making new code load a prompt, or when a template seems to be missing.
+
+**Memory extraction and curation**
+
+- `memory_extraction_system.txt` — the live extraction contract. Open it before changing what becomes a durable memory.
+- `memory_extraction_user.txt` — the transcript half of that pair. Open it when the extractor's input format changes.
+- `memory_extraction_system_qwen_v2.txt` — dead: no call site loads it, and its head marker says so.
+- `memory_extraction_system_qwen_experimental.txt` — dead: a second unused extraction variant, marked at its head too.
+- `pending_memory_entities_system.txt` — the entity-tagging contract for memories already stored. Open it before changing how a stored memory earns its retrieval anchors.
+- `pending_memory_entities_user.txt` — the batch of memories to tag. Open it when that input format changes.
+- `entity_merge_system.txt` — the trigram-match dedup judge. Open it before changing when two entities count as one.
+- `entity_merge_user.txt` — the grouped-candidate half. Open it when the group format changes.
+
+**Segment summary, compaction, retrieval**
+
+- `segment_summary_system.txt` — the contract for what survives a segment collapse. Open it before changing what a collapsed segment keeps.
+- `segment_summary_user.txt` — the segment half of that pair. Open it when the summarizer's input format changes.
+- `synthesis_summary_system.txt` — folds a long segment's partial traces into one summary. Open it before changing that fold.
+- `synthesis_summary_user.txt` — the chunk half of that pair. Open it when the chunking input format changes.
+- `live_context_compaction_system.txt` — the rolling continuation brief: one per session, each pass updating and extending the last. Open it before changing what a compacted range must carry forward.
+- `live_context_compaction_user.txt` — the newly compacted range. Open it when the compaction input format changes.
+- `subcortical_system.txt` — the per-turn retrieval filter. Open it before changing which memories and entities a turn sees.
+- `subcortical_user.txt` — the turn half of that pair.
+- `behavioral_primer.txt` — a rehearsal correction dialogue spliced into the session cache. Open it before editing its turns; its shape is a parser contract, see `## Rules`.
+
+**User model: assess, synthesize, validate, revise**
+
+- `assessment_extraction_system.txt` — the third-party judge of one segment against the behavioral contract. Open it before changing what counts as alignment.
+- `assessment_extraction_user.txt` — the judge's input: the segment, the anonymized system prompt, and the current user model's observations.
+- `thinking_block_instructions.txt` — the weighing rules for thinking traces, spliced into that judge's system prompt.
+- `user_model_synthesis_system.txt` — the synthesizer contract. Open it before changing how signals become stored observations; two of its examples are filled from the live section vocabulary.
+- `user_model_synthesis_user.txt` — its inputs: valid anchors, current model, unsynthesized signals.
+- `user_model_critic_system.txt` — the quality gate every candidate model passes before storage. Two flows load it, so a wording change reaches both.
+- `user_model_critic_user.txt` — the candidate under review. Open it before changing what the critic is shown.
+- `lora_refinement_system.txt` — the user-feedback reviser of a stored model; its user message is code-built, so it has no user twin. Open it before changing what a user correction may edit.
+
+**Persona and portrait**
+
+- `persona_evaluation_system.txt` — the segment judge of MIRA's behavior against the contract and the current Persona. Open it before changing what a persona signal means.
+- `persona_evaluation_user.txt` — its three inputs.
+- `persona_refinement_system.txt` — the Persona editor, and the system prompt of the manual refinement path too. Open it before changing how a Persona directive is written.
+- `persona_refinement_user.txt` — the evidence-driven revision inputs.
+- `persona_manual_refinement_user.txt` — the user-instructed revision; no system twin of its own.
+- `persona_critic_system.txt` — the validator over a candidate Persona. Open it before changing what a directive may contain.
+- `persona_critic_user.txt` — the candidate under review.
+- `portrait_synthesis_system.txt` — the User Context portrait contract. Open it before changing how the user is described in the system prompt.
+- `portrait_synthesis_user.txt` — the segment summaries it profiles from.
+- `portrait_refinement_system.txt` — the portrait reviser on user feedback; its user message is code-built, so it has no user twin.
+
+**Response shaping**
+
+- `repulsion_rewriter_system.txt` — the register-conditional de-telling rewriter. Open it before changing what counts as assistant-shaped writing.
+- `repulsion_rewriter_user.txt` — the message pair plus the flagged tells.
+- `peanutgallery_system.txt` — the Tuning Fork observer contract. Open it before changing when MIRA is told to correct itself mid-conversation.
+- `peanutgallery_user.txt` — the history and execution trace it judges.
+- `domaindoc_summary_system.txt` — the table-of-contents sentence contract; open it before changing what a section's index line says.
+- `domaindoc_summary_user.txt` — the section header and content it summarizes.
+
+**Untrusted content**
+
+- `untrusted_content_directive.txt` — the treat-as-data sentence placed inside every untrusted-content wrapper. Open it before changing what a model is told about wrapped content.
+
+Tier-1 questions — one file per name in `SCREEN_QUESTIONS`, and the name is also the answer key in every screen response. Open one before reworking the question it asks.
+
+- `injection_screen/overrides_instructions.txt` — instruction and identity hijacking.
+- `injection_screen/requests_action.txt` — orders to act on the user's behalf.
+- `injection_screen/requests_disclosure.txt` — extraction of prompt, memories, or user detail.
+- `injection_screen/requests_deception.txt` — steering the assistant to mislead its own user.
+- `injection_screen/claims_false_authority.txt` — forged authority over the assistant.
+- `injection_screen/exfiltration_channel.txt` — data leaving through a link, image, or address.
+- `injection_screen/escalation_system.txt` — the tier-2 judge contract for content tier 1 could not place.
+- `injection_screen/escalation_user.txt` — the per-question scores and the content under review.
+- `injection_screen/revealed_text_header.txt` — the line placed above decoded hidden text.
+
+**Sidebar agent rubrics**
+
+- `agents/base_system.txt` — the sidebar loop contract; open it before changing what an agent tells itself about its own loop.
+- `agents/forage_system.txt` — the research protocol; open it before changing how a sidebar research agent is told to get past the first page of results.
+- `agents/heartbeat_agent_system.txt` — the brief gate: bail, check, or dispatch, one report per brief.
+- `agents/phoneafriend_system.txt` — the outside voice, whose completion summary is the only channel back to the caller.
+- `agents/whilethecatsaway_system.txt` — idle-time curiosity research that stores memories as it goes.
+- `agents/memory_curator_integration.txt` — curator INTEGRATION mode, after a segment collapse.
+- `agents/memory_curator_floor.txt` — curator FLOOR mode, over memories already scoring low.
 
 ## Wiring
 
-- Loader boundary: every consumer loads through `load_prompt()` — full set by grep, `rg 'load_prompt\('` (18 consumer modules); no file here is opened directly anywhere. `untrusted_content_directive.txt` loads at module import (`utils/untrusted_content.py`); services and the screen load at construction or first call — always before any LLM call.
-- Section vocabulary chain: `config.system_prompt` → `get_assessable_section_ids` (`cns/services/AGENTS.md` owns the parser) → fills this corpus (Rule above) → `validate_section_anchors` at the three save paths. System prompt owned by `config/AGENTS.md`; save action by `cns/api/AGENTS.md`.
-- Screen chain: `config/prompts/injection_screen/revealed_text_header.txt` → tier-1 six questions (loaded by name from `SCREEN_QUESTIONS`, `utils/untrusted_content.py`) → band edges → the `escalation_*` pair → `wrap_untrusted` (`config/prompts/untrusted_content_directive.txt`). Wording is calibrated against `tests/protected/injection_defense_probe.py` — reword only with the battery's numbers (band edges and fail-closed contract owned by `utils/AGENTS.md`; battery by `tests/protected/AGENTS.md`). Silent drift moves the pass/reject bands: benign content refused or attacks waved through.
-- Extraction pair ↔ `lt_memory/processing/AGENTS.md` — that map routes prompt variables and examples here; parsing, remap, and temporal handling stay there. `pending_memory_entities_*` ↔ the pending-manual drain (`cns/services/AGENTS.md`). `entity_merge_*` ↔ the scheduled merge job (`lt_memory/AGENTS.md`).
-- Summary pair ↔ `cns/services/AGENTS.md` (`summary_generator.py`: collapsed sentinels, synthesis) and `utils/AGENTS.md` (`tag_parser.py` regexes).
-- User-model family ↔ `cns/services/AGENTS.md` (assessment extractor, synthesizer, lora refinement) + `working_memory/trinkets/AGENTS.md` (`lora_trinket.py` serves the stored model into every turn's system prompt).
-- Persona family ↔ `cns/services/AGENTS.md` (`persona_service.py`; the preview-before-save contract is owned by root) · portrait family ↔ `cns/services/AGENTS.md` (`portrait_service.py`) · `peanutgallery_*` ↔ same (observer service; guidance lands in working memory) · `subcortical_*` ↔ same (orchestrator fast path: query expansion + previous-memory retention) · `domaindoc_summary_*` ↔ same (section summaries) · `live_context_compaction_*` ↔ same (the service renders the stored report).
-- `behavioral_primer.txt` ↔ `cns/core/AGENTS.md` (`segment_cache_loader.py`). `repulsion_rewriter_*` ↔ `cns/api/AGENTS.md` (`actions.py` rewrite pool). `agents/*` ↔ `agents/AGENTS.md` (loop mechanics, `load_agent_prompt`) + `agents/implementations/AGENTS.md` (Mode Contract; the curator's two mode files).
+- Loader boundary: `load_prompt` → each consumer's own load site → the LLM call that load feeds. Every consumer reads through it, the full set by `rg 'load_prompt\('`; loading happens at construction or first call and always before the call it feeds, so a load moved after the call sends a request with no system prompt. Counterpart: `cns/services/AGENTS.md`.
+- Section vocabulary: `config.system_prompt` → `get_assessable_section_ids` → the `{example_section_a}`/`{example_section_b}` fill in `lora_refinement_system.txt` and `user_model_synthesis_system.txt` → `validate_section_anchors` at the save paths. The vocabulary must be one live read at fill time and at validation time; renaming a section between them strands every observation built in that window, because validation compares against the prompt as it is now. Counterpart: `config/AGENTS.md`.
+- Screen chain: the reveal header → the six tier-1 questions → band edges → the escalation pair → `wrap_untrusted` with `untrusted_content_directive.txt`. Wording and band edges are calibrated to each other against one battery, so a reworded question moves both bands and the template cannot show which way: either benign content starts being refused, or an attack starts passing. Counterparts: `utils/AGENTS.md`, `tests/protected/AGENTS.md`.
+- Extraction edge: `memory_extraction_*` crosses into `lt_memory/processing/AGENTS.md`, which owns parsing, id remap, and temporal handling; this map owns only what the template says. Counterpart: `lt_memory/processing/AGENTS.md`.
+- Pending-entity edge: `pending_memory_entities_*` is loaded and its reply parsed in `cns/services/segment_collapse_handler.py`, which owns the pending_id echo keyed by identity. An output-shape change to that template and the parser move in the same commit. Counterpart: `cns/services/AGENTS.md`.
+- Sidebar rubrics: `load_agent_prompt` → `load_prompt("agents/<name>")`. A rubric loads at the agent's first prompt fetch, not at import, so a `py_compile`-clean agent can still carry a missing rubric. Counterpart: `agents/AGENTS.md`.
+- Gated edge — `config/prompts/agents/base_system.txt`: reached only when `BaseAgent.inherit_base_prompt` is left at its default `True`, and every concrete agent sets it `False`, so the file currently reaches no live prompt. A new agent leaving the default re-activates it; the loop contract it states is enforced by `agents/base.py` either way. Counterpart: `agents/AGENTS.md`.
 
-## Assessment loop, segment to system prompt
+## Rules
 
-The user-model prompts are one loop, not eight template files; each is the loop's surface at one stage.
+- Every `{var}` in a template pairs with exactly one fill at its call site, and the two fill mechanisms fail differently. `.format()` is used where every token is a call-site key: it raises `KeyError` on a placeholder nobody fills, but silently ignores a key the template no longer carries, so a call passing a stale key looks fine. `.replace()` is used where the fill value is generated in code and must reach the model verbatim — the pending-entity format example, the escalation verdict format, the thinking-weight block — and leaves the unfilled `{var}` in front of the model as literal text with no error anywhere. Template edit and call site move in the same commit.
+- A template's output shape and its parser are one contract, so change both in the same commit. `<mira:complexity>` accepts exactly `0.5|1|2|3` (`utils/tag_parser.py`), so any other value a prompt offers degrades silently to the default score; an omitted persona tag raises `PersonaParseError`; an unparseable critic verdict fails closed rather than auto-publishing. Where a template's format token is code-built — `{OUTPUT_FORMAT_EXAMPLE}` in `pending_memory_entities_system.txt`, `{verdict_format}` in `config/prompts/injection_screen/escalation_system.txt` — edit the generating code, never the template text.
+- Exactly three templates load with `required=False`: `thinking_block_instructions.txt`, `synthesis_summary_system.txt`, `synthesis_summary_user.txt`. Every other file here is load-bearing, and where the load sits decides the blast radius: `untrusted_content_directive.txt` loads at `utils/untrusted_content.py` module import, so an emptied copy fails the boot; a template loaded at module or service construction also fails the boot; one loaded inside a call-scope function survives boot and fails the first call of that feature. Emptying a template never disables a feature — it moves the failure. Absence is not always a degraded mode: the optional synthesis pair absent raises in `summary_generator._synthesize_chunk_summaries` and re-surfaces as a `ValueError` from `_generate_chunked_summary`, so the first segment too large for the context window cannot be collapsed at all.
+- `behavioral_primer.txt` is a wire format, not prose: `cns/core/segment_cache_loader.py` splits the file on `---`, reads the bracketed first line of each block as the role, and takes the remainder as content. The roles it can emit are the three `Message` accepts, and a block with an unrecognized role or an empty remainder raises `ValueError` from `Message.__post_init__` while the session cache loads — so an edit that drops a bracket or a line fails the first session load rather than degrading the primer.
 
-1. A segment collapses. `cns/services/assessment_extractor.py:extract_signals` fills `assessment_extraction_user.txt` — the anonymized system prompt, the current user-model observations (themselves this loop's output), the assessable-section list, the segment as `<user>`/`<assistant>`/`<tool>`/`` `thinking` `` turns — and calls the `assessment` route. `{{THINKING_BLOCK_INSTRUCTIONS}}` supplies only the weighing instructions: thinking traces render as think-tagged blocks whenever they are at least 70% of assistant content (`THINKING_INCLUSION_THRESHOLD`) — absent the optional file, the traces are still in the transcript the judge reads, unweighed.
-2. The response's `<mira:assessment>` signals (per section: alignment|misalignment|contextual_pass × strong|moderate|mild, each with cited evidence) are parsed into `AssessmentSignal`s. Misalignment outweighs alignment — one rule stated in both `assessment_extraction_user.txt` and `user_model_synthesis_system.txt`.
-3. Synthesis (`user_model_synthesis_*`, route `batch`) folds every unsynthesized signal plus the current model into a candidate `<mira:user_model>` — no signal time window (`get_unsynthesized_signals` selects all unsynthesized); the 7-use-day figure is the run cadence (`feedback_tracker.should_synthesize`, every 7th cumulative activity day), not a window — after a `CriticExhaustedError` the next run folds all signals accumulated since the last success. Its examples were pre-filled at load with two real anchor names from the same section vocabulary — the model imitates anchors that exist by construction.
-4. The candidate passes three gates in order: deterministic anchor validation (`validate_section_anchors` — code, not LLM; failure feedback names the valid set and the loop retries), then the LLM critic (`user_model_critic_*` — the three failure modes; an unparseable verdict fails closed, never auto-publishes), and exhaustion after `CRITIC_MAX_ATTEMPTS` raises `CriticExhaustedError`. The critic is the only quality gate before auto-publish.
-5. The stored model is served into every subsequent turn's system prompt by `working_memory/trinkets/lora_trinket.py` — the same observations step 1 reads back as context. Explicit user feedback short-circuits steps 1-3: `lora_refinement_system.txt` revises the stored model directly from the user's words (code-built user message), then the same critic vocabulary and anchor validation apply.
+Elsewhere: this map does not own which pipeline fires a template, how its reply is parsed, or what a template ought to say — firing and reply parsing belong to the invoking service and its own map, cited per consumer under `## Wiring`; the escalation verdict's parse contract is the docstring of `utils/untrusted_content.py`; why a prompt reads the way it does is `git log`. Every other destination this directory reaches is an edge — see `## Wiring` above.
 
-Ordering invariant: the anchor vocabulary must be identical at fill time (steps 1, 3) and validation time (step 4) — it is one live function over `config.system_prompt`, so a section renamed between a fill and its validation strands the observations built in between. The persona family runs the same shape without section anchoring — `persona_evaluation_*` → `persona_refinement_*` → `persona_critic_*`, regex-parsed in `cns/services/persona_service.py`.
+## The assessment loop, one segment to the next turn's system prompt
+
+The user-model templates are one loop, not eight separate files, and it exercises three of the Rules above.
+
+1. A segment collapses. `cns/services/assessment_extractor.py` fills `assessment_extraction_user.txt` with the anonymized system prompt, the current model's observations — this loop's own earlier output — the section list, and the segment as typed turns. Whether thinking traces are rendered at all is decided there, against `THINKING_INCLUSION_THRESHOLD`; `thinking_block_instructions.txt` only supplies how to weigh them, so with the optional file absent the traces are still read, unweighed.
+2. The reply's `<mira:assessment>` signals carry, per section, an alignment verdict and its cited evidence. Misalignment outweighs alignment, a weighting both the extraction user template and the synthesis system template state.
+3. Synthesis folds every unsynthesized signal plus the current model into a candidate `<mira:user_model>`. There is no signal window: the repository selects all unsynthesized signals, and the run cadence is a separate use-day counter.
+4. The candidate passes three gates in order — deterministic anchor validation in code, then the LLM critic against its three failure modes, then `CRITIC_MAX_ATTEMPTS` exhaustion, which raises rather than publishing. The critic is the only quality gate before auto-publish.
+5. The stored model is served into every later turn's system prompt by `working_memory/trinkets/lora_trinket.py` — the same observations step 1 then reads back as context. Explicit user feedback short-circuits steps 1 to 3: the refinement template revises the stored model from the user's words, then the same anchors and critic apply.
+
+The ordering invariant that spans the loop: the anchor vocabulary filled into the templates at step 1 and step 3 and the vocabulary validation checks at step 4 must be the same live read of `config.system_prompt`. The persona family runs the same evaluate, revise, critic shape with regex parsing in place of anchor validation.

@@ -1,14 +1,23 @@
 """
-Extraction orchestrator - high-level extraction workflows.
+The extraction lifecycle: one collapsed segment in, one marked boundary out.
 
-Two entry points:
-- submit_segment_extraction(user_id, boundary_message_id): Self-contained segment
-  extraction. Loads messages, extracts directly, marks boundary. Called by collapse handler
-  and extract_unprocessed_segments.
-- extract_unprocessed_segments(): Safety-net sweep for collapsed segments where
-  extraction failed or was never attempted. Runs on a 6-hour schedule.
+``submit_segment_extraction`` owns the whole path — boundary row lookup, the
+message walk to the next boundary sentinel, chunk construction, the memory
+context snapshot, execution, and the ``memories_extracted`` mark. It writes
+that mark only after ``execute_extraction`` returns, so any raise leaves the
+segment unmarked and the retry sweep re-enters it: safe for a raise, fatal for
+a silent success, which is why a degenerate LLM response raises rather than
+returning zero memories.
 
-All complexity lives in submit_segment_extraction. Callers are trivial.
+Two distinct empty outcomes are not interchangeable: no message rows at all
+returns False so the sweep retries, while rows with nothing extractable marks
+the boundary extracted and never revisits the segment.
+
+``extract_unprocessed_segments`` is the safety-net sweep. It sets the user
+contextvar per user and clears it after, isolates failures per segment, and
+bumps the content-failure budget only for failures
+``_is_content_caused_extraction_failure`` classifies as caused by the segment's
+own data.
 """
 import json
 import logging

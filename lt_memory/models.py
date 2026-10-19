@@ -1,7 +1,23 @@
 """
-Pydantic models for LT_Memory system.
+The shared data structures of the memory system: stored rows (`Memory`,
+`Entity`), pre-persistence shapes (`ExtractedMemory`, `ProcessingChunk`,
+`PendingManualMemory`), and the TypedDicts that mirror the JSONB columns.
 
-All data structures for memories, links, and processing chunks.
+A JSONB shape written by one module and read by another is declared here as a
+TypedDict, because nothing validates JSONB at runtime — two local spellings of
+one entry shape drift without either side raising.
+
+`VALID_RELATIONSHIP_TYPES` is the single set of link kinds, and the one callers
+subtract from (`memory_tool` drops `null` before it validates a link);
+`RelationshipType` is the same set spelled as the literal that types
+`MemoryLink.link_type`. A kind added to the set alone passes the tool's check
+and then fails model validation on construction, while a kind added to the
+literal alone is a value nothing validates against.
+
+`Memory._coerce_embedding` is the pgvector boundary: a raw row carries
+`pgvector.types.Vector`, which is neither iterable nor a list subclass, so
+without the `to_list()` coercion every query that returns an embedding fails
+Pydantic validation.
 """
 import logging
 from pydantic import BaseModel, Field, field_validator

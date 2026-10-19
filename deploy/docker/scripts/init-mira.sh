@@ -1,10 +1,22 @@
 #!/bin/bash
-# MIRA Docker Container Entrypoint
-# Handles first-boot configuration, then hands off to s6-overlay
+# MIRA container PID-1 entrypoint: first-boot provisioning, then handoff to
+# s6-overlay.
 #
-# First-boot detection: checks for /opt/vault/init-keys.txt
-# - If absent: runs setup wizard (interactive or env-var based)
-# - If present: proceeds directly to s6-overlay startup
+# First boot is gated on /opt/vault/init-keys.txt, written only by Vault
+# initialization. Absent means nothing is configured: the wizard runs when
+# stdin and stdout are both TTYs and the env-var path otherwise (only
+# MIRA_PROVIDER_KEY is required), then this script starts a temporary
+# PostgreSQL and a temporary Vault, provisions roles, the database, the
+# schema, the model routes and every Vault entry, and stops both again.
+#
+# Present means the install is configured. Provisioning is first-boot-only, so
+# this branch verifies /var/lib/postgresql/17/main/postgresql.conf still
+# exists and aborts if it does not: initdb on an empty pgdata would silently
+# create a new database and abandon the one the surviving Vault describes.
+#
+# Both branches end by fixing ownership on the volume mountpoints, which come
+# up root-owned, and `exec /init`, replacing this process with s6-overlay —
+# the only supervisor of the longruns.
 
 set -e
 

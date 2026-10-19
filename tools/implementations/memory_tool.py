@@ -1,13 +1,30 @@
 """
-Memory management tool for manual memory operations.
+Long-term memory management: graph-aware search, queued creation, typed links,
+annotations, use-touch, archive, and merge.
 
-Provides search, create, link, and annotate operations for long-term memories.
-This tool gives full domain ownership over memory operations, replacing the
-memory search functionality previously in continuum_tool.
+A search runs two pools concurrently — hybrid vector+BM25 similarity, and
+entity hub discovery, which only runs when the caller names entities — merges
+them without duplicates, and applies the supersedes penalty (a memory another
+one supersedes scores at 30% of its importance) before paginating. Link
+traversal then attaches each top result's related memories with their link
+type, bond, and reasoning.
 
-Memory creation is deferred: create_memory() queues memories to Valkey for
-processing at segment collapse, which moves heavy operations (embedding
-generation, entity extraction) to the existing extraction pipeline.
+`create_memory` deliberately writes nothing: it pushes a PendingManualMemory
+onto the Valkey queue keyed by user and segment, and the collapse-time
+extraction pipeline does the embedding and entity work later. The queue key
+therefore has to outlive a Valkey flush, which the root map's preserve
+whitelist covers.
+
+A memory reference resolves by either identity form — a full UUID is an exact
+match, a short id is a UUID-prefix match under a LIMIT 2 collision check that
+raises on ambiguity rather than guessing. `_OPERATION_REQUIRED_FIELDS` gates
+each operation's required parameters before dispatch, so a missing argument
+raises this tool's recoverable ValueError instead of a raw TypeError from
+argument binding.
+
+`CURATOR_MEMORY_SCHEMA` is this tool's schema with `create_memory` removed: the
+MemoryCuratorAgent works on existing memories only and must never manufacture
+new ones.
 """
 
 import copy

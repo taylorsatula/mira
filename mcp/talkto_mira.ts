@@ -13,6 +13,12 @@
  * minted by `python3 -m ui.tui --login`). That store's format is owned by
  * ui/tui/endpoints.py in the mira-OSS repo; any format change updates this file
  * in the same commit (twin contract).
+ *
+ * Abandoning the wait is not cancelling the turn: the abort signal and
+ * READ_TIMEOUT_MS sever only pi's wait, while the server keeps the message it
+ * already staged, commits it, and holds the per-user lock until its handler
+ * returns — so an immediate retry bounces with the busy row. The tool carries
+ * no retry logic, and its error text promises none.
  */
 
 import { readFileSync } from "node:fs";
@@ -180,6 +186,9 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (response.ok && envelope?.success) {
+        // CROSS-FILE-COUPLING: cns/api/chat.py's size-limit path answers HTTP 200
+        // with data.rejected set and data.response holding the rejection text, so
+        // an oversized message arrives here as an ordinary reply.
         const reply = envelope.data?.response;
         if (typeof reply !== "string") {
           // Twin of cns/api/mcp.py's malformed-success row.

@@ -1,4 +1,12 @@
-"""Time manager trinket for current date/time injection."""
+"""
+Renders the current wall clock as the model's only "now".
+
+Every compose produces a fresh `<current_datetime>` line from the user's
+preference timezone, so the section is never empty and the model always has a
+resolvable anchor for relative times it writes. Nothing is held between
+composes: the render is a pure read of the clock, so no stale value can
+accumulate in memory.
+"""
 import logging
 from typing import Dict, Any
 

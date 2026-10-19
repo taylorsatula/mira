@@ -1,6 +1,11 @@
-"""Type definitions for working memory structures.
+"""The dict shapes crossing the composer/core boundary.
 
-TypedDicts for the well-known dict shapes produced by composer.py and core.py.
+`ComposedPrompt` is what `SystemPromptComposer.compose()` returns and what
+`WorkingMemory._handle_compose_prompt` unpacks into event fields;
+`TrinketState`, `TrinketStatesMeta` and `AllTrinketStates` describe the two
+working-memory API read responses. These are `TypedDict`s, so nothing checks
+them at runtime: a producer that renames or omits a key surfaces as a
+`KeyError` in the consumer, never as an error at the point the dict is built.
 """
 from typing import TypedDict
 

@@ -1,11 +1,21 @@
 """
-Peanut Gallery metacognitive observer model.
+Peanut Gallery observer model: one fast-route call over a scoped conversation
+window plus a compact execution ledger.
 
-Single-stage LLM pipeline for conversation observation.
-The observer reviews recent conversation plus a compact execution trace and
-emits metacognitive guidance when MIRA needs evidence-backed correction.
+`evaluate` narrows the continuum to the recent turn window, builds the ledger
+(the latest user request, the latest assistant response, assistant commitments
+extracted by phrase pattern, and tool activity), and asks the observer for a
+verdict. Actions are `noop`, `concern`, `coaching`, `initiative`.
 
-Actions: noop, concern, coaching, initiative
+Parsing is the entire contract, and it fails toward silence: an unparseable
+response, a missing type attribute, an unknown action type, or a missing
+`<guidance>` block all degrade to `noop` rather than raising. A malformed
+emission therefore costs one observation, never a turn. `initiative` is never
+marked critical.
+
+Everything spliced into the prompt from conversation content is XML-escaped at
+the interpolation point, because that text is user-authored and would otherwise
+be able to close a container and speak as the prompt.
 """
 import json
 import logging

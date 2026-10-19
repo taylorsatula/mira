@@ -1,12 +1,10 @@
 """
-Memory processing pipeline - clean, surgical implementation.
+The memory processing package: extraction, response parsing, storage, consolidation.
 
-This package contains the rebuilt extraction pipeline with proper separation of concerns:
-- memory_processor: Parse and validate LLM responses
-- extraction_engine: Build extraction payloads and prompts
-- execution_strategy: Execute directly through model_config=batch
-- consolidation_handler: Handle memory consolidation
-- orchestrator: High-level workflow coordination
+Each module owns one stage of the pipeline and is wired together by
+``lt_memory/factory.py``; in-repo callers import those submodules directly.
+This root only re-exports the seven ``__all__`` names, so a name added to a
+submodule and used by a caller is not necessarily reachable from here.
 """
 
 from lt_memory.processing.memory_processor import MemoryProcessor

@@ -1,4 +1,21 @@
-"""PostgreSQL repository for immutable Persona revisions and evidence."""
+"""
+Immutable Persona revisions, the current-revision pointer, and the behavioral
+evidence behind them.
+
+History is append-only: `append_revision()` is the one writer that adds a
+revision, it serializes on `SELECT … FOR UPDATE` over `persona_state`, and it
+computes `revision_number` and the parent edge inside that lock. A direct
+INSERT or UPDATE outside it races two writers into duplicate revision numbers
+or a detached parent edge.
+
+`expected_parent_revision_id` is a compare-and-set for previews: the caller
+passes the revision it previewed against, and a concurrent change raises
+`ValueError` so the caller regenerates instead of overwriting. Evidence lives
+in `persona_signals`, never in `feedback_signals` — the two tables share no
+column beyond the keys — and `append_revision()` consumes the evidence ids it
+was given in the same transaction, so unconsumed rows are exactly what the
+next refinement reads.
+"""
 
 from __future__ import annotations
 

@@ -5,6 +5,11 @@ segments.
 Thin StatefulTrinket. Zero I/O — receives inbox data from InboxPollerService
 via UpdateTrinketEvent events, stores it in memory, renders XML. Cleared
 automatically on segment collapse via WorkingMemory._flush_stateful_trinkets().
+
+A compose with no snapshot for the user renders nothing, so the section
+vanishes instead of showing the previous segment's mail. The listing is
+escaped once, by `wrap_untrusted` around the whole block, so per-field
+escaping here would double-escape.
 """
 import logging
 from typing import Any, Dict, TYPE_CHECKING

@@ -1,8 +1,30 @@
 """
-CNS Integration Factory
+The composition root: builds the CNS dependency graph and registers every
+in-process event subscription.
 
-Provides service initialization and dependency injection for connecting CNS
-with existing MIRA components (tool repository, working memory, workflow manager, etc.)
+`create_orchestrator()` constructs in dependency order — event bus, working
+memory with its trinkets, tool repository, providers, session cache, the
+handlers and services that subscribe to the bus, then the orchestrator. Two
+of those orderings are load-bearing rather than stylistic.
+`_get_tool_repository` must follow `_get_working_memory`, because
+`ToolRepository.__init__` reaches the bus through `working_memory.event_bus`
+and silently skips its `SegmentCollapsedEvent` subscription when that is
+None. `_initialize_session_cache` must precede
+`_initialize_segment_collapse_handler`, because the latter's
+get_continuum_pool() raises RuntimeError until the pool is initialized.
+`get_lt_memory_factory()` is called here with no arguments and raises the
+same way unless the lifespan built that singleton first.
+
+Construction is registration. Trinkets have no discovery pass — the manual
+construction lines in `_get_working_memory` are the whole roster, so a
+trinket missing one is silently absent from every composed prompt. `EventBus()`
+is constructed only in `_get_event_bus`, so the bus this factory builds is
+the process's single bus, and a second one partitions the subscribers from
+the publishers.
+
+This module runs twice per boot — the `main.py` lifespan and the pre-server
+POST child process each call `create_cns_orchestrator()` against the same
+real infrastructure — so nothing here may write non-idempotently.
 """
 from __future__ import annotations
 
@@ -58,6 +80,9 @@ class CNSIntegrationFactory:
         self._subcortical_layer: SubcorticalLayer | None = None
         self._peanutgallery_service: PeanutGalleryService | None = None
         self._inbox_poller: object | None = None
+        # ACCEPTED-RESIDUAL: never assigned. The live message cache is built in
+        # ContinuumPool.__init__; this slot and the import it types stay as the
+        # leftover of a wiring path that moved, not as a place to assign.
         self._valkey_cache: ValkeyMessageCache | None = None
         self._memory_relevance_service: MemoryRelevanceService | None = None
         self._live_context_compaction_service: LiveContextCompactionService | None = None

@@ -1,4 +1,4 @@
-# MIRA - Python Project Guide
+# repo root — process-wide doctrine, the map registry, and the root file index
 
 **Complex problems require simple and clear solutions.**
 
@@ -45,7 +45,7 @@ directory whose map is missing is a defect.
 | `deploy/lib/` | Shared bash helper libraries, Vault state machine |
 | `deploy/migrations/` | Versioned and repeatable database steps, the generated BASELINE fingerprint table, and the step authoring contract |
 | `deploy/vm/` | VM spin-up, dev-build deploy, and sarcophagus restore toolkit: modes, transports, sarcophagus contract, reference-host recipes |
-| `docs/` | Operator documentation and process authorities: `REGISTER.md` (writing register for any text a model reads) and `AGENTS_MAP_RESEARCH.md` (research base behind the map law; the law lives in the `maintaining-agentsmd-maps` skill) |
+| `docs/` | Operator documentation and process authorities: `REGISTER.md` (the writing register for any text a model reads), the operator guides, and `AGENTS_MAP_RESEARCH.md`, which records the sources behind each map-law rule while the law itself is the `maintaining-agentsmd-maps` skill |
 | `lt_memory/` | Long-term memory: storage, scoring, retrieval, linking, entity services |
 | `lt_memory/processing/` | Extraction pipeline and consolidation |
 | `mcp/` | Agent-facing check-in clients: the pi `talkto_mira` extension, its TUI-store twin contract, and the shared check-in mapping rows |
@@ -70,11 +70,10 @@ directory is read, so those maps are present in context together with this
 one.
 
 **Shape, authoring rules, and audits:** the map law — fixed section order,
-the six Rule requirements, cross-map reciprocity (each fact has exactly one
-owning map; others cite it in one line), routing-card and anchor conventions,
-the complete maintenance trigger table, and the run-before-committing audits
-(path-anchor, one-card-per-file, grep-validity, reciprocity, density) — lives
-in the `maintaining-agentsmd-maps` skill.
+the seven Rule requirements, cross-map reciprocity (each fact has exactly one
+owning map; others cite it in one line), routing-line and anchor conventions,
+the complete maintenance trigger table, and the run-before-committing audits —
+lives in the `maintaining-agentsmd-maps` skill.
 
 The high-frequency obligations, binding in every session: map updates are part
 of the same commit as the triggering change — a new/deleted/renamed file updates
@@ -89,40 +88,27 @@ update the map — an unnecessary edit costs a line; a missed one misleads
 every session.
 
 
-## Repo root files
+## Files
 
-- `main.py` — application entry point and wiring hub: router mounts, the
-  middleware stack, the global `APIError` → HTTP-status mapping, lifespan
-  startup/shutdown ordering (LT_Memory factory → CNS graph → sidebar/release-check/failover-probe
-  jobs → announcement; `websocket_chat.close_all_connections()` awaited at
-  shutdown; the Valkey flush keeps
-  `clients/valkey_client.py:BOOT_FLUSH_PRESERVE_PREFIXES` — owned by
-  `clients/AGENTS.md`), the pre-server
-  POST gate before bind, the conditional mounts: the federation router when
-  `config.lattice.enabled`, the MCP sub-app when `config.system.mcp_enabled`,
-  the unconditional browser-client page routes and `/assets` mount from
-  `UI_BROWSER_DIR` — `create_app` raises when a `UI_BROWSER_FILES` entry is
-  missing — and the in-process restart exit: after hypercorn's graceful
-  shutdown returns, a pending restart request (bash_tool `restart_mira`, fired
-  at the requesting turn's end via `utils/self_restart.py`) exits with the
-  dedicated code 75 so the deployment supervisor respawns the process.
-  Per-directory contracts are owned by `ui/browser/AGENTS.md`,
-  `cns/api/AGENTS.md`, `auth/AGENTS.md`,
-  `cns/integration/AGENTS.md`, `agents/AGENTS.md`, `config/AGENTS.md`,
-  `lt_memory/AGENTS.md`, `utils/AGENTS.md`.
-- `requirements.txt` — dependency pins; the optional block's visibility to
-  `Dockerfile.base` is owned by `deploy/AGENTS.md`.
-- `VERSION` — release identity string, read by `utils/release_identity.py:get_current_version`
-  and reported by `/health` and `/v1/api/update_status` (`cns/api/AGENTS.md`,
-  `utils/AGENTS.md`).
-- `install.sh` — stable installer entrypoint. Resolves the newest published
-  release from GitHub's `releases/latest` redirect, fetches that tag's
-  `deploy/deploy.sh`, and hands off with stdin reattached to `/dev/tty` so
-  `curl … | bash` stays interactive; forwards installer flags (`--config`,
-  `--loud`, `--local`). Release mechanics owned by `deploy/AGENTS.md`.
-- `.env.example` — repo-root env-var template (container first-boot vars plus the runtime feature switches `config/config_manager.py` reads). Nothing loads it; the operative container contract is `deploy/.env.example` + `deploy/docker/scripts/init-mira.sh`.
-- `README.md`, `license.txt` — static repo documents;
-  no runtime consumers.
+- `main.py` — the ASGI entry point, and the one place the process is wired. Open it before changing what boot constructs, which surface mounts, or how shutdown drains.
+- `requirements.txt` — dependency pins. Open it before adding or removing a package.
+- `VERSION` — the release identity string. Open it before cutting a release: it is read at boot as FastAPI's app version, by `ui/tui`'s update and migrate commands, and by `utils/release_identity.py` for the health and update-status endpoints.
+- `install.sh` — the stable installer front door. Open it before changing how a new install begins.
+- `.env.example` — the repo-root env-var template for container first-boot vars and the runtime feature switches `config/config_manager.py` reads. Open it before adding an env var an install must accept.
+- `README.md` — the project's public account of what MIRA is and which tools it ships; its `## Tools` list is operator-facing prose that drifts silently from `tools/implementations/`. Open it before writing or checking any statement about the shipped tool set.
+- `license.txt` — the license text, with no runtime consumer.
+- `notes/` — dated design notes, handoffs, and release-note drafts kept as working residue; no code reads them and they are not a shipped surface.
+- `.agents/mira-collaboration/SKILL.md` — the project-local copy of the `mira-collaboration` agent skill. Open it before a session that works alongside a live deployed instance.
+
+## Wiring
+
+- Boot order in `main.py:lifespan`, and why it is an order: Vault secret preload → announcement → embeddings provider → continuum repository → model_configs routes → `LLMProvider` → dialect-registry `discover()` → lt_memory factory → `create_cns_orchestrator()`. Each step raises `RuntimeError` naming the component that failed, so a step moved out of this order either fails at boot under the wrong name or surfaces later as a degraded turn. Counterpart: `clients/AGENTS.md` (the client boot steps and their reverse-order shutdown), `config/AGENTS.md` (the config rows those steps read), `lt_memory/AGENTS.md` (the factory), `cns/integration/AGENTS.md` (`create_cns_orchestrator`).
+- Jobs before the scheduler runs: `initialize_all_scheduled_tasks`, `register_segment_timeout_job`, `register_sidebar_dispatcher_job`, `register_update_check_job`, and `register_failover_probe_job` all take the orchestrator's event bus and all complete before `scheduler_service.start()`. A job registered after start misses its first fires, and a subscriber attached after the orchestrator is built never sees an event. Counterpart: `utils/AGENTS.md` (job registration and the use-day gates), `agents/AGENTS.md` (the dispatcher job this one registers).
+- Mounted surfaces: the `cns/api` routers and the `auth` routes are mounted by `create_app`, and the browser-client page routes are mounted after them from `UI_BROWSER_DIR`, with every name in `UI_BROWSER_FILES` checked at construction. A missing page fails the boot; an unmounted router 404s with no other signal. Counterpart: `cns/api/AGENTS.md`, `auth/AGENTS.md`, `ui/browser/AGENTS.md`.
+- MCP session manager: the sub-app mounts only when `config.system.mcp_enabled`, and mounted sub-apps receive no lifespan events, so `lifespan` enters the session manager's task group once per process and closes it last of all in shutdown. Entering it twice in one process raises, and closing it before the singletons strands in-flight `check_in` calls on a dead group. Counterpart: `mcp/AGENTS.md`.
+- Deliberately absent dependencies: the packages `requirements.txt` omits are installed by `deploy/python.sh` gated on config and unconditionally by `deploy/docker/Dockerfile.base`. Moving one into `requirements.txt` drags it onto every install class. Counterpart: `deploy/AGENTS.md`.
+- Boot env contract: `.env.example` here is a template nothing loads; the operative container contract is `deploy/.env.example` plus `deploy/docker/scripts/init-mira.sh`. A var added to one and not the others is silently absent at boot. Counterpart: `deploy/AGENTS.md`.
+
 ## Critical Principles (Non-Negotiable)
 
 # NO MOCKS — verification doctrine lives in `tests/AGENTS.md`
@@ -331,3 +317,11 @@ reference-host recipes); install mechanics by `deploy/AGENTS.md`. Read both
 before any deploy or restore task. The deployed-instance quickbook (token
 minting, chat endpoint, DB probing, turn-in-flight rules) lives on the host at
 $SNAPSHOTS/AGENTS.md.
+
+Elsewhere: this map owns the doctrine every directory obeys and the index of
+what sits at the repo root, not any one directory's implementation detail.
+`git log` carries why a given rule reads as it does; `docs/REGISTER.md` is the
+writing register these sections are held to; the `maintaining-agentsmd-maps`
+skill is the map law this file summarizes; `docs/GLOSSARY.md` decodes the
+tribal terms used above. Every other destination this map reaches is an edge —
+see `## Wiring`.

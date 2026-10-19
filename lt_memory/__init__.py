@@ -1,7 +1,12 @@
 """
-LT_Memory Module - Long-term memory system for MIRA.
+The package's single import surface: the factory, the four service classes,
+and the model types, re-exported for callers that want one import path.
 
-Factory-based initialization with explicit dependency management.
+Code inside `lt_memory/` and the consumers in this repo import
+`lt_memory.<submodule>` directly, so this list is not load-bearing for them.
+Every name in `__all__` is imported above it; a name added to `__all__`
+without a matching import resolves only when a caller asks for it, not at
+package import, so the omission stays invisible until that one import fails.
 """
 import logging
 

@@ -1,8 +1,23 @@
 """
-Distributed lock implementation using Valkey for multi-process concurrency control.
+Distributed locks over Valkey, for the concurrency guards that must hold
+across worker processes (in-memory locks only cover one process).
 
-Provides atomic distributed locks that work across multiple worker processes,
-replacing in-memory locks that only work within a single process.
+Every acquire mints a UUID token and every mutation is token-scoped:
+``release`` is a compare-and-delete and ``renew`` a compare-and-expire. The
+token is what makes an expired-and-re-acquired lock safe — the old owner's
+release or renewal finds a mismatch and does nothing, where a plain DELETE
+would drop the new owner's live lock. ``release`` reporting False is therefore
+a routine outcome (ownership was lost), a logged no-op rather than an error;
+infrastructure failures still propagate.
+
+``start_renewal`` runs a daemon thread that re-extends the lock every TTL/3 and
+stops when the caller sets the returned Event — the caller owns setting it when
+the guarded action ends, or the thread renews a lock nobody is using.
+
+Lock objects resolve their Valkey client on first use, never in ``__init__``:
+``UserRequestLock`` instances are built at module import, and import must
+succeed on a host with no Valkey or Vault credentials. Unavailability is still
+loud, just at the first acquire rather than at import.
 """
 
 import logging

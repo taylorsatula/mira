@@ -1,4 +1,20 @@
-"""Public LLMProvider entry point backed by provider-neutral dialects."""
+"""
+Public LLMProvider entry point backed by provider-neutral dialects.
+
+`generate_response()` returns a final result; `stream_events()` yields
+normalized events and then re-raises, after yielding an `ErrorEvent`, so a
+streaming caller has to handle both. Callers pass one thinking source, either
+`thinking=ThinkingConfig(...)` or the `effort=`/`thinking_tokens=` keywords, and
+mixing them raises `ValueError` instead of silently discarding half the intent.
+A provider context overflow leaves here as `ContextOverflowError`, and each
+finished or retryable-failed attempt is reported to `clients.llm.diverter` so a
+primary endpoint that keeps failing is tripped to its backup; auth and overflow
+errors pass through uncounted, so a bad credential or an oversized request
+cannot divert around itself.
+
+Importing this module installs the SIGUSR1 traffic-tap handler, which raises
+when the import runs off the main thread.
+"""
 
 from __future__ import annotations
 

@@ -6,6 +6,12 @@ surface an install runs can brief a consumer (the HeartbeatAgent evaluating
 briefs, any future wake-path) without that consumer knowing the sources'
 specifics.
 
+Nothing imports this module today: `build_background_digest` has no caller, so
+the self-registration at the bottom of this file never runs and the digest is
+not exercised anywhere. It is kept as the contributor Protocol and a worked
+example for a planned wake digest, and it becomes live the moment a wake path
+imports it.
+
 A contributor owns one source and its presentation:
 
     class BackgroundDigestContributor(Protocol):
@@ -49,6 +55,9 @@ an in-band failure line, and a bounded row render):
                 for r in records[:_LIMIT]
             ]
 """
+# ACCEPTED-RESIDUAL: unreferenced by design — no module imports this one, so the
+# self-registration below never runs; it becomes live the moment a wake path
+# imports it.
 import logging
 from typing import Protocol
 

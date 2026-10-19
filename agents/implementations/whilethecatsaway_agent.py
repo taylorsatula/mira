@@ -1,10 +1,22 @@
 """
-WhileTheCatsAwayAgent -- Background curiosity-driven research agent.
+WhileTheCatsAwayAgent -- background curiosity-driven research.
 
-Mira dispatches this when she wants to learn more about a topic outside
-the pressure of an active conversation. Runs with a high iteration cap --
-no rush, just open-ended exploration. Findings are stored as LT_Memory
-entries via memory_tool so they surface naturally in future conversations.
+Mira dispatches this when she wants to learn more about a topic outside the
+pressure of an active conversation. Findings are meant to land in long-term
+memory through memory_tool so they surface naturally in future conversations.
+
+Fire-and-forget only: the class implements `activate` and no `continue_task`,
+and `blocking` is accepted for protocol uniformity and ignored. The spec row
+is what carries `continuable=False`, so a `continue` aimed at this type is
+refused generically by subagent_tool before the class is reached -- there is
+no refine path or dismiss prose to maintain here.
+
+`available_tools` is the un-narrowed roster: the full memory_tool surface,
+`create_memory` included, so what the agent learns queues into the
+pending-memories chain rather than becoming memory directly. Completions
+publish to the unified results trinket through `_get_completion_trinket` and
+`_build_completion_context`; how long an entry survives is the spec row's
+`result_ttl_turns`, not this class's.
 """
 import logging
 from typing import Any, TYPE_CHECKING

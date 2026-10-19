@@ -1,5 +1,15 @@
-"""
-Type definitions for the lean authentication system.
+"""The record types every layer of `auth` shares: DB rows, the Valkey session payload, and the two credential contexts.
+
+`SessionData` and `APITokenContext` are the type-level distinction the credential
+ladder returns — a browser/header session versus an issued API token — and
+browser-session-only surfaces branch on `isinstance` to refuse an API-token
+holder. Collapsing them into one type removes that refusal.
+
+`UserRecord` mirrors `AuthDatabase._USER_RECORD_COLUMNS` field for field, and the
+two change together. Pydantic ignores extra keys, so a column with no matching
+model field disappears without raising; a model field with no matching column
+raises when the row is constructed. Either drift is silent one way and loud the
+other, never symmetric.
 """
 
 from typing import Optional, Literal, Dict, Any

@@ -24,6 +24,12 @@
  *   - response_text: the offending assistant response
  *   - preceding_user_message: the user's prompt that elicited the response
  *   - matched_tells: which tell-names fired
+ *
+ * Two captures per hit are the design, not a duplicate: the automatic one fires
+ * the moment a tell matches and carries an empty reason, so the response is
+ * recorded even if the user never opens the popover; the popover's send writes
+ * the row carrying the reason. An automatic capture that fails is only a
+ * console warning — the response is then unrecorded unless the user sends one.
  */
 (function () {
     'use strict';

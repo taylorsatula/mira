@@ -1,9 +1,27 @@
 """
-Domain Document Tool - Section-aware editing with version control.
+Section-aware domain knowledge documents in per-user SQLite, with per-section
+version history, expand/collapse state, and sharing.
 
-Provides section-level management for domain knowledge documents stored in SQLite.
-Operations are section-scoped with expand/collapse support and full version history.
-Supports shared domaindocs via PostgreSQL domaindoc_shares table.
+A document owns a tree of sections at most three levels deep (depth 0, 1, 2).
+`_resolve_section_by_header` finds a parent at any depth, the shallowest match
+wins, and a header naming several sections at the same depth is rejected
+rather than silently targeting one of them. Every mutation goes through
+`_record_version`: version numbers are contiguous per section because the
+numbering subquery filters on `section_id` as well as `domaindoc_id`, each row
+carries the section's content as of that version so a rollback can restore it,
+and the diff is sealed with the manager's Fernet before the raw INSERT because
+raw execute does not apply the `encrypted__` transparency.
+
+Label resolution runs through `resolve_domaindoc`, so one label may name a
+document a collaborator shared in; editing one invalidates both parties'
+trinket caches. Pinned sections never collapse and never delete, and
+`delete_section` refuses a collapsed section outright — expanding first is the
+review gate, not a formality.
+
+The resolution scheme, the depth accounting, and the version numbering are
+replicated from `cns/api/actions.py:DomainKnowledgeDomainHandler` instead of
+imported: the tool layer has no sanctioned edge into the API layer, so the two
+copies must change in the same commit.
 """
 import json
 import logging

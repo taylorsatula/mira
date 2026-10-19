@@ -1,7 +1,17 @@
 """
-Base API infrastructure for MIRA endpoints.
+The response envelope and the error taxonomy every API router shares.
 
-Provides consistent response patterns, error handling, and middleware.
+Two handler bases differ in exactly one behaviour, and the choice is made per
+route. `BaseHandler.handle_request` converts every `APIError` and every
+unexpected exception into an `ErrorResponse`, so a route that returns
+`response.to_dict()` reports failure as HTTP 200 with `success: false`.
+`PropagatingHandler` re-raises instead, letting main.py's global handlers assign
+the real HTTP status. Picking the wrong base makes a failure read as a success,
+or makes a status code lie about one.
+
+`create_error_response` never serializes raw exception text for an unexpected
+error: the client gets fixed copy plus the request id, and that id is its only
+correlation with the server-side log entry the call site writes.
 """
 import logging
 from dataclasses import dataclass, replace

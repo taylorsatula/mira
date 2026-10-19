@@ -1,15 +1,28 @@
 """
-Pager tool for managing virtual pager device messaging.
+Virtual pager devices, local and federated messaging, and device trust.
 
-This tool simulates a pager device system allowing users to send and receive messages
-through virtual pagers. Each pager has a unique ID and can send/receive messages with
-location tracking and priority levels.
+A device carries a secret and a fingerprint derived from it, the way an SSH
+host key identifies a host. Every delivered message records the sender's
+fingerprint, and the receiving device's trust row is what verifies it: first
+contact records trust on use, a match refreshes it, and a mismatch marks the
+row `conflicted` and raises `PermissionError` instead of delivering.
+Impersonation is refused, not flagged.
 
-Datetime handling follows the UTC-everywhere approach:
-- All datetimes are stored in UTC internally
-- Timezone-aware datetime objects are used consistently
-- Conversion to local time happens only when displaying to users
-- The utility functions from utils.timezone_utils are used consistently
+`deliver_federated_message` is the write-only seam the federation router calls:
+it can append a message for this user and never read one, and an
+`external_message_id` already stored returns that row as a duplicate instead of
+delivering twice. Local recipient resolution reads the recipient's own per-user
+store, since `self.db` is scoped to the sending user and can never hold another
+user's device binding.
+
+Messages are stored verbatim and wrapped with `wrap_untrusted` on the way out,
+not on the way in — the boundary is model-context entry, and a remote address
+stored as `sender_id` is wrapped on read because the device-name join cannot
+match it.
+
+Location pins are simulated: no location source exists in this tree, so a pin
+carries an explicit "no real location available" marker and never invented
+coordinates.
 """
 
 import logging

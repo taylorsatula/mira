@@ -1,20 +1,31 @@
 """
-HeartbeatAgent -- the heartbeat gate: evaluates due briefs and reports.
+HeartbeatAgent -- the brief gate: evaluates due briefs and reports.
 
-Dispatched by the HeartbeatTrigger with every due armed brief for the
-user batched into one work item. Separation of duties: this agent is a
-gate, not a worker. It evaluates each brief (bail_if first, then
-condition_check) and reports; a condition or mission that requires tools
-or real work is dispatched to a specialized agent, never performed
-inline. Its only tool is a report-only heartbeat_tool.
+Dispatched by the HeartbeatTrigger with every due armed brief for the user
+batched into one work item, whose context holds that briefs list and nothing
+else. Separation of duties: this agent is a gate, not a worker. It evaluates
+each brief (bail_if first, then condition_check) and reports the outcome.
 
-Runs on the 'fast' route: gate decisions are that route's job. Ephemeral
-by construction -- nothing touches the main conversation; the trace lands
-in the agent trace store and the outcome in the brief row.
+The rubric asks the gate to dispatch a mission that needs real work to a
+specialized agent. This surface cannot: `available_tools` carries no dispatch
+tool, and no work-item key names a target agent. So a `fired` report records
+this agent's own say-so, not an observed dispatch -- read one as a claim to
+verify, never as evidence that work started.
 
-Failure accounting: on_completion advances the failure state machine for
-every carried brief that received no valid report (the run failed, timed
-out, or hit the iteration cap), via heartbeat_tool.apply_run_failure.
+Runs on the 'fast' route: gate decisions are that route's job. Ephemeral by
+construction -- nothing touches the main conversation; the trace lands in the
+agent trace store and the outcome in the brief row. The one tool is
+heartbeat_tool narrowed to its report-only schema via `tool_schema_overrides`,
+so the gate cannot schedule or cancel its own wake schedule.
+
+Failure accounting: `on_completion` advances the failure state machine for
+every carried brief that received no valid report (the run failed, timed out,
+or hit the iteration cap), via heartbeat_tool.apply_run_failure. The tell is
+`state == 'armed'` with `last_wake_at` still equal to the carried
+`dispatch_stamp`: the trigger stamps every brief it hands over, and every
+report overwrites that stamp a moment later. `max_retries = 0` is the
+matching half -- a dispatcher retry would re-run a stale due-window payload
+whose briefs the per-brief accounting has already re-armed.
 """
 import logging
 from typing import Any, TYPE_CHECKING

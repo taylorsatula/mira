@@ -1,27 +1,29 @@
 """
-Centralized prompt loader for config/prompts/.
+The one sanctioned way to read a prompt template out of `config/prompts/`.
 
-All production services should use load_prompt() instead of rolling their own
-open()/read_text() calls. This ensures consistent:
-  - UTF-8 encoding
-  - Existence checks with descriptive errors
-  - Whitespace stripping (.strip())
-  - Path resolution (always relative to this directory, never cwd-dependent)
-  - Path traversal protection (cannot escape config/prompts/)
-  - Empty-file detection (required prompts must not be empty after strip)
-  - File type enforcement (.txt only)
-  - Debug logging for load events
+`load_prompt()` resolves its argument against this directory and never
+against the caller's cwd, refuses a name that does not end in `.txt` or that
+resolves outside the directory, reads UTF-8, and strips. Subdirectory names
+are ordinary arguments (`"agents/forage_system.txt"`).
+
+Two consequences a caller has to plan for. A required template that is
+missing, or empty after stripping, raises `FileNotFoundError` ("prompts are
+system configuration, not optional features") — there is no empty-string
+fallback to guard against, so a consumer that catches it would be masking a
+broken deployment. And because the strip happens before the emptiness check,
+a whitespace-only template is indistinguishable from an absent one: a
+template cannot be switched off by emptying it.
+
+`required=False` returns `""` for an absent file and is reserved for a genuine
+addendum whose absence degrades a feature rather than the boot. It also
+returns `""` for a file that exists and is empty, so the empty-versus-missing
+distinction survives only on the required path.
 
 Usage:
-    from config.prompts.loader import load_prompt
+    from config.prompts import load_prompt
 
     system_prompt = load_prompt("subcortical_system.txt")
-    user_template = load_prompt("subcortical_user.txt")
-
-    # Subdirectories:
     agent_prompt = load_prompt("agents/forage_system.txt")
-
-    # Optional prompts (missing = empty string, no error):
     instructions = load_prompt("thinking_block_instructions.txt", required=False)
 """
 

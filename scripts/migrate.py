@@ -22,9 +22,9 @@ server it reaches as a PostgreSQL superuser — maintainer-only, never run on an
 install, and it reads no Vault.
 
 Exit codes: 0 ok / nothing to do; 1 a step failed after the backup was
-taken; 2 validation, lint, or drift refusal (nothing changed); 3 blocked — no
-superuser access, no terminal for a typed value, backup failed or disk
-short, database or Vault unreachable.
+taken, or ``restore`` was named with no backup; 2 validation, lint, or drift
+refusal (nothing changed); 3 blocked — no superuser access, no terminal for a
+typed value, backup failed or disk short, database or Vault unreachable.
 """
 from __future__ import annotations
 
@@ -36,6 +36,10 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+# CROSS-FILE-COUPLING: deploy/update.sh reads every line printed before
+# PLAN_BEGIN as the human-readable plan and the JSON between the pair as the
+# machine plan. Moving a marker, or printing after PLAN_END, silently hands the
+# operator or the updater the wrong transcript without any command failing.
 PLAN_BEGIN = "MIRA_PLAN_BEGIN"
 PLAN_END = "MIRA_PLAN_END"
 EXIT_OK, EXIT_STEP_FAILED, EXIT_REFUSED, EXIT_BLOCKED = 0, 1, 2, 3
@@ -251,7 +255,13 @@ class _DropVaultToast(logging.Filter):
 
 
 def main(argv: list[str] | None = None, resolve_conninfo: Callable[[], str] = vault_admin_conninfo) -> int:
-    """Parse ``argv`` and run one subcommand; ``resolve_conninfo`` is called only by commands that open the database."""
+    """Parse ``argv`` and run one subcommand; ``resolve_conninfo`` is called only by commands that open the database.
+
+    ``resolve_conninfo`` is the injection seam probes use; production binds
+    `vault_admin_conninfo`. Never add a conninfo flag or environment variable —
+    the connection target is the host's Vault AppRole, and an override would
+    point this runner at a database no credential of its own scopes.
+    """
     # deploy/update.sh pipes this through tee: block-buffered stdout would hold
     # "Running: …" until a long step finished, and print it after the log lines.
     sys.stdout.reconfigure(line_buffering=True)

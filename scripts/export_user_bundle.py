@@ -21,6 +21,17 @@ Bundle format (see AGENTS.md inside the zip for the import contract):
       per-user key.
   manifest.json - sha256 checksums + row counts; the importer must verify
       before importing.
+
+The file executes top to bottom on import: there is no ``main()`` and no
+``__main__`` guard, so importing this module runs an export and drives the
+process to exit. Nothing is written to the output path until every read has
+succeeded — the zip is the last step — so a bad environment, unknown email, or
+failed query leaves no partial bundle behind.
+
+``db_path`` is hardcoded to the deployed install root. On any other tree the
+SQLite half is skipped without a warning: the zip is still produced, with an
+empty ``tables`` map and a manifest whose ``sqlite_row_counts`` is empty, so
+receiving-side verification passes while the person's tool data is gone.
 """
 import sys, os, json, sqlite3, base64, hmac, hashlib, zipfile, datetime
 import psycopg2, psycopg2.extras
@@ -34,6 +45,9 @@ EXPORTED_AT = datetime.datetime.now(datetime.timezone.utc).isoformat()
 admin = psycopg2.connect(get_database_url("mira_service", admin=True))
 cur = admin.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+# CROSS-FILE-COUPLING: this column list and the users table in
+# deploy/mira_service_schema.sql move together. A column added to the table and
+# not added here vanishes from every exported profile without failing anything.
 cur.execute("""SELECT id, email, first_name, last_name, created_at, last_login_at,
                timezone, cumulative_activity_days, last_activity_date,
                temperature_unit, portrait, portrait_generated_at
@@ -66,6 +80,11 @@ for t, spec in PG_TABLES.items():
     mm[t] = [dict(r) for r in rows]
     print("PG %-20s %d rows" % (t, len(mm[t])))
 
+# CROSS-FILE-COUPLING: this derivation must stay byte-identical to
+# utils/userdata_manager.py's derive_session_key + _create_fernet. Change one
+# and change both: a divergence makes every encrypted__ value decrypt to a
+# null under an UNDECRYPTABLE__ flag while this bundle still passes its own
+# manifest, so the loss surfaces only on the receiving install.
 master = get_service_config("userdata_encryption_key").encode()
 session_key = hmac.new(master, uid.encode(), hashlib.sha256).digest()
 f = Fernet(base64.urlsafe_b64encode(session_key[:32]))
@@ -104,6 +123,10 @@ if os.path.exists(db_path):
 TMP = "/tmp/bundle_%s" % uid.replace("-", "")
 os.makedirs(TMP, exist_ok=True)
 
+# CROSS-FILE-COUPLING: twin of import_user_bundle.py's module docstring. Both
+# state the import procedure — verification before any write, the account
+# question, import order, embedding regeneration, row-count re-check — and a
+# change to either edits the other in the same commit.
 AGENTS_MD = """# MIRA User Data Bundle — Deployment Instructions
 
 This zip contains one user's complete data from a MIRA hosted instance:

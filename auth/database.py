@@ -9,6 +9,19 @@ run on `get_session(user_id)` so RLS on `api_tokens` enforces ownership.
 With RLS enabled on `users`, `magic_links` and `api_tokens`, using the wrong
 side of this split does not error — the fail-closed `NULLIF` policy predicate
 yields silent zero-row results.
+
+Account bootstrap is the second mechanism here. `initialize_mira_account`
+creates the continuum and then `_prepopulate_welcome_content` appends five
+orientation messages, each in its own `UnitOfWork` with a pause between: the
+rows are timestamped sequentially and one batch collides on the key. A failure
+anywhere propagates to the caller, whose teardown removes the account.
+
+Passkey writes are single guarded statements, never a read-modify-write of the
+whole `webauthn_credentials` JSONB column: `add_webauthn_credential`,
+`remove_webauthn_credential` and `update_credential_sign_count` each touch one
+key under a `jsonb_exists` precondition and report zero rows as `False`, so a
+concurrent registration, removal or verification cannot be silently lost and a
+credential removed mid-flight cannot be resurrected as a phantom entry.
 """
 
 import logging

@@ -1,5 +1,23 @@
-"""
-Session management using Valkey.
+"""Valkey-backed sessions and CSRF tokens, stored so that the raw token is nowhere on disk.
+
+Both keyspaces are keyed by a digest of the raw token — `session:<sha256>` and
+`csrf:<sha256>` — recomputed at every lookup. A dump of Valkey therefore holds no
+value that can be replayed as a credential.
+
+`validate_session` is the only reader of a session record, and it enforces the
+things a TTL alone would not: the absolute lifetime cap in `max_expiry`, and demo
+account expiry. When either has passed it deletes the session/CSRF pair rather
+than leaving a stale record to be re-validated. Its `None` return means "no such
+session, or expired" — two legitimate outcomes the caller must treat alike —
+while infrastructure failure raises, so an outage can never read as a logged-out
+user.
+
+Extending activity is a read-modify-write of the whole record instead of an
+atomic EXPIRE, because the same write must also refresh `last_activity`. That
+leaves a window in which a revoke landing between the read and the write is
+undone. It is closed only by the single-worker deployment (`api_server
+workers=1`), where one session's revoke and extend never overlap; an atomic
+extend is the precondition for more than one worker.
 """
 
 import secrets

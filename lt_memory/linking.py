@@ -1,13 +1,19 @@
 """
-Relationship discovery and link management for LT_Memory system.
+Candidate discovery for the Memory Curator, and link traversal for surfacing.
 
-Handles finding semantically related memories and traversing bidirectional links
-in the memory graph. The Memory Curator agent owns relationship judgments.
+`find_candidate_hints()` runs three axes — vector neighbours, entity
+co-occurrence above an embedding floor, and TF-IDF term overlap — and returns
+short IDs tagged with the axis that found them. It writes no links: the agent
+decides whether a candidate relates, and how; a link is a judgment, not a
+similarity score. `traverse_related()` walks outbound links to a bounded depth
+and removes the links whose target no longer loads.
 
-Discovery uses three axes:
-1. Vector similarity — embedding cosine distance
-2. Entity co-occurrence — shared entities filtered by embedding similarity floor
-3. TF-IDF term overlap — catches orphan memories the embedding model smooths over
+The TF-IDF matrices live per user on this process-global service, keyed by
+active-memory count and the newest write stamp. The count alone misses churn
+that keeps the count fixed — a rewritten text, or one archived beside one
+added — and would serve the curator a matrix of stale text. A corpus too small
+or too sparse to vectorize caches a disabled state and falls back to the other
+two axes instead of raising, because a raise here aborts extraction storage.
 """
 import logging
 from datetime import datetime

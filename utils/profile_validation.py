@@ -1,4 +1,15 @@
-"""Validation helpers for user-supplied profile display names."""
+"""Validation helpers for user-supplied profile display names.
+
+``validate_profile_name`` is the single gate for a name a user types (signup and
+profile update both call it): it collapses internal whitespace, rejects empty,
+over-100-character, control-character, and angle-bracket input, and returns the
+normalized string for the caller to store. Angle brackets are refused rather
+than escaped because these names are interpolated into prompt text, where an
+escaped bracket is still a forged tag.
+
+A ``ValueError`` names the field and the violated rule, so the API layer can
+return the message to the client unchanged.
+"""
 
 import re
 

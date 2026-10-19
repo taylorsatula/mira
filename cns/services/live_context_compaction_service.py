@@ -1,11 +1,22 @@
 """
-Asynchronous live compaction for active-chat provider context.
+Rolling compaction of the active segment for provider requests.
 
-This service keeps one rolling compaction report per active segment in
-Valkey. A background worker summarizes older messages into the report; each
-provider request then carries the report in place of the messages it covers.
-Segment collapse remains the durable memory pipeline; this service only
-shapes provider requests.
+This service keeps one compaction report per user in Valkey. A background worker
+summarizes the older part of the active segment into it, and each provider
+request then carries the report in place of the messages it covers. Segment
+collapse remains the durable memory pipeline; this service only shapes provider
+requests.
+
+A report is tagged with the `segment_id` it was built for. One whose tag differs
+from `get_current_segment_id()` is ignored at request time and discarded by the
+next `select_range`, so a missed collapse cleanup cannot leak a report into the
+next segment.
+
+Every read here is defensive because the report is a cache: a store read failure
+sends the full uncompacted segment for that request (logged), and lock contention
+or a scheduling failure leaves the turn untouched. `acquire_lock` writes a unique
+per-acquisition token instead of a constant, so `release_lock`'s compare-and-delete
+cannot delete a lock a second holder has already taken.
 """
 from __future__ import annotations
 

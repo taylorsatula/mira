@@ -10,8 +10,21 @@ reads credentials.
 
 Two vocabularies, never mixed: operator strings (``OPERATOR_MESSAGES``,
 ``Refusal.message``, ``render_plan``, ``render_drift_report``) are plain
-English and always carry a runnable command; the technical detail behind each
-(step numbers, checksums, table names, hashes) goes to the log beside them.
+English, each carrying a runnable command wherever one exists, and never
+containing the words ledger, revision, checksum, migration, schema, fingerprint,
+adoption, or baseline — an operator who reads jargon has no next step. The
+technical detail behind each (step numbers, checksums, table names, hashes) goes
+to the log line ``refusal()`` writes beside it.
+
+``superuser_prefix()`` is this file's half of the superuser seam; the shell half
+is ``deploy/lib/services.sh:seam_mode`` and the two must stay in step, or the
+runner elevates one way while the deploy scripts elevate another.
+
+A backup is complete when its ``manifest.json`` validates as a
+``BackupManifest`` — that predicate is the completeness signal ``restore``,
+``list_backups``, ``apply_retention`` and the residue sweeper all read, which is
+why new manifest fields must be optional/defaulted and the manifest is written
+last and fsynced.
 """
 from __future__ import annotations
 
@@ -1061,7 +1074,7 @@ def _sql_body(text: str) -> str:
 
 def lint_steps(chain: OrderedChain) -> list[LintFinding]:
     """
-    Authoring-rule violations in the chain (``deploy/migrations/AGENTS.md`` lint rules):
+    Authoring-rule violations in the chain — the list below is the whole rule set:
     transaction control inside a step; reading the release VERSION or branching on the
     clock; any reference to ``embedding_config``; ``UPDATE model_configs SET`` of a route
     field; a literal ``vector(<digits>)``; a ``dialect_name`` CHECK without the

@@ -1,9 +1,23 @@
 """
-Assessment extraction service for the user model pipeline.
+Assessment extraction: judge one collapsed segment against MIRA's behavioral
+contract and emit section-anchored signals.
 
-Evaluates conversation segments against Mira's behavioral contract (system prompt),
-producing section-anchored signals (alignment, misalignment, contextual_pass) with
-specific evidence. Replaces the old blind feedback extraction approach.
+`extract_signals` runs on the `assessment` route over the anonymized system
+prompt, the current user model (for calibration), and the segment's messages,
+producing `alignment` / `misalignment` / `contextual_pass` signals at `strong` /
+`moderate` / `mild` strength. Malformed emissions are dropped one at a time with
+a warning; an empty result is legitimate, not an error.
+
+The assessable sections, the anonymized prompt, and the prompt templates are
+snapshotted at construction, and the collapse handler builds this extractor once
+(lazily, on the first collapse). A system-prompt section change therefore reaches
+the assessor only after a process restart — until then it assesses against the
+vocabulary it was built with.
+
+Thinking traces are included only when they make up at least
+`THINKING_INCLUSION_THRESHOLD` of assistant content, and the thinking block
+instructions are an optional prompt whose absence simply omits that section of
+the system template.
 """
 import html
 import logging

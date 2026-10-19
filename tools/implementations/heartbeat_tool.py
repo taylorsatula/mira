@@ -6,7 +6,10 @@ type ('one-off' | 'scheduled'), mission, condition_check, bail_if, and a
 schedule. The heartbeat trigger surfaces due briefs to the HeartbeatAgent
 (agents/implementations/heartbeat_agent.py), which evaluates bail_if first,
 then the condition, executes the mission when the condition holds, and
-records each brief's outcome via the 'report' operation.
+records each brief's outcome via the 'report' operation. A run that dies
+without reporting never leaves its briefs silently armed: the agent's
+on_completion passes them to `apply_run_failure`, which backs off and
+retires them once the failure count reaches max_failures.
 
 Storage split:
 - Brief content lives in per-user SQLite (this tool's store, same database
@@ -16,7 +19,8 @@ Storage split:
   earliest_wake_at) presence so the sidebar dispatcher can enumerate users
   with armed briefs (dormant users included) and the device-power binding
   can sleep the metal between wakes. State lives in SQLite; Postgres
-  carries presence, not truth.
+  carries presence, not truth — `refresh_armed_marker` recomputes it after
+  every state transition.
 """
 
 import inspect

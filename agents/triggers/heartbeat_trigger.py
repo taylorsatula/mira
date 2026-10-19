@@ -19,6 +19,34 @@ genuinely new work item; the same window never double-dispatches.
 Eligibility: users with armed briefs remain pollable by the dispatcher
 even when dormant (the heartbeat_armed_users UNION in
 agents/sidebar.py:_get_eligible_users).
+
+Dispatch stamp: before returning, every due brief's last_wake_at is written
+with the run's format_utc_iso(now) and that same string travels in the work
+item under each brief's dispatch_stamp. HeartbeatAgent compares the pair to
+find briefs that were handed out and never reported, and every
+heartbeat_tool report outcome overwrites last_wake_at a moment later. Change
+the write, the context key, or the comparison and unreported briefs stay
+armed behind a stale stamp until the completion sweep reaches them.
+
+This class defines no on_dispatched. The dispatcher calls that hook
+unconditionally after a successful spawn (agents/sidebar.py:_poll_user), so
+every heartbeat dispatch raises AttributeError once the agent thread is
+already running; the dispatcher catches it per user and logs a poll error for
+the rest of that tick. HeartbeatTrigger is last in TRIGGER_CLASSES today, so
+no later trigger is lost to it.
+
+agent_class is a lazy property because a module-level import of
+HeartbeatAgent drags its tool module (and that module's Postgres session
+machinery) into utils/sidebar_jobs.py's boot-time registration import path.
+
+The module also owns the device-power publisher. register_device_wake_job
+schedules publish_device_wake_aggregate, which reads the earliest
+heartbeat_armed_users.earliest_wake_at in one admin session and hands it to
+notify_heartbeat_sleep. It is a separate job rather than a piggyback on the
+poll because that read is cross-user Postgres while the dispatcher works per
+user in SQLite; its cadence is borrowed from
+config.sidebar_dispatcher.poll_interval_minutes, and both the job's
+registration and check_for_new_items re-check config.heartbeat.enabled.
 """
 import logging
 from typing import Any

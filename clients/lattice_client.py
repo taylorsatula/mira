@@ -1,8 +1,13 @@
 """
 Lattice client for federation messaging.
 
-Thin HTTP client for communicating with the Lattice discovery service.
-All federation logic (signing, queueing, retries) is handled by Lattice.
+A thin HTTP client over the Lattice discovery service: it sends federated
+messages and reads this server's federation identity, and nothing else —
+signing, queueing, and retries belong to Lattice. Each call opens and closes its
+own `httpx.Client`, so there is no connection reuse and no retry: a transport
+failure reaches the caller as `httpx.HTTPError`. `get_identity()` raises
+`ValueError` on a 404, which is how "this server has no federation identity
+yet" surfaces to a caller.
 """
 
 import logging

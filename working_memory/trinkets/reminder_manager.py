@@ -1,4 +1,17 @@
-"""Reminder manager trinket for system prompt injection."""
+"""
+Renders active reminders, split into user and internal categories.
+
+Reminders are not queried directly: this trinket constructs `ReminderTool` and
+calls `run(operation="get_reminders", ...)` once per category and date filter
+(overdue, today). The rows it renders are the tool's own projection, so their
+field names are the tool's decrypted-storage names — `encrypted__title`,
+`encrypted__description`, `reminder_date` — and a change to that projection
+breaks this render without touching this file.
+
+`generate_content` raises on tool failure; the notification section is then
+absent for that turn and the isolation boundary in `WorkingMemory` logs why
+attributing it to infrastructure or logic.
+"""
 import html
 import logging
 from dataclasses import dataclass

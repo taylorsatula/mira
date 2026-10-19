@@ -1,4 +1,29 @@
-"""Per-user tool configuration storage with server-side secret fields."""
+"""Per-user tool configuration storage with server-side secret fields.
+
+A tool config splits into public JSON (one credential row per tool) and one
+credential row per secret field. The sentinel state machine every caller must
+honour, across load, redact, validate and save:
+
+``SECRET_REDACTION_SENTINEL``
+    the field is set; ``redact_tool_config`` sends this to the client, and a
+    save that echoes it back writes nothing (preserve the stored value).
+""
+    no stored value; a save carrying ``""`` deletes whatever is stored.
+any other string
+    a new value; a save stores it.
+field absent from the save
+    treated as the sentinel — nothing is written.
+
+Secret fields are discovered from the tool registry
+(``json_schema_extra={"secret": True}`` on the registered config class). A
+config class the registry does not hold has no known secret fields, so
+``redact_tool_config`` returns it untouched and its secrets reach the client.
+
+``save_tool_config_update`` exists because ``UserCredentialService`` commits on
+every call: writing the secrets and the public config separately can strand a
+committed secret change when the config write then fails. It performs both on
+the user's connection inside one SQLite transaction and commits once.
+"""
 
 from __future__ import annotations
 

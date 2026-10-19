@@ -1,9 +1,18 @@
 """
-Peanut Gallery metacognitive observer trinket.
+Renders metacognitive guidance with a turn-counted time to live.
 
-Displays metacognitive directives from the Peanut Gallery observer system in
-the notification center (HUD). Supports concern alerts and coaching directives
-with turn-based TTL expiry.
+Guidance arrives from the Peanut Gallery observer as `add_guidance` update
+requests and is stored per user with an absolute expiry turn. It survives
+until `current_turn` passes that turn, which is only ever advanced by a
+`TurnCompletedEvent`, so guidance added before any turn has completed starts
+its window at turn zero. The default TTL is a constructor argument.
+
+Rendering splits three ways: standard guidance asks for a silent repair,
+initiative guidance asks for one bounded conversational improvement, and
+critical guidance carries the 4th-wall-breaking directive that permits the
+model to acknowledge a slip to the user out loud. Critical also wins its own
+section regardless of type, so a critical coaching entry renders there and
+not with the standard ones.
 """
 import logging
 from dataclasses import dataclass

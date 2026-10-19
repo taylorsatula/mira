@@ -1,8 +1,16 @@
 """
-Immutable state management for CNS continuums.
+The frozen identity of one continuum: `id`, owning `user_id`, `metadata`.
 
-Provides immutable state objects and controlled state transitions
-for continuum data.
+`ContinuumState` is frozen at the attribute layer only. `metadata` is an
+ordinary mutable dict, so freezing stops attribute rebinding and nothing
+else, and `to_dict` hands out that same dict rather than a copy — a caller
+that persists the result and then mutates the state has mutated the record
+it believed it had already written.
+
+`ContinuumState.to_dict`/`from_dict` have no caller today: the repository
+builds `ContinuumState` directly from its query rows, and `Continuum`'s own
+`to_dict`/`from_dict` reach them only from each other. Treat the pair as
+unexercised surface, not as a working round-trip.
 """
 from __future__ import annotations
 
@@ -31,6 +39,8 @@ class ContinuumState:
 
     metadata: dict[str, object] = field(default_factory=dict)
 
+    # ACCEPTED-RESIDUAL: `to_dict`/`from_dict` have no caller anywhere in the repo;
+    # the repository builds `ContinuumState` straight from its query rows.
     def to_dict(self) -> ContinuumStateDict:
         """Convert state to dictionary for persistence."""
         return {

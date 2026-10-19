@@ -1,12 +1,18 @@
 """
-Hybrid search implementation combining BM25 text search with vector similarity.
+Hybrid retrieval over personal and global memories: a BM25 arm and a vector
+arm, fused by Reciprocal Rank Fusion with per-intent weights.
 
-This module provides hybrid retrieval that leverages both lexical matching
-(for exact phrases) and semantic similarity (for related concepts).
+`_reciprocal_rank_fusion` scores each arm by the position it assigned, never
+by the value, so rescaling `ts_rank` or cosine before the fusion changes
+nothing downstream — the knobs are the intent weights and the fusion constant.
+Both arms run on a two-worker pool with copied context, because RLS scoping
+rides the contextvar and a worker without the copy reads zero rows.
 
-Note: Entity-based retrieval is now handled by HubDiscoveryService in proactive.py,
-which provides a proper retrieval path (entity → memories → hubs) rather than
-just boosting existing similarity results.
+Raw fusion scores cluster in a narrow band near zero, so `similarity_score` on
+a fused result is a sigmoid normalization, not the cosine the vector arm
+measured; a threshold tuned against one of the two lies on the other.
+`_bm25_search` projects `embedding` as NULL, so a result arriving through that
+arm carries no embedding and its vector-sourced duplicate is what restores one.
 """
 import logging
 import math

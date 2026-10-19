@@ -1,9 +1,31 @@
 # deploy/lib/vault.sh
-# HashiCorp Vault helper functions
+# HashiCorp Vault helper functions: the initialize/reconcile state machine and
+# the put policy every host-install credential write goes through.
 # Source this file - do not execute directly
 #
 # Requires: lib/output.sh and lib/services.sh sourced first
 # Requires: LOUD_MODE variable set
+#
+# vault_initialize selects its own half by whether /opt/vault/init-keys.txt
+# exists: absent means a fresh Vault (init, unseal, enable KV2/AppRole/policy,
+# write role-id and secret-id), present means reconcile (unseal, log in, and
+# enable or re-derive only what is missing). vault_is_sealed treats any status
+# failure other than "sealed" and "unsealed" as sealed, the safe direction —
+# an unreachable Vault must not read as unsealed.
+#
+# vault_put_if_not_exists is reserved for secret/mira/database and
+# vault_put_with_backup for every other host-install entry, because `vault kv
+# put` replaces the whole secret: writing unconditionally would destroy the
+# previous install's credentials on a re-run. vault_put_with_backup copies the
+# existing value verbatim to "<path>_legacy_<MIRA_LEGACY_STAMP>" through the
+# HTTP API (values never pass a shell, so newlines, quotes, and `$` survive
+# byte-identical) before it writes; a failed copy exits 1, because replacing
+# the operator's only credential with no backup is unrecoverable.
+#
+# Exit codes are checked, not trusted: `vault kv get` answers 2 both for "no
+# value at this path" and for an unreachable Vault, so reachability is proven
+# with `vault status` first and a get that fails any other way aborts. Treating
+# an unreadable existing secret as absent overwrites it with no backup.
 
 # Vault helper: Check if Vault is initialized
 vault_is_initialized() {

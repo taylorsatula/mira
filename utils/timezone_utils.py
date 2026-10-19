@@ -1,15 +1,26 @@
 """
-Timezone utility functions for handling timezone conversions.
+Timezone utilities: the only sanctioned vocabulary for time in MIRA.
 
-This module provides consistent timezone handling across the application,
-with functions to validate timezone names, convert between timezones,
-and handle time formatting.
+All datetimes are stored UTC and converted to a user's zone only at display
+time. ``utc_now()`` and ``format_utc_iso()`` are the required spellings for
+"now" and for a stored timestamp string; ``datetime.now()`` without a zone
+loses the offset the rest of the code assumes.
 
-Core principles:
-- All datetimes are stored in UTC internally
-- Conversion to local time happens only at display time
-- All datetime objects should be timezone-aware
-- Consistent formats are used for string representations
+Model-supplied times are the user's local wall time, not UTC: ``parse_time_string``
+reads one in a named zone (a time-only value resolves to tomorrow when it has
+already passed today, so "remind me at 7pm" at 8pm is not already in the past).
+``normalize_exact_local_wall_time`` + ``local_datetime_to_utc_iso`` are the
+DST-strict pair for a wall time that names one specific moment: a time that does
+not exist, or occurs twice, across a transition raises instead of silently
+resolving to one of two instants an hour apart.
+
+``validate_timezone`` memoizes its result because ``available_timezones()``
+walks the TZ database directory and this runs per message during prompt
+composition. ``get_default_timezone`` is memoized for the same reason, and
+falls back to UTC when host detection yields a name IANA does not know.
+
+``strftime_no_pad`` exists because the ``%-I``/``%-d`` directives raise on the
+Windows CRT; formatting through it keeps output byte-identical across platforms.
 """
 
 import logging

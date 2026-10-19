@@ -155,6 +155,15 @@
     <script src="/assets/javascript/sidebar.js?v=ui-20261012"></script>
 
     <script>
+/*
+  Memories page controller. Lists and mutates memories through
+  MiraAPIClient.actions.executeAction('memory', …) — 'delete', 'bulk_delete'
+  and 'create' — with a 50-row offset cursor behind a "load more" button, a
+  debounced search, client-side filters and sort over the loaded page, and a
+  selection set for bulk delete. The action names and their argument shapes
+  are the server's: a rename there fails inside a handler and renders as an
+  error row, not at load.
+*/
 document.addEventListener('DOMContentLoaded', () => {
     const miraAPI = new MiraAPIClient();
 

@@ -1,15 +1,26 @@
 """
-Memory processor - parse and validate LLM extraction responses.
+Response parsing: model text in, validated ``ExtractedMemory`` objects out.
 
-Consolidates all response processing logic into a single, focused module:
-- JSON parsing with repair fallback
-- Structure validation
-- UUID remapping (short → full)
-- Memory field validation and sanitization
-- Duplicate detection (fuzzy + vector)
-- Index remapping for filtered memories
+The pipeline is parse → remap → validate → dedup → construct, in that order,
+over one response. Parse accepts a bare list, a single memory object, or a
+``{"memories": [...]}`` wrapper, with ``json_repair`` as the fallback; the
+rebuild of the short-ID vocabulary happens once per response (case-folded, then
+``mem_``-stripped) so an id the model echoes with drifted casing still resolves.
 
-This module is pure data processing with no side effects.
+A degenerate response is a failure, not a zero: empty, whitespace-only,
+unrepairable JSON, or a non-list ``memories`` value raises
+``LLMResponseFormatError``, while a well-formed ``[]`` is a genuine zero. The
+distinction decides whether the segment is marked extracted, which ends its
+extraction permanently.
+
+Malformed optional fields degrade rather than reject: a bad entity list or a
+malformed related-memory entry is dropped with a warning and the memory is kept,
+because the segment is already collapsed and a rejected memory is lost for good.
+
+Not write-free. Dedup runs a live vector search (``find_similar_for_dedup``) after
+a fuzzy pass over the context texts, and the timezone resolution reads the user's
+preferences once per response, falling back to UTC on outage rather than failing
+every memory in the batch.
 """
 import json
 import logging
@@ -173,7 +184,11 @@ class MemoryProcessor:
 
     Single Responsibility: Transform raw LLM text → validated memories
 
-    No side effects - pure data processing that can be tested independently.
+    Not pure: parsing a response reaches infrastructure. Dedup calls
+    ``vector_ops.find_similar_for_dedup`` and construction reads the user's
+    timezone preference once per response, so a response cannot be validated
+    without both. Both are tolerate-and-log by design (see the module
+    docstring), not side effects to be stubbed out.
     """
 
     def __init__(self, vector_ops: VectorOps):

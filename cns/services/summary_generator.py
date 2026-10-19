@@ -1,8 +1,22 @@
 """
-Summary generation service for CNS.
+Segment synopsis, precis, display title, and complexity, on the batch route.
 
-Provides out-of-band summary generation with predefined prompts,
-proper message storage, and continuum integration.
+`generate_summary` is the only producer of a segment's summary text; the
+collapse handler calls it while the segment is claimed and stores the result on
+the sentinel. Every call adds the recent collapsed segments as context so the
+summary can join to earlier work.
+
+A `ContextOverflowError` from the provider falls back to hierarchical
+summarization: messages are split into chunks of about 50k tokens, each chunk is
+summarized with the same segment prompts, and the synthesis prompts merge the
+chunk synopses. The synthesis prompts are loaded optionally at construction and
+are required only if chunking ever runs.
+
+A response missing `<mira:display_title>` raises rather than degrading to an
+empty summary. That raise is what routes the segment into the collapse
+handler's attempt budget, whose force-tombstone is the designed degradation; a
+silent empty summary would be indistinguishable from a real one. An invalid
+complexity score defaults to 2, and a missing precis only warns.
 """
 import logging
 from typing import List, Optional

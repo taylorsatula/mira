@@ -1,16 +1,33 @@
 """
-SegmentPoller — Generic base for services that poll external sources during
-active conversation segments.
+SegmentPoller — generic base for services that poll an external source while a
+conversation segment is active.
 
-Handles all lifecycle and threading concerns:
-- Starts a per-user polling thread on first ComposeSystemPromptEvent
-- Polls at a configurable interval
-- Stops the thread on SegmentCollapsedEvent
-- No active segment = no polling = no external calls
+A poller holds no thread of its own until a user composes a system prompt:
+construction only subscribes to ComposeSystemPromptEvent (start) and
+SegmentCollapsedEvent (stop); one daemon thread per user is spawned on the
+first compose, runs one cycle per interval, and exits on collapse. No active
+segment means no polling and no external calls.
 
-Subclasses implement only the protocol-specific parts:
-- _try_load_config() — credentials and connection params
-- _poll_once(config) — one polling cycle against the external service
+Two mechanisms the caller must respect. `_on_compose` runs on the publishing
+thread — the turn path inside working_memory's `_compose_lock` — so
+`_try_load_config` must stay a cheap local read; a network call there stalls
+every concurrent compose in the process. And the membership check and the
+registry insert are separate lock sections, so two composes for one user can
+both pass the check: only the upstream one-turn-per-user lock prevents a
+double start, and the second start overwrites the state entry, orphaning the
+first thread's stop handle so it polls until process exit alongside its
+replacement.
+
+Shutdown is best-effort — the collapsed handler joins the thread with a bounded
+timeout and returns. A cycle still blocked inside `_poll_once` outlives the
+collapse, may publish once more, and briefly co-exists with the replacement
+poller the next compose starts.
+
+Subclasses set `poll_interval_seconds`, `target_trinket`, `poller_name`, and
+implement two methods: `_try_load_config` (None means the user is unconfigured,
+a normal case rather than an error) and `_poll_once` (None means a failed
+cycle, `[]` a genuinely empty source). Swapping those two either masks an
+outage as an empty listing or blanks a good listing during one.
 """
 import logging
 import threading

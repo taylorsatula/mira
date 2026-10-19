@@ -1,18 +1,31 @@
 """
-Centralized MCP (Model Context Protocol) client with automatic retry logic and user-scoped connections.
-This module provides MIRA-integrated wrappers for the MCP SDK with built-in authentication support.
+Centralized MCP (Model Context Protocol) client: user-scoped sessions over SSE
+or stdio, with credentials read from the user's own credential store and
+connection-level retry.
 
-Usage:
-    from utils import mcp_client
+Nothing in this tree imports it today — ``mcp_client`` appears only in
+``requirements.txt`` — so it is a reserved integration surface rather than an
+exercised path. Build on it only with a consumer that will exercise it.
 
-    # Create user-scoped client
-    async with mcp_client.create_session("square", "https://mcp.squareup.com/sse") as session:
-        tools = await session.list_tools()
-        result = await session.call_tool("create_customer", params)
+Mechanisms a caller must know:
 
-    # Or use convenience functions
-    result = await mcp_client.call_tool("square", "create_customer", params)
+- ``create_session`` pools one connection per (user, server) and claims it with
+  ``_in_use``. A second concurrent context gets its own connection; sharing one
+  would let either context's exit disconnect the other's session.
+- OAuth comes from ``UserCredentialService`` under ``credential_type="oauth_token"``,
+  keyed by the server name; a missing token raises ``MCPAuthenticationError``
+  naming the server rather than connecting unauthenticated.
+- Errors are unwrapped through ``_unwrap_exception`` before classification
+  because the SDK raises inside ``ExceptionGroup``/``__cause__`` chains; without
+  that, a 401 arrives as an opaque group and is retried as a transient failure.
+- Read timeout is bounded on every session, so a hung server fails the call
+  instead of blocking the caller forever.
 """
+
+# ACCEPTED-RESIDUAL: no in-tree consumer. This is a deliberate reserved surface
+# (an integration path for third-party tool servers), not dead code left behind
+# by a retired caller — do not delete it for lacking one call site, and do not
+# treat it as exercised.
 
 import logging
 import asyncio

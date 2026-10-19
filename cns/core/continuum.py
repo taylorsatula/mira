@@ -1,10 +1,22 @@
 """
-Continuum aggregate root for CNS.
+The `Continuum` aggregate: frozen identity plus a mutable hot message cache.
 
-Mutable aggregate that encapsulates business logic and state transitions.
-ContinuumState is frozen, but the aggregate itself maintains a mutable
-message cache that is appended to during processing and replaced on
-session reload.
+Every `add_*` method appends to `_message_cache` and does nothing else. A
+message becomes durable only when the same `Message` object is staged into
+`UnitOfWork.add_messages` and committed — the aggregate holds no persistence
+of its own. An append path that skips staging therefore shows its message
+until the cache is next replaced wholesale, then loses it with no error
+raised anywhere.
+
+`apply_cache` is the only writer that replaces the list instead of appending
+to it, and the pool calls it on both the cache-miss and cache-hit paths, so a
+`Message` reference held across that call points at a message no longer in
+the conversation.
+
+`add_tool_message`, `discard_transient_user_message`, and
+`Continuum.to_dict`/`from_dict` have no caller. The event lists the `add_*`
+methods return are always empty: a turn's events are published by whoever
+completed the turn, never by the aggregate.
 """
 from __future__ import annotations
 
@@ -95,6 +107,8 @@ class Continuum:
 
         return message, []
 
+    # ACCEPTED-RESIDUAL: `add_tool_message`, `discard_transient_user_message` and
+    # `to_dict`/`from_dict` have no caller anywhere in the repo; kept unexercised.
     def discard_transient_user_message(self, message_id: UUID) -> bool:
         """Remove one internal continuation prompt from the hot cache.
 

@@ -1,5 +1,11 @@
 -- Mira Blog Database Schema
--- New database: mira_blog
+-- Creates the roles, `posts` table, and default privileges for a separately
+-- created `mira_blog` database.
+--
+-- No in-repo caller: nothing in MIRA reads or migrates this schema. An operator
+-- runs it with psql against a mira_blog database they created; the app has no
+-- code path to it. Do not build on it — a blog feature belongs in
+-- deploy/mira_service_schema.sql plus a step in deploy/migrations/, not here.
 
 DO $$
 BEGIN

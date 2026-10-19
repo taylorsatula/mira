@@ -1,8 +1,45 @@
 """
-Main configuration module for the application.
+The process-global configuration singleton and the access layer over it.
 
-Provides centralized configuration management with validation, loading from
-multiple sources, and a clean access interface.
+`config = initialize_config()` runs at module scope, so the instance exists the
+moment anything imports this module, and nothing reloads it: a runtime assignment
+to a `config.*` field stays visible to every user and every thread in the process
+until restart.
+
+`AppConfig.load()` is the only constructor that yields a usable instance — it
+applies the process-environment overrides and then loads the system prompt. A bare
+`AppConfig()` never runs `_load_system_prompt()`, so its `.system_prompt` raises
+`AttributeError`.
+
+Environment overrides reach exactly three sections. `api` reads the positive
+integers in `API_INT_ENVIRONMENT_FIELDS`; `system` reads the strict `0`/`1`
+switches in `SYSTEM_FEATURE_FLAG_ENVIRONMENT_FIELDS` plus the strings in
+`SYSTEM_STRING_ENVIRONMENT_FIELDS`; `systemone` reads
+`SYSTEMONE_STRING_ENVIRONMENT_FIELDS` plus the `local`/`remote` provider. A
+variable outside those dicts is never read, so deploy can write it into the env
+file indefinitely with no effect on the running process. Parsing is strict on
+purpose — anything other than a literal `0`/`1` raises at import, which kills boot
+before the POST self-test gate rather than coercing to a meaning the operator did
+not choose.
+
+`_load_system_prompt()` reads `config/system_prompt.txt` by path and raises on a
+missing or empty-after-strip file, because the prompt is system configuration
+rather than an optional feature. The `is_relative_to` and `.txt` suffix checks
+above that read cannot fire: the path is a hardcoded join of this file's directory
+with a `.txt` literal, so they validate nothing an operator can supply.
+
+`__getattr__` routes any `*_tool`-suffixed name, and any name already cached in
+`tool_configs`, to `get_tool_config`; every other unknown name raises
+`AttributeError`, so a misspelled tool attribute loses the per-user merge and the
+`enabled` gate instead of failing loudly. `get_tool_config` resolves the config
+class through `registry.get_or_create`, which fabricates a class carrying only
+`enabled=True` for an unregistered name — a typo reads as enabled defaults, never
+as an error. Outside a request it returns the global default; inside one it merges
+the current user's stored row over that default on every access.
+
+`system_prompt_text`, `as_dict`, `get`, `require`, and `list_available_tool_configs`
+have no callers, and the excluded `system_prompt_text` field is always `""` — the
+live prompt is the private `_system_prompt`.
 """
 
 import logging

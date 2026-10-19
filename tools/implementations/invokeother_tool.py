@@ -1,10 +1,19 @@
 """
-Dynamic tool loading meta-tool for MIRA.
+On-demand tool loading meta-tool: the model names tools, and names a lifetime
+for each.
 
-Allows the LLM to load tools on demand via constrained enum parameters.
-Two loading modes: ephemeral (current turn only) and pinned (rest of session).
-The tool catalog is encoded directly in the tool_schema for prompt cache
-stability — no dynamic working memory content needed.
+The two parameters are the operations — `load` for this turn only,
+`load_for_rest_of_session` to pin — and each carries an enum of the loadable
+tool names. The catalog behind those enums is computed once, at construction,
+from `tool_repo.list_all_tools()`, minus essential tools, minus gated tools,
+minus anything whose config says `enabled=False`, minus anything lacking a
+`simple_description`; it is written into the schema description rather than
+into working-memory content so the prompt prefix stays cacheable.
+
+Two consequences a caller must expect: a tool instantiated after this object
+was built is absent from the enum, and a tool without `simple_description` can
+never be loaded this way at all — which is why such tools have to appear in
+`ESSENTIAL_TOOLS` instead.
 """
 
 import logging

@@ -1,4 +1,14 @@
-"""Shared types for dialect-owned thinking/effort translation."""
+"""Two helpers shared by dialect-owned thinking translation: an adaptive-thinking model test and the loss note.
+
+`uses_adaptive_thinking` reads the model id for a Claude `4-<minor>` marker
+and answers True from minor 6 up, which is where Anthropic replaced explicit
+`budget_tokens` with adaptive thinking. `TranslationNote` is the record a
+dialect emits whenever the caller's `ThinkingConfig` is not honored verbatim —
+a heuristic budget, a per-model clamp — so the seam between caller intent and
+provider behavior is logged instead of silently absorbed. A dialect that
+translates without emitting a note leaves the caller believing its request was
+honored.
+"""
 
 from __future__ import annotations
 

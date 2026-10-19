@@ -1,4 +1,31 @@
-"""Persona evaluation, automatic evolution, and manual revision workflows."""
+"""
+Persona: MIRA's own behavioral directives — evaluation, automatic evolution,
+and the manual revision flows.
+
+Three paths share one revision history in
+`cns/infrastructure/persona_repository.py`:
+
+- `evaluate_segment` records section-anchored evidence once per collapsed
+  segment; its `segment_was_evaluated` skip-guard makes a retry after a
+  successful pass a no-op, which is what lets the collapse handler run it
+  before the sentinel save and count its failures against the attempt budget.
+- `refine_automatically_if_due` publishes at most one revision per
+  `PERSONA_REFINEMENT_USE_DAYS` activity days, gated by the repository's
+  use-day checkpoint. A candidate that fails validation is recorded as an
+  attempt with its feedback and no revision is published.
+- The manual flow is preview-before-save: `create_preview` validates and stores
+  a `PersonaPreview` JSON (directives plus `parent_revision_id`) in Valkey under
+  an opaque id with a 600s TTL, and `accept_preview` consumes it by `GETDEL` and
+  appends the revision with `expected_parent_revision_id`, so a concurrent
+  automatic revision cannot be silently overwritten.
+
+A rejection from the critic is a failure, never a pass: an unparseable
+`<mira:persona_review` status re-enters the loop with feedback.
+`_invalidate_cache` clears only `persona_directives` — the neighbouring
+`behavioral_directives` field belongs to LoraTrinket, and clearing it would
+drop the user model's cached section while leaving stale Persona directives
+behind.
+"""
 
 from __future__ import annotations
 

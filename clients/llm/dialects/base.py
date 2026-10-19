@@ -6,6 +6,12 @@ back into a Result. The class attribute native_thinking_fields declares which
 thinking knobs the provider natively accepts; the dialect's _serialize_thinking
 hook (or its Anthropic-specific equivalent) is responsible for translating
 non-native fields and logging a TranslationNote when information is lost.
+
+`ProviderStallError` is defined in this module but raised only by
+`clients/llm/lifecycle.py`'s watchdog, which cancels the in-flight request before
+raising. A dialect that raised it for a stall of its own would skip that
+cancel-first ordering, leaving the provider generation running while the caller
+believes the request is dead.
 """
 
 from __future__ import annotations

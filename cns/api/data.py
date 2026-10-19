@@ -1,7 +1,18 @@
 """
-Data API endpoint - unified data access with type-based routing.
+The read surface: `GET /data`, type-routed over one query parameter.
 
-Uses proper repository methods for safe data access with user isolation.
+Each `DataType` member owns one `_get_*` method and the router's `if` chain
+routes to it, so a new read is an enum member plus a method plus a branch.
+
+Two read contracts the code does not show by itself. History is
+keyset-paginated only: `before` is an opaque cursor, and `offset` and `search`
+are rejected rather than deprecated, because offset over a descending,
+insert-heavy table skips and repeats rows across a page boundary and free-text
+search has no stable keyset to page on at all. And a domaindoc listing must go
+through `UserDataManager.select`, which decrypts each row; `fetchall` hands back
+the raw `encrypted__*` columns and puts ciphertext in a response. A shared
+document whose owner row cannot be read is logged and skipped, so one broken
+share does not fail the whole listing.
 """
 import base64
 import binascii

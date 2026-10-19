@@ -1,9 +1,22 @@
 """
-Consolidation handler - memory consolidation with link transfer.
+Consolidation: fold several memories into one without losing their links.
 
-Handles consolidating multiple memories into one while preserving all
-relationship information through link bundle transfer, source memory
-outbound link rewriting, and proper archival of consolidated memories.
+``execute_consolidation`` loads every source first and raises if any is missing,
+before a single write, so a partial merge never persists. The new memory carries
+the median importance of its sources, keeps the earliest source segment for the
+provenance column, and sums access and mention counts while taking the most
+conservative decay position — the latest ``last_accessed`` and the smallest
+activity-day count. The full source-id and source-segment sets are recorded in
+the consolidation annotation only when ``merge_note`` is supplied; without it,
+provenance is the single earliest ``source_segment_id``.
+
+The mechanism that makes the merge lossless is link transfer in two directions:
+link bundles pointing at the sources are rewritten onto the new id, and every
+memory that linked to a source — inbound or outbound — is re-read and rewritten
+on its own side. When several sources collapse onto the one new target, a side
+keeps the most recent entry (compared by ``created_at``), the same dedupe rule
+the bundle collection uses. Sources are archived last, so a failure before that
+point leaves both the new memory and the old ones readable.
 """
 import logging
 import statistics
@@ -25,7 +38,10 @@ class ConsolidationHandler:
     Single Responsibility: Consolidate multiple memories into one,
     preserving all relationship information.
 
-    Pure business logic - no I/O decisions or orchestration.
+    Writes directly: link arrays on both sides, counter sums, the annotation,
+    and the source archives all go through ``db.update_memory`` /
+    ``db.archive_memory``. Callers own the precondition and the post-merge
+    tending stamp.
     """
 
     def __init__(self, vector_ops: VectorOps, db: LTMemoryDB):

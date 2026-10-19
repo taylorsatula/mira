@@ -1,12 +1,26 @@
 """
-User context management using contextvars.
+The ``user_id`` contextvar family: identity, segment id, request cancellation,
+user preferences and their cache, the five fixed model routes, and the
+cumulative-activity-days cache.
 
-This module provides transparent user context that works for both:
-- Single-user scenarios (CLI): Context set once and persists
-- Multi-user scenarios (web): Context isolated per request automatically
+Identity lives in one contextvar, set once at the API boundary; every
+user-scoped component reads it from here rather than taking a ``user_id``
+parameter it would have to thread through. ``get_current_user_id`` raises
+``RuntimeError`` when nothing is set — the failing call site is the bug, and a
+default user would be a cross-user data leak.
 
-Uses Python's contextvars which provides automatic isolation for
-concurrent operations while working identically for single-threaded use.
+``get_user_preferences`` caches the row in Valkey under ``user_prefs:{user_id}``
+for 5 minutes; ``invalidate_user_preferences_cache`` is the only way a write
+becomes visible to other contexts before that TTL expires.
+
+``get_model_configs``/``get_model_config`` serve the fixed route set loaded by
+``load_model_configs()``, which raises until it has run and raises if the table
+does not hold exactly the five route names. There is no fallback route: a
+caller that cannot resolve its route fails here, not at the provider.
+
+The activity counter is cached in the same context dict under
+``cumulative_activity_days``, so a caller already holding that key does not
+re-query (``utils/user_activity.py`` writes it after a persisted increment).
 """
 
 import contextvars

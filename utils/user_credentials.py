@@ -1,9 +1,18 @@
 """
-User credential management bridge to UserDataManager.
+Per-user credential storage, on the ``credentials`` table of the user's own
+encrypted SQLite file.
 
-This module provides the expected interface for tools while leveraging
-the existing UserDataManager's SQLite-based credential storage with
-automatic encryption in user-specific databases.
+One row per (``credential_type``, ``service_name``) pair; the value lives in the
+``encrypted__credential_value`` column, so it is stored Fernet-encrypted through
+``UserDataManager`` and decrypted on read. Callers name a credential by type and
+service — the secret itself never travels through an interface that could log it,
+and ``get_credential_metadata`` exists for the surfaces that need to show a
+credential exists without showing its value.
+
+The user defaults to the ``user_id`` contextvar; the explicit ``user_id``
+constructor argument is for administrative work outside a request. With neither,
+construction raises ``RuntimeError`` — a credential store that picked a default
+owner would hand one user another's secret.
 """
 
 import json

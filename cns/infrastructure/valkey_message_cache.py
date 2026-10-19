@@ -1,7 +1,18 @@
 """
-Valkey-based message cache for continuum messages.
+The hot continuum message cache and the collapse-epoch counter beside it.
 
-Provides distributed caching with event-driven invalidation via segment timeout.
+Two keys per user: the serialized message list and an integer epoch.
+`invalidate_continuum()` deletes the list and bumps the epoch in one atomic
+Valkey operation, so a writer still holding the pre-collapse epoch cannot
+land a stale list between a delete and a separate bump.
+`set_continuum_if_epoch()` writes the list only while the epoch still matches
+what the loader captured; a mismatch means a collapse happened, and the
+skipped write leaves the cache empty for the next load to rebuild from
+PostgreSQL.
+
+A cache miss is meaningful: the pool reads it as a new session boundary.
+Invalidation is event-driven — segment collapse and a failed commit — so a
+miss never means the entry expired.
 """
 from __future__ import annotations
 

@@ -8,7 +8,16 @@ startup.
 
 Discovery validates each candidate (fail-loud) — a malformed dialect class
 raises at startup rather than at first request, so misconfiguration is caught
-during boot rather than under load.
+during boot rather than under load. `_validate_dialect_class` rejects a blank
+or reserved `dialect_name`, a name absent from the DialectName literal, a
+`native_thinking_fields` that is not a tuple of NativeField members, a
+`from_selection` not declared `@classmethod`, and a duplicate name; the walk
+additionally skips abstract classes and re-exported classes.
+
+Discovery is once per process. The second `discover()` call is a no-op, so a
+dialect module added after the first discovery stays invisible until restart,
+and isolation between probe runs is done by replacing `_classes` rather than by
+calling `discover()` again.
 """
 
 from __future__ import annotations

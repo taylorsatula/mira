@@ -1,13 +1,22 @@
 """
-LoRA (user model) refinement service.
+LoRA (user model) refinement service: the user-initiated edit of a stored user
+model, preview-before-save.
 
-Generates a revised user model based on user instructions and stores it as a
-preview in Valkey. The user then accepts or declines the preview. Critic
-validation runs before presenting the preview, ensuring the refined model
-meets the same quality standards as synthesized models.
+`refine_lora` re-runs the model on the user's instructions under a critic loop,
+then stores the candidate in Valkey under an opaque `preview_id` with a 600s
+TTL. `accept_lora` consumes it by `GETDEL` and persists through
+`feedback_tracker.set_synthesis_output`; `decline_lora` is a no-op on an absent
+preview. The client never round-trips stored text, so a save cannot be driven by
+arbitrary text from the caller.
 
-Unlike portrait refinement (plain prose), user model refinement must produce
-valid XML and pass the critic's quality checks before the preview is shown.
+Critic exhaustion differs from synthesis on purpose: this path is user-initiated,
+so the last candidate is presented for the user to judge rather than discarded.
+`validate_section_anchors` still gates that exhaustion path — an anchor the
+system prompt does not define is not presentable.
+
+The refinement system prompt's example anchors are filled from
+`get_assessable_section_ids`, so the example the model imitates cannot drift
+from the taxonomy the checker enforces.
 """
 import logging
 import re

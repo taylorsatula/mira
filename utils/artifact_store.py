@@ -1,4 +1,17 @@
-"""User-scoped artifact storage for generated files."""
+"""User-scoped artifact storage for generated files.
+
+Each artifact lands under ``data/users/{user_id}/artifacts/{file_id}/`` as a
+UUID-named ``.bin`` plus a ``.meta`` JSON holding the sanitized filename and
+MIME type. The user comes from the ``user_id`` contextvar, so a caller outside
+a request raises before anything is written rather than writing to a default
+owner. ``file_id`` must match ``FILE_ID_PATTERN`` — it becomes a directory
+name, and an unchecked id would let a caller escape the user's tree.
+
+Both the declared size and the byte length are checked against
+``MAX_FILE_ARTIFACT_SIZE`` before the write: the declared size is what the
+caller promised, the byte length is what it actually passed, and checking only
+the former stores an oversized file under a small claim.
+"""
 
 from __future__ import annotations
 

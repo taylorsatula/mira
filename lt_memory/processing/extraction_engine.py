@@ -1,15 +1,27 @@
 """
-Extraction engine - build extraction payloads and prompts.
+Payload construction: what to extract, and how the LLM is asked.
 
-Consolidates all prompt building, context loading, and message formatting:
-- Prompt loading from config files
-- UUID shortening and bidirectional mapping
-- Memory context retrieval and caching
-- Message formatting (conversation → XML-tagged turns)
-- Extraction prompt building with context
+Builds the complete input contract for one extraction call — the two prompts,
+the message text formatted as XML turns, and the bidirectional short/full ID
+maps. ``ExtractionPayload.short_to_uuid`` is the contract the response parser
+depends on: ``memory_processor`` remaps the model's short ids through exactly
+that map, so building a payload without the maps silently degrades every
+related-memory reference the model emits into an unresolved one.
 
-This module handles WHAT to extract and HOW to ask the LLM.
-MemoryProcessor handles parsing the LLM's response.
+Prompts load once at construction through ``load_prompt`` and raise if the file
+is missing. A chunk with no messages raises here rather than yielding an empty
+prompt, because an empty ``user_prompt`` is skipped by the executor and only
+counts toward its no-payload failure.
+
+The snapshot rule: memory context is read from the chunk's
+``memory_context_snapshot``, taken before the model call, so the texts the model
+sees reflect memory state at chunk-creation time. The DB fallback exists for
+chunks built outside the orchestrator and raises when it cannot load every id.
+
+Conversation text is untrusted. Message content is html-escaped into its
+``<user>``/``<assistant>`` tag, and referenced memory text into
+``<references_memory>``, so conversation content cannot forge a turn boundary
+in the prompt.
 """
 import html
 import logging

@@ -1,8 +1,23 @@
 """
-Segment timeout detection service.
+The segment timeout sweep: which open segments have gone quiet, and when.
 
-APScheduler job that runs every 5 minutes to find active segments
-that have exceeded their inactivity threshold and publishes SegmentTimeoutEvent.
+`check_timeouts` runs every five minutes over every user's active sentinels
+under an admin session, and publishes `SegmentTimeoutEvent` for the ones past
+their threshold.
+
+Two invariants are not visible from the call site. `_segment_activity_anchor`
+is the single source both for that decision and for the event's
+`inactive_duration_minutes`, so the two agree by construction; it is keyed on
+the segment's own `segment_id` metadata rather than on a position in the
+continuum, so a successor segment's messages cannot pass as this segment's
+activity. And `last_turn_at` is only the crash grace for a turn that died
+uncommitted — the live-turn guard is the `_user_request_lock.is_locked` probe in
+`check_timeouts`, which defers the segment for the cycle (no event, no attempt,
+no claim).
+
+The lock probe raises when Valkey is down, and the raise propagates through
+this job's log-and-reraise: an unverifiable "no turn in flight" must never
+default to collapsing.
 """
 import logging
 from datetime import datetime, timedelta

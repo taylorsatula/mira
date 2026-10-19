@@ -1,12 +1,19 @@
 """
-Production-ready Vault client for MIRA secret management.
+Vault KV-v2 secret reads over AppRole authentication.
 
-Core principles:
-- Never manages vault server lifecycle
-- Fails fast with clear errors
-- Uses environment variables for configuration
-- Individual secret retrieval only
-- IAM-ready auth abstraction
+The AppRole bootstrap credentials (`VAULT_ADDR`, `VAULT_ROLE_ID`,
+`VAULT_SECRET_ID`) come from the process environment; every secret value comes
+from Vault. Each field read is cached in `_secret_cache` for the process
+lifetime and nothing invalidates it, so a secret rotated in Vault does not
+reach a running process — code that re-reads to "refresh" serves the stale
+value until restart. `preload_secrets()` fills the three groups at startup
+while the AppRole token is fresh and raises on any failed group, which turns a
+missing secret into one startup error instead of scattered runtime failures.
+
+`check_required_secrets()` reports manifest fields absent from Vault for the
+boot gate; it raises rather than reporting a gap when Vault itself is
+unreachable or unauthenticated, so an outage is never mistaken for a missing
+secret. `get_auth_secret` (the `mira/auth` family) has no caller in the tree.
 """
 
 import json

@@ -1,4 +1,14 @@
-"""Provider-neutral local tool continuation message assembly."""
+"""Assemble the message history one local tool round adds, in the shape every dialect replays.
+
+`append_tool_result_messages` is the entry point: an assistant message
+carrying the tool calls that actually ran and their reasoning blocks, one
+`role="tool"` message per result, then any repair feedback. Two exclusions
+keep the next provider request valid, and both exist because the wire formats
+reject a half-pair: a call with no matching result (provider-side execution)
+is stripped from the assistant message, and a call rejected for invalid
+arguments never replays as `tool_calls` at all — replaying it would reintroduce
+the bad arguments — so it becomes a user-role feedback message instead.
+"""
 
 from __future__ import annotations
 

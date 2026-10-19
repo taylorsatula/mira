@@ -26,5 +26,14 @@ so the app's own clients/managers do the crypto and DB writes.
 
 Usage (once implemented):
   python3 import_user_bundle.py <bundle.zip> [--account <email>]
+
+This module has no implementation: the body prints the docstring above and
+exits, so running it reports the procedure and imports nothing. An import
+until then is done by hand, following the AGENTS.md inside the bundle.
 """
+# CROSS-FILE-COUPLING: this docstring is the twin of the AGENTS_MD template in
+# export_user_bundle.py, which ships in the zip addressed to the receiving
+# install. One statement of the procedure in two texts: a change to either
+# edits the other in the same commit, or an import driven by one text fails the
+# other's verification.
 print(__doc__)

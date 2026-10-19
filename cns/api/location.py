@@ -1,4 +1,18 @@
-"""Location context endpoint — receives coordinates, fetches geocode + forecast, caches in Valkey."""
+"""
+Location context: coordinates in, reverse geocode and forecast cached in Valkey.
+
+`POST /location` reads the user's temperature unit and timezone from
+preferences, reverse geocodes through Nominatim, fetches the next hours of
+forecast plus recent daily summaries from Open-Meteo, and writes
+`location:{user_id}` for the location trinket to read.
+
+Both upstream calls degrade rather than fail — a failed geocode or forecast logs
+and returns None, and an empty result reports `cached: false` — but the Valkey
+write propagates, because a silent skip would leave the trinket serving a stale
+location indefinitely. The Nominatim call issues its own request with its own
+User-Agent instead of going through `utils/nominatim_client.py`, so it does not
+take that client's process-wide request throttle.
+"""
 import json
 import logging
 from datetime import datetime, date

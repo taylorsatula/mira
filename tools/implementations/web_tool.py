@@ -1,10 +1,35 @@
 """
-Web tool providing search, fetch, and HTTP request capabilities.
+Web search, page fetch, and direct HTTP requests.
 
-Three operations:
-- search: Query Kagi search API for current information
-- fetch: Extract webpage content via trafilatura (HTTP first, Playwright escalation for JS-heavy pages)
-- http: Make direct HTTP requests to APIs
+Every piece of external text leaves this tool wrapped in `wrap_untrusted` —
+search titles and snippets, fetched content and titles, HTTP bodies and
+response headers — because a tool result is where third-party text enters model
+context. The fetch-and-condense path also wraps the page text before the fast
+model reads it, so a condensed result cannot launder an injection into the main
+model.
+
+Requests pin their connection. `_request_with_validated_redirects` validates a
+hop's URL with `validate_public_http_url`, then connects to the IP that
+validation resolved through `http_client.pinned_request` rather than re-running
+DNS — and every redirect target is validated the same way instead of being
+followed blind, up to `MAX_REDIRECT_HOPS`. Query params are folded into the
+initial URL once, because httpx applies `params` against the URL on every
+request and would otherwise re-send them to the redirect host.
+
+Credentials stay server-side. The model names one; `_get_credential` reads its
+metadata, requires an explicit `allowed_domains` binding, validates the request
+host against it, and only then fetches the value for header injection.
+Response headers are filtered against `_SENSITIVE_RESPONSE_HEADERS` plus the
+injected header's own name, so an API that echoes its auth header cannot hand
+the secret back to the model.
+
+Fetching has a fixed fallback order: plain HTTP plus trafilatura, BeautifulSoup
+as a last-resort text extractor, Playwright when the page reads as JS-rendered
+under the length gate, and finally whatever the plain-HTTP tier retrieved —
+labelled `partial` when it is under the gate — rather than a fabricated
+failure for a page that did fetch. Condensing long pages on the `fast` route is
+optional: only the provider's own transport, protocol, auth, and stall failures
+(plus context overflow) degrade to a truncated dump; anything else propagates.
 """
 import json
 import re

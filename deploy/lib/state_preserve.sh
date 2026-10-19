@@ -3,10 +3,17 @@
 # clear keeps, what git never tracks, and what a clear destroys.
 # Source this file - do not execute directly. No dependencies.
 #
-# Every slash-anchored entry of write_install_exclude must name a member of
-# MIRA_PRESERVE_NAMES: tools/implementations/bash_tool.py:_load_app_tree reads
-# the exclude's literal entries as the names it refuses to delete, so the code
-# clear must keep exactly those too.
+# MIRA_PRESERVE_NAMES is read by is_preserved_name, clear_code_preserving_state,
+# and list_cleared_files (through _cleared_top_level_names), and they must
+# agree. write_install_exclude does not read it: its slash-anchored entries are
+# a hand-written heredoc, so adding a preserve name is two edits, and nothing
+# compares one spelling to the other. A name the exclude protects but the array
+# rejects is protected from the agent's delete and then destroyed by the next
+# code clear; a name in the array but not the exclude is kept by the clear and
+# deletable by the agent.
+# tools/implementations/bash_tool.py:_load_app_tree reads the exclude's literal
+# entries as the names it refuses to delete. A name list_cleared_files omits is
+# a file the custom-build export never saves.
 
 # find(1) -name patterns, matched against top-level names only.
 MIRA_PRESERVE_NAMES=(venv .env data logs scratch .git run.sh 'venv*' 'tui-venv*')

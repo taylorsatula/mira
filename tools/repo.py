@@ -1,8 +1,54 @@
 """
-Tool repository for the MIRA system.
+The `Tool` base class and the `ToolRepository` that owns tool discovery,
+availability, and the invocation pipeline.
 
-This module provides the base Tool class and ToolRepository for managing, 
-discovering, and using tools within the continuum system.
+A tool call reaches `run()` through one of two doors. `invoke_tool` is the
+framework door: it applies the per-user config gate first, then resolves
+availability - auto-enabling a tool absent from the current user's set,
+because turn-end cleanup removed it at the last boundary - then drops params
+outside the tool's declared `input_schema.properties`, coerces the survivors
+to their declared types, and binds the result to `run()`'s signature.
+Argument defects (a non-mapping payload, an irreparable value, an arity or
+keyword mismatch) raise `ParameterError` before dispatch; that type is how
+`cns/services/tool_loop.py` distinguishes a call the model can repair, which
+is why a `TypeError` raised inside a tool surfaces as itself instead of
+being relabelled. The second door is `get_tool`, taken by sidebar agents;
+the API action routes and the reminder trinket go further and instantiate
+the class themselves. Neither door applies any of that.
+
+`get_tool` constructs a fresh instance per call and injects constructor
+parameters by annotation name (`LLMProvider`/`LLMBridge`, `ToolRepository`,
+`WorkingMemory`), required parameters only - a defaulted
+`Optional[...] = None` is never filled. Nothing is cached, and `__init__`
+therefore runs on every invocation, so it must stay free of network calls,
+LLM calls, and schema creation.
+
+Availability state is per user, never process-global: `_enabled_tools` and
+`_pinned_tools` are dicts keyed by the `utils/user_context` user id, with
+`_BOOT_ENABLED_KEY` reserved for enablement that ran before any user context
+existed (startup). `SegmentCollapsedEvent` clears the collapsing user's pins
+and enablement together, so "rest of session" ends at collapse; the
+subscription is taken through `working_memory.event_bus`, so a repository
+constructed without one never subscribes and never clears anything. The
+`enabled_tools` property is the cross-user union - a read surface for the
+pre-server boot gate, which runs with no user context; per-user visibility is
+`is_tool_enabled` and `get_all_tool_definitions`.
+
+`enable_tools_from_config` is the only boot enablement: it iterates
+`ESSENTIAL_TOOLS` under that no-context key, so every essential tool is
+everyone's baseline, and a config-disabled essential is skipped with a
+warning that `utils/power_on_self_test.py:_check_tools` turns into a refusal
+to bind. `get_all_tool_definitions` applies the config gate to the enabled
+set but not to the `gated_tools` loop, which advertises on `is_available()`
+alone - a gated tool must survive the gate on its own, or the model is
+offered a name `invoke_tool` refuses.
+
+The docstring-derived metadata trio (`get_metadata`,
+`get_formatted_description`, `get_tool_metadata`), `disable_tool`,
+`resolve_dependencies`/`get_dependencies`, and `enable_all_tools` have no
+production caller: `tool_schema` is the model-facing contract and
+`config.<name>.enabled=false` is the disable path. They are kept as API -
+do not build on them.
 """
 import inspect
 import importlib

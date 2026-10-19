@@ -1,7 +1,9 @@
-"""Residue checks: turn "I cleaned up" into a check.
+"""Residue checks: turn "I cleaned up" into a raising witness.
 
-Spec: tests/fixtures/AGENTS.md. Use after teardown so a probe verifies its own
-blast radius is empty.
+Both assertions raise `AssertionError` when debris remains, so a probe that wraps
+one in `harness.check` records a FAIL instead of a pass. Call them after the
+fixture's teardown has run: inside a `with probe_user()` or `with scratch_database()`
+block they still see the pre-teardown state.
 """
 from __future__ import annotations
 

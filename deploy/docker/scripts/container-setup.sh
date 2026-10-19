@@ -1,16 +1,21 @@
 #!/bin/bash
-# MIRA Container Interactive Setup
-# Adapted from deploy/config.sh for Docker container context
+# MIRA container interactive setup wizard: the TTY first-boot path that
+# collects the inference provider and key, an optional Kagi key, an optional
+# database password, and an optional System One token for the injection
+# screen. Every answer lands in a CONFIG_* shell variable; nothing is written
+# to disk or to Vault here — init-mira.sh provisions from those exports after
+# this file returns.
 #
-# This script is sourced (not executed) by init-mira.sh when running
-# interactively with a TTY attached.
+# Sourced into the PID-1 shell by init-mira.sh, never executed: `exec` here
+# would replace the container entrypoint and end the container before
+# provisioning, and a bare `exit` would do the same. The cancel path therefore
+# re-sources a fresh pass and then `return`s, so control unwinds to
+# init-mira.sh with the accepted CONFIG_* exports intact.
 #
-# Differences from host deploy/config.sh:
-# - No disk space check (container handles this)
-# - No port availability check (container manages ports)
-# - No systemd/service management options
-# - No Playwright install prompt (pre-installed in image)
-# - No existing installation check (clean container)
+# Key prefixes are validated per provider where the provider has one, and an
+# unvalidated key is accepted only after an explicit confirmation — a key
+# pasted from the wrong provider otherwise reaches Vault intact and fails
+# nothing until the first LLM call.
 
 # Source helper libraries
 source /opt/mira/app/deploy/lib/output.sh

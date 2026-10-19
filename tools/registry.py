@@ -1,4 +1,26 @@
 
+"""
+The tool-config registry: tool name to Pydantic config class, plus the strict
+write seam over that mapping.
+
+This module imports nothing from `config`, `clients`, or `utils` on purpose.
+`config/__init__.py` imports it at package level, so a top-level import of
+`config` from here closes an import cycle and `import config` fails at boot.
+
+`validate_config_data` is the one place incoming tool-config data is checked
+strictly. Pydantic's default `extra='ignore'` would drop a misspelled field
+name while the write still looked accepted, so an unknown key raises
+`UnknownToolConfigFields` naming the key and the valid field set. Strictness
+lives here rather than `extra='forbid'` on the config classes because
+`config_manager` also instantiates those classes from stored per-user rows,
+and rows written before this seam existed can carry unknown keys - a
+class-level forbid would fail every read of them.
+
+`get_or_create` and `create_default` fabricate a config class whose only
+field is `enabled=True`, and they return the class, never an instance. A tool
+that registers no config class of its own therefore gets that default:
+silently enabled, with none of the fields it declared.
+"""
 from typing import Any, Dict, Type, Optional
 from pydantic import BaseModel, create_model
 

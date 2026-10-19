@@ -1,16 +1,40 @@
 """
-SidebarAgent -- Base class for autonomous sidebar agents.
+SidebarAgent -- the autonomous-agent base class: gates, loop, exit, trace.
 
-Encapsulates LLM-in-a-loop mechanics so implementations only define
-domain logic: prompt, initial message, and tool list.
+Implementations supply a prompt, an initial message, and a tool list; this
+class owns the rest: tool-schema assembly, the LLM iteration loop, tool
+execution, completion detection, trace capture, and the completion publish.
+`run()` is the only entry for a spawned agent and `run_blocking()` for a
+synchronous one; neither is for overriding.
 
-Loop terminates when the LLM calls sidebar_tool.complete_task().
-The base class intercepts that call, enriches it with work item metadata,
-executes the tool (which writes the activity record to SQLite), publishes
-an UpdateTrinketEvent to refresh the agent's completion trinket
-(AsyncActivityTrinket by default; subclasses override
-_get_completion_trinket() / _build_completion_context() to target a
-different trinket), and exits.
+Two gates run before the first LLM call and they hold opposite failure
+policies. `_run_injection_gate` fails closed: `_sanitize_work_item` screens
+`context['raw_content']` and writes `sanitized_content` back, a rejection
+exits `'rejected'`, and a screen outage propagates out of `run()` as
+`'failed'` — content never reaches the loop unscreened. `_run_sentry` fails
+open on both a parse failure and an LLM error, because it exists to save
+cost, not to protect anything.
+
+Wall-clock budgets resolve from `config.sidebar_dispatcher` at construction:
+the shared `agent_timeout_seconds`, a per-agent `agent_timeout_overrides`
+entry keyed by class name minus the `Agent` suffix and lowercased, and
+`agent_iteration_timeout_seconds`. A `timeout_seconds` class attribute is
+overwritten here without a word, and an override key that does not match
+that derivation silently falls back to the shared default.
+
+Every termination calls `_exit(status, summary, activity_status)`, which
+writes the `sidebar_activity` record and then publishes. `status` and
+`activity_status` are separate values: the first goes to the trace and to
+`on_completion()`, the second to the dedup row the dispatcher reads.
+
+`run_blocking()` runs the same loop on the caller's thread under
+`blocking_timeout_seconds`, publishes no trinket event at all, and returns
+`{'status', 'summary'}` — a failed run is that record, not an exception, so
+a caller that only catches exceptions reads failures as successes.
+
+`_get_tool_schemas` swallows an unresolvable tool name at debug level: a typo
+in `available_tools` never raises, it just removes the tool from the model's
+context.
 """
 import json
 import logging

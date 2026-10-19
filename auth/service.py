@@ -1,12 +1,18 @@
-"""
-Core authentication service - orchestrates the magic-link flow.
+"""The auth service facade: signup, magic links, sessions, API tokens, and the single-mode local bootstrap.
 
-This is the generic multi-user auth layer. Everything an account owed to a
-system outside `auth` goes through the injected `AccountProvisioner` (see
-`auth/provisioning.py`), and everything that puts text in an inbox goes
-through the injected `MailSender` (see `auth/email_service.py`). Both default
-to "resolved lazily / nothing to do", which is what lets `single` and `dev`
-installs import, boot and serve with no mailer and no sidecar system.
+Everything an account owes to a system outside `auth` goes through the injected
+`AccountProvisioner` (see `auth/provisioning.py`), and everything that puts text
+in an inbox goes through the injected `MailSender` (see `auth/email_service.py`).
+Both default to "resolved lazily / nothing to do", which is what lets `single`
+installs and any process without a configured mailer import, boot and serve with
+no mailer and no sidecar system.
+
+Both account-creation paths run the same `_initialize_account`, so a resource one
+of them requires is required by the other: public signup through `create_user`,
+and the single-mode bootstrap through `create_local_session`. They differ in
+what happens when it raises — signup tears the new account back down, the
+bootstrap lets the error propagate — so a step added to only one path leaves
+installs whose accounts are not equivalent.
 """
 
 import secrets
@@ -323,8 +329,8 @@ class AuthService:
         """Return the mail transport for a send, or raise.
 
         Fails loud at the point of the send — never at import and never at
-        startup — so `single` and `dev` installs serve traffic with no mail
-        configuration of any kind.
+        startup — so `single` installs, and any process whose mailer is
+        unconfigured, serve traffic with no mail configuration of any kind.
         """
         if self.mailer is not None:
             return self.mailer

@@ -1,8 +1,28 @@
 """
-Continuum repository for CNS.
+Every SQL statement over `messages` and `continuums`, behind the module
+singleton `get_continuum_repository()`.
 
-Handles persistence and retrieval of continuums and messages
-with RLS (Row Level Security) per user.
+User isolation is RLS: each statement runs on a `PostgresClient` scoped to
+the user, so nothing here filters by `user_id` to isolate users.
+`find_all_active_segments_admin()` is the one BYPASSRLS query — the timeout
+sweep needs every user's live sentinel — and it joins `users` so segments
+belonging to deactivated accounts drop out.
+
+Message content reloads by identity, never by shape: every write stamps
+`content_type` ("json" for list content, "text" for a string) and
+`_parse_message_rows()` parses only rows tagged "json". A plain-text message
+that happens to be valid JSON must reload as text; rows written before the
+tag existed carry none and stay text.
+
+Segment sentinels are ordinary message rows whose metadata carries
+`is_segment_boundary` and a `status` of `active`, `paused`, `collapsing`, or
+`collapsed`. `active` and `paused` are both live — a paused segment is still
+the current segment — so sentinel lookups match both, and only the timeout
+sweep's admin query narrows to `active`.
+
+`load_messages_with_metadata()` is dead: no in-repo caller. It is kept as the
+metadata-filter loader for a future consumer, so do not build on it as
+exercised code.
 """
 from __future__ import annotations
 
@@ -541,6 +561,7 @@ class ContinuumRepository:
 
         return messages
 
+    # ACCEPTED-RESIDUAL: dead — `rg 'load_messages_with_metadata'` matches this definition and the docstring example block only; kept as the metadata-filter loader for a future consumer.
     def load_messages_with_metadata(self, 
                                   continuum_id: str, 
                                   user_id: str,

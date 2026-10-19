@@ -1,7 +1,33 @@
 #!/usr/bin/env python3
 """
-MIRA - Main Application Entry Point
-FastAPI server that wires together the CNS architecture and handles startup/shutdown.
+MIRA's FastAPI entry point and the one place the process is wired.
+
+`lifespan` constructs every process-global singleton in a fixed order and
+raises `RuntimeError` naming the failed component, so a broken dependency
+stops the boot instead of surfacing later as a degraded turn: thread-pool
+sizing, Vault secret preload, announcement, embeddings provider, continuum
+repository, model_configs routes, LLMProvider, dialect-registry warm-up, the
+lt_memory factory, and the CNS orchestrator. The Valkey flush then drops
+every key outside `clients.valkey_client.BOOT_FLUSH_PRESERVE_PREFIXES`;
+sessions, CSRF tokens, rate limits, pending memories, and compaction reports
+survive a restart only because they are in that tuple. Scheduled-job
+registration and `scheduler_service.start()` follow the orchestrator because
+the jobs are registered with its event bus. Shutdown drains in reverse order:
+scheduler, WebSocket connections, event bus, Valkey, the singletons, and the
+MCP session-manager task group last.
+
+`create_app` adds middleware in reverse-visibility order (CORS, when enabled,
+is registered last and therefore outermost), installs the handlers that map
+`APIError` codes onto HTTP status and flatten the auth ladder's error
+envelope, mounts the routers, and then mounts the browser client. Every name
+in `UI_BROWSER_FILES` is checked against `UI_BROWSER_DIR` at construction so a
+missing page fails the boot rather than the first request for it. The
+federation router and the MCP sub-app mount only under their config flags.
+
+`main` parses `--firehose`, serves under Hypercorn with HTTP/2 preferred, runs
+the pre-server POST gate before the port binds, and after a graceful shutdown
+exits `utils.self_restart.RESTART_EXIT_CODE` when a restart was requested, so
+the supervisor respawns the process instead of it lingering.
 """
 
 import argparse

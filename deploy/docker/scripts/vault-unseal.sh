@@ -1,6 +1,19 @@
 #!/bin/bash
-# Vault unseal script for s6-overlay container restarts
-# Simplified version without fancy output functions
+# Restart-time Vault unseal and root-token login, exec'd by the s6 oneshot
+# vault-init/up once Vault answers on 127.0.0.1:8200.
+#
+# Vault returns sealed on every container start: the unseal key and initial
+# root token persist in /opt/vault/init-keys.txt on the /opt/vault volume, but
+# the seal state does not. This script extracts `Unseal Key 1` and `Initial
+# Root Token` from that file and unseals only when `vault status` reports
+# sealed; an already-unsealed Vault is left alone.
+#
+# No `set -e` by design: `vault status` exits 2 when sealed, which is the
+# expected branch here, and errexit would abort every sealed restart before
+# the unseal ran. Each failure path checks its own condition and exits 1 — a
+# missing keys file, an unextractable key or token, an unexpected status code
+# — which fails the oneshot, so the mira longrun never starts against a Vault
+# it cannot read.
 
 export VAULT_ADDR="http://127.0.0.1:8200"
 

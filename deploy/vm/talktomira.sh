@@ -8,6 +8,12 @@
 # message to /v1/api/chat, and prints the reply text. Long turns block their
 # HTTP call — we wait up to 15 min and stream nothing back until it lands.
 #
+# Unlike every other driver in this directory it does not source lib.sh: the
+# whole request runs on the libvirt host (`ssh "$HOST" … 'bash -s'`) against the
+# VM's API, so no payload is ever pushed into the VM. That remote block needs a
+# heredoc, and the heredoc IS its stdin — the one sanctioned place without
+# `ssh -n`.
+#
 # Environment overrides:
 #   MIRA_HOST   ssh target of the libvirt host (required; no default — export
 #               it or pass --host USER@HOST)

@@ -1,10 +1,28 @@
 """
-InboxPollerService — Polls IMAP inbox for unread emails during active
-conversation segments.
+InboxPollerService — polls an IMAP inbox for unread email headers while a
+conversation segment is active.
 
-Subclass of SegmentPoller. Publishes unread email headers to EmailTrinket
-so Mira can mention them to the user. No email bodies are fetched — just
-From, Subject, Date, and UID for token economy.
+The only SegmentPoller subclass. Each cycle logs in, searches UNSEEN, and
+fetches From/Subject/Date for the newest MAX_UNREAD_EMAILS messages, publishing
+them as the EmailTrinket snapshot so the model can mention mail the user never
+shows it. No bodies are fetched.
+
+Two properties a cycle must preserve. The mailbox is opened with
+`select(readonly=True)` and headers are read through `BODY.PEEK`, so polling
+never sets \\Seen — a plain FETCH would mark the user's mail read as a side
+effect of a chat turn, destructive and invisible to them. And each UID is
+namespaced `folder:uid`, because IMAP UIDs are unique only within one folder.
+
+Failure classification follows the base contract: an empty UNSEEN result
+returns `[]` and renders as "no unread mail", while a failed login, select, or
+fetch returns None so the trinket keeps serving its last snapshot through the
+outage. Every exception in the cycle becomes None for the same reason rather
+than escaping into the poll thread. The IMAP socket timeout is 15s against the
+base's 5s stop join, so a cycle in progress outlives a segment collapse.
+
+Credentials come from the user's `email_tool` config, hydrated through the tool
+config store; a config missing `imap_server`, `email_address`, or `password`
+logs the missing field names and returns None — no poller start, no exception.
 """
 import email
 import email.header

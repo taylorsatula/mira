@@ -1,4 +1,16 @@
-"""Location context trinket — injects user's location, sunrise/sunset, and 2-hour forecast into system prompt."""
+"""
+Renders location, sun times, UV index, and the next two hours of forecast.
+
+Content comes from the Valkey key `location:{user_id}`, written by the
+`POST /location` endpoint when the browser client's page loads; this trinket
+does no fetching of its own. A missing key, or one carrying no location name,
+no forecast, and no sunrise, renders nothing and the slot is absent from the
+prompt.
+
+Known defect in the rendering: every UV index below 11 is labelled "(Very
+High)", so a low index reaches the model as a high one and nothing downstream
+corrects the label.
+"""
 import html
 import json
 import logging

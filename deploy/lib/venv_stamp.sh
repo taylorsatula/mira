@@ -9,6 +9,10 @@
 # pip-installed by hand are not in it, and a matching stamp keeps the venv
 # as-is (those packages survive). `deploy/update.sh --rebuild-venvs` is the
 # escape hatch when the live venv itself is wrong.
+#
+# write_venv_stamp must be the caller's last statement: a stamp written before
+# the extras install claims extras the venv does not have, and every later
+# update then matches it and skips the install that would have added them.
 
 VENV_STAMP_FILE=".mira-build-stamp"
 

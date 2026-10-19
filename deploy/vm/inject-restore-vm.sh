@@ -4,6 +4,19 @@
 # payload staged at $1 (default /tmp/inject-sarc). VM_USER (default ubuntu)
 # remaps ownership + unit User= lines when the sarcophagus was captured on a
 # VM with a different user (e.g. ubuntu → mira_service).
+#
+# Order is the contract. Step 0 re-scans for `user_lock:*` because a turn can
+# start between the caller's gate and the payload landing. Vault is stopped
+# before /opt/vault is replaced (a running vault rewrites its storage
+# mid-copy). `data` is chowned to $VM_USER and the unit User=/Group= lines are
+# remapped before mira starts (root-owned sqlite answers `readonly database`,
+# and the unit runs mira as $VM_USER). Valkey restarts only while mira is
+# stopped.
+#
+# The captured authorized_keys is deliberately not restored: the operator's own
+# key already reaches the VM, and instance credentials are what the archive is
+# for. Step 8's venv reinstall warns instead of aborting — a failed pip leaves a
+# venv that may still match the restored code.
 set -euo pipefail
 SRC="${1:-/tmp/inject-sarc}"
 VM_USER="${VM_USER:-ubuntu}"
@@ -77,7 +90,7 @@ sudo -n systemctl daemon-reload
 # A copied conf is inert until valkey re-reads it — daemon-reload re-reads unit
 # files, not the running process — so restart valkey when a restored conf was
 # actually staged (gated on the cp's own condition). Unit name per distro, same
-# detection as deploy/finalize.sh:66-69: Ubuntu ships valkey-server.service,
+# detection as deploy/lib/services.sh:resolve_valkey_unit: Ubuntu ships valkey-server.service,
 # Fedora ships valkey.service. mira is still stopped here, so nothing depends
 # on valkey mid-restart; volatile in-memory state is disposable by design.
 if [ -f "$SRC/systemd/valkey.conf" ]; then

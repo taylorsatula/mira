@@ -1,15 +1,19 @@
 """
-Subcortical layer service for retrieval-optimized query expansion.
+Subcortical layer: retrieval-optimized query expansion, retention, entities,
+and the effort assessment the turn's thinking budget is derived from.
 
-Transforms fragmentary user queries into detailed, specific queries
-optimized for finding relevant memories via embedding similarity.
+Key principle: the expansion REPLACES the original query for retrieval rather
+than augmenting it.
 
-Key principle: The query expansion REPLACES the original query for retrieval,
-rather than augmenting it. Research showed this approach outperforms
-query augmentation for personal memory search.
-
-Also handles memory retention decisions - evaluating which previously
-surfaced memories should remain in context based on conversation trajectory.
+Three mechanisms a caller must know. `get_effort_level` emits only "low" and
+"high": "medium" is missing from several providers' effort ladders, so
+deriving it here 400s every straightforward turn. `_build_user_prompt` is the
+byte-exact shared source for the real call and for the speculative
+`warm_cache` request, and that identity is the whole vLLM prefix-cache hit — a
+divergence breaks the optimization silently, without touching the response.
+And retention pins are a union: the LLM's picks plus every memory ID already
+cited in the conversation turns, so a memory the model referenced this turn
+cannot be dropped from context by a retention miss.
 """
 import contextvars
 import html

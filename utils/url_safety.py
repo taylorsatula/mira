@@ -1,4 +1,21 @@
-"""Public HTTP URL validation for tool-controlled outbound requests."""
+"""
+Public HTTP URL validation for tool-controlled outbound requests.
+
+``validate_public_http_url`` answers two questions and returns both halves: is
+this URL allowed (scheme, no userinfo, hostname not a known-metadata name,
+every resolved address global rather than private/loopback/link-local), and
+which exact IP should the connection target. Callers must connect to
+``ValidatedURL.resolved_ip`` — resolving the hostname a second time at connect
+reopens the DNS-rebinding window the validation just closed, which is why
+``utils/http_client.pinned_request`` exists.
+
+IPv6 transition ranges that embed IPv4 in their low 32 bits (NAT64
+``64:ff9b::/96``, deprecated ``::/96``) are rejected explicitly: CPython
+reports them as global, so ``is_global`` alone would pass a URL smuggling
+``169.254.169.254``. Every address the resolver returns is checked, not just
+the first, so a host that resolves to one public and one private address is
+refused.
+"""
 
 from __future__ import annotations
 

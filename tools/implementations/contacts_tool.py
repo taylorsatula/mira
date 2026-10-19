@@ -1,9 +1,20 @@
 """
-Simple contacts management tool.
+Contacts CRUD over the per-user SQLite `contacts` table.
 
-This tool provides basic contact management functionality including
-adding, retrieving, listing, and deleting contacts. Each contact has
-a UUID for unique identification and can be linked to other tools.
+Every column holding user text is declared `encrypted__`-prefixed, so the store
+decrypts on read and encrypts on write. That is why the tool never queries the
+name column in SQL: duplicate detection and name lookup load the rows and
+compare the decrypted values in Python, and output dicts keep the
+`encrypted__` storage keys for the API boundary to project.
+
+An identifier-addressed lookup resolves UUID first, then exact name, then name
+prefix, then substring, and the outcome decides the shape of the reply. A
+unique match acts. Several matches return a `success: False` dict carrying
+`ambiguous` — or `needs_confirmation` with the candidate, for a partial-name
+match on delete or update — so the model can re-ask with a UUID. No match at
+all raises `ContactNotFoundError`, a ValueError subclass, because a returned
+`success: False` flag lets a caller report success on an absent resource; the
+API maps that raise onto its 404 envelope.
 """
 
 import json

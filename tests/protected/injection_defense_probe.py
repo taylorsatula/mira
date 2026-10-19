@@ -171,6 +171,9 @@ from utils.untrusted_content import (  # noqa: E402
 logging.getLogger("utils.untrusted_content").setLevel(logging.ERROR)
 logging.getLogger("http_client").setLevel(logging.ERROR)
 
+# CROSS-FILE-COUPLING: utils/untrusted_content.py's SCREEN_QUESTIONS is unpacked
+# positionally here, so a question added, removed, or reordered there must be
+# re-mapped into these six names in the same change.
 O, A, D, X, F, E = SCREEN_QUESTIONS  # short names for target labels
 
 

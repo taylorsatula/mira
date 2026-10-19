@@ -1,8 +1,20 @@
 """
-Event Bus Implementation for CNS
+The in-process event bus every CNS component publishes through.
 
-Provides event publishing and subscription for CNS components.
-Integrates CNS events with existing MIRA components for system coordination.
+Dispatch is a dict lookup on the event's exact `__class__.__name__`, with no
+MRO walk: a handler subscribed to a category class such as `MessageEvent`
+hears nothing, because nothing is ever published under a category name.
+`subscribe()` is the only validating call — it resolves the name against a
+live `ContinuumEvent.__subclasses__()` walk and raises ValueError for an
+unknown one, so a renamed event class breaks boot instead of stranding its
+subscriber. `publish()` validates nothing: an event with no subscribers is a
+DEBUG-only no-op.
+
+Delivery is synchronous, inline on the publisher's thread, at most once. A
+subscriber that raises is logged with its traceback and skipped — no retry,
+no requeue, and the publisher never learns — while the remaining subscribers
+still run. A handler that blocks therefore stalls every later subscriber and
+the turn that published.
 """
 from __future__ import annotations
 

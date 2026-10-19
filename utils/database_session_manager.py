@@ -1,8 +1,26 @@
 """
-Database session management for LT_Memory with proper lifecycle and transaction support.
+Database session management: the process-wide connection pool and the two
+session types every Postgres read in MIRA goes through.
 
-Provides session-based database access with connection pooling, automatic cleanup,
-and transaction management following MIRA's architectural patterns.
+``LTMemorySession`` is user-scoped: it sets ``app.current_user_id`` on the
+connection at ``__enter__``, which is what armed row-level security reads to
+decide visibility. ``AdminSession`` deliberately sets nothing — its pool
+authenticates as ``mira_admin``, a BYPASSRLS role, so resetting the setting
+would leave cross-user queries silently returning no rows instead of all
+rows.
+
+One pool per database name, created lazily and shared process-wide
+(``get_shared_session_manager``); the pool's ``configure`` hook registers
+pgvector once per physical connection, so no session registers it again. Keep
+the pools small and let callers queue — this module does not bound concurrency
+beyond the pool size.
+
+Exit contract: on success the session commits, and a commit failure re-raises
+(preserving the driver's exception type) so no caller reports success over data
+that never persisted; while an exception is already propagating, a failing
+rollback is logged only, never raised, so the original failure is not masked.
+A connection that dies between pool checkout and setup is returned to the pool
+before the error propagates, or the pool slot leaks one connection per failure.
 """
 
 import time

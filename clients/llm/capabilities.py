@@ -1,4 +1,14 @@
-"""Capability declarations and validation for LLM dialects."""
+"""The pre-transport capability gate: what a dialect can do versus what a request needs.
+
+Each dialect declares a frozen `Capabilities` as a class attribute
+(`Dialect.capabilities`, all-False by default, overridden by a transport that
+supports more). `Capabilities.validate` compares it against the request's
+`Requirements` and raises `CapabilityError` naming every unsupported flag at
+once, so the failure lands before any bytes reach the provider — the
+alternative is a provider-side 400 the caller has to decode. The gate only
+works if something actually calls `validate`; a new request path that skips it
+ships a requirement no dialect was checked against.
+"""
 
 from __future__ import annotations
 

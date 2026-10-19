@@ -360,6 +360,14 @@
 <script src="/assets/javascript/sidebar.js?v=ui-20261012"></script>
 
 <script>
+/*
+  Settings hub controller: the six hash tabs (#profile, #general, #credentials,
+  #tools, #automations, #developer) over a `pageLoaders` registry — a tab's
+  loader runs again on every navigate to that tab. #general has no loader; its
+  Appearance select and Edit Memories button bind once at DOMContentLoaded.
+  Adding a tab is a nav link, a .page-section, and a pageLoaders entry when the
+  tab fetches anything.
+*/
 document.addEventListener('DOMContentLoaded', () => {
 	const defaultHash = '#profile';
 	const navLinks = document.querySelectorAll('.page-tab');

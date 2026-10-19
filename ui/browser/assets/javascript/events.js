@@ -1,21 +1,23 @@
 /**
- * EVENTS.JS - Event Handlers & User Interaction
+ * EVENTS.JS — the chat page's DOM wiring: send and stop, keyboard, the file
+ * picker and image paste, popover open/close, and the Retry Send buttons.
  *
- * PURPOSE:
- * Wires DOM events on the chat page to application functions: send/stop,
- * keyboard shortcuts, attachments (picker and image paste), popover
- * open/close, and the retry-queue actions.
+ * Three paths reach a send — the form's submit, the send button's click, and
+ * Enter on a desktop keyboard — and each one checks `.stop-mode` first, so the
+ * same button stops a running turn instead of starting a second one.
  *
- * DEPENDENCIES:
- * - core.js: AppState, elements
- * - messaging.js: sendMessage, cancelGeneration, handleFileSelect, downscaleImage, queue operations
- * - ui.js: popover toggles, updateAttachmentPopover, updateAttachmentCount, hapticFeedback
+ * The send button's `pointerdown` preventDefault is load-bearing on iOS: focus
+ * has to stay in the textarea, or tapping collapses the keyboard, the visual
+ * viewport resizes mid-tap, and the synthetic click lands where the button no
+ * longer is.
  *
- * DEPENDENTS:
- * - core.js calls setupEventListeners and setupDelegatedEvents at startup
+ * `setupDelegatedEvents` binds the retry-queue buttons once, on
+ * `#queue-messages`, so the rows messaging.js re-renders stay clickable without
+ * rebinding. Everything else binds directly at startup against ids captured by
+ * core.js's `elements`, so it must run after `initializeMira` has built the
+ * client.
  *
- * LOAD ORDER:
- * Last of the chat modules (after core.js, ui.js, messaging.js, history.js).
+ * Load order: last of the chat modules.
  */
 
 // ========================================

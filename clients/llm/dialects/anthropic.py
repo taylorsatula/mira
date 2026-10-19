@@ -1,4 +1,51 @@
-"""Anthropic dialect for the provider-neutral LLM boundary."""
+"""Anthropic Messages API dialect: the `Dialect` behind every Anthropic route.
+
+Requests go through the SDK's beta messages surface with
+`betas=ANTHROPIC_BETA_FLAGS` (the code-execution and files-API flags), and a
+`CODE_EXECUTION` server tool block is inserted ahead of the caller's tools
+whenever tools are sent. The credential is mandatory: Anthropic cannot serve an
+unauthenticated request, so `from_selection` raises `PermissionError` instead of
+sending an anonymous one the way the OpenAI family does.
+
+Thinking translation has two regimes and `thinking.uses_adaptive_thinking(model)`
+picks one. Adaptive models take `output_config.effort` natively; legacy models take
+`thinking.budget_tokens`, derived from `_LEGACY_BUDGET_PER_EFFORT` when the caller
+gave only an effort level. Converting between the two knobs is a documented
+mapping, so it stays silent; a discarded knob, a clamped effort, or a budget
+reduced to fit under `max_tokens` (the reduction runs last, after every clamp)
+logs a `TranslationNote`. `effort="none"` never becomes an effort value —
+Anthropic has no "none" level — so it resolves to
+`thinking: {"type": "disabled"}`, an explicit disable because the default flips
+from off to on across model generations.
+
+Message conversion buffers `tool` messages into one user message, the packing the
+API requires. Assistant content accepts both content-block `tool_call` entries
+and the OpenAI family's key-form `tool_calls`, because stored history replays
+through whichever dialect serves the next turn, and a duplicate id is emitted
+once. Reasoning blocks pair positionally with `thinking_signatures`: an unpaired
+reasoning block or a leftover signature raises `ProviderProtocolError` by design,
+because unsigned reasoning written by an OpenAI-family route must not replay as
+signed thinking; recovery is a stored-history rewind or a segment collapse.
+
+Failure normalization: `_raise_anthropic_error` maps status codes onto the
+`base.py` taxonomy, matching only the documented overflow phrases on a 400 — a
+bare "context" substring fires on ordinary 400s. An unknown `stop_reason` wraps as
+`ProviderProtocolError` rather than letting `coerce_stop_reason`'s `ValueError`
+out, because the WS turn classifier reads ValueError as `TURN_VALIDATION_FAILED`
+and skips overflow remediation.
+
+`request.temperature` is never sent: current models pin temperature=1 and SDK 1.x
+removed the parameter. The SDK read window is a fixed long timeout sized to
+`config.api.provider_response_timeout`, so the stall bound and the socket bound
+stay equal; `config.api.timeout` reaches `from_selection` and is deliberately not
+applied. Streaming retries the overload case only before the first event is
+yielded — a restart mid-stream would re-yield text the client already received.
+
+The file-artifact path is UNTESTED against live infrastructure; Anthropic's
+artifact support is known buggy. `anthropic_thinking_params` and
+`normalize_anthropic_message` have no importer anywhere in the repo and are
+dead — do not build on them.
+"""
 
 from __future__ import annotations
 

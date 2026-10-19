@@ -1,11 +1,19 @@
 """
-Document processing for multi-turn context.
+Document processing for multi-turn context: PDF, DOCX, XLSX, CSV, JSON and TXT
+into provider-neutral extracted text for any fixed model route.
 
-Processes PDF, DOCX, XLSX, CSV, JSON, and TXT into provider-neutral text
-for any fixed model route.
+Extraction is local for every format; a provider-side file ID cannot cross the
+provider-neutral boundary. The stdlib extractors (``_extract_docx_stdlib``,
+``_extract_xlsx_stdlib``) are the normal path, not a fallback: the optional
+python-docx/openpyxl imports are commented out of ``requirements.txt``, so on a
+shipped install ``HAS_DOCX``/``HAS_OPENPYXL`` are false and this code is hot.
 
-Optional dependencies (python-docx, openpyxl) provide richer extraction
-but are not required - falls back to stdlib XML parsing.
+Zip containers are validated before parsing (``validate_office_zip``: entry
+count, per-entry and total uncompressed size, compression ratio, zero-compressed
+entries) because a document is attacker-supplied input, and the extracted text
+is capped so one document cannot exhaust a request's context. Non-UTF-8 text is
+refused rather than decoded into mojibake, and a PDF with no extractable text
+raises instead of returning an empty document that reads as "nothing here".
 """
 import logging
 import re

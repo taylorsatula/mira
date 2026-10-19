@@ -1,9 +1,22 @@
 """
-Chat API endpoint - simple request/response over HTTP.
+One synchronous HTTP chat turn: `POST /chat`.
 
-Provides a non-streaming JSON API to send a user message and receive
-the assistant's response plus structured metadata. Authenticated via
-Bearer token (header) or session cookie.
+The request acquires the per-user turn lock before size validation (the
+oversized-message path persists a message, so it is ordered like a real turn),
+runs the orchestrator's tool loop inside a UnitOfWork this module commits, and
+releases the lock in a `finally`. Three orderings are load-bearing. A failure
+after the message is accepted still commits the staged user message before the
+exception propagates, because the client was told the message was received. The
+lock is renewed just before the commit so a long turn cannot race its own lock
+expiry. `trigger_restart_if_pending()` runs after the response dict exists, so
+hypercorn's graceful shutdown drains this request before a pending restart ends
+the process.
+
+`_HTTP_TURN_LOCK_TTL_SECONDS` is the only derivation of the turn-lock TTL;
+`websocket_chat.py` imports it as `_TURN_LOCK_TTL_SECONDS` rather than deriving a
+second one, because a drifting TTL lets a legal turn outlive its lock.
+`_BUSY_REJECTION_MESSAGE` is imported by `mcp.py` to key its busy mapping, so it
+is changed here and nowhere else.
 """
 import base64
 import logging

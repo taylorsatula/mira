@@ -3,6 +3,23 @@
 # Source this file - do not execute directly
 #
 # Requires: LOUD_MODE variable to be set (default: false)
+#
+# Every line the scripts that source this file print, and every command they
+# run, goes through this family: the print_* functions for text, run_quiet /
+# run_with_status / show_progress for commands. LOUD_MODE is the one verbosity
+# switch, and it defaults to false — a caller that echoes or runs a command
+# bare floods the quiet install and makes --loud stop meaning anything.
+#
+# run_with_status's quiet branch captures the command's output to a temp file
+# and replays its tail on failure, because a bare failure glyph leaves the
+# operator nothing to diagnose from; its loud branch marks a failure
+# explicitly, because a command that fails silently (e.g. `test -s`) would
+# otherwise die under `set -e` with no line printed at all.
+#
+# The palette variables are an export, not private: deploy/config.sh bakes the
+# STATUS_* strings from CHECKMARK / WARNING / DIM / RESET at interview time,
+# so renaming a constant here breaks rendering in every phase script that
+# prints a STATUS_* value.
 
 # ANSI color codes (muted/professional palette)
 RESET='\033[0m'
@@ -87,6 +104,9 @@ run_with_status() {
 }
 
 # Progress spinner for long operations
+# Takes the PID of an already-backgrounded command ($!), never a command: the
+# caller owns the `&`, because the spinner has to observe the process while it
+# runs.
 show_progress() {
     local pid=$1
     local msg=$2

@@ -1,9 +1,20 @@
 #!/bin/bash
-# extract-stage-vm.sh — stage all sarcophagus components under /tmp/sarc-v2 (in the VM).
+# deploy/vm/extract-stage-vm.sh — the in-VM half of extract: stage every
+# sarcophagus member under /tmp/sarc-v2 and self-check the staged checksums.
+#
+# Run as `$VM_USER` over ssh by extract.sh, which pulls the stage afterwards.
+# Live services are not touched: pg_dump is transactional, each sqlite database
+# is snapshotted through the `.backup()` API and that snapshot then replaces the
+# copied live file (with its -wal/-shm dropped — tarring a live WAL seals a torn
+# database that still checksums clean), and vault storage has been quiescent
+# since provision. sudo -n is used only where $VM_USER cannot read: postgres
+# operations, and /etc/valkey (root:valkey, 0750).
+#
+# The systemd stage is a loud completeness check: a missing unit or valkey.conf
+# aborts here rather than sealing a sarcophagus that restores a broken VM.
+# `home-ubuntu.tar.gz` is that archive's literal name whatever $VM_USER is —
+# inject-restore-vm.sh reads the name, not the user.
 VM_USER="${VM_USER:-ubuntu}"
-# Run as user `$VM_USER` over ssh. Uses sudo -n only for postgres operations.
-# Live services are NOT touched: pg_dump is transactional, sqlite uses the
-# consistent .backup() API, vault storage has been quiescent since provision.
 set -euo pipefail
 STAGE="${SARC_STAGE:-/tmp/sarc-v2}"
 APP=/opt/mira/app

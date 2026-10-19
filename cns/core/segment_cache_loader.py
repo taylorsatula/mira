@@ -1,7 +1,29 @@
 """
-Segment Cache Loader for CNS.
+Rebuilding a continuum's message cache when Valkey holds none.
 
-Loads context for new sessions with segment summaries and session boundary markers.
+The cache is invalidated by segment collapse — an epoch bump, not a TTL — so
+a load runs when a user returns to a conversation that has since collapsed.
+Entry is `load_session_cache`, which sets the user contextvar itself: every
+repository call inside resolves the user from it, RLS fails closed, and an
+unset contextvar yields an empty cache instead of an error.
+
+Two selection tiers draw from one candidate pool, newest first. Tier 1 takes
+extended summaries while accumulated `complexity_score` stays within
+`SESSION_SUMMARY_COMPLEXITY_LIMIT`, capped by count too, with the newest
+segment always admitted even when it alone exceeds the limit. Tier 2 resumes
+where tier 1 stopped and takes further segments that carry a non-empty
+`precis`. Tier 2 copies are stamped `display_mode='precis'`; that stamp
+reaches the Valkey cache and stops there, because these sentinels are re-read
+from Postgres on the next load.
+
+The ordering contract: the returned list is chronological end to end, so
+`segment_summaries[-1]` is the newest collapsed segment. The session boundary
+marker reads that tail for its gap line, so reordering the concatenation
+makes the boundary state the wrong session's end time.
+
+Primer turns are parsed once in `__init__` and those same `Message` instances
+enter every user's cache; they are never persisted, so nothing may stamp
+per-user data onto their metadata.
 """
 from __future__ import annotations
 

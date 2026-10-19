@@ -1,4 +1,20 @@
-"""Direct memory extraction through MIRA's fixed background model route."""
+"""
+The single extraction execution path, and the only storage path it writes through.
+
+``DirectExecutionStrategy.execute_extraction`` builds one payload per chunk,
+calls ``generate_response(model_config="batch")`` synchronously, hands the raw
+response text to ``memory_processor``, and stores through
+``store_and_tend_extraction``. There is one strategy; ``create_execution_strategy``
+returns it. No deferred or remote submission layer exists, so the segment's
+mark in the orchestrator waits on a completed call, not on a queued one.
+
+``store_and_tend_extraction`` orders durability before tending: the embedding
+write plus INSERT is a plain non-idempotent insert, and the orchestrator marks
+the segment only after this whole call returns. Every post-store step — entity
+links, candidate hints, the ``on_memories_stored`` callback — is therefore
+tolerate-and-log; a raise from one of them would surface as an unmarked segment
+whose next sweep re-inserts the same memories.
+"""
 
 from __future__ import annotations
 

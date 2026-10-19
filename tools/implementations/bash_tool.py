@@ -276,6 +276,10 @@ def _compile_blocklist(
     pattern layer sees, so it fires before quoting is removed. Compiled by the
     handlers (not the validator) and passed in as inert data; the protected
     battery's purity walk never sees a compiler.
+
+    tests/protected/bash_guardrail_probe.py calls this directly with its
+    `BLOCKED_CASES` patterns and pins the `*`-crosses-newlines contract; a
+    change to that relaxation is proven there or not at all.
     """
     compiled = []
     for raw in patterns:
@@ -755,6 +759,8 @@ def _classify_path(
 # install), and that history is the undo for anything MIRA changes in it —
 # `git diff` shows the change, `git stash` sets it aside, one command reverts
 # it. A tree with that undo is ordinary editable material, not a system path.
+# tests/protected/bash_guardrail_probe.py imports this name as `mbt._APP_ROOT`
+# for its guardrail-self-edit cases; renaming it aborts that battery at import.
 _APP_ROOT = Path(__file__).resolve().parents[2]
 
 

@@ -1,8 +1,20 @@
 """
-Update Check API endpoint - version update notification.
+Version surface: two public probes and one authenticated status read.
 
-Public endpoint that checks if a newer MIRA version is available.
-Logs check requests with timestamp and IP to data/update_checks.log for analytics.
+`GET /check_update` compares a caller-supplied version against this instance's
+own and declines to compare when either side does not parse, rather than
+guessing. `GET /check_remote_update` proxies miraos.org server-side so browsers
+dodge CORS, and answers "no update" on any upstream failure.
+`GET /update_status` returns the cached verdict of the daily server-side check —
+the per-install fact a client renders as an update notice, which is why it is the
+one authenticated route here.
+
+The check log (`data/update_checks.log`, rotating) records the client-supplied
+version only through `_sanitize_log_field`, which keeps it on one physical line.
+That keeps forgeries visible in the log while denying a caller a free 4xx oracle
+for probing the log format. `X-Forwarded-For` is ignored on purpose: the header
+is client-controlled and no proxy is deployed, so the socket peer is the only
+honest address available.
 """
 import json
 import logging

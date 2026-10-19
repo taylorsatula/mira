@@ -1,4 +1,17 @@
-"""Proactive memory trinket for displaying relevant long-term memories."""
+"""
+Renders the long-term memories surfaced for this turn, and holds them.
+
+`generate_content` reads `context['memories']` when the orchestrator supplies
+it and otherwise re-renders the previous turn's list, so the section survives
+a compose that carries no new surfacing. The same per-user cache backs
+`get_cached_memories()`, which the orchestrator reads to decide whether last
+turn's memories are still relevant.
+
+The cache is per-user in memory and segment collapse does not flush it — the
+trinket is stateless by base class for exactly that reason. That is correct
+only while the orchestrator republishes every turn; a reader of the cache on
+any other cadence sees memories from before the collapse.
+"""
 import html
 import logging
 from typing import List, Dict, Any, TYPE_CHECKING

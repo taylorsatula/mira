@@ -1,10 +1,17 @@
 """
-Feedback synthesis tracking for the user model pipeline.
+Synthesis timing and stored output for the user model pipeline.
 
-Determines when user model synthesis should run using modular arithmetic
-on cumulative_activity_days (every N use-days). Stores a snapshot of the
-activity day counter when synthesis last ran — completely stateless,
-no counters to reset.
+Timing is a comparison, not a counter: `should_synthesize()` fires when the
+user's cumulative activity days land on a multiple of the threshold and have
+advanced past the snapshot taken at the last run, so no cycle has to reset
+anything. A user with no tracking row never synthesizes — the row that
+`initialize_user()` writes at account creation is the precondition, and its
+absence makes `should_synthesize()` return False on every call.
+
+Check-in feedback has two read modes, and a caller picks one deliberately:
+`get_checkin_response()` peeks, `get_and_clear_checkin_response()` consumes
+atomically. A path that consumes before its fallible work finishes destroys
+the user's feedback on the first failure.
 """
 from __future__ import annotations
 

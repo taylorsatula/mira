@@ -1,11 +1,19 @@
 """
-Domaindoc Trinket - Injects enabled domain knowledge documents with section awareness.
+Renders enabled domaindocs as section trees with per-section display state.
 
-Reads from SQLite storage and formats content with expand/collapse state.
-Supports two levels of nesting (section → subsection → sub-subsection).
-Collapsed sections show only headers; expanded sections show full content.
-When a parent is collapsed, ALL its descendants are hidden.
-Pinned sections are always expanded regardless of collapsed state.
+Content is per-user SQLite. Personal docs and the docs other users have shared
+with this user render together; a share is looked up in the owner's database,
+so one unreadable share is logged and skipped rather than failing the section.
+
+One tree walk per document produces three outputs at once — the collapsed /
+expanded state listing, the section index, and the document text. The index is
+emitted unconditionally, including for sections the document body hides,
+because it is the table of contents the model navigates with. Pinned sections
+override their collapsed flag, and a collapsed parent hides every descendant.
+
+Rows are read with `db.fetchall()` and decrypted by hand through
+`db._decrypt_dict()`; only `db.select()` decrypts implicitly. Dropping that
+call puts Fernet ciphertext into the prompt with nothing raised at fetch time.
 """
 import html
 import logging

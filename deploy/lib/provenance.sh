@@ -5,6 +5,18 @@
 #
 # Requires: lib/services.sh (run_bounded) and lib/repo_identity.sh
 # (mira_github_repo) sourced first
+#
+# RELEASE_COMMIT is injected here at build time and never committed: the
+# builder refuses a tag whose tree tracks it, because a committed copy names
+# the commit before it and every install from that tree records the wrong
+# provenance. A tree without it is a pre-provenance tree, and the updater
+# resolves that tag's commit through resolve_release_sha instead (release tags
+# may be lightweight, so the peeled ^{} entry wins only when it is listed).
+#
+# build_release_artifact prints only the asset path on stdout — everything a
+# human or the release script reads goes to stderr — and any failed gate
+# produces no asset at all, so a caller that trusts stdout cannot pick up a
+# partial artifact.
 
 # Prints the 40-hex SHA recorded in <tree>/RELEASE_COMMIT. Returns 1 for a
 # pre-provenance tree (file absent, empty, or not exactly 40 lowercase hex).

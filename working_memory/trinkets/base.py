@@ -1,9 +1,26 @@
 """
-Event-aware base trinket class.
+The two trinket base classes and the publish cycle every trinket runs.
 
-Provides common functionality for all trinkets to participate in the
-event-driven working memory system. Persists content to Valkey for
-API access and monitoring.
+Constructing a trinket registers it in `WorkingMemory` on the spot — there is
+no discovery pass, so a trinket whose constructor never runs is absent from
+every compose with no error anywhere. `variable_name` is checked in
+`__init__` because it keys both the composer's section and the field this
+trinket writes in the `trinkets:{user_id}` Valkey hash.
+
+`handle_update_request` renders, then either persists the content and
+publishes a `TrinketContentEvent` carrying `cache_policy`, or deletes the
+Valkey field and publishes nothing. Failures from `generate_content` are left
+to propagate: `WorkingMemory._handle_update_trinket` is the isolation
+boundary, and it classifies by exception type. A trinket that catches its own
+failure and returns `""` therefore reports an outage as an empty section and
+the classification never fires.
+
+`StatefulTrinket` overlays a per-user turn counter fed by
+`TurnCompletedEvent` and calls `_expire_items()` on each turn; a True return
+re-renders through `publish_trinket_update`. The counter is keyed by the
+contextvar's user, never by an instance attribute. Segment collapse is not
+subscribed here — `WorkingMemory._flush_stateful_trinkets` clears every
+stateful trinket centrally.
 """
 import json
 import logging
@@ -26,16 +43,12 @@ TRINKET_KEY_PREFIX = "trinkets"
 
 class EventAwareTrinket(ABC):
     """
-    Base class for event-driven trinkets.
+    Base for a trinket that renders one prompt slot on request.
 
-    Trinkets inherit from this class to:
-    1. Receive update requests via UpdateTrinketEvent
-    2. Generate content when requested
-    3. Publish their content via TrinketContentEvent
-
-    Subclasses must define these class attributes:
-        variable_name: str  — section name in the composed prompt
-        cache_policy: bool  — whether to use prompt caching (default False)
+    Subclasses define two class attributes:
+        variable_name: str  — section name in the composed prompt; also the
+            Valkey hash field. Falsy raises `TypeError` at construction.
+        cache_policy: bool  — prompt-cache eligibility (default False).
     """
 
     variable_name: str

@@ -1,8 +1,18 @@
 """
-Federation webhook endpoint for receiving messages from Lattice.
+The inbound Lattice webhook: one federated message written into a local user's pager.
 
-This endpoint receives validated, de-duplicated messages from the Lattice
-discovery daemon and delivers them to local users via the pager tool.
+Lattice has already verified the sender's signature, applied rate limits,
+de-duplicated the message and resolved the recipient to a `user_id`, so the only
+work left here is delivery — `PagerTool.deliver_federated_message`, the pager's
+write-only entry.
+
+The HTTP status is Lattice's retry contract: 4xx means permanent and it will not
+retry, 5xx means temporary and it will. An unverified sender is therefore 400 and
+an unexpected server-side error is wrapped as 500.
+
+Delivery installs the recipient's `user_id` contextvar, because the pager
+resolves its user from it, and clears the context in `finally`; leaving it set
+would carry one user's scope into whatever the worker runs next.
 """
 
 import logging

@@ -1,4 +1,19 @@
 
+"""
+The APScheduler wrapper every scheduled job is registered through.
+
+``register_job`` records the registration and, once the scheduler is started,
+adds it to the live scheduler as well. ``start`` adds every already-registered
+job before calling APScheduler's ``start()``: adding a job to an already-running
+scheduler makes APScheduler recalculate schedules after each addition, and
+registering jobs one at a time against a running scheduler is the shape this
+ordering exists to avoid.
+
+``stop`` shuts down without waiting, because ``AsyncIOExecutor`` ignores
+``wait=True`` anyway; a job stuck in a thread cannot be waited on.
+
+``scheduler_service`` is the process singleton ``main.py`` wires.
+"""
 import logging
 from typing import Dict, Callable
 from dataclasses import dataclass

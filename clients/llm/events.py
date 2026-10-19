@@ -1,4 +1,13 @@
-"""Provider-neutral stream event types for live LLM calls."""
+"""The provider-neutral stream-event union a live call yields, plus the cancellation exception.
+
+Every subclass of `StreamEvent` fixes its own `type` discriminator string with
+`init=False`, so a consumer can switch on `event.type` or on the class and the
+two agree by construction. Two facts a consumer must hold: `GenerationCancelled`
+subclasses `Exception`, not `StreamEvent` — a user halt arrives as a raise from
+the iterator and can never appear as an event — and this module defines the
+union only, while several members are produced outside the directory, so an
+event type with no producer here is not dead code.
+"""
 
 from __future__ import annotations
 

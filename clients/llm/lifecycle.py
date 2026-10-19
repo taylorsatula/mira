@@ -1,4 +1,22 @@
-"""Shared fail-loud lifecycle for fixed-route LLM calls."""
+"""The one wrapper every live provider call runs inside: stall bound, cancellation, billing stamp.
+
+`complete` and `stream` both drive `_run`, which pulls the dialect's event
+iterator one item at a time through `_run_with_response_timeout`. That method
+runs each `next()` on a worker thread and polls it in short slices rather than
+waiting out one bounded join, so a cancel event interrupts a stalled pull
+instead of going unnoticed for the whole stall window; on either a cancel or
+the stall deadline it calls `dialect.abort_active_stream()` before raising,
+because that is the only cross-thread unblock for a worker sitting in a socket
+read and without it the connection leaks with a daemon thread pinned to it.
+
+The worker runs the pull under `contextvars.copy_context()`, since a bare
+thread would lose the request's user context and any artifact the dialect
+saves on the stalled path would be dropped. Two outcomes are shaped here
+rather than in the dialect: a `ToolNotLoadedError` becomes a synthetic
+`invokeother_tool` call the tool loop can act on, and every `CompleteEvent` is
+restamped with `ProviderMetadata` and fed to cost accounting — a `Result`
+returned without that stamp escapes billing silently.
+"""
 
 from __future__ import annotations
 

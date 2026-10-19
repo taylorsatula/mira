@@ -16,6 +16,14 @@ settings UI via refine_portrait(), which produces a preview stored in Valkey
 with a 10-minute TTL. The user then accepts or declines the preview before
 it touches the database. This prevents junk prompts from corrupting the
 portrait and requiring multiple follow-up corrections.
+
+Two deliberate tolerances, both because the portrait is optional content rather
+than required infrastructure: `read_portrait` returns "" when the read fails,
+which working memory treats exactly like the pre-portrait state, and the
+in-memory `_portrait_last_synthesized` dedup clears on restart, costing at most
+one extra synthesis per user. `synthesize_and_store` does raise on
+infrastructure failure and on an empty result, so the collapse handler logs a
+real error instead of silently storing nothing.
 """
 import logging
 from typing import Optional

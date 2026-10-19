@@ -16,9 +16,29 @@ override hook methods for the parts that diverge:
     on the base Dialect class; each dialect whitelists only the fields its
     provider natively accepts.
 
-The base class is not directly instantiable — it raises NotImplementedError
-from from_selection. Discovery in clients.llm.dialect_registry intentionally
-skips this module by name.
+The class here is skipped by discovery rather than guarded from inside: it keeps
+the inherited `dialect_name = "base"` and `is_abstract = True`, and the registry
+walk filters on both before any validation runs. It is a mixin carrying shared
+mechanics, never a route's transport.
+
+Two contracts the base owns on behalf of every subclass:
+
+  - Validated events only. Malformed wire shapes raise `ProviderProtocolError`
+    instead of being skipped, and a stream that ends without `[DONE]` and
+    without a `finish_reason` raises rather than reporting its partial
+    accumulation — truncated tool arguments would otherwise surface as schema
+    violations and truncated text as a complete reply. `CompleteEvent` is
+    yielded exactly once, last.
+  - `Usage.input_tokens` is the uncached remainder: `_parse_usage` subtracts the
+    cache write and read counts from `prompt_tokens` and raises when the cached
+    counts exceed it. Callers price the three fields independently, so folding a
+    cache count into `input_tokens` double-bills every cached token.
+
+The abort handle is registered before the blocking call and cleared after it. On
+the streaming path it is the `httpx.Response`; the non-streaming path holds the
+client, because a response object exists only after the blocked read returns.
+`abort_active_stream()` closes whichever is held, which is the only unblock that
+works for a worker sitting inside a socket read.
 """
 
 from __future__ import annotations

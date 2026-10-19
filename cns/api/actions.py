@@ -1,8 +1,23 @@
 """
-Actions API endpoint - domain-routed state mutations.
+Domain-routed mutations (`POST /actions`) and the whitelisted tool read surface.
 
-Executes state-changing operations through domain-specific handlers that
-call tools and services directly, just as MIRA does during continuums.
+One `BaseDomainHandler` subclass per `DomainType`, each declaring an `ACTIONS`
+schema; `validate_action` rejects unknown and missing fields before any handler
+code runs, so a typo'd field is a 400 naming it rather than a silent no-op. What
+the handlers show collectively, and no single handler states: storage column
+names stop at this boundary (``_project_reminder``/``_project_contact`` are
+explicit per-field allowlists, so a new ``encrypted__`` column cannot leak into a
+response by default), a mutation that changes composed content must drop its
+stale trinket hash field, and a service's not-found ValueError maps to
+``_not_found_envelope`` so a missing resource never falls into the 500 catch-all.
+
+The reminder and contacts domains pass ``**data`` straight into the tool's
+``run()``, which means an API field name that does not equal the tool parameter
+name is dropped in silence.
+
+``TOOL_QUERY_REQUIRED_KWARGS`` states per-operation required arguments that the
+tools' JSON schemas do not, because the requirements live in method signatures
+``run()`` keeps private.
 """
 import logging
 from concurrent.futures import ThreadPoolExecutor

@@ -1,7 +1,26 @@
 #!/bin/bash
 # MIRA Database Deployment Script
-# Deploys mira_service database with unified schema
-# For fresh PostgreSQL installations
+# Deploys the mira_service database with the unified schema.
+#
+# Standalone operator tool: nothing in the installer chain calls it, and it
+# shares no state with deploy/deploy.sh. Use it to create mira_service on a
+# PostgreSQL server the operator provisioned by hand.
+#
+# What it does, in order: locate a superuser (the invoking role when it is one,
+# else the first superuser in pg_roles); refuse if mira_service already exists;
+# create mira_admin (LOGIN, BYPASSRLS) and mira_dbuser at the sentinel password;
+# create mira_service owned by mira_admin; build the schema's five embedding
+# variables through deploy/lib/embedding_config.sh (interpreting
+# MIRA_EMBEDDING_PROVIDER/ENDPOINT/MODEL, reading a remote bearer token from the
+# terminal, defaulting MIRA_PYTHON to the checkout's venv) and apply
+# mira_service_schema.sql; apply bootstrap_adopt.sql so later steps run as
+# mira_admin; then verify and print the next steps.
+#
+# It writes no Vault entries and runs no database steps. Roles keep the sentinel
+# password and the ledger stays empty until the operator follows the printed
+# instructions (ALTER ROLE + `vault kv put secret/mira/database` +
+# `scripts.migrate migrate`). Skipped, the app has no credential to authenticate
+# with and the ledger reports no install commit.
 
 set -e  # Exit on any error
 

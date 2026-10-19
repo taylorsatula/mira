@@ -14,9 +14,12 @@ Verified against the 2026-09-18 build plan and live history samples:
 * History pages arrive oldest->newest; a request without ``before`` returns
   the newest window; ``meta.next_before`` pages further back; ``has_more``
   means older messages exist.
-* Segment sentinels arrive inline: ``metadata.is_segment_boundary == "true"``
-  (string), ``status`` active|paused|collapsed. A collapsed sentinel's
-  ``content`` IS the session summary; the active sentinel's content is
+* Segment sentinels arrive inline: ``metadata.is_segment_boundary``, which
+  the server has sent as JSON ``true`` (currently) and as the string
+  ``"true"`` (historically) — accept both, as ``client.py:_is_sentinel``
+  and ``ui/browser/assets/javascript/messaging.js:isSegmentSentinel`` do;
+  ``status`` active|paused|collapsed. A collapsed sentinel's ``content`` IS
+  the session summary; the active sentinel's content is
   ``"[Segment in progress]"``.
 * ``role == "tool"`` rows carry JSON tool results; assistant rows carry a
   stringified JSON array of content blocks. ``metadata`` stays

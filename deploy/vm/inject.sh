@@ -11,6 +11,16 @@
 # (sqlite snapshots), Vault (wholesale — real API keys ride in it), instance
 # credentials, systemd units (User= remapped to the actual VM user), venv drift
 # guard, mira restart, health poll, fact verification.
+#
+# The sarcophagus is resolved and manifest-verified unconditionally, so a
+# directory path and a bare name take the same gate; the call is idempotent for
+# the absolute path oneshot.sh phase 6 hands in. resolve_sarc checks only the
+# manifest and SNAPSHOT-FACTS, which is why the payload-presence loop still runs
+# here.
+#
+# The verify walk consumes only `pg_*`, `sqlite_*`, and `mira_version` from
+# SNAPSHOT-FACTS.txt. Every other fact key orients an operator and verifies
+# nothing, so a mistyped key passes this loop without failing anything.
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$HERE/lib.sh"

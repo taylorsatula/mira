@@ -4,7 +4,8 @@
 # __SET_ME__ placeholder, then run:
 #     ./deploy/deploy.sh --config deploy-config.yml --loud
 #
-# Rules (enforced before sudo is requested):
+# Rules (enforced when this file is parsed, which happens after the sudo
+# prompt at startup):
 #   - Every key below is REQUIRED. Deleting a line aborts the deploy.
 #   - Leaving any __SET_ME__ aborts the deploy. Replace it with your value,
 #     or with "" to skip that field (skip = the interview's Enter-to-skip:

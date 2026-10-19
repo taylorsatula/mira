@@ -1,9 +1,20 @@
 #!/bin/bash
 # deploy/docker/scripts/mira-migrate.sh — the container's database step run,
-# on every start, as the s6 oneshot mira-migrate (before the mira longrun).
-# Runs as root so the runner's superuser seam is `sudo -u postgres`. A failed
-# step restores this run's backup; any nonzero exit fails the oneshot, so
-# mira never starts on a half-upgraded database.
+# every start, as the s6 oneshot mira-migrate (before the mira longrun).
+#
+# Waits for an unsealed Vault and a listening PostgreSQL, 60 s each, exiting 3
+# when either never arrives — a timeout that fails the oneshot rather than a
+# migration failure, and it triggers no restore. Then exports the AppRole the
+# runner authenticates with and runs `scripts.migrate migrate` as root, so the
+# runner's superuser seam is `sudo -u postgres`, writing this run's backups
+# under /opt/mira/backups.
+#
+# The exit code is the migration's. Only a migration failure (exit 1) with
+# this run's manifest on disk triggers a restore of that backup, and the
+# restore's own exit code decides whether the closing message says the data
+# was put back or was not. Any nonzero exit fails the oneshot, so mira never
+# starts on a half-upgraded database; the operator reruns the previous image
+# on the same volumes.
 set -uo pipefail
 
 export VAULT_ADDR=http://127.0.0.1:8200

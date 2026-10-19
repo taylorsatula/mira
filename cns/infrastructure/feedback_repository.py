@@ -1,7 +1,16 @@
 """
-Repository for persisting assessment signals.
+Assessment signals — the behavioral evidence the user-model pipeline
+synthesizes from — persisted to `feedback_signals`.
 
-Part of the user model pipeline for behavioral assessment.
+Signals arrive as `AssessmentSignal` objects from
+`cns.services.assessment_extractor`, the one upward import in this package.
+That type carries no user field, so `user_id` comes from the ambient context
+variable: a list produced for one user is written under whoever is current.
+
+`get_unsynthesized_signals()` returns only rows with `synthesized = FALSE`, so
+`mark_signals_synthesized()` is what removes evidence from the next synthesis
+run's input. Marking before the synthesis output is durably stored drops that
+evidence — nothing brings the rows back into the unsynthesized set.
 """
 from __future__ import annotations
 

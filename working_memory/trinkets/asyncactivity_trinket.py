@@ -1,11 +1,18 @@
 """
-AsyncActivityTrinket -- Renders sidebar agent activity into the system prompt.
+Renders the sidebar-agent activity feed from the per-user SQLite store.
 
-SQLite-backed. Reads from sidebar_activity on every generate_content() call.
-UpdateTrinketEvent is a re-render signal; state lives in SQLite, not memory.
+State lives in the `sidebar_activity` table and is re-read on every render,
+which is why this is an `EventAwareTrinket` and not a stateful one: an update
+event is only a signal to re-read, and segment collapse clears nothing. Rows
+leave the feed when a producer writes `dismissed` or `resolved`.
 
-EventAwareTrinket (not StatefulTrinket): no turn-scoped expiry, no in-memory
-state to clear on collapse. Items persist until explicitly dismissed.
+phoneafriend rows are excluded in the query. A blocking consult leaves its
+entire response in `summary`, so rendering them would echo every consult's
+answer as a feed line beside the result the model already received.
+
+`_format_age` has a broad fallback to "recently" when a stored timestamp will
+not parse; that label is display-only and must not be copied into anything
+whose value matters.
 """
 import html
 import logging

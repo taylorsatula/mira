@@ -1,8 +1,16 @@
 """
-Announcement system — loads config/announcement.json once at startup.
+The startup announcement every user sees until an operator clears it.
 
-To post an announcement: set id and message in config/announcement.json, restart app.
-To remove: set both fields back to null, restart app.
+The announcement lives in `config/announcement.json` — `announcement.sample.json`
+is its filled shape — and `load_announcement()` reads it once into a module global
+from the `main.py` lifespan. `get_cached_announcement()` serves that cache and
+loads it defensively on a first call that arrives before startup, so posting or
+removing an announcement takes a restart to take effect.
+
+The announcement is an optional feature, and this is a sanctioned degrade: a
+missing file logs at info, malformed JSON logs a warning, and either leaves the
+cache empty. A null `id` or `message` means no active announcement. None of these
+fails boot; the surfaces that serve the cache tolerate absence.
 """
 import json
 import logging

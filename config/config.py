@@ -1,9 +1,29 @@
 """
 Centralized configuration models — operational and infrastructure settings only.
 
-Algorithm tuning constants live inline in their consumer modules.
-Only values that operators change without code changes belong here:
-feature flags, infrastructure coordinates, scheduling cadences, deployment settings.
+Each section class owns one domain, and a knob belongs in the class owning its
+domain so a reader finds a setting without grepping its consumers. Field
+descriptions are the operator's documentation, so they carry the contract, the
+unit, and the failure the bound exists to prevent.
+
+Validators fire at construction, which happens at `import config`: a rejected
+value raises there and the process never reaches the server bind.
+`ApiConfig.validate_failover_block` requires the backup transport coordinates
+whenever the diverter is enabled, `validate_compaction_trigger_tokens` requires
+the trigger below the context window, and `SystemConfig.validate_timezone_name`
+accepts IANA names only. `ApiConfig.validate_compaction_budget` is the exception:
+it needs the database-owned primary route's output reserve, so it runs later, from
+`utils.user_context.load_model_configs` at startup and again at the POST gate.
+
+`*_use_days` fields are modular activity-day gates, not calendar cadences: jobs
+fire on the user's activity days, so `1` means every active day. The gate is
+`utils.scheduled_tasks.get_users_due_for_job` for the fields passed to it, and
+`get_user_cumulative_activity_days() % field` for the two the consumer evaluates
+inline.
+
+Algorithm tuning constants stay inline in their consumer modules. Only values an
+operator changes without a code change belong here: feature flags, infrastructure
+coordinates, scheduling cadences, deployment settings.
 """
 
 from typing import Dict, List, Literal, Optional

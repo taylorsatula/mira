@@ -1,4 +1,27 @@
-"""Local tool execution support for orchestrator-owned LLM tool loops."""
+"""
+Local tool execution inside the orchestrator's model-turn loop.
+
+`ToolLoopExecutor.execute_tools` partitions one provider response's tool calls
+into a sequential batch (tools whose `is_call_parallel_safe` is False, plus any
+tool the repository does not know) and a parallel batch, and runs the
+sequential batch first. Every call still executes exactly once, but the order
+is visible: a later tool sees what an earlier one changed.
+
+Cancellation is a stop, never an error. `_execute_tool` re-raises
+`GenerationCancelled` ahead of its broad handler, so a halt is not downgraded
+into model-facing "the tool failed" text and the turn does not continue. A
+halt stops later parallel calls from starting but never abandons one already
+running: the batch drains every started sibling's terminal event, then
+re-raises the deferred cancel.
+
+`CircuitBreaker.should_continue` trips only when the same tool fails twice on
+the same input hash. `ToolReportedError.from_result` is what makes a tool's
+structured `success: False` count as that failure; without it the breaker sees
+no error and lets the model repeat an identical failing call indefinitely.
+`_schema_hint` attaches the parameter schema only for genuine argument errors
+(`ParameterError`, or a provider-rejected call carrying `invalid_reason`), so
+an operational failure never misdirects the model's recovery.
+"""
 
 from __future__ import annotations
 

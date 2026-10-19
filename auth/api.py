@@ -1,5 +1,28 @@
-"""
-FastAPI endpoints for lean magic-link authentication.
+"""The `/v1/auth` router, and the HTTP credential dependencies every other router depends on.
+
+`get_current_user` is the credential ladder: an `Authorization: Bearer` value is
+tried first, then the `session` cookie, and the API-token rung runs only when the
+token arrived in the header. Activity and TTL extension happen only on the cookie
+rung, so a header-presented token never becomes a rolling session. A
+cookie-authenticated unsafe method additionally needs `x-csrf-token`, except on
+the exempt path suffix that mints it. `get_current_session_user` narrows the
+result to a browser session, which is what keeps an API-token holder off the
+surfaces that mint tokens and manage passkeys.
+
+Every synchronous Valkey/Postgres call in an async dependency or handler crosses
+through `run_in_threadpool`. The shared event loop also schedules WebSocket frame
+sends, so one infrastructure stall awaited on the loop freezes the whole
+single-worker server, streaming included. `get_current_user` must stay `async`:
+as a plain `def` its body runs in a worker thread and the
+`set_current_user_id`/`set_current_user_data` writes are discarded, silently
+dropping user context on every request. `get_current_user_for_pages` is that
+`def` case — its writes do not propagate either, which is harmless only while
+the gated page routes it guards return a `FileResponse` and read no user-scoped
+row; a gated page doing RLS work reads zero rows with no error.
+
+Cookie writes and deletes both take their attributes from
+`AuthService.get_cookie_settings`. A delete carrying attributes the set did not
+leaves the revoked cookie alive in the browser.
 """
 
 import logging

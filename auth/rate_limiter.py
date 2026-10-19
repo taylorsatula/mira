@@ -1,5 +1,18 @@
-"""
-Valkey-backed rate limiter for authentication requests.
+"""Fixed-window rate limiting on Valkey for the pre-authentication surfaces.
+
+`is_allowed` advances two independent windows per call — one keyed by the email
+address, one by the client IP — so a single mailbox cannot be hammered through
+many requests and a single host cannot spray many mailboxes. Both are Valkey
+counters created with a TTL, so the window is shared by every worker and expires
+without a sweeper; the retry hint handed back is the key's remaining TTL.
+
+Infrastructure failure propagates to the caller. A Valkey outage must fail the
+request that needed the limit, never admit it: a limiter that reads as "allowed"
+because its store was unreachable is switched off exactly when the deployment is
+already unhealthy.
+
+`reset` has no caller anywhere in the tree. It is dead surface — do not build on
+it, and deleting it is safe.
 """
 
 import hashlib
@@ -32,8 +45,10 @@ class RateLimiter:
         Check if request is allowed under rate limit.
 
         Implements dual rate limiting:
-        - Email-based: 3 requests per 5 minutes (prevents spam to specific user)
-        - IP-based: 10 requests per 5 minutes (prevents distributed email spam from one IP)
+        - Email-based: `max_requests` increments per `window_seconds` (both from
+          `auth/config.py`), preventing repeated sends to one address
+        - IP-based: `ip_max_requests` per `ip_window_seconds`, preventing one
+          host from spraying many addresses
 
         Args:
             email: Email address to rate limit
@@ -69,6 +84,7 @@ class RateLimiter:
 
         return True, 0
 
+    # ACCEPTED-RESIDUAL: dead surface, deliberately kept; no caller anywhere in the tree.
     def reset(self, email: str, ip_address: Optional[str] = None) -> bool:
         """
         Reset rate limit for email and optionally IP.

@@ -1,8 +1,25 @@
 """
-Provider-neutral message formatting for CNS.
+Provider-neutral message formatting: `Message` list in, request dicts out.
 
-This module converts immutable Message objects into the neutral LLM request
-shape. Continuum owns the message cache; this module owns serialization.
+`Continuum` owns the message cache; this module owns turning it into the
+neutral request shape the dialects consume.
+
+A collapsed segment sentinel does not become a summary paragraph. It becomes
+a synthetic pair — an assistant `tool_call` on `continuum_tool` with
+`operation: search` and the display title as the query, then a tool result
+carrying the rendered summary — because the model weighs retrieved tool
+results above plain assistant prose, which is how a past segment must
+arrive. `display_mode` selects the renderer and anything other than
+`extended` or `precis` raises: a new mode is an edit here as well as in
+`segment_cache_loader`.
+
+Timestamps are injected, not stored: user-local `[h:mm]` goes onto the first
+text block at render time, so the cache never holds a clock reading. It is
+withheld from boundary sentinels, `system_notification` rows, and tool-call
+turns, all of which are structure rather than conversation.
+
+The `segment_helpers` and timezone imports are function-local on purpose —
+module level would drag `cns.services` onto the package import chain.
 """
 from __future__ import annotations
 

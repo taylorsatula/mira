@@ -12,6 +12,19 @@ issued API token; ``ThinkingFrame``/``ModelErrorFrame`` forward ``thinking`` and
 ``model_error`` to the browser, and ``TurnCompleteFrame`` carries the fields the
 UI reads to close a turn. Account-billing handshakes are not part of this
 protocol.
+
+Two ordering rules hold the turn together. The per-user turn lock is released
+before the terminal frame is queued, so a client that watched a turn end can send
+its next message immediately; earlier frames were queued while the lock was held,
+so the order on the socket is unaffected. And streamed frames cross from the
+orchestrator's worker thread to the event loop through ``stream_to_connection``,
+which waits ``STREAM_SEND_TIMEOUT_SECONDS``: a wait that expires means the loop
+is wedged, and the turn is cancelled with reason ``stall`` instead of pinning the
+worker thread forever.
+
+The proactive push path (``push_proactive_message_sync``) has no producer in this
+tree — both clients render the ``proactive_message`` frame, but nothing calls the
+bridge yet, so treat it as unexercised rather than as a working seam.
 """
 
 from __future__ import annotations

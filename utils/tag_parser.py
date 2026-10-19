@@ -1,7 +1,25 @@
 """
-Tag parsing service for CNS.
+Semantic tag parsing for assistant responses, and the memory short-ID family.
 
-Extracts semantic tags from assistant responses.
+``TagParser.parse_response`` splits one model response into its ``mira:``
+namespaced tags (emotion, display title, complexity, precis, internal
+monologue, check-in response, error analysis) and the clean text a client
+displays. The tags are stripped by ``remove_all_tags``, which also drops
+``internal_monologue`` blocks rather than leaving them for autoregressive
+conditioning: streaming clients cannot reliably strip a multi-paragraph block,
+so a retained block leaks.
+
+Leading ``[HH:MMam]`` stamps are stripped only as a bracketed run at the very
+start of the text — that is the exact shape the tool loop injects, and a
+natural opening time reference such as "7:48pm — the results are in" must
+survive.
+
+``referenced_memories`` is always empty by design: memory mention handling
+moved to ``memory_tool``'s touch operation, so nothing parses mentions here.
+
+The ``mem_XXXXXXXX`` helpers (``format_memory_id``/``parse_memory_id``/
+``match_memory_id``) are the only place the short-ID shape is defined: an
+8-character prefix of the dash-stripped UUID, matched case-insensitively.
 """
 import re
 from typing import Optional

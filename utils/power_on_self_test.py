@@ -1,8 +1,22 @@
-"""Power-on self-test checks for MIRA startup and live readiness.
+"""
+Power-on self-test: the boot gate that runs before Hypercorn binds, and the
+live checks that run against the bound server.
 
-The pre-server POST is intentionally run in a subprocess from main.py. That
-keeps probe-side singleton initialization out of the serving process and gives
-the parent process a hard deadline before Hypercorn can bind a socket.
+The pre-server phase runs in a child process (``run_pre_server_post_gate``
+spawns ``python -m utils.power_on_self_test pre-server``) so the probe's own
+singletons never land in the serving process's memory, and so the parent can
+kill a round at a hard deadline. Rounds retry a bounded number of times; on the
+final failure the gate does not return at all — it parks (default) or exits per
+``MIRA_POST_GATE_FAILURE_ACTION``, because returning or exiting into a
+restart-on-exit supervisor re-runs the billed provider reachability probes on
+every restart. ``run_post_server_post`` does the live HTTP checks instead.
+
+Checks are declared as ``CheckSpec`` rows marked required or advisory; a
+required failure fails the phase with every check's diagnostic preserved in the
+report. The database-revision check never runs a step: it refuses to serve
+unless the ledger matches this tree exactly, and points at the remedy the
+install can actually run (the ``mira`` wrapper when it exists, this tree's own
+``scripts.migrate`` otherwise).
 """
 
 from __future__ import annotations

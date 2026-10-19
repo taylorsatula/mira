@@ -18,6 +18,19 @@
  * - PUT /v1/api/actions/tools/{tool} - Update config
  * - POST /v1/api/actions/tools/{tool}/validate - Validate config without saving
  * - DELETE /v1/api/actions/tools/{tool} - Reset to defaults
+ *
+ * MECHANISMS:
+ * - email_tool's four folder fields are deliberately absent from the generated
+ *   form: they exist only in the validate response's `discovered` mapping, so
+ *   the first Save on that tool runs validation, renders the folder dropdowns
+ *   and returns without writing — the user reviews the mapping and saves again.
+ *   A save that skipped that step would persist folder guesses nothing checked.
+ * - extractFormValues throws naming the field when a number or JSON value will
+ *   not convert, and the dialog shows the message in its status slot; a silent
+ *   coercion here would save a config the tool then fails on.
+ * - _escapeAttribute is required for every value placed inside a quoted
+ *   attribute: schema defaults and tool descriptions are server-side data, and
+ *   an unescaped quote ends the attribute and injects markup.
  */
 
 class ToolConfigManager {

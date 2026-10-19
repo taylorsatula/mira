@@ -19,6 +19,14 @@ Semantics:
 - The rule's scope column is trigger-specific metadata; no registered
   trigger has a scoped surface, so it is stored and returned but not
   matched here.
+
+The silent failure this module owns: an item's context key is read by name
+(`item.context.get(rule["field"])`), so a stored rule whose field was
+renamed out of the trigger's context matches nothing and drops EVERY
+discovered item for that user — a missing key and a non-matching value are
+indistinguishable here by design, because a rule that excludes everything is
+a legal user request. Rows are read fresh per poll, so a rule edit takes
+effect on the next poll with no restart.
 """
 import logging
 import re

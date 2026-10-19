@@ -1,13 +1,22 @@
 """
-Sidebar Tool -- Agent lifecycle management for sidebar agents.
+Sidebar-agent lifecycle: the between-iteration scratchpad, and the explicit
+sign-out that tells the dispatcher a thread is done.
 
-Two concerns:
-1. Scratchpad: persistent working notes between agent iterations
-2. Task completion: explicit signal that the agent is done
+Both concerns live in tables whose DDL is owned by `utils/userdata_manager` and
+created here through `agents.base.ensure_activity_schema`: `scratchpad` rows
+keyed by `thread_id`, and a `sidebar_activity` UPSERT keyed by
+`(interface_name, thread_id)` — the pair the dispatcher dedupes on.
 
-Registered but disabled (enabled=False) -- never appears in the main
-conversation's tool schema. Sidebar agents access it via
-tool_repo.get_tool('sidebar_tool'), which succeeds for disabled tools.
+`thread_id`, `interface_name`, `agent_id`, and `run_count` arrive in `params`
+from the SidebarAgent base, which enriches the call before execution. They are
+deliberately absent from the schema so the model cannot set them, and
+`_complete_task` defaults each of them rather than raising when an agent calls
+it outside that enrichment.
+
+Registered with `enabled=False`, so it never enters the main conversation's
+tool schema; sidebar agents fetch it by name through `tool_repo.get_tool`, which
+succeeds for a disabled tool. `_ensure_schema` also creates `sidebar_audit`,
+which nothing reads or writes.
 """
 import logging
 from typing import Dict, Any

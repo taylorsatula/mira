@@ -1,10 +1,33 @@
 """
-Main continuum orchestrator for CNS.
+The turn engine: one user message in, a streamed model turn out.
 
-Coordinates all continuum processing: message handling, LLM interaction,
-tool execution, working memory updates, and event publishing.
+`process_message` is the entry both transports call. It stages the accepted
+user message in the `UnitOfWork` before any model work, surfaces memories,
+composes the system prompt, runs the model behind the `primary` route plus the
+local tool loop, and then persists one assistant message per provider step,
+under that step's own `entry_id`. Timestamps are monotonic microsecond offsets
+from the user message so provider order survives the repository's
+`created_at DESC, id DESC` keyset.
 
-Optimized to generate embeddings once and propagate them to all services.
+Three mechanisms a reader cannot recover from the call site:
+
+- Compose is a round-trip, not a call. `_compose_llm_messages` publishes
+  `ComposeSystemPromptEvent` inside `working_memory.core._compose_lock` and
+  reads back what `_handle_system_prompt_composed` stored. `_cached_content` is
+  tested against None and never for falsiness, because a trinket section may
+  legitimately be empty; a failed compose raises instead of shipping an empty
+  system prompt.
+- Cancellation is a stop, not an error. A `GenerationCancelled` raised during
+  memory surfacing or the stream ends the turn as stopped: the partial
+  assistant text is kept, the staged user message is committed, and no
+  `TurnCompletedEvent` is published.
+- `TurnCompletedEvent` is registered through `UnitOfWork.add_post_commit_callback`,
+  so its subscribers observe committed state only. Publishing it inline would
+  hand them a message that is still in flight.
+
+The live-context compaction baseline (`_last_turn_prompt_tokens`) stores the
+terminal step's own input tokens, not the work's accumulated sum, because it
+measures the context size of the last request.
 """
 from __future__ import annotations
 

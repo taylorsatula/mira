@@ -1,8 +1,23 @@
 """
-Continuum pool using Valkey for distributed caching.
+The in-process continuum pool and the two-store commit for one turn.
 
-Provides session detection and automatic expiration for continuums,
-replacing the in-memory LRU pool with Valkey-based caching.
+`ContinuumPool.get_or_create()` loads a user's Continuum under a per-user
+lock, capturing the collapse epoch before it reads any message: on a cache
+hit from Valkey, otherwise by composing the session from the repository and
+caching the result under that epoch. `begin_work()` hands back a
+`UnitOfWork` carrying the epoch, and `UnitOfWork.commit()` uses it to
+compare-and-set its cache write. A collapse that invalidated the cache
+between load and commit has moved the epoch past the captured value, so the
+write is skipped and the cache stays empty for the next load to rebuild — an
+unguarded write there would re-cache the pre-collapse message set and serve
+it until the next collapse.
+
+`UnitOfWork` stages a turn's messages, caps their content at the persistence
+limit in place so the in-memory continuum matches the durable row, writes
+them as one batch, writes the cache, then runs post-commit callbacks. A
+failed batch rolls back and invalidates the cache so no stale copy outlives
+the rollback; a failed cache write logs and invalidates rather than failing
+the turn, because the database write has already landed.
 """
 from __future__ import annotations
 
@@ -158,7 +173,7 @@ class UnitOfWork:
         Persist all accumulated changes atomically.
 
         Saves messages to database, updates cache, and persists metadata changes.
-        Segment creation now happens automatically in repository.save_message().
+        Segment sentinel creation happens inside repository.save_messages_batch().
         """
         if self.pending_messages:
             # One transaction so a mid-batch failure rolls back atomically — and the
@@ -225,6 +240,7 @@ class UnitOfWork:
         for callback in callbacks:
             callback()
 
+    # ACCEPTED-RESIDUAL: dead — `rg '_get_real_messages'` matches this definition only; commit() stages pending_messages instead.
     def _get_real_messages(self) -> list[Message]:
         """
         Get conversation messages, excluding summaries and boundaries.

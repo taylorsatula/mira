@@ -9,6 +9,12 @@ CNS Integration Points:
 - Uses pre-computed embeddings (no redundant embedding generation)
 - Supports hub-based discovery via extracted entities
 - Returns hierarchical memory structures with link metadata
+
+The embedding precondition is enforced, not assumed: a missing
+`expansion_embedding` raises ValueError rather than re-encoding the query
+inside this layer, because the orchestrator computes it once and shares it with
+the assistant-text search. Retrieval failures propagate from lt_memory — a
+memory outage must not look like "no relevant memories".
 """
 import logging
 from typing import Optional

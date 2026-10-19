@@ -4,6 +4,12 @@ Invoke skill tool — loads an Agent Skill's instructions and activates them.
 Returns the skill's markdown body to the model for this turn AND publishes an
 activation to ActiveSkillsTrinket so the body persists in the system prompt
 for the rest of the segment instead of scrolling away in tool-result history.
+
+A name that matches nothing in the `skills_catalog` prompt section raises
+`SkillNotFoundError` from `utils.skill_files.load_skill` and comes back as a
+`success: False` envelope naming that section, never as a path lookup —
+resolution goes through scan results, so a traversal-shaped argument matches
+nothing.
 """
 
 import logging

@@ -1,4 +1,17 @@
-"""Fixed model-config selection for LLMProvider."""
+"""Turn a route name into the immutable transport selection one provider call uses.
+
+`ModelResolver.resolve` reads one of MIRA's five DB-configured routes and
+builds a frozen, self-validating `ModelSelection`: transport coordinates are
+required and blank-rejected, while the credential field goes through
+`optional_api_key_name`, which converts the on-disk `''` no-credential
+sentinel to `None` so a `ModelSelection` can never carry it. Resolution
+therefore fails the same way whether or not the failover diverter is tripped —
+the requested route is resolved first and only then swapped for
+`_failover_selection`, which keeps the primary's `model_config_name` so cost
+pricing and route attribution survive an outage. Calling `ModelSelection`
+directly with a raw `''` raises rather than deferring the failure to a Vault
+lookup.
+"""
 
 from __future__ import annotations
 

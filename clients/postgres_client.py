@@ -1,8 +1,21 @@
 """
 PostgreSQL client with explicit connection management and dict-style results.
 
-General-purpose Postgres client that can be used anywhere in the application.
-Replaces SQLAlchemy with raw SQL for performance and explicit memory management.
+Raw SQL over a per-database psycopg connection pool, with user isolation
+enforced by row-level security rather than by query filters. Every checkout of
+a non-admin connection sets `app.current_user_id` from the constructor's
+`user_id` and clears it when none was given, so a pooled connection never hands
+the previous borrower's scope to the next one. An admin client (`admin=True`)
+draws from its own pool under the BYPASSRLS role and never sets user context.
+
+RLS fails closed: a query without user context returns zero rows instead of
+raising, which is indistinguishable from empty data. `_rls_canary` logs the
+first such query per (pool, table) to make the omission visible, and
+`_RLS_COVERED_TABLES` is the table list it recognizes — it must match the
+schema's `ENABLE ROW LEVEL SECURITY` statements, or a table goes unwatched.
+
+These connections carry no `statement_timeout`; a wedged statement holds its
+pooled connection until the server times it out or the caller gives up.
 """
 
 from psycopg.conninfo import make_conninfo

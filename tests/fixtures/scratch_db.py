@@ -7,6 +7,11 @@ availability check; it never reads or writes an application table. The shipped
 schema is psql-only (it opens with `\\if`/`\\set` guards), so the apply shells out
 to `psql -v ... -f` with the five embedding_* variables — the same applier and
 the same values seam (`describe_for_installer`) the deploy scripts use.
+
+The `finally` drops only the roles this run created, tracked in `created_roles`.
+`_ROLES` names the production identities, so an unconditional drop deletes roles
+another install provisioned on a shared dev Postgres, and a re-spelled name
+breaks the schema's role precondition before any DDL runs.
 """
 from __future__ import annotations
 

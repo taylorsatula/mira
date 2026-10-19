@@ -14,6 +14,13 @@ Flow:
 Key insight: The LLM already decided these entities are relevant when it
 extracted them. We trust that decision and let expansion similarity
 rank the memories, rather than filtering at the hub level.
+
+Matching and fetching are batched: both queries take the whole name list or
+entity set at once, so cost does not grow with how many names the turn
+extracted. Nothing here raises on a miss — no extracted entities, no matched
+entity, or no linked memory each return an empty list, which the caller reads
+as "this arm had nothing", so a broken match is indistinguishable from a quiet
+turn and belongs in the logs, not in an exception.
 """
 import logging
 from typing import List, Set
