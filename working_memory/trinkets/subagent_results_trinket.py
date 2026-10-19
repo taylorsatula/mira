@@ -254,9 +254,43 @@ class SubagentResultsTrinket(StatefulTrinket):
                 continue
             parts.append(self._format_entry(task_id, result))
 
+        alerts = self._agent_memory_alerts()
+        if alerts:
+            parts.append(
+                "<agent_memory_alerts>\n"
+                + "\n".join(alerts)
+                + "\n</agent_memory_alerts>"
+            )
+
         if parts:
             return "<subagent_results>\n" + "\n".join(parts) + "\n</subagent_results>"
         return ""
+
+    def _agent_memory_alerts(self) -> list[str]:
+        """Surface a 'too many memories' alert when an agent exceeds the
+        configured active-memory threshold."""
+        try:
+            from config import config
+            from utils.user_context import get_current_user_id
+            from utils.userdata_manager import get_user_data_manager
+
+            threshold = config.sidebar_dispatcher.agent_memory_max_count
+            db = get_user_data_manager(get_current_user_id())
+            rows = db.execute(
+                "SELECT agent_id, COUNT(*) AS c FROM agent_memory "
+                "WHERE status = 'active' GROUP BY agent_id"
+            )
+            alerts: list[str] = []
+            for row in rows:
+                if int(row.get("c", 0)) > threshold:
+                    alerts.append(
+                        f"agent {row.get('agent_id')} has "
+                        f"{row.get('c')} active memories (threshold "
+                        f"{threshold}); consider compacting or deprecating."
+                    )
+            return alerts
+        except Exception:
+            return []
 
     def _format_entry(self, task_id: str, result: Dict[str, Any]) -> str:
         result_type = result['type']

@@ -17,6 +17,13 @@ Registered with `enabled=False`, so it never enters the main conversation's
 tool schema; sidebar agents fetch it by name through `tool_repo.get_tool`, which
 succeeds for a disabled tool. `_ensure_schema` also creates `sidebar_audit`,
 which nothing reads or writes.
+
+`_complete_task` also accepts an optional `memories` array of
+`{content, justification}` pairs and writes each to `agent_memory` with
+`status='active'`, keyed by `agent_id`. A justification shorter than ten
+characters is refused, which is what keeps one run's context from becoming
+durable memory. The read side is not here: the base class pushes the pool into
+the prompt.
 """
 import logging
 from typing import Dict, Any
@@ -115,6 +122,46 @@ class SidebarTool(Tool):
                         "Why this needs human attention. Required when "
                         "status is 'escalated'."
                     ),
+                },
+                "memories": {
+                    "type": "array",
+                    "description": (
+                        "Memories to store at completion. Write only durable, "
+                        "cross-run facts with justification; one-off context "
+                        "must not be stored. Optional, default none."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": (
+                                    "The memory text. Plain prose, one durable "
+                                    "fact, rule, or preference that future "
+                                    "runs of this agent should reuse. Avoid "
+                                    "phrases or jargon that only make sense in "
+                                    "the current session; future agents will "
+                                    "have no context for them."
+                                ),
+                            },
+                            "justification": {
+                                "type": "string",
+                                "description": (
+                                    "Why this memory is worth keeping. Stored "
+                                    "for audit/depuration and never shown to "
+                                    "the agent as prompt content."
+                                ),
+                            },
+                            "source_thread_id": {
+                                "type": "string",
+                                "description": (
+                                    "Optional originating thread id; defaults "
+                                    "to this run's thread id."
+                                ),
+                            },
+                        },
+                        "required": ["content", "justification"],
+                    },
                 },
             },
             "required": ["operation"],
@@ -230,10 +277,47 @@ class SidebarTool(Tool):
             },
         )
 
+        # Store durable memories supplied at completion. The justification
+        # is persisted alongside the content for later hygiene/audit, but
+        # never shown to the agent when the memory is (re)injected.
+        stored = 0
+        raw_memories = params.get("memories")
+        if raw_memories is not None:
+            if not isinstance(raw_memories, list):
+                raise ValueError("memories must be a list")
+            for item in raw_memories:
+                if not isinstance(item, dict):
+                    raise ValueError(
+                        "each memory must be an object with content and "
+                        "justification"
+                    )
+                content = (item.get("content") or "").strip()
+                justification = (item.get("justification") or "").strip()
+                if not content:
+                    raise ValueError("memory content is required")
+                if len(justification) < 10:
+                    raise ValueError(
+                        "memory justification must be at least 10 "
+                        "characters"
+                    )
+                source_tid = item.get("source_thread_id") or thread_id
+                self.db.insert(
+                    "agent_memory",
+                    {
+                        "agent_id": agent_id,
+                        "encrypted__content": content,
+                        "encrypted__justification": justification,
+                        "source_thread_id": source_tid,
+                        "status": "active",
+                    },
+                )
+                stored += 1
+
         return {
             "completed": True,
             "interface_name": interface_name,
             "thread_id": thread_id,
             "status": status,
             "summary": summary,
+            "memories_stored": stored,
         }

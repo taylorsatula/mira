@@ -15,6 +15,12 @@
 # files out of the live tree, so after the clear there is nothing left to
 # compute the delta from. A failed export removes its partial directory and
 # returns 1, and the caller is expected to stop with the install unchanged.
+#
+# A caller that sets CUSTOM_EXPORT_NEW_TREE (the incoming release tree) gets
+# each saved file classified against it: absorbed, clean-apply, both-changed,
+# upstream-deleted, or not-classified when the variable is unset. Paths under
+# config/ or tools/ are tagged operator-only, because MIRA's own guardrail
+# refuses agent edits there, so those restores end with the operator.
 
 # Subjects deploy/lib/provenance.sh:official_commit_message writes, plus the
 # pre-provenance forms (`install <tag>`, `install <tag> (local tree)`) the
@@ -227,10 +233,81 @@ export_custom_build() {
     CUSTOM_EXPORT_COUNT="$shown"
 }
 
+# --- Classification against the incoming release ---------------------------
+# The caller sets CUSTOM_EXPORT_NEW_TREE to the release tree being installed
+# (deploy/update.sh: its first argument; deploy/python.sh: the tree the script
+# itself runs from). Unset or missing: every file is tagged not-classified and
+# the restore guidance in the catalog still applies.
+_blob_sha256() {
+    # sha256 of a blob piped on stdin, same tool fallback as file_sha256
+    if command -v sha256sum > /dev/null 2>&1; then
+        sha256sum | awk '{print $1}'
+    else
+        shasum -a 256 | awk '{print $1}'
+    fi
+}
+
+# MIRA's bash guardrail refuses edits under config/ and the tools/ tree in
+# every mode (they define what the tool may do), so those restores end with
+# the operator's hands, not the agent's.
+_is_agent_refused_path() {
+    case "$1" in
+        config/*|tools/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Prints one classification tag for a delta file, computed against the
+# incoming release tree: absorbed (already byte-identical upstream), clean-apply
+# (the release never touched the file), both-changed (yours and the release's
+# edits meet; expect a 3-way conflict), upstream-deleted (the release removed or
+# redesigned the path; the release wins by default). Symlinks compare by target.
+# Usage: _classify_delta_file <exp> <tree> <baseline> <status> <path>
+_classify_delta_file() {
+    local exp="$1" tree="$2" baseline="$3" status="$4" path="$5"
+    local new custom_sha new_sha base_sha
+    if [ -z "${CUSTOM_EXPORT_NEW_TREE:-}" ] || [ ! -d "${CUSTOM_EXPORT_NEW_TREE}" ]; then
+        echo "not-classified"
+        return 0
+    fi
+    new="${CUSTOM_EXPORT_NEW_TREE}/${path}"
+    if [ ! -e "$new" ] && [ ! -L "$new" ]; then
+        # A pure addition of yours the release never carried applies clean;
+        # a modified file the release no longer has was redesigned away.
+        if [ "$status" = "A" ]; then echo "clean-apply"; else echo "upstream-deleted"; fi
+        return 0
+    fi
+    if [ -L "${exp}/${path}" ] || [ -L "$new" ]; then
+        if [ -L "${exp}/${path}" ] && [ -L "$new" ] \
+            && [ "$(readlink "${exp}/${path}")" = "$(readlink "$new")" ]; then
+            echo "absorbed"
+        else
+            echo "both-changed"
+        fi
+        return 0
+    fi
+    custom_sha="$(file_sha256 "${exp}/${path}")"
+    new_sha="$(file_sha256 "$new")"
+    if [ "$custom_sha" = "$new_sha" ]; then
+        echo "absorbed"
+        return 0
+    fi
+    if [ "$status" = "A" ]; then
+        echo "both-changed"
+        return 0
+    fi
+    base_sha="$(git -C "$tree" show "${baseline}:${path}" 2>/dev/null | _blob_sha256)"
+    if [ "$new_sha" = "$base_sha" ]; then
+        echo "clean-apply"
+    else
+        echo "both-changed"
+    fi
+}
+
 # Copies, verifies, and catalogs into an existing empty export directory.
 _export_into() {
     local tree="$1" baseline="$2" tag="$3" work="$4" exp="$5" expected="$6"
-    local record status path copied=0 catalog="${exp}/RESTORE_MY_CUSTOM_BUILD.txt"
+    local record status path cls op copied=0 catalog="${exp}/RESTORE_MY_CUSTOM_BUILD.txt"
     while IFS= read -r -d '' record; do
         status="${record%%"$MIRA_TAB"*}"
         path="${record#*"$MIRA_TAB"}"
@@ -271,21 +348,44 @@ _export_into() {
         echo "  as the reference for what each file looked like before the update."
         echo "  A folder marked 'not in custom.patch' is a git repository of its own and is"
         echo "  restored by copying the folder back."
+        echo "  Each changed or added file below carries a classification computed against"
+        echo "  THIS release (the update had the incoming tree in hand):"
+        echo "    absorbed          already byte-identical in the new release; nothing to do"
+        echo "    clean-apply       the release never touched the file; expect the patch to apply"
+        echo "    both-changed      your edit and the release's meet in one file; resolve for the"
+        echo "                      new code — where the release redesigned the area, the release wins"
+        echo "    upstream-deleted  the release removed or redesigned this path; restore the change"
+        echo "                      only if it still fits the new design, drop the rest"
+        echo "  Files marked operator-only live under config/ or the tools/ tree: they are"
+        echo "  MIRA's own guardrail and tool sources, and a MIRA agent cannot edit them in"
+        echo "  any mode — plan to apply those by hand."
+        echo "  The restore does not need to be one-shot. Collaborating with the operator"
+        echo "  is a valid and expected part of it, not a fallback: the agent may lack the"
+        echo "  conversation that explains why the release changed an area, and a redesign"
+        echo "  can delete or replace files a custom change touched. Apply the clear cases"
+        echo "  (absorbed: nothing to do; clean-apply: apply) and bring the operator the"
+        echo "  ambiguous ones — both-changed conflicts that do not resolve from the full"
+        echo "  copies, upstream-deleted files whose change may or may not still fit the"
+        echo "  new design. A restore that forces an old version back over a deliberate"
+        echo "  redesign is worse than no restore; the operator knows which it is."
         echo ""
         echo "Baseline (the last official MIRA install/update before your changes):"
         echo "  $(git -C "$tree" log -1 --format='%s' "$baseline")"
         echo "  commit ${baseline}"
         echo ""
-        echo "Files (status: A added, M modified, D deleted):"
+        echo "Files (status: A added, M modified, D deleted; classification: absorbed, clean-apply, both-changed, upstream-deleted, not-classified):"
         while IFS= read -r -d '' record; do
             status="${record%%"$MIRA_TAB"*}"
             path="${record#*"$MIRA_TAB"}"
             case "$status" in
                 A|M)
+                    cls="$(_classify_delta_file "$exp" "$tree" "$baseline" "$status" "$path")"
+                    op=""
+                    if _is_agent_refused_path "$path"; then op="  operator-only"; fi
                     if [ -L "${exp}/${path}" ]; then
-                        echo "  ${status}  ${path}  (symlink -> $(readlink "${exp}/${path}"))"
+                        echo "  ${status}  ${path}  ${cls}${op}  (symlink -> $(readlink "${exp}/${path}"))"
                     else
-                        echo "  ${status}  ${path}  sha256 $(file_sha256 "${exp}/${path}")"
+                        echo "  ${status}  ${path}  ${cls}${op}  sha256 $(file_sha256 "${exp}/${path}")"
                     fi
                     ;;
             esac

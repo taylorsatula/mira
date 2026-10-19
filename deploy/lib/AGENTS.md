@@ -13,7 +13,7 @@
 - `provenance.sh` — building the release artifact, and naming the commit a tree came from. Open it before cutting a release or changing how an install learns its provenance.
 - `venv_stamp.sh` — the venv build stamp, so an update rebuilds a venv only when its inputs changed. Open it when an update rebuilds too much or too little, or when the comparison changes.
 - `state_preserve.sh` — the one definition of the host-local state a code clear keeps, and of what a clear destroys. Open it before touching the preserve set, the install exclude, or the clear itself.
-- `custom_export.sh` — saves the operator's own changes out of the install tree before a code clear. Open it before changing what an update saves, how the delta is computed, or what the save notice says.
+- `custom_export.sh` — saves the operator's own changes out of the install tree before a code clear, and classifies each against the incoming release when the caller names one. Open it before changing what an update saves, how the delta is computed, how a saved file is classified, or what the save notice says.
 - `host_artifacts.sh` — generators for the files MIRA installs outside its code tree. Open it before changing an installed file that both a fresh install and every update write.
 
 ## Wiring

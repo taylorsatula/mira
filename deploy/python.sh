@@ -77,7 +77,10 @@ if [ -d /opt/mira/app/.git ] && REINSTALL_BASELINE="$(official_baseline_commit /
     REINSTALL_EXPORT_ROOT="$HOME"
     [ -d "$HOME/Desktop" ] && [ -w "$HOME/Desktop" ] && REINSTALL_EXPORT_ROOT="$HOME/Desktop"
     # The lib's free-space refusal prints this caller's remedy, not the updater's.
+    # deploy.sh runs from the release tree it installs, so the export can
+    # classify every operator file against it.
     CUSTOM_EXPORT_REMEDY="re-run deploy.sh"
+    CUSTOM_EXPORT_NEW_TREE="${SCRIPT_DIR:?}/.."
     if ! export_custom_build /opt/mira/app "$REINSTALL_BASELINE" "$RELEASE_TAG" \
             "$(date -u +%Y%m%dT%H%M%SZ)" "$REINSTALL_EXPORT_ROOT"; then
         print_error "MIRA could not save a safe copy of the files you changed in /opt/mira/app, so the reinstall stopped before touching anything."

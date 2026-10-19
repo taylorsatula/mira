@@ -14,8 +14,8 @@
 - `memory_tool.py` — long-term memory: search, queued creation, links, annotations, archive, merge. Open it before changing how a memory is found, created, or retired.
 - `pager_tool.py` — virtual pager devices, local and federated messaging, device trust. Open it when delivery, a trust verdict, or an inbound federation write misbehaves.
 - `reminder_tool.py` — reminders in per-user SQLite with optional contact links and the user/internal split. Open it when a date lands at the wrong instant or a reminder will not resurface.
-- `sidebar_tool.py` — the sidebar-agent scratchpad, and the sign-out that closes a thread. Open it before changing what an agent may record or what closes a thread.
-- `subagent_tool.py` — one tool surface over every subagent type's lifecycle: start, resume, dismiss, inspect. Open it before changing that vocabulary, its routing, or the activity surface.
+- `sidebar_tool.py` — the sidebar-agent scratchpad, the `complete_task` sign-out, and the durable `agent_memory` rows it writes at completion. Open it before changing what an agent may record or what closes a thread.
+- `subagent_tool.py` — one tool surface over every subagent type's lifecycle: start, resume, dismiss, inspect, plus the main context's management of the agent-memory pool. Open it before changing that vocabulary, its routing, the activity surface, or how a stored memory is revised.
 - `web_tool.py` — search, fetch, and direct HTTP, with SSRF pinning and server-side credentials. Open it before changing how external text reaches the model.
 - `secondarytools_notincontextrn.zip` — archive of retired tool sources; inert, on no package path, and drifting. Not source.
 

@@ -375,6 +375,15 @@ class SidebarDispatcherConfig(BaseModel):
             "(api turn cancel event) still applies on top"
         )
     )
+    agent_memory_max_count: int = Field(
+        default=15, ge=1,
+        description=(
+            "Maximum number of active agent-memory entries per (user, agent) before "
+            "the subagent_results trinket surfaces a 'too many memories' alert. "
+            "Configurable; the alert prompts the agent/main context to compact or "
+            "deprecate."
+        )
+    )
 
 
 class DevicePowerBindingConfig(BaseModel):
