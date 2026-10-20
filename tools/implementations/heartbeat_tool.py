@@ -25,6 +25,7 @@ Storage split:
 
 import inspect
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -64,6 +65,19 @@ BRIEFS_STATE_INDEX_DDL = (
 _MIN_INTERVAL_SECONDS = 60
 # Decay/backoff both use base * 2^count capped at this exponent, then the max_interval_seconds config ceiling applies on top.
 _MAX_DECAY_EXPONENT = 3
+# Scheduled cadence: the `every` parameter is one string with two shapes the
+# parser dispatches on — 'HH:MM' (daily wall clock, user-local) or '<N>h|<N>m'
+# (fixed cadence). The `schedule` column stores the same dual shape verbatim,
+# so re-arm resolution re-parses the stored value with the same rules.
+_CADENCE_RE = re.compile(r"^(\d{1,2}):(\d{2})$|^((?:\d+(?:\.\d+)?)(?:h|m))$")
+_MAX_CADENCE_SECONDS = 23 * 3600
+
+
+def _is_fixed_cadence(schedule: Any) -> bool:
+    """True when a stored schedule value is the '<N>h'/'<N>m' cadence shape
+    (False for 'HH:MM' wall times, one-off ISO timestamps, and junk)."""
+    match = _CADENCE_RE.match(str(schedule or ""))
+    return match is not None and match.group(3) is not None
 _NOTE_MAX_CHARS = 2000
 _MISSION_MAX_CHARS = 4000
 
@@ -144,23 +158,27 @@ def refresh_armed_marker(db, user_id: str) -> None:
 
 
 
-def _parse_wake_at(wake_at: str, daily_at: Optional[str]) -> datetime:
-    """Resolve a wake time: one-off takes wake_at (ISO or 'in N seconds');
-    scheduled takes daily_at ('HH:MM', user-local) and fires next."""
+def _parse_cadence(every: str) -> datetime:
+    """Resolve a scheduled cadence string to its first wake time.
+
+    One string, two shapes: 'HH:MM' is a daily wall-clock time in the user's
+    timezone (next occurrence, DST-strict); '<N>h' or '<N>m' is a fixed
+    cadence (first wake = now + interval, deliberately not wall-clock-aligned).
+    """
     from utils.user_context import get_user_preferences
 
     now = utc_now()
-    if daily_at is not None:
-        import re
-
-        match = re.fullmatch(r"(\d{1,2}):(\d{2})", daily_at.strip())
-        if not match:
-            raise ValueError(
-                f"daily_at must be 'HH:MM' (24h, user-local), got: {daily_at!r}"
-            )
+    text = every.strip()
+    match = _CADENCE_RE.match(text)
+    if not match:
+        raise ValueError(
+            f"every must be 'HH:MM' (daily wall clock) or '<N>h'/'<N>m' "
+            f"(fixed cadence), got: {every!r}"
+        )
+    if match.group(1) is not None:
         hour, minute = int(match.group(1)), int(match.group(2))
         if hour > 23 or minute > 59:
-            raise ValueError(f"daily_at out of range: {daily_at!r}")
+            raise ValueError(f"every out of range: {every!r}")
         tz_name = get_user_preferences().timezone
         # DST-strict resolution, the codebase's sanctioned pair for
         # user-supplied exact wall times (reminder_tool, punchclock_tool):
@@ -176,6 +194,25 @@ def _parse_wake_at(wake_at: str, daily_at: Optional[str]) -> datetime:
             candidate_date += timedelta(days=1)
         wall = f"{candidate_date.isoformat()}T{hour:02d}:{minute:02d}:00"
         return parse_utc_time_string(local_datetime_to_utc_iso(wall, tz_name))
+    seconds = int(float(text[:-1]) * (3600 if text[-1] == "h" else 60))
+    if seconds < _MIN_INTERVAL_SECONDS or seconds > _MAX_CADENCE_SECONDS:
+        raise ValueError(
+            f"every cadence must be between {_MIN_INTERVAL_SECONDS}s and "
+            f"{_MAX_CADENCE_SECONDS / 3600:g}h (daily-or-slower is 'HH:MM'), "
+            f"got: {every!r}"
+        )
+    return now + timedelta(seconds=seconds)
+
+
+def _parse_wake_at(wake_at: str, every: Optional[str] = None) -> datetime:
+    """Resolve a wake time: one-off takes wake_at (ISO or 'in N seconds');
+    scheduled takes every ('HH:MM' daily wall clock or '<N>h'/'<N>m' fixed
+    cadence) and fires next."""
+    if every is not None:
+        return _parse_cadence(every)
+    from utils.user_context import get_user_preferences
+
+    now = utc_now()
     if wake_at is None:
         raise ValueError("one-off briefs require wake_at (ISO 8601 or 'in N seconds')")
     stripped = wake_at.strip()
@@ -196,10 +233,14 @@ def _parse_wake_at(wake_at: str, daily_at: Optional[str]) -> datetime:
     return parsed
 
 
-def _next_daily_occurrence(schedule_daily: str) -> str:
-    """Compute the next user-local daily occurrence as a UTC ISO timestamp."""
-    dt = _parse_wake_at(None, schedule_daily)
-    return format_utc_iso(dt)
+def _next_recurring_occurrence(schedule: str) -> str:
+    """Compute a scheduled brief's next wake as a UTC ISO timestamp.
+
+    The stored schedule value is the user's `every` string verbatim
+    ('HH:MM' wall clock or '<N>h'/'<N>m' cadence); re-parsing it applies the
+    same rules as scheduling, so the two paths cannot drift.
+    """
+    return format_utc_iso(_parse_cadence(schedule))
 
 
 def _clamped_interval(base_seconds: int, count: int) -> int:
@@ -314,7 +355,7 @@ class HeartbeatTool(Tool):
                     "description": (
                         "Brief type, for 'schedule'. one-off: fires once until its "
                         "condition holds, then dies (bail_if required). scheduled: "
-                        "recurs perpetually (e.g. daily), bail_if optional."
+                        "recurs perpetually per `every`, bail_if optional."
                     ),
                 },
                 "mission": {
@@ -347,10 +388,13 @@ class HeartbeatTool(Tool):
                         "seconds'."
                     ),
                 },
-                "daily_at": {
+                "every": {
                     "type": "string",
                     "description": (
-                        "Scheduled only: 'HH:MM' in the user's local timezone, daily."
+                        "Scheduled only, one string with two shapes: 'HH:MM' = daily "
+                        "at that wall-clock time in the user's timezone; '<N>h' or "
+                        "'<N>m' = fixed cadence (e.g. '6h', '90m'), firing every N "
+                        "hours/minutes from scheduling rather than wall-clock-aligned."
                     ),
                 },
                 "interval_seconds": {
@@ -429,7 +473,7 @@ class HeartbeatTool(Tool):
         condition_check: Optional[str] = None,
         bail_if: Optional[str] = None,
         wake_at: Optional[str] = None,
-        daily_at: Optional[str] = None,
+        every: Optional[str] = None,
         interval_seconds: Optional[int] = None,
         note: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -453,33 +497,43 @@ class HeartbeatTool(Tool):
         if bail_if and len(bail_if) > _MISSION_MAX_CHARS:
             raise ValueError(f"bail_if exceeds {_MISSION_MAX_CHARS} characters (got {len(bail_if)})")
 
-        base_interval = (
-            interval_seconds
-            if interval_seconds is not None
-            else config.heartbeat.default_interval_seconds
-        )
+        # Enforce per-type inputs before _parse_wake_at can AttributeError on
+        # None; the one-off + every cross-pairing is rejected too — a one-off
+        # must name its one wake moment, not borrow the scheduled machinery.
+        if type == "one-off" and not wake_at:
+            raise ValueError("one-off briefs require wake_at (ISO 8601 or 'in N seconds')")
+        if type == "one-off" and every:
+            raise ValueError("one-off briefs take wake_at, not every")
+        if type == "scheduled" and not every:
+            raise ValueError(
+                "scheduled briefs require every ('HH:MM' daily wall clock "
+                "or '<N>h'/'<N>m' fixed cadence)"
+            )
+
+        # A scheduled brief's cadence is fully validated here (shape, range,
+        # DST resolution) before any default derivation reads it.
+        if type == "scheduled":
+            wake_dt = _parse_wake_at(None, every)
+        if interval_seconds is not None:
+            base_interval = interval_seconds
+        elif _is_fixed_cadence(every):
+            # fixed cadence: the cadence IS the interval (decay/backoff base);
+            # _parse_cadence already bounded it to [60s, 23h]
+            base_interval = int(float(every.strip()[:-1]) * (3600 if every.strip()[-1] == "h" else 60))
+        else:
+            base_interval = config.heartbeat.default_interval_seconds
         if not isinstance(base_interval, int) or base_interval < _MIN_INTERVAL_SECONDS:
             raise ValueError(
                 f"interval_seconds must be an integer >= {_MIN_INTERVAL_SECONDS}, got: {base_interval!r}"
             )
 
-        # Enforce per-type inputs before _parse_wake_at can AttributeError on
-        # None; the one-off + daily_at cross-pairing is rejected too — a
-        # one-off must name its one wake moment, not borrow the daily machinery.
-        if type == "one-off" and not wake_at:
-            raise ValueError("one-off briefs require wake_at (ISO 8601 or 'in N seconds')")
-        if type == "one-off" and daily_at:
-            raise ValueError("one-off briefs take wake_at, not daily_at")
-        if type == "scheduled" and not daily_at:
-            raise ValueError("scheduled briefs require daily_at ('HH:MM' user-local)")
-
         # Resolve first wake time. A one-off's schedule field is its first
-        # wake ISO timestamp; a scheduled brief's is its 'HH:MM' local time.
-        wake_dt = _parse_wake_at(wake_at, daily_at)
+        # wake ISO timestamp; a scheduled brief stores its `every` verbatim.
         if type == "one-off":
+            wake_dt = _parse_wake_at(wake_at)
             schedule_value = format_utc_iso(wake_dt)
         else:
-            schedule_value = daily_at.strip()
+            schedule_value = every.strip()
 
         brief_id = f"brf_{uuid4().hex[:12]}"
         now_iso = format_utc_iso(utc_now())
@@ -513,7 +567,7 @@ class HeartbeatTool(Tool):
             "message": (
                 f"Brief {brief_id} armed ({type}). The HeartbeatAgent will wake "
                 f"with its payload at {row['next_wake_at']}"
-                + (f" (daily at {schedule_value} local)" if type == "scheduled" else "")
+                + (f" (every {schedule_value})" if type == "scheduled" else "")
                 + "."
             ),
         }
@@ -635,8 +689,8 @@ class HeartbeatTool(Tool):
                     "state": "done",
                     "message": f"Brief {brief_id} fired and is complete.",
                 }
-            # scheduled: re-arm at the next daily occurrence, reset counters
-            next_wake = _next_daily_occurrence(row.get("schedule"))
+            # scheduled: re-arm at the next occurrence, reset counters
+            next_wake = _next_recurring_occurrence(row.get("schedule"))
             self.db.execute(
                 "UPDATE briefs SET encrypted__last_result = :note, next_wake_at = :nw, "
                 "consecutive_false = 0, consecutive_failures = 0, last_wake_at = :now, "
@@ -664,6 +718,12 @@ class HeartbeatTool(Tool):
                     f"seconds (config.heartbeat.max_interval_seconds); rejected, not clamped"
                 )
             delay = wake_in_seconds
+        elif _is_fixed_cadence(row.get("schedule")):
+            # cadence-brief: the cadence IS the schedule. The false-path decay
+            # exists to back off condition-wait briefs; applying it here would
+            # clamp max_interval_seconds (default 4800s) UNDER a sub-daily
+            # cadence and silently shorten the fixed loop. Keep the cadence.
+            delay = base_interval
         else:
             delay = _clamped_interval(base_interval, false_count)
         next_wake = format_utc_iso(now + timedelta(seconds=delay))
@@ -733,6 +793,10 @@ def apply_run_failure(brief_ids: List[str], failure_note: str) -> List[Dict[str,
                 },
             )
             results.append({"brief_id": brief_id, "state": "failed_permanently"})
+        elif _is_fixed_cadence(row.get("schedule")):
+            # same fixed-cadence rule as the false re-arm: failure backoff must
+            # not clamp a sub-daily cadence below itself
+            next_wake = format_utc_iso(now + timedelta(seconds=base_interval))
         else:
             delay = _clamped_interval(base_interval, failures)
             next_wake = format_utc_iso(now + timedelta(seconds=delay))
