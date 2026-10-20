@@ -81,6 +81,19 @@ class SubagentSpec:
 
 
 SUBAGENT_SPECS: dict[str, SubagentSpec] = {
+    "talktoanyone": SubagentSpec(
+        agent_type="talktoanyone",
+        interface_name="talktoanyone",
+        model_route="other",
+        invocable=True,
+        blocking_only=True,
+        continuable=True,
+        publishes_pending=False,
+        dismissable=False,
+        result_ttl_turns=None,
+        error_ttl_turns=None,
+        agent_class_path="agents.implementations.talktoanyone_agent:TalkToAnyoneAgent",
+    ),
     "phoneafriend": SubagentSpec(
         agent_type="phoneafriend",
         interface_name="phoneafriend",

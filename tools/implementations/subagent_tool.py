@@ -161,7 +161,8 @@ class SubagentTool(Tool):
 
     simple_description = """
     Start and manage subagent work: consult an outside model synchronously
-    (phoneafriend), dispatch background research (forage, whilethecatsaway),
+    (phoneafriend), consult a persona you describe in character (talktoanyone),
+    dispatch background research (forage, whilethecatsaway),
     continue or refine prior work, and inspect or close sidebar agent activity.
     """
 
@@ -172,12 +173,16 @@ class SubagentTool(Tool):
             "every surface.\n\n"
             "  activate (agent_type + subject): start work. phoneafriend consults "
             "an outside model synchronously — the full response returns in this "
-            "tool result, and its task_id resumes the same consult thread. forage "
+            "tool result, and its task_id resumes the same consult thread. "
+            "talktoanyone consults a persona you write in subject — answers come "
+            "back in that persona's voice, and its task_id resumes the thread. "
+            "forage "
             "researches across conversations, memories, and web — async by default "
             "(results appear in your context window when ready) or blocking=true. "
             "whilethecatsaway explores a topic at leisure in the background and "
             "stores findings as memories.\n"
-            "  continue (task_id + subject): resume — continue a phoneafriend "
+            "  continue (task_id + subject): resume — continue a phoneafriend or "
+            "talktoanyone "
             "consult thread with a follow-up question, or refine a completed "
             "forage result (the prior result is dismissed and passed to the new "
             "agent; subject is the refinement instruction).\n"
@@ -215,6 +220,8 @@ class SubagentTool(Tool):
                     "description": (
                         "activate only: which subagent type to start. "
                         "phoneafriend = synchronous outside-model consult; "
+                        "talktoanyone = synchronous consult answered in character "
+                        "by a persona you describe; "
                         "forage = research across conversations, memories, and "
                         "web; whilethecatsaway = open-ended background research "
                         "stored as memories."
@@ -237,10 +244,14 @@ class SubagentTool(Tool):
                         "The work itself. activate: the inquiry (phoneafriend — "
                         "include every fact the outside model needs; it sees "
                         "only this and the thread's prior turns, never the main "
-                        "conversation) or the research target (forage/"
+                        "conversation), the persona plus question (talktoanyone — "
+                        "describe who the persona is, the background and "
+                        "perspective to answer from, then the question), or the "
+                        "research target (forage/"
                         "whilethecatsaway — be specific, it drives the search "
                         "strategy). continue: the follow-up question "
-                        "(phoneafriend) or the refinement instruction (forage)."
+                        "(phoneafriend/talktoanyone) or the refinement "
+                        "instruction (forage)."
                     ),
                 },
                 "context": {
@@ -250,7 +261,8 @@ class SubagentTool(Tool):
                         "whilethecatsaway (activate and continue): what you and "
                         "the user are discussing and why this information would "
                         "be useful. The subagent uses it to judge relevance. "
-                        "Not read by phoneafriend — put everything in subject."
+                        "Not read by phoneafriend or talktoanyone — put "
+                        "everything in subject."
                     ),
                 },
                 "blocking": {

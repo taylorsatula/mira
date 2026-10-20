@@ -7,6 +7,7 @@
 - `heartbeat_agent.py` — the brief gate, and the one place an under-reported run is accounted for. Open it before changing what happens to a brief whose run died before reporting.
 - `memory_curator_agent.py` — the two-mode memory-graph curator and its work-item context shapes. Open it before changing a shape a trigger or the collapse handler fills.
 - `phoneafriend_agent.py` — the outside-model consult and its segment-scoped thread store. Open it before changing how a consult thread is keyed, resumed, or expired.
+- `talktoanyone_agent.py` — the persona consult: the caller supplies a persona description and a question in `subject`, and the model answers fully in character. Same blocking `other`-route mechanics and thread store as the phone-a-friend consult, separate `talktoanyone:` key prefix and interface. Open it before changing how a persona consult is framed, resumed, or expired.
 - `whilethecatsaway_agent.py` — fire-and-forget curiosity research. Open it before changing what a background discovery is allowed to write into memory.
 
 ## Wiring

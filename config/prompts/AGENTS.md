@@ -85,6 +85,7 @@ Tier-1 questions — one file per name in `SCREEN_QUESTIONS`, and the name is al
 - `agents/forage_system.txt` — the research protocol; open it before changing how a sidebar research agent is told to get past the first page of results.
 - `agents/heartbeat_agent_system.txt` — the brief gate: bail, check, or dispatch, one report per brief.
 - `agents/phoneafriend_system.txt` — the outside voice, whose completion summary is the only channel back to the caller.
+- `agents/talktoanyone_system.txt` — the persona voice: adopt the supplied persona fully and answer in character, with the completion summary again the only channel out.
 - `agents/whilethecatsaway_system.txt` — idle-time curiosity research that stores memories as it goes.
 - `agents/memory_curator_integration.txt` — curator INTEGRATION mode, after a segment collapse.
 - `agents/memory_curator_floor.txt` — curator FLOOR mode, over memories already scoring low.

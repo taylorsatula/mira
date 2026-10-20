@@ -6,9 +6,10 @@ which is why this is an `EventAwareTrinket` and not a stateful one: an update
 event is only a signal to re-read, and segment collapse clears nothing. Rows
 leave the feed when a producer writes `dismissed` or `resolved`.
 
-phoneafriend rows are excluded in the query. A blocking consult leaves its
-entire response in `summary`, so rendering them would echo every consult's
-answer as a feed line beside the result the model already received.
+phoneafriend and talktoanyone rows are excluded in the query. A blocking
+consult leaves its entire response in `summary`, so rendering them would echo
+every consult's answer as a feed line beside the result the model already
+received.
 
 `_format_age` has a broad fallback to "recently" when a stored timestamp will
 not parse; that label is display-only and must not be copied into anything
@@ -45,12 +46,12 @@ class AsyncActivityTrinket(EventAwareTrinket):
 
         rows = db.select(
             "sidebar_activity",
-            # phoneafriend rows carry the full consult response in summary
+            # consult rows carry the full response in summary
             # (SidebarAgent._exit) — rendering them would echo every
             # consult's answer as a feed line; the response belongs to the
             # subagent_tool result, not the activity feed.
             where="status NOT IN ('dismissed', 'resolved') "
-                  "AND interface_name != 'phoneafriend'",
+                  "AND interface_name NOT IN ('phoneafriend', 'talktoanyone')",
             order_by="updated_at DESC",
         )
 
