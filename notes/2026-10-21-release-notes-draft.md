@@ -33,4 +33,19 @@ Installs using the local embedding provider
 (`embedding_provider: local`) re-pull torch and sentence-transformers
 unchanged — those stay outside `requirements.txt`.
 
+## Verification
+
+- Gate rows a–c verified at build time against the tagged asset:
+  `scripts.migrate lint` passed, and `verify_release_identity` confirmed
+  tag = v + VERSION, the asset's VERSION matches the repo, and the asset's
+  RELEASE_COMMIT equals the tagged commit (9d24c90).
+- Gate rows d (skip-chain) and e (restore round trip): not re-run at cut
+  time — this release ships no database steps and changes no migration or
+  updater-flow code (`git diff v2026.10.20-2.1.1 v2026.10.21-2.1.2 --
+  deploy/migrations/ utils/schema_migrations.py deploy/update.sh` is
+  empty), so the two rows carry their v2026.10.20-2.1.1 results unchanged.
+- The full pinned requirement set installed from scratch into a clean venv
+  on the build host at cut time — the pins are installable, not merely
+  resolvable.
+
 - Known residuals: unchanged from v2026.10.20-2.1.1.
