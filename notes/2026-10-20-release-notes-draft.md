@@ -1,4 +1,4 @@
-# MIRA v2026.10.16-2.1
+# MIRA v2026.10.20-2.1.1
 
 This is the largest release since 2.0. MIRA now has a browser chat client,
 updates itself in place — database included, with your consent, a backup
@@ -9,6 +9,14 @@ the ground up.
 Run `mira update` as usual. The update flow itself is new in this release:
 it shows you what it will do to the database and asks once before touching
 anything.
+
+**2.1.1 corrects the 2.1 build.** The 2.1 TUI refused to start: `mira`
+exited with `ValueError: Invalid key: c-enter` before drawing anything,
+because the Ctrl+Enter binding named a key prompt_toolkit does not have.
+No terminal can deliver Ctrl+Enter as its own key anyway, so the
+interrupt-and-send action moved to Alt+Enter. If you installed 2.1 and
+never got a prompt, this release is the fix — nothing in your data was
+affected.
 
 ---
 
@@ -111,6 +119,8 @@ cap (8) with a truthful capacity message when full.
   so a restart no longer starts blind.
 - Ctrl+C now clears the input box first; quitting requires a double tap
   within 3 seconds.
+- Alt+Enter sends your message now, interrupting the reply in progress;
+  `\` then Enter or Ctrl+J starts a new line.
 - Resizing mid-turn no longer leaves stray bar fragments in
   scrollback; the window title is now `:mira:`.
 - `mira update --nightly` supported.
