@@ -103,7 +103,7 @@ class Submit:
 
 @dataclass(frozen=True)
 class SubmitNow:
-    """Ctrl+Enter: submit, interrupting the active turn so it sends now."""
+    """Alt+Enter: submit, interrupting the active turn so it sends now."""
 
     text: str
 
@@ -523,16 +523,20 @@ class Screen:
 
         @kb.add("enter")
         def _submit(event) -> None:
-            self._post(Submit(self._input.buffer.text))
+            buffer = self._input.buffer
+            if buffer.document.is_cursor_at_the_end and buffer.text.endswith("\\"):
+                buffer.delete_before_cursor(count=1)
+                buffer.insert_text("\n")
+                return
+            self._post(Submit(buffer.text))
 
-        # Only distinguishable where the terminal can send Ctrl+Enter as its
-        # own key (kitty protocol / CSI-u terminals); elsewhere it arrives as
-        # Enter and the plain submit path runs.
-        @kb.add("c-enter")
+        # Ctrl+Enter is not bindable: prompt_toolkit has no ControlEnter key and
+        # Apple Terminal sends it as a bare CR, identical to Enter. Option+Enter
+        # does arrive distinctly as ESC CR wherever Option is the Meta key.
+        @kb.add("escape", "enter")
         def _submit_now(event) -> None:
             self._post(SubmitNow(self._input.buffer.text))
 
-        @kb.add("escape", "enter")
         @kb.add("c-j")
         def _newline(event) -> None:
             event.current_buffer.insert_text("\n")

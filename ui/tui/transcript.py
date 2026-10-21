@@ -298,7 +298,8 @@ class Flow:
 def banner(endpoint: str, base_url: str) -> Text:
     return Text(
         f"MIRA · {sanitize(endpoint)} · {sanitize(base_url)}\n"
-        "Enter send · Alt+Enter newline · Ctrl+C clear/stop · Ctrl+C ×2 quit · Ctrl+T thinking",
+        "Enter send · \\+Enter newline · Alt+Enter interrupt + send\n"
+        "Ctrl+C clear/stop · Ctrl+C ×2 quit · Ctrl+T thinking",
         style="dim",
     )
 

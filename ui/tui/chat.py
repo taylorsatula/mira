@@ -221,7 +221,7 @@ class ChatSession:
         self._in_flight: _InFlight | None = None
         self._turn: _Turn | None = None
         self._halt_on_start = False  # Ctrl+C before turn_started: halt on arrival
-        self._interrupting_for_send = False  # Ctrl+Enter halted the turn: send the queue at its end, don't restore it
+        self._interrupting_for_send = False  # Alt+Enter halted the turn: send the queue at its end, don't restore it
         self._deferred: list[str] = []  # proactive content held until the turn ends
         self._show_thinking = False  # Ctrl+T view toggle; forward-looking, no replay of what streamed while off
         self._flow = transcript.Flow()  # spacing between scrollback blocks across emits
@@ -318,9 +318,9 @@ class ChatSession:
             if turn.halt_requested:
                 return Status("stopping…", "busy", turn.started)
             text = {
-                "replying": "MIRA is replying… · Ctrl+C clears input / stops · Ctrl+Enter interrupts and sends",
-                "thinking": "MIRA is thinking… · Ctrl+C clears input / stops · Ctrl+Enter interrupts and sends",
-                "tool": f"running {turn.tool_name}… · Ctrl+C clears input / stops · Ctrl+Enter interrupts and sends",
+                "replying": "MIRA is replying… · Ctrl+C clears input / stops · Alt+Enter interrupts and sends",
+                "thinking": "MIRA is thinking… · Ctrl+C clears input / stops · Alt+Enter interrupts and sends",
+                "tool": f"running {turn.tool_name}… · Ctrl+C clears input / stops · Alt+Enter interrupts and sends",
             }[turn.activity]
             return Status(text, "busy", turn.started)
         if flight is not None:
@@ -520,7 +520,7 @@ class ChatSession:
                 elif self._conn == "connected" and not self._busy():
                     await self._send_next()
                 elif interrupt and self._turn is not None:
-                    # Ctrl+Enter mid-turn: end the turn so the message goes out
+                    # Alt+Enter mid-turn: end the turn so the message goes out
                     # as soon as the server confirms the halt, instead of
                     # queueing behind whatever MIRA was doing.
                     self._interrupting_for_send = True
