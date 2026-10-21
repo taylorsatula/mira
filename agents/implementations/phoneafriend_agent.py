@@ -19,10 +19,6 @@ segment validated on load. `thread_id` is the consult's task_id and the
 WorkItem's item_id — one identifier family — so the `sidebar_activity` dedup
 row (UNIQUE(interface_name, thread_id)) UPSERTs once per thread and updates
 per consult.
-
-CROSS-FILE-COUPLING: `talktoanyone_agent.py` carries the same thread store —
-record shape, validation order, TTL — under a different key prefix; a change to
-this one belongs in both.
 """
 import json
 import logging
