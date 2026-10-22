@@ -127,7 +127,7 @@ The agent's `complete_task` call is the **only** way to exit the loop. The base 
 |---------|---------------|---------------|
 | **Base class** | `agents/base.py:SidebarAgent` | ABC, loop mechanics, `_exit()`, trace capture |
 | **Prompt loading** | `agents/base.py:load_agent_prompt` | `config/prompts/agents/` file resolution |
-| **Dispatcher** | `agents/sidebar.py` | `WorkItem`, `SidebarTrigger` protocol, `_dispatch_decision()`, seam delegation |
+| **Dispatcher** | `agents/sidebar.py` | `WorkItem`, `SidebarTrigger` base class, `_dispatch_decision()`, seam delegation |
 | **Spawn seam** | `agents/spawn.py` | The only thread spawner: process-global cap, pending/crash publishing |
 | **Spec table** | `agents/specs.py` | Per-type policy rows + the dispatch protocol + `load_agent_class` |
 | **Minimal agent** | `agents/implementations/whilethecatsaway_agent.py` | Fewest overrides — start here |
@@ -328,12 +328,12 @@ Overwatch is **observability, not results**. Publish failures must be swallowed 
 
 ### Step 5: Create a Trigger (If Dispatcher-Driven)
 
-If your agent is triggered by external events (polling), create `agents/triggers/my_trigger.py`. Triggers are plain classes satisfying the `SidebarTrigger` protocol (`agents/sidebar.py`) -- no inheritance:
+If your agent is triggered by external events (polling), create `agents/triggers/my_trigger.py`. Triggers extend the `SidebarTrigger` base class (`agents/sidebar.py`), which supplies the default no-op `on_dispatched`:
 
 ```python
-from agents.sidebar import WorkItem
+from agents.sidebar import SidebarTrigger, WorkItem
 
-class MyTrigger:
+class MyTrigger(SidebarTrigger):
     trigger_id = "my_trigger"
     interface_name = "my_interface"   # Key in AsyncActivityTrinket
 
@@ -352,21 +352,13 @@ class MyTrigger:
         """Poll for new work. Return ALL discovered items."""
         # Deterministic discovery only -- no LLM calls, no judgment.
         ...
-
-    def on_dispatched(self, user_id: str, item_id: str) -> None:
-        """Post-dispatch hook for trigger-specific side effects.
-
-        NOT for dedup. Use for things like setting IMAP flags.
-        Must be idempotent (safe to call on retries).
-        """
-        ...
 ```
 
 **Trigger rules:**
 - `check_for_new_items()` must be **idempotent** and **cheap** -- safe to call repeatedly with no LLM calls. All LLM work (including injection defense) belongs in the agent, not the trigger. **Beware hidden LLM paths**: a tool operation can invoke a model invisibly (`web_tool`'s fetch condenses pages over 5000 chars via the `fast` route), which silently violates this rule and breaks anything deterministic like hash comparisons — check the operations your trigger calls before trusting them LLM-free.
 - **Dedup is handled by the dispatcher** via `sidebar_activity` SQLite. Triggers return all discovered items and the dispatcher decides what to act on (first dispatch, retry, or skip).
-- `on_dispatched()` is for domain-specific side effects only (e.g. setting an IMAP flag). It must be idempotent because it's called on retries too.
-- **Error handling distinction**: Return `[]` to signal "no work found" (not an error). Raise `Exception` only for actual failures (connection errors, programming bugs). The dispatcher lets exceptions propagate — if a trigger has a bug, operators need to know via error logs, not silent `[]` returns.
+- Override `on_dispatched()` only when the trigger fronts an external source whose items must be marked consumed after a successful spawn (e.g. setting an IMAP flag); the base-class default is a no-op. It must be idempotent because it's called on retries too.
+- **Error handling distinction**: Return `[]` to signal "no work found" (not an error). Raise `Exception` only for actual failures (connection errors, programming bugs). The dispatcher catches each trigger at its own boundary, logs at error, and skips that trigger for the tick while later triggers still run — if a trigger has a bug, operators see it in the error log, not a silent `[]` return.
 - Store untrusted content as `"raw_content"` in the WorkItem context. Set `sanitize_untrusted_input = True` on the agent class to have the base class sanitize it before the LLM loop.
 - Make `item_id` **stable across polls** for the same logical work item -- it is the dedup key (`UNIQUE(interface_name, thread_id)` in `sidebar_activity`), and that uniqueness is **global across users**: the dispatcher keys in-flight work by `interface_name:item_id` on a process-global map, which is why every key shape below embeds `{user_id}`. Key it to the **entity**, not the cycle: a single-item trigger may key by cycle (`memory_floor_trigger.py` uses `floor_{user_id}_{activity_days}`), but a **multi-item** trigger emitting one WorkItem per entity must derive the key from the entity's own stable ID (`rsteward_{reminder_id}`, `folder:uid`) -- a cycle- or timestamp-keyed ID in a multi-item trigger re-dispatches every entity on every cycle and the dispatcher will happily run them all again.
 - The dispatcher caps at `MAX_ITEMS_PER_USER_PER_POLL = 5`; in-flight work is tracked keyed `interface_name:item_id` against the process-global `max_concurrent_agents` in `agents/spawn.py` (every spawn site shares the cap — dispatcher, subagent_tool, collapse handler). Returning 500 items does not run 500 agents -- a backlog drains over successive polls.
