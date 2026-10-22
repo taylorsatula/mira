@@ -33,13 +33,13 @@ utils/sidebar_jobs.py's import path.
 """
 import logging
 
-from agents.sidebar import WorkItem
+from agents.sidebar import SidebarTrigger, WorkItem
 from agents.triggers.rule_filter import apply_trigger_rules
 
 logger = logging.getLogger(__name__)
 
 
-class MemoryFloorTrigger:
+class MemoryFloorTrigger(SidebarTrigger):
     """Surfaces floor-mode curation work-items for the MemoryCuratorAgent."""
 
     trigger_id = "memory_floor"
@@ -131,7 +131,3 @@ class MemoryFloorTrigger:
             },
         )]
         return apply_trigger_rules(user_id, self.trigger_id, items)
-
-    def on_dispatched(self, user_id: str, item_id: str) -> None:
-        """No side effects (floor curation leaves no IMAP-style flags)."""
-        pass
