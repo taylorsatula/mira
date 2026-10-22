@@ -1,12 +1,13 @@
 """
-Sidebar dispatcher -- the trigger protocol, the work item, and the poll loop.
+Sidebar dispatcher -- the trigger base class, the work item, and the poll loop.
 
 `WorkItem` is the contract between the two halves of this directory: a trigger
 produces one per piece of discovered work, keyed by an `item_id` that stays
 stable across polls, and the agent run consumes its `context`. `SidebarTrigger`
-is structural, with no base class to inherit: `check_for_new_items` returns
+is the base class every trigger extends: `check_for_new_items` returns
 candidate work and nothing else, because the dispatcher alone decides what
-actually runs.
+actually runs, and the default `on_dispatched` no-op covers triggers with no
+post-dispatch ack.
 
 `SidebarDispatcher.poll` is one APScheduler tick. It resolves eligible users
 (active recently, plus anyone holding an armed heartbeat brief), sets the user
@@ -20,12 +21,14 @@ Two bounds live here. `MAX_ITEMS_PER_USER_PER_POLL` caps dispatches per trigger
 per user per tick, and `_maybe_cleanup` deletes old activity rows — which is what
 makes a long-finished item discoverable again later.
 
-A trigger that raises aborts the rest of that user's triggers for the tick: the
-per-user handler logs it and moves to the next user, so one broken trigger hides
-every trigger ordered after it for the users it breaks on.
+Each trigger's discover-and-dispatch runs inside its own exception boundary in
+`_poll_user`: a trigger that raises is skipped for that user's tick with an
+error log, and the triggers after it still run, so one broken trigger hides
+nothing ordered after it.
 """
 import logging
-from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING
+from abc import ABC, abstractmethod
+from typing import Any, TYPE_CHECKING
 
 from pydantic import BaseModel
 
@@ -46,23 +49,33 @@ class WorkItem(BaseModel):
     context: dict[str, Any]  # Trigger-specific payload passed to the agent
 
 
-@runtime_checkable
-class SidebarTrigger(Protocol):
+class SidebarTrigger(ABC):
+    """Base class for dispatcher triggers: required discovery, optional ack.
+
+    Implementations define `trigger_id`, `interface_name`, a lazy `agent_class`
+    property (an import at module scope drags the agent's tool chain into
+    scheduler registration), and `FILTERABLE_FIELDS` (omitted is zero
+    addressable rule fields; an empty tuple is a deliberate declaration).
+    """
+
     trigger_id: str
     interface_name: str
     agent_class: type['SidebarAgent']
 
+    @abstractmethod
     def check_for_new_items(self, user_id: str) -> list[WorkItem]:
         """Poll for new work. Return ALL discovered items -- dispatcher handles dedup."""
         ...
 
     def on_dispatched(self, user_id: str, item_id: str) -> None:
-        """Post-dispatch hook for trigger-specific side effects (e.g. IMAP flag).
-
-        NOT for dedup -- the dispatcher owns that via sidebar_activity.
-        Must be idempotent (safe to call on retries).
+        """Ack a dispatched item at its source. Needed only when the trigger
+        fronts an external store whose items must be marked consumed after a
+        successful spawn (e.g. an IMAP flag); triggers backed by mira's own
+        stores keep the default no-op, since discovery-time writes are safe
+        where dispatcher dedup lives in the same store. NOT for dedup -- the
+        dispatcher owns that via sidebar_activity. Must be idempotent (safe
+        to call on retries).
         """
-        ...
 
 
 # Per-user-per-poll cap to prevent runaway cost from misconfigured triggers
@@ -121,45 +134,66 @@ class SidebarDispatcher:
                 clear_user_context()
 
     def _poll_user(self, user_id: str) -> None:
-        """Check all triggers for a single user, with SQLite-backed dedup."""
+        """Check all triggers for a single user, with SQLite-backed dedup.
+
+        Each trigger runs inside its own exception boundary: one that raises
+        is logged and skipped for this tick, and later triggers still run.
+        """
         from utils.userdata_manager import get_user_data_manager
         from agents.base import ensure_activity_schema
-        from agents.spawn import is_in_flight
 
         db = get_user_data_manager(user_id)
         ensure_activity_schema(db)
         self._maybe_cleanup(db, user_id)
 
         for trigger in self._triggers:
-            items = trigger.check_for_new_items(user_id)
-            if not items:
+            try:
+                self._poll_trigger(trigger, db, user_id)
+            except Exception as e:
+                logger.error(
+                    f"Sidebar trigger {trigger.trigger_id} failed for user "
+                    f"{user_id}: {e}",
+                    exc_info=True,
+                )
+
+    def _poll_trigger(
+        self,
+        trigger: SidebarTrigger,
+        db,
+        user_id: str,
+    ) -> None:
+        """Discover and dispatch for one trigger; the caller owns the boundary."""
+        from agents.spawn import is_in_flight
+
+        items = trigger.check_for_new_items(user_id)
+        if not items:
+            return
+
+        dispatched = 0
+        for item in items:
+            if dispatched >= MAX_ITEMS_PER_USER_PER_POLL:
+                break
+
+            if is_in_flight(item.interface_name, item.item_id):
                 continue
 
-            dispatched = 0
-            for item in items:
-                if dispatched >= MAX_ITEMS_PER_USER_PER_POLL:
-                    break
+            prior_run = self._get_prior_run(db, item)
+            decision = self._dispatch_decision(
+                prior_run, trigger.agent_class,
+            )
+            if decision == 'skip':
+                continue
 
-                if is_in_flight(item.interface_name, item.item_id):
-                    continue
+            if decision == 'retry' and prior_run:
+                item.context['run_count'] = prior_run.get('run_count', 1) + 1
+                item.context['prior_run'] = dict(prior_run)
+            else:
+                item.context['run_count'] = 1
 
-                prior_run = self._get_prior_run(db, item)
-                decision = self._dispatch_decision(
-                    prior_run, trigger.agent_class,
-                )
-                if decision == 'skip':
-                    continue
-
-                if decision == 'retry' and prior_run:
-                    item.context['run_count'] = prior_run.get('run_count', 1) + 1
-                    item.context['prior_run'] = dict(prior_run)
-                else:
-                    item.context['run_count'] = 1
-
-                if not self._spawn_agent(trigger, item):
-                    continue
-                trigger.on_dispatched(user_id, item.item_id)
-                dispatched += 1
+            if not self._spawn_agent(trigger, item):
+                continue
+            trigger.on_dispatched(user_id, item.item_id)
+            dispatched += 1
 
     def _get_prior_run(self, db, item: WorkItem) -> dict | None:
         """Look up existing activity record for this item."""
