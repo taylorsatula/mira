@@ -166,17 +166,23 @@ class LLMProvider:
                     # One diversion level: the backup gets a single attempt
                     # and its failure is not recorded against the primary's
                     # trip counter.
+                    self.logger.warning(
+                        "Provider %s failed on the failover target; raising",
+                        selection.endpoint_url,
+                    )
                     raise
                 if retry >= config.api.provider_retry_max_attempts:
                     # Exhausted: one record per failed call, so retries do
                     # not multiply the trip counter's unit.
-                    diverter.record_failure(selection.endpoint_url, error)
+                    self._record_failure(selection, error)
                     fallback = self._fallback_selection(selection)
                     if fallback is None:
                         self.logger.warning(
-                            "Provider %s failed after %d retries; no failover "
-                            "target configured, raising",
+                            "Provider %s failed after %d retries; %s, raising",
                             selection.endpoint_url, retry,
+                            ("already running on the failover target"
+                             if config.api.failover_enabled
+                             else "no failover target configured"),
                         )
                         raise
                     self.logger.warning(
@@ -265,20 +271,26 @@ class LLMProvider:
                         # One diversion level: the backup gets a single attempt
                         # and its failure is not recorded against the primary's
                         # trip counter.
+                        self.logger.warning(
+                            "Provider %s failed on the failover target; raising",
+                            selection.endpoint_url,
+                        )
                         raise
                     if yielded_content:
                         # Mid-stream failure is final and counts once, like
                         # every exhausted call.
-                        diverter.record_failure(selection.endpoint_url, error)
+                        self._record_failure(selection, error)
                         raise
                     if retry >= config.api.provider_retry_max_attempts:
-                        diverter.record_failure(selection.endpoint_url, error)
+                        self._record_failure(selection, error)
                         fallback = self._fallback_selection(selection)
                         if fallback is None:
                             self.logger.warning(
-                                "Provider %s failed after %d retries; no "
-                                "failover target configured, raising",
+                                "Provider %s failed after %d retries; %s, raising",
                                 selection.endpoint_url, retry,
+                                ("already running on the failover target"
+                                 if config.api.failover_enabled
+                                 else "no failover target configured"),
                             )
                             raise
                         self.logger.warning(
@@ -389,6 +401,23 @@ class LLMProvider:
         if selection.endpoint_url == config.api.failover_endpoint_url:
             return None
         return ModelResolver.failover_selection(selection)
+
+    @staticmethod
+    def _record_failure(selection: ModelSelection, error: BaseException) -> None:
+        """Record one failed call against the diverter, primary endpoints only.
+
+        A failure on the failover endpoint must not poison the trip counter —
+        including a call that exhausted on the backup just as the recovery
+        probe flipped the diverter back, which would otherwise record while
+        untripped. The endpoint check here, not the diverter's tripped early
+        return, is what keeps backup failures structurally uncountable.
+        """
+        if (
+            config.api.failover_enabled
+            and selection.endpoint_url == config.api.failover_endpoint_url
+        ):
+            return
+        diverter.record_failure(selection.endpoint_url, error)
 
     @staticmethod
     def _backoff_seconds(retry: int) -> int:
