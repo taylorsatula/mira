@@ -55,7 +55,7 @@
     const UNATTRIBUTED_SEND_CODES = new Set(['INVALID_MESSAGE', 'TURN_SETUP_FAILED']);
     // Server frames forwarded unchanged to eventHandlers.onMessage. Terminal
     // frames settle the sendMessage promise instead.
-    const TURN_STREAM_FRAMES = new Set(['turn_started', 'assistant_delta', 'thinking', 'tool', 'context_reset', 'model_error']);
+    const TURN_STREAM_FRAMES = new Set(['turn_started', 'assistant_delta', 'thinking', 'tool', 'context_reset', 'model_error', 'provider_notice']);
 
     class MiraHttpError extends Error {
         constructor(status, code, message) {
