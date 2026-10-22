@@ -2,8 +2,10 @@
 Public LLMProvider entry point backed by provider-neutral dialects.
 
 `generate_response()` returns a final result; `stream_events()` yields
-normalized events and then re-raises, after yielding an `ErrorEvent`, so a
-streaming caller has to handle both. Callers pass one thinking source, either
+normalized events and re-raises on failure — the generic-error path yields an
+`ErrorEvent` first, while a retryable-final failure (exhausted retries, mid-
+stream death after content) re-raises bare, so a streaming caller has to
+handle both. Callers pass one thinking source, either
 `thinking=ThinkingConfig(...)` or the `effort=`/`thinking_tokens=` keywords, and
 mixing them raises `ValueError` instead of silently discarding half the intent.
 A provider context overflow leaves here as `ContextOverflowError`, and each
