@@ -115,6 +115,16 @@ class ModelError:
 
 
 @dataclass
+class ProviderNotice:
+    turn_id: str
+    segment_id: str
+    message: str
+    attempt: int
+    retry_in_seconds: int
+    using_fallback: bool
+
+
+@dataclass
 class ContextReset:
     turn_id: str
     segment_id: str
@@ -660,6 +670,15 @@ class MiraClient:
                 turn_id=str(frame.turn_id),
                 segment_id=str(frame.segment_id),
                 message=frame.message,
+            )
+        if kind == "provider_notice":
+            return ProviderNotice(
+                turn_id=str(frame.turn_id),
+                segment_id=str(frame.segment_id),
+                message=frame.message,
+                attempt=frame.attempt,
+                retry_in_seconds=frame.retry_in_seconds,
+                using_fallback=frame.using_fallback,
             )
         if kind == "context_reset":
             return ContextReset(turn_id=str(frame.turn_id), segment_id=str(frame.segment_id))

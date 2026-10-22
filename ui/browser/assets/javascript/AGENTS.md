@@ -45,7 +45,7 @@
 | `turn_started` | `_onTurnStream` | binds `turn_id`/`segment_id` to the in-flight send, then emits `onMessage` | `messaging.js:handleTurnFrame` |
 | `assistant_delta` | `_onTurnStream` | appends `content` to the send's `streamedText`, then emits | `handleTurnFrame` |
 | `context_reset` | `_onTurnStream` | clears `streamedText`, then emits | `handleTurnFrame` |
-| `thinking`, `tool`, `model_error` | `_onTurnStream` | emits | `handleTurnFrame`; `tool` also reaches `core.js`'s badge listener, which is why that listener outlives a turn |
+| `thinking`, `tool`, `model_error`, `provider_notice` | `_onTurnStream` | emits | `handleTurnFrame`; `tool` also reaches `core.js`'s badge listener, which is why that listener outlives a turn; `provider_notice` pushes a transient notice cleared at turn end |
 | anything else | default | logs `Unknown server frame type` and drops it | nothing |
 
 ## Rules

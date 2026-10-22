@@ -57,6 +57,6 @@ The path that decides most of the Rules above, crossing `screen.py`, `commands.p
 4. `client.send_message` mints a message id and writes the frame; a send failure puts the text back in the box.
 5. `turn_started` with that id is the moment the text moves to scrollback: one emit prints `transcript.you` and clears the live region together, so the message is never in two places and never in none.
 6. Deltas go through `_Turn.stream.feed`, which commits only whole lines and holds back anything that could still turn into a tag or a partial leading timestamp. Committed lines print as `mira_rows` — the label on the first row, the gutter on the rest — and the uncommitted tail stays in the live region.
-7. A tool event or a `model_error` flushes the stream before printing, so a row never lands inside a paragraph still pending in the live region.
+7. A tool event, a `model_error`, or a `provider_notice` flushes the stream before printing, so a row never lands inside a paragraph still pending in the live region.
 8. Exactly one terminal frame ends the turn. `turn_complete` renders its own `response` only when the stream never displayed text; `_end_reply` closes the box, prints proactives held during the turn, then either returns the queue to the box (a Ctrl+C halt) or sends the next message.
 9. A `TURN_BUSY` protocol error attributed to that message id is not a failure: a retry timer re-sends from the first bounce, and only exhausting the wait window returns the text to the box.

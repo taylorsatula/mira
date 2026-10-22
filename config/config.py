@@ -70,6 +70,24 @@ class ApiConfig(BaseModel):
     failover_trip_consecutive_failures: int = Field(default=3, ge=1, description="Consecutive retryable provider failures (ProviderRetryableError, including stalls) from the same primary endpoint that trip the diverter. A single success resets the counter; auth and context-overflow errors never count.")
     failover_flipback_consecutive_passes: int = Field(default=2, ge=1, description="Consecutive passing primary probes required before traffic returns to the primary; one lucky probe cannot cause an outage-flap loop.")
 
+    # Provider retry: per-call retry with exponential backoff before the
+    # fallback decision. Independent of failover_enabled: retries run with or
+    # without a configured backup; the fallback leg fires only when the
+    # failover block above is configured.
+    provider_retry_max_attempts: int = Field(default=3, ge=0, description="Retries against the resolved primary after the initial attempt fails retryably (ProviderRetryableError, stalls included) before the fallback decision: with the failover block configured, one attempt on the backup target; otherwise the call raises. 0 disables per-call retry.")
+    provider_retry_backoff_base_seconds: int = Field(default=30, ge=1, description="First retry's backoff wait in seconds; each subsequent retry doubles the wait.")
+    provider_retry_backoff_max_seconds: int = Field(default=180, ge=1, description="Ceiling on any single backoff wait; a doubled delay past this value is clamped to it.")
+
+    @model_validator(mode="after")
+    def validate_provider_retry(self) -> "ApiConfig":
+        """The backoff ceiling cannot sit below the base it clamps."""
+        if self.provider_retry_backoff_max_seconds < self.provider_retry_backoff_base_seconds:
+            raise ValueError(
+                "provider_retry_backoff_max_seconds must be >= "
+                "provider_retry_backoff_base_seconds"
+            )
+        return self
+
     @model_validator(mode="after")
     def validate_failover_block(self) -> "ApiConfig":
         """When the diverter is enabled, its transport coordinates are required."""
