@@ -44,6 +44,7 @@ from .client import (
     Disconnected,
     MiraClient,
     ModelError,
+    ProviderNotice,
     Proactive,
     ProtocolError,
     ServerShutdown,
@@ -444,6 +445,8 @@ class ChatSession:
                 await self._on_tool(item)
             case ModelError():
                 await self._on_model_error(item)
+            case ProviderNotice():
+                await self._on_provider_notice(item)
             case RetrySend():
                 await self._on_retry_send(item)
             case AutoReconnectDue():
@@ -922,6 +925,24 @@ class ChatSession:
         if thinking:
             bodies.append(transcript.thinking_lines(thinking))
         lines = turn.stream.flush()  # the notice must not land inside a paragraph
+        if lines:
+            bodies.append(transcript.mira_lines(lines))
+        await self._emit(*self._in_box(turn, *bodies, notice))
+
+    async def _on_provider_notice(self, event: ProviderNotice) -> None:
+        # Same discipline as _on_model_error: flush thinking and stream so the
+        # notice never lands inside a paragraph, and render it as a transient
+        # status line the next delta pushes past.
+        notice = transcript.notice(event.message)
+        turn = self._turn
+        if turn is None or turn.turn_id != event.turn_id:
+            await self._emit(notice)
+            return
+        bodies: list[Text] = []
+        thinking = turn.thinking.flush()
+        if thinking:
+            bodies.append(transcript.thinking_lines(thinking))
+        lines = turn.stream.flush()
         if lines:
             bodies.append(transcript.mira_lines(lines))
         await self._emit(*self._in_box(turn, *bodies, notice))

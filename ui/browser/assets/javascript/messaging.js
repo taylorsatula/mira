@@ -1083,6 +1083,11 @@ function handleTurnFrame(frame) {
 			appendDisplayText(streamingState.filter.flush());
 			streamingState.turnNotices.push(showNotice(`Model error: ${frame.message} — retrying`, 'alert'));
 			break;
+		case 'provider_notice':
+			// Transient provider retry/fallback status from the server; removed at turn end
+			// with the other turn notices.
+			streamingState.turnNotices.push(showNotice(frame.message, 'alert'));
+			break;
 	}
 }
 

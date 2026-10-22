@@ -7,10 +7,15 @@ streaming caller has to handle both. Callers pass one thinking source, either
 `thinking=ThinkingConfig(...)` or the `effort=`/`thinking_tokens=` keywords, and
 mixing them raises `ValueError` instead of silently discarding half the intent.
 A provider context overflow leaves here as `ContextOverflowError`, and each
-finished or retryable-failed attempt is reported to `clients.llm.diverter` so a
-primary endpoint that keeps failing is tripped to its backup; auth and overflow
-errors pass through uncounted, so a bad credential or an oversized request
-cannot divert around itself.
+call's outcome is reported to `clients.llm.diverter` so a primary endpoint
+that keeps failing is tripped to its backup; auth and overflow errors pass
+through uncounted, so a bad credential or an oversized request cannot divert
+around itself. Retryable failures are retried in-place with exponential
+backoff (`provider_retry_*` config); after the retries exhaust, the call
+makes one attempt on the failover target when it is configured, and raises
+otherwise. Streaming retries stop at the first yielded content event — a
+retry after visible output would duplicate it — with `ProviderNoticeEvent`
+carrying the between-attempts status to streaming callers.
 
 Importing this module installs the SIGUSR1 traffic-tap handler, which raises
 when the import runs off the main thread.
@@ -21,6 +26,7 @@ from __future__ import annotations
 import logging
 import signal
 import threading
+import time
 from collections.abc import Mapping as MappingABC
 from typing import Any, Generator
 
@@ -28,6 +34,7 @@ from config import config
 from clients.llm.events import (
     ErrorEvent,
     GenerationCancelled,
+    ProviderNoticeEvent,
     StreamEvent,
 )
 from clients.llm import diverter
@@ -143,25 +150,61 @@ class LLMProvider:
         dialect = self._dialect_for_selection(selection)
         dialect.capabilities.validate(self._requirements_for_request(request), dialect.dialect_name)
         lifecycle = LLMLifecycle()
-        try:
-            result = lifecycle.complete(request, dialect)
-        except ProviderRetryableError as error:
-            # Trip counting: consecutive retryable failures from the same
-            # primary endpoint trip the diverter (stalls included). Auth and
-            # context-overflow errors pass through uncounted — a
-            # misconfigured credential or an oversized request must not
-            # divert around itself. While tripped the selection is already
-            # the backup target and the diverter ignores records for it.
-            diverter.record_failure(selection.endpoint_url, error)
-            raise
-        except ProviderContextOverflowError as error:
-            raise ContextOverflowError(
-                error.estimated_tokens,
-                error.context_window,
-                error.endpoint,
-            ) from error
-        diverter.record_success(selection.endpoint_url)
-        return result
+        retry = 0
+        on_fallback = False
+        while True:
+            try:
+                result = lifecycle.complete(request, dialect)
+            except ProviderContextOverflowError as error:
+                raise ContextOverflowError(
+                    error.estimated_tokens,
+                    error.context_window,
+                    error.endpoint,
+                ) from error
+            except ProviderRetryableError as error:
+                if on_fallback:
+                    # One diversion level: the backup gets a single attempt
+                    # and its failure is not recorded against the primary's
+                    # trip counter.
+                    raise
+                if retry >= config.api.provider_retry_max_attempts:
+                    # Exhausted: one record per failed call, so retries do
+                    # not multiply the trip counter's unit.
+                    diverter.record_failure(selection.endpoint_url, error)
+                    fallback = self._fallback_selection(selection)
+                    if fallback is None:
+                        self.logger.warning(
+                            "Provider %s failed after %d retries; no failover "
+                            "target configured, raising",
+                            selection.endpoint_url, retry,
+                        )
+                        raise
+                    self.logger.warning(
+                        "Provider %s exhausted %d retries; falling back to %s",
+                        selection.endpoint_url, retry, fallback.endpoint_url,
+                    )
+                    on_fallback = True
+                    selection = fallback
+                    request = self._build_request(
+                        messages,
+                        tools,
+                        selection=selection,
+                        system_prompt=system_prompt,
+                        thinking=resolved_thinking,
+                        temperature=temperature,
+                        container_id=container_id,
+                    )
+                    dialect = self._dialect_for_selection(selection)
+                    dialect.capabilities.validate(
+                        self._requirements_for_request(request), dialect.dialect_name
+                    )
+                    continue
+                self._log_retry(selection, error, retry)
+                self._sleep_backoff(retry)
+                retry += 1
+            else:
+                diverter.record_success(selection.endpoint_url)
+                return result
 
     def stream_events(
         self,
@@ -202,17 +245,89 @@ class LLMProvider:
             dialect = self._dialect_for_selection(selection)
             dialect.capabilities.validate(self._requirements_for_request(request), dialect.dialect_name)
             lifecycle = LLMLifecycle()
-            for event in lifecycle.stream(request, dialect):
-                yield event
-            # Clean end of stream: a primary success resets the trip counter
-            # (no-op while tripped — see generate_response).
-            diverter.record_success(selection.endpoint_url)
+            retry = 0
+            on_fallback = False
+            yielded_content = False
+            while True:
+                try:
+                    for event in lifecycle.stream(request, dialect):
+                        # First-event gate: once provider content has been
+                        # yielded, a retry would duplicate user-visible
+                        # output, so a mid-stream failure is final. Notices
+                        # are status, never content — they do not trip it.
+                        if not isinstance(event, ProviderNoticeEvent):
+                            yielded_content = True
+                        yield event
+                except GenerationCancelled:
+                    raise
+                except ProviderRetryableError as error:
+                    if on_fallback:
+                        # One diversion level: the backup gets a single attempt
+                        # and its failure is not recorded against the primary's
+                        # trip counter.
+                        raise
+                    if yielded_content:
+                        # Mid-stream failure is final and counts once, like
+                        # every exhausted call.
+                        diverter.record_failure(selection.endpoint_url, error)
+                        raise
+                    if retry >= config.api.provider_retry_max_attempts:
+                        diverter.record_failure(selection.endpoint_url, error)
+                        fallback = self._fallback_selection(selection)
+                        if fallback is None:
+                            self.logger.warning(
+                                "Provider %s failed after %d retries; no "
+                                "failover target configured, raising",
+                                selection.endpoint_url, retry,
+                            )
+                            raise
+                        self.logger.warning(
+                            "Provider %s exhausted %d retries; falling back to %s",
+                            selection.endpoint_url, retry, fallback.endpoint_url,
+                        )
+                        on_fallback = True
+                        yield ProviderNoticeEvent(
+                            message=(
+                                f"Primary provider unreachable; switching to "
+                                f"backup {fallback.endpoint_url}"
+                            ),
+                            attempt=retry + 1,
+                            retry_in_seconds=0,
+                            using_fallback=True,
+                        )
+                        selection = fallback
+                        request = self._build_request(
+                            messages,
+                            tools,
+                            selection=selection,
+                            system_prompt=system_prompt,
+                            thinking=resolved_thinking,
+                            temperature=temperature,
+                            container_id=container_id,
+                        )
+                        dialect = self._dialect_for_selection(selection)
+                        dialect.capabilities.validate(
+                            self._requirements_for_request(request), dialect.dialect_name
+                        )
+                        continue
+                    self._log_retry(selection, error, retry)
+                    yield ProviderNoticeEvent(
+                        message=f"Provider unreachable; retrying in {self._backoff_seconds(retry)}s",
+                        attempt=retry + 1,
+                        retry_in_seconds=self._backoff_seconds(retry),
+                    )
+                    self._sleep_backoff(retry)
+                    retry += 1
+                else:
+                    # Clean end of stream: a primary success resets the trip
+                    # counter (no-op while tripped — see generate_response).
+                    diverter.record_success(selection.endpoint_url)
+                    return
         except GenerationCancelled:
             raise
-        except ProviderRetryableError as error:
-            # Same trip counting as generate_response; a stall surfaces
-            # mid-iteration of the event loop above.
-            diverter.record_failure(selection.endpoint_url, error)
+        except ProviderRetryableError:
+            # Recording and the retry decision happen inside the loop above;
+            # whatever escapes there is a final failure.
             raise
         except ProviderContextOverflowError as error:
             raise ContextOverflowError(
@@ -261,6 +376,51 @@ class LLMProvider:
             max_tokens=max_tokens,
             effort=effort,
         )
+
+    def _fallback_selection(self, selection: ModelSelection) -> ModelSelection | None:
+        """Backup-target selection for one exhausted call, or None.
+
+        None when failover is unconfigured or the call already runs on the
+        backup target: there is exactly one diversion level, so an exhausted
+        backup attempt raises rather than falling over again.
+        """
+        if not config.api.failover_enabled:
+            return None
+        if selection.endpoint_url == config.api.failover_endpoint_url:
+            return None
+        return ModelResolver.failover_selection(selection)
+
+    @staticmethod
+    def _backoff_seconds(retry: int) -> int:
+        """Exponential backoff for one retry index, clamped to the cap."""
+        delay = config.api.provider_retry_backoff_base_seconds * (2 ** retry)
+        return min(delay, config.api.provider_retry_backoff_max_seconds)
+
+    def _log_retry(self, selection: ModelSelection, error: BaseException, retry: int) -> None:
+        self.logger.warning(
+            "Provider %s unreachable (%s); retry %d/%d in %ds",
+            selection.endpoint_url, error, retry + 1,
+            config.api.provider_retry_max_attempts, self._backoff_seconds(retry),
+        )
+
+    @staticmethod
+    def _sleep_backoff(retry: int) -> None:
+        """One backoff wait, interruptible by the turn's cancel event.
+
+        A set cancel event wakes the wait early and check_cancelled() raises
+        GenerationCancelled, so a user halt ends the retry loop instead of
+        waiting out the delay. Callers with no cancel context (background
+        jobs) sleep the full delay.
+        """
+        from utils.user_context import check_cancelled, get_cancel_event
+
+        delay = LLMProvider._backoff_seconds(retry)
+        cancel_event = get_cancel_event()
+        if cancel_event is not None:
+            cancel_event.wait(delay)
+        else:
+            time.sleep(delay)
+        check_cancelled()
 
     def _build_request(
         self,

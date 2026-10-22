@@ -126,6 +126,24 @@ class ErrorEvent(StreamEvent):
 
 
 @dataclass
+class ProviderNoticeEvent(StreamEvent):
+    """Retry or fallback status from the provider boundary; never content.
+
+    Emitted by LLMProvider's retry loop between attempts: the provider is
+    unreachable and a retry is scheduled, or the call moved to the backup
+    target. Safe to repeat, and never counted as stream content by
+    stream_events' first-event gate.
+    """
+
+    message: str
+    attempt: int
+    retry_in_seconds: int
+    using_fallback: bool = False
+    type: str = field(default="provider_notice", init=False)
+    timestamp: float = field(default_factory=time.time, init=False)
+
+
+@dataclass
 class CircuitBreakerEvent(StreamEvent):
     """Circuit breaker triggered during local tool execution."""
 

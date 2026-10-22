@@ -1364,7 +1364,7 @@ if not text:
 | Call | `generate_response(messages, *, model_config, ...)` — `model_config` is a required keyword; a missing route name raises at `_resolve_selection` |
 | Return | a `Result` object, **not** a dict — text comes out via `llm.extract_text_content(response).strip()` |
 | Empty response | `extract_text_content` can return empty — check and raise (see `agents/implementations/phoneafriend_agent.py:PhoneAFriendAgent._consult`, the preserved empty-consult-response `RuntimeError`) |
-| Failure | **propagates.** `LLMLifecycle` enforces provider timeouts and raises `ProviderStallError`; there is no fallback route. Wrap in `try` only to add context before re-raising, never to return a default |
+| Failure | **propagates after retries.** `LLMLifecycle` enforces provider timeouts and raises `ProviderStallError`; `LLMProvider` retries `ProviderRetryableError` (stalls included) with backoff, then makes one attempt on the failover target when configured, then raises. Wrap in `try` only to add context before re-raising, never to return a default |
 | `ContextOverflowError` | raised on context overflow if you need a specific message (`clients.llm_provider`) |
 | Route choice | high-frequency mechanical judgments on `fast`; semantic work stays on `primary`. Never `get_model_config()` by hand unless you need route metadata like the model name |
 
