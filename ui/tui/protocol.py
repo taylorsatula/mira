@@ -196,6 +196,18 @@ class ModelErrorFrame(ProtocolModel):
     message: str
 
 
+class ProviderNoticeFrame(ProtocolModel):
+    """Transient provider retry/fallback status; rendered once, never persisted."""
+
+    type: Literal["provider_notice"]
+    turn_id: UUID
+    segment_id: UUID
+    message: str
+    attempt: int
+    retry_in_seconds: int
+    using_fallback: bool = False
+
+
 class TurnCompleteFrame(ProtocolModel):
     """Terminal frame for a successful turn."""
 
@@ -254,6 +266,7 @@ InboundFrame = Annotated[
     | ToolFrame
     | ContextResetFrame
     | ModelErrorFrame
+    | ProviderNoticeFrame
     | TurnCompleteFrame
     | TurnStoppedFrame
     | TurnErrorFrame

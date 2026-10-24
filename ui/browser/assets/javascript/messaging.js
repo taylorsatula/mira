@@ -734,7 +734,7 @@ const streamingState = {
 
 const DEFAULT_EMOTION = '🤖';
 const RESTORE_HISTORY_LIMIT = 30;
-const TURN_FRAME_TYPES = new Set(['assistant_delta', 'thinking', 'tool', 'context_reset', 'model_error']);
+const TURN_FRAME_TYPES = new Set(['assistant_delta', 'thinking', 'tool', 'context_reset', 'model_error', 'provider_notice']);
 
 // Resolved once the page-load restore has decided what the response box shows;
 // history.js waits on it before computing its first page.
@@ -1082,6 +1082,11 @@ function handleTurnFrame(frame) {
 		case 'model_error':
 			appendDisplayText(streamingState.filter.flush());
 			streamingState.turnNotices.push(showNotice(`Model error: ${frame.message} — retrying`, 'alert'));
+			break;
+		case 'provider_notice':
+			// Transient provider retry/fallback status from the server; removed at turn end
+			// with the other turn notices.
+			streamingState.turnNotices.push(showNotice(frame.message, 'alert'));
 			break;
 	}
 }

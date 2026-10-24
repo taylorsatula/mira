@@ -65,6 +65,7 @@ from clients.llm.events import (
     FileArtifactEvent,
     GenerationCancelled,
     ModelStepCompletedEvent,
+    ProviderNoticeEvent,
     StreamEvent,
     TextEvent,
     ThinkingEvent,
@@ -980,6 +981,16 @@ class ContinuumOrchestrator:
                             "type": "model_error",
                             "reason": event.reason
                         })
+                elif isinstance(event, ProviderNoticeEvent):
+                    # Retry/fallback status from the provider boundary: rendered
+                    # as a transient status frame, never persisted as content.
+                    stream_callback({
+                        "type": "provider_notice",
+                        "message": event.message,
+                        "attempt": event.attempt,
+                        "retry_in_seconds": event.retry_in_seconds,
+                        "using_fallback": event.using_fallback,
+                    })
                 elif isinstance(event, FileArtifactEvent):
                     size = event.size_bytes
                     if size < 1024:

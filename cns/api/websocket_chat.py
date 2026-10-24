@@ -263,6 +263,18 @@ class ModelErrorFrame(ProtocolModel):
     message: str
 
 
+class ProviderNoticeFrame(ProtocolModel):
+    """Transient provider retry/fallback status; rendered once, never persisted."""
+
+    type: Literal["provider_notice"]
+    turn_id: UUID
+    segment_id: UUID
+    message: str
+    attempt: int
+    retry_in_seconds: int
+    using_fallback: bool = False
+
+
 class TurnCompleteFrame(ProtocolModel):
     """Terminal frame for a successful turn.
 
@@ -323,6 +335,7 @@ ServerFrame = Annotated[
     | ToolFrame
     | ContextResetFrame
     | ModelErrorFrame
+    | ProviderNoticeFrame
     | TurnCompleteFrame
     | TurnStoppedFrame
     | TurnErrorFrame
@@ -1030,6 +1043,18 @@ class WebSocketChatHandler:
                     "The AI model made an invalid tool call. Attempting to recover..."
                 ),
             }
+        if event_type == "provider_notice":
+            # Transient retry/fallback status from the provider boundary;
+            # never persisted, rendered once by clients that know the type.
+            return {
+                "type": "provider_notice",
+                "turn_id": turn_id,
+                "segment_id": segment_id,
+                "message": event.get("message", ""),
+                "attempt": event.get("attempt", 0),
+                "retry_in_seconds": event.get("retry_in_seconds", 0),
+                "using_fallback": bool(event.get("using_fallback", False)),
+            }
         return None
 
     def _process_with_orchestrator(
@@ -1109,7 +1134,7 @@ async def websocket_chat_endpoint(websocket: WebSocket) -> None:
     * client ``{type:"message", message_id, content, include_thinking?, image?,
       image_type?, document?, document_type?}`` -> ``turn_started``, then
       ``assistant_delta`` / ``thinking`` / ``tool`` / ``model_error`` /
-      ``context_reset``, then
+      ``provider_notice`` / ``context_reset``, then
       exactly one of ``turn_complete`` / ``turn_stopped`` / ``turn_error``
     * client ``{type:"halt", turn_id}`` -> the active turn ends in ``turn_stopped``
     * client ``{type:"ping"}`` -> ``{type:"pong"}``
