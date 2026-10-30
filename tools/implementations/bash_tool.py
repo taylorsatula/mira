@@ -66,6 +66,7 @@ import signal
 import subprocess
 import time
 from collections import OrderedDict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Iterable, List, NoReturn, Optional, Tuple
 
@@ -74,8 +75,10 @@ from pydantic import BaseModel, Field, field_validator
 from tools.repo import Tool
 from tools.registry import registry
 from utils.self_restart import request_restart
-from utils.timezone_utils import utc_now
+from utils.timezone_utils import format_utc_iso, utc_now
 from utils.user_context import get_cancel_event, get_cancel_reason
+
+logger = logging.getLogger(__name__)
 
 
 # Home directory of the user MIRA runs as, whatever it is named. Path.home()
@@ -115,8 +118,165 @@ def ensure_background_jobs(db) -> None:
     and the start time. kill_background only ever stops pids present here,
     which is its whole safety property: the tool can only stop jobs it
     launched.
+
+    The table is live work, never a history: `command` is here so a notice can
+    name the job and so an operator shell can tell what a pid is, and rows go
+    as soon as they have nothing left to do (see `background_jobs_by_state`).
+    Do not add columns that would make an old row worth keeping.
     """
     db.create_table("background_jobs", _BACKGROUND_JOBS_DDL)
+
+
+_BACKGROUND_JOB_COLUMNS = "pid, pgid, log_path, command, started_at"
+
+
+def _status_path(log_path: str) -> str:
+    """Exit-status file for one detached job, beside its log.
+
+    Two jobs in one file: the launcher creates it empty, which is how the sweep
+    knows the row belongs to a launch that can report at all, and the wrapper
+    fills it with the exit code on the way out. A row with no status file was
+    launched before this bookkeeping existed (or its log directory was swept),
+    so its completion was never observable and must not be invented now.
+    """
+    return log_path + ".exit"
+
+
+def _pid_alive(pid: str) -> bool:
+    """Whether a recorded pid still names a process.
+
+    PermissionError counts as alive: the pid exists and belongs to someone
+    else, which is not this job's business to decide. A zombie answers yes
+    until reaped, so a job that just exited can be read as running for one
+    sweep; reading a recycled pid as dead is the direction that loses live work.
+    """
+    try:
+        os.kill(int(pid), 0)
+    except (ProcessLookupError, ValueError):
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def background_jobs_by_state(db) -> List[Dict[str, Any]]:
+    """Every row in the launch table, classified by what is still owed for it.
+
+    `running` — the process is alive; the row is its kill handle.
+    `finished` — the wrapper recorded an exit code, or the marker is empty and
+    the pid is gone (killed from outside the wrapper, so `exit_code` is None).
+    The outcome is owed to the user once.
+    `abandoned` — no marker and no process: nothing to report and nothing to
+    kill, either because the launch predates the marker or because its log
+    directory was swept.
+
+    The table holds live work, never a history of commands: a `finished` row is
+    deleted once its outcome has been delivered and an `abandoned` row is
+    deleted on sight. Deletion belongs to the caller, through
+    `forget_background_job`.
+
+    A zombie answers signal 0 until it is reaped, so a job that just exited can
+    read as running for one sweep. The reverse error, reading a recycled pid as
+    dead, would delete the kill handle of a live job, so it is not made.
+    """
+    rows = db.fetchall(
+        f"SELECT {_BACKGROUND_JOB_COLUMNS} FROM background_jobs ORDER BY started_at"
+    )
+    classified: List[Dict[str, Any]] = []
+    for row in rows:
+        status_file = _status_path(row["log_path"])
+        exit_code: Optional[str] = None
+        try:
+            with open(status_file, encoding="utf-8") as handle:
+                exit_code = handle.read().strip()
+        except FileNotFoundError:
+            state = "running" if _pid_alive(row["pid"]) else "abandoned"
+        except OSError as exc:
+            # Present but unreadable still means watched, so the job is
+            # classified by its process. The caller needs the fact, not the
+            # diagnostics.
+            logger.warning("Background job status file %s unreadable: %s", status_file, exc)
+            state = "running" if _pid_alive(row["pid"]) else "finished"
+        else:
+            if exit_code:
+                state = "finished"
+            elif _pid_alive(row["pid"]):
+                state = "running"
+            else:
+                state = "finished"
+                exit_code = None
+        classified.append({
+            "pid": row["pid"],
+            "pgid": row["pgid"],
+            "log_path": row["log_path"],
+            "command": row["command"],
+            "started_at": row["started_at"],
+            "state": state,
+            "exit_code": exit_code,
+            # Only a recorded exit code dates the exit: an empty marker's mtime
+            # is when the marker was created, which is the launch, and claiming
+            # it as the finish time would be a wrong number.
+            "finished_at": (
+                _status_written_at(status_file)
+                if state == "finished" and exit_code
+                else None
+            ),
+        })
+    return classified
+
+
+def _status_written_at(status_file: str) -> Optional[str]:
+    """When the wrapper wrote the job's status, or None when it never did."""
+    try:
+        written = os.stat(status_file).st_mtime
+    except OSError:
+        return None
+    return format_utc_iso(datetime.fromtimestamp(written, timezone.utc))
+
+
+def background_job_log_tail(
+    log_path: str,
+    max_bytes: int,
+    max_lines: int,
+) -> str:
+    """The last `max_lines` lines within the last `max_bytes` of a job's log.
+
+    Bounded on both axes because a job's log has no size ceiling: a build that
+    printed gigabytes must not be read into memory, and the model needs the
+    tail, not the history.
+    """
+    try:
+        size = os.path.getsize(log_path)
+        with open(log_path, "rb") as handle:
+            if size > max_bytes:
+                handle.seek(size - max_bytes)
+            raw = handle.read()
+    except OSError:
+        return ""
+    text = raw.decode("utf-8", errors="replace")
+    if size > max_bytes and "\n" in text:
+        # The first line is a fragment of a line that began before the window.
+        text = text.split("\n", 1)[1]
+    lines = text.splitlines()
+    return "\n".join(lines[-max_lines:])
+
+
+def forget_background_job(db, pid: str) -> None:
+    """Drop a finished job's row and its status file.
+
+    The log stays: it is the job's output, which the user may still want to
+    read. The row goes because both of its reasons to exist, killable and
+    unannounced, are spent.
+    """
+    row = db.fetchone(
+        "SELECT log_path FROM background_jobs WHERE pid = :pid", {"pid": pid}
+    )
+    if row is not None:
+        try:
+            os.remove(_status_path(row["log_path"]))
+        except FileNotFoundError:
+            pass
+    db.delete("background_jobs", "pid = :pid", {"pid": pid})
 
 
 # -- directory context maps ---------------------------------------------------
@@ -2047,7 +2207,9 @@ class BashTool(Tool):
                     "description": (
                         "run: execute and wait, returning exit code and output. "
                         "run_background: start detached with nohup and return immediately "
-                        "with the process ID and log path. kill_background: stop a "
+                        "with the process ID and log path; when the job exits you are woken "
+                        "in a new turn with its exit code and log tail, so do not poll it "
+                        "or hold a turn open waiting. kill_background: stop a "
                         "background job this tool previously launched, by its pid "
                         "(the command field is ignored for this operation)."
                     ),
@@ -2454,21 +2616,32 @@ class BashTool(Tool):
         # `mkdir` and `cd` run in the FOREGROUND, so a start failure
         # (log_dir not creatable at runtime, a cwd that vanished between the
         # check above and the cd) lands in this process's exit status instead
-        # of dying unseen inside a backgrounded subshell. Only the nohup'd job
-        # is backgrounded, and every one of its descriptors points at the log
-        # or /dev/null — no long-lived process holds the inherited stdout
-        # pipe, so `_execute_local` returns as soon as PID/LOG print and `$!`
-        # is the survivable job process itself, not a wrapper subshell.
+        # of dying unseen inside a backgrounded subshell. Only the job is
+        # backgrounded, and every one of its descriptors points at the log or
+        # /dev/null — no long-lived process holds the inherited stdout pipe, so
+        # `_execute_local` returns as soon as PID/LOG print. `$!` names the
+        # backgrounded supervisor, which lives exactly as long as the job it
+        # runs, so the recorded pid stays a usable handle for kill_background.
         # `echo "PGID:$$"` records the wrapper's pid: the wrapper is the
         # session leader `_execute_local` creates, so it is the group the
         # launched job and its descendants share — and that group outlives
         # the wrapper, because the nohup'd child stays a member. It is
         # recorded so `kill_background` can still address live descendants
         # after the job's own shell has exited.
+        status_path = _status_path(log_path)
+        # The wrapper records the job shell's exit status into the status file,
+        # so a finished job reports its code instead of a later probe guessing
+        # from a pid that may already have been recycled. `$1` and `$2` are the
+        # command and the status path, passed as positional arguments because
+        # the -c script is single-quoted against the outer shell. The empty file
+        # written before the launch is the watch marker: without it the sweep
+        # cannot tell a job it can report on from a row that predates this.
         composed = (
             f"mkdir -p {shlex.quote(log_dir)} && cd {shlex.quote(workdir)} || exit 1; "
             f"echo \"PGID:$$\"; "
-            f"nohup bash -lc {shlex.quote(command)} "
+            f": > {shlex.quote(status_path)}; "
+            f"nohup bash -c 'bash -lc \"$1\"; printf %s \"$?\" > \"$2\"' _ "
+            f"{shlex.quote(command)} {shlex.quote(status_path)} "
             f"> {shlex.quote(log_path)} 2>&1 </dev/null & "
             f"child=$!; echo \"PID:$child\"; echo \"LOG:{log_path}\""
         )
