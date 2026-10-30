@@ -5,7 +5,7 @@
 - `__init__.py` — package marker only; nothing is defined or re-exported here.
 - `base.py` — the response envelope, the error taxonomy, and the two handler bases the handler-backed routers inherit. Open it before deciding how a new route reports failure.
 - `chat.py` — one synchronous HTTP chat turn. Open it before changing turn-lock acquisition, the attachment gates, or where a pending restart fires on the HTTP path.
-- `websocket_chat.py` — the socket, every frame model, and the server side of the turn protocol. Open it before touching a frame shape, the reader and writer tasks, or the streamed-frame timeout.
+- `websocket_chat.py` — the socket, every frame model, and the server side of the turn protocol, including the `proactive_message` push bridge whose only producer is `cns/services/background_job_notice.py`. Open it before touching a frame shape, the reader and writer tasks, or the streamed-frame timeout.
 - `actions.py` — domain-routed mutations plus the whitelisted tool query surface. Open it before adding an action domain, mutating a domaindoc, or moving a value across the storage boundary.
 - `data.py` — the read surface, one `_get_*` per `DataType`. Open it before adding a read or changing history pagination.
 - `federation.py` — the inbound Lattice delivery webhook, mounted only when federation is enabled. Open it before changing what Lattice's retry contract sees.

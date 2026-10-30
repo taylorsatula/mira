@@ -138,6 +138,29 @@ def register_sidebar_dispatcher_job(scheduler_service, tool_repo, event_bus) -> 
         raise RuntimeError(f"Failed to register sidebar dispatcher job: {e}") from e
 
 
+def register_background_job_notice_job(scheduler_service) -> None:
+    """
+    Register the sweep that announces finished `run_background` jobs.
+
+    Args:
+        scheduler_service: System scheduler service
+
+    Raises:
+        RuntimeError: If job registration fails
+    """
+    try:
+        from cns.services.background_job_notice import register_notice_job
+
+        register_notice_job(scheduler_service)
+        logger.info("Successfully registered background-job notice sweep")
+
+    except Exception as e:
+        logger.error(f"Error registering background-job notice job: {e}", exc_info=True)
+        raise RuntimeError(
+            f"Failed to register background-job notice job: {e}"
+        ) from e
+
+
 def get_users_due_for_job(interval: int) -> list[dict]:
     """
     Get recently-active users whose cumulative_activity_days falls on the interval.
