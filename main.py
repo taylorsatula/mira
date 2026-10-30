@@ -224,12 +224,18 @@ async def lifespan(app: FastAPI):
     try:
         initialize_all_scheduled_tasks(scheduler_service)
 
-        from utils.scheduled_tasks import register_segment_timeout_job, register_sidebar_dispatcher_job
+        from utils.scheduled_tasks import (
+            register_background_job_notice_job,
+            register_segment_timeout_job,
+            register_sidebar_dispatcher_job,
+        )
         register_segment_timeout_job(scheduler_service, orchestrator.event_bus)
 
         register_sidebar_dispatcher_job(
             scheduler_service, orchestrator.tool_repo, orchestrator.event_bus
         )
+
+        register_background_job_notice_job(scheduler_service)
 
         from utils.update_check import register_update_check_job
         register_update_check_job(scheduler_service)

@@ -22,9 +22,10 @@ which waits ``STREAM_SEND_TIMEOUT_SECONDS``: a wait that expires means the loop
 is wedged, and the turn is cancelled with reason ``stall`` instead of pinning the
 worker thread forever.
 
-The proactive push path (``push_proactive_message_sync``) has no producer in this
-tree — both clients render the ``proactive_message`` frame, but nothing calls the
-bridge yet, so treat it as unexercised rather than as a working seam.
+The proactive push path (``push_proactive_message_sync``) has one producer:
+``cns/services/background_job_notice.py``, which pushes a wake-up message when a
+detached shell job exits. Both clients render the frame; anything else that
+wants to push builds on that module rather than calling the bridge directly.
 """
 
 from __future__ import annotations
