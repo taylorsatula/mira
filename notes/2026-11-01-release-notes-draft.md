@@ -100,4 +100,25 @@ to rebuild around. The new interface appears on the next page load.
 
 ## Verification
 
-_Pending — gate results are recorded here after the asset is built._
+- Gate rows a–c verified at build time against the tagged asset:
+  `build_release_artifact v2026.11.01-2.2.0` passed `scripts.migrate lint`
+  (3 versioned and 1 repeatable step follow the rules), and
+  `verify_release_identity` confirmed tag = v + VERSION, the asset's VERSION
+  matches the repo, and the asset's RELEASE_COMMIT equals the tagged commit
+  (5767dda).
+- Row c (convergence) re-ran on the build host against a local PostgreSQL
+  superuser. Every origin and revision reached the fresh-install structure;
+  the command rewrote `deploy/migrations/BASELINE` and
+  `HEAD_FINGERPRINT.json` with byte-identical content, so the checked-in
+  generated files still extend correctly.
+- Gate rows d (skip-chain) and e (restore round trip): not re-run at cut
+  time — this release ships no database steps and changes no migration or
+  updater-flow code (`git diff v2026.10.21-2.1.2 v2026.11.01-2.2.0 --
+  deploy/migrations/ utils/schema_migrations.py deploy/update.sh` is empty),
+  so the two rows carry their v2026.10.21-2.1.2 results unchanged.
+- The pinned requirement set installed from scratch into a clean virtualenv
+  on the build host at cut time — the dependency set is installable, not
+  merely resolvable.
+- Known residuals: unchanged from v2026.10.21-2.1.2. The interface was
+  visually confirmed on a deployed instance before the reskin landed
+  (e351b58).
