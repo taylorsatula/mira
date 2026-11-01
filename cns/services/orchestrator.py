@@ -81,7 +81,11 @@ from clients.llm.tool_messages import (
 from clients.llm.types import Result, ToolCall, ToolDefinition, ToolResult, Usage
 from cns.services.tool_loop import CircuitBreaker, ToolLoopExecutor
 from clients.embeddings_provider import get_embeddings_provider
-from cns.services.subcortical import SubcorticalResult, SurfacedMemory
+from cns.services.subcortical import (
+    SubcorticalAnalysisError,
+    SubcorticalResult,
+    SurfacedMemory,
+)
 from lt_memory.models import MemoryDict
 from lt_memory.proactive import (
     MAX_PINNED_MEMORIES,
@@ -91,7 +95,7 @@ from lt_memory.proactive import (
     ASSISTANT_SIMILARITY_THRESHOLD,
     MAX_ASSISTANT_MEMORIES,
 )
-from utils.tag_parser import TagParser, match_memory_id
+from utils.tag_parser import TagParser, format_memory_id, match_memory_id
 from utils.user_context import get_cancel_reason, get_current_segment_id
 
 CONTEXT_OVERFLOW_FALLBACK_TEXT_LIMIT = 400
@@ -1179,8 +1183,6 @@ class ContinuumOrchestrator:
                 and not config.api.show_openai_compat_thinking
             )
 
-            # Ephemeral effort override (Valkey, 1h TTL) — takes precedence over
-            # the subcortical assessment, which is skipped when one is present.
             try:
                 from clients.valkey_client import get_valkey_client
                 from utils.user_context import get_current_user_id
@@ -1198,12 +1200,6 @@ class ContinuumOrchestrator:
             except Exception:
                 # The override is optional — a Valkey outage must not stop the turn.
                 pass
-
-            # Extended thinking: enabled only when subcortical layer provides complexity assessment
-            if mem.subcortical_result is not None and "effort" not in llm_kwargs:
-                effort_level = mem.subcortical_result.get_effort_level()
-                llm_kwargs['effort'] = effort_level
-                logger.info(f"Thinking: complexity={mem.subcortical_result.complexity} effort={effort_level}")
 
             def compose_messages() -> list[dict[str, object]]:
                 return self._compose_llm_messages(continuum, system_prompt)
@@ -1443,8 +1439,9 @@ class ContinuumOrchestrator:
         """
         Run subcortical memory surfacing, or return an empty deliberate fast-path result.
 
-        Enabled subcortical failures propagate. They are infrastructure/model failures,
-        not evidence that memory surfacing should silently look disabled.
+        A malformed analysis degrades this turn to the memories already in context and
+        surfaces nothing fresh, warned in the log. Infrastructure failures propagate:
+        they are not evidence that memory surfacing should silently look disabled.
 
         Args:
             continuum: Current continuum state (passed to subcortical layer)
@@ -1466,11 +1463,27 @@ class ContinuumOrchestrator:
         max_surfaced = MAX_SURFACED_MEMORIES
         min_fresh = MIN_FRESH_MEMORIES
 
-        subcortical_result = self.subcortical_layer.generate(
-            continuum,
-            text_for_context,
-            previous_memories=previous_memories
-        )
+        try:
+            subcortical_result = self.subcortical_layer.generate(
+                continuum,
+                text_for_context,
+                previous_memories=previous_memories
+            )
+        except SubcorticalAnalysisError as error:
+            retained_ids = {
+                format_memory_id(memory["id"]).removeprefix("mem_")
+                for memory in previous_memories if memory.get("id")
+            }
+            logger.warning(
+                "Subcortical analysis unusable (%s); this turn keeps the %d memories "
+                "already in context and surfaces no fresh ones",
+                error, len(previous_memories),
+            )
+            return MemorySurfacingResult(
+                surfaced_memories=list(previous_memories),
+                pinned_ids=retained_ids,
+                subcortical_result=None,
+            )
 
         pinned_ids = subcortical_result.pinned_memory_ids
         pinned_memories = self._apply_retention(previous_memories, pinned_ids)

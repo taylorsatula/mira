@@ -1,19 +1,19 @@
 """
-Subcortical layer: retrieval-optimized query expansion, retention, entities,
-and the effort assessment the turn's thinking budget is derived from.
+Subcortical layer: retrieval-optimized query expansion, retention, and entities.
 
-Key principle: the expansion REPLACES the original query for retrieval rather
-than augmenting it.
+The expansion replaces the original query for retrieval. The model returns one
+`record_subcortical_analysis` tool call, whose schema comes from
+`SubcorticalAnalysis`; no tool is executed. Anything else — prose instead of a
+call, two calls, refused arguments — raises `SubcorticalAnalysisError`, which
+the orchestrator answers by degrading the turn to its retained memories. A
+fabricated retention ID is unrepresentable rather than policed: `_analysis_tool`
+narrows `pinned_memory_ids` to the IDs this call supplied, and the dialect
+validates the arguments against that schema before returning the call.
 
-Three mechanisms a caller must know. `get_effort_level` emits only "low" and
-"high": "medium" is missing from several providers' effort ladders, so
-deriving it here 400s every straightforward turn. `_build_user_prompt` is the
-byte-exact shared source for the real call and for the speculative
-`warm_cache` request, and that identity is the whole vLLM prefix-cache hit — a
-divergence breaks the optimization silently, without touching the response.
-And retention pins are a union: the LLM's picks plus every memory ID already
-cited in the conversation turns, so a memory the model referenced this turn
-cannot be dropped from context by a retention miss.
+`_build_user_prompt` supplies both generate() and the speculative warm_cache()
+request, so their shared prefix stays byte-identical. Retention pins are the
+union of the model's picks and memory IDs already cited in conversation turns.
+Primary thinking effort is configured by the primary route, not this layer.
 """
 import contextvars
 import html
@@ -23,9 +23,12 @@ import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Literal, Set, TypedDict, TYPE_CHECKING
+from typing import Annotated, List, Set, TypedDict, TYPE_CHECKING
 
-import json_repair
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from clients.llm.tool_messages import append_tool_result_messages
+from clients.llm.types import Result, ToolCall, ToolDefinition, ToolResult
 
 from cns.core.continuum import Continuum
 from cns.core.message import preprocess_content_blocks
@@ -43,6 +46,15 @@ logger = logging.getLogger(__name__)
 _MIRA_TAG_PATTERN = re.compile(r'<mira:[^>]*>.*?</mira:[^>]*>|<mira:[^/]*/\s*>', re.DOTALL)
 
 
+class SubcorticalAnalysisError(RuntimeError):
+    """The fast route returned no usable analysis call for this turn.
+
+    A shape failure only: the caller degrades the turn to the memories already
+    in context. Provider, network, and context-overflow errors are not this
+    type and propagate as the infrastructure failures they are.
+    """
+
+
 class SurfacedMemory(TypedDict):
     """Memory previously surfaced in conversation, evaluated for retention."""
     id: str  # Full UUID string
@@ -50,30 +62,45 @@ class SurfacedMemory(TypedDict):
     importance_score: float  # 0.0-1.0
 
 
+class SubcorticalAnalysis(BaseModel):
+    """Model-facing analysis arguments; also generates their tool schema."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, strict=True)
+
+    query_expansion: str = Field(
+        min_length=1,
+        description=(
+            "Current message rewritten as 2-4 concrete search phrases, separated by "
+            "semicolons. Resolve pronouns using recent history. Do not answer the message."
+        ),
+    )
+    entities: list[Annotated[str, Field(min_length=1)]] = Field(
+        description=(
+            "Proper names in query_expansion: people, organizations, products, events, "
+            "or places. Not general nouns. Empty array when none."
+        ),
+    )
+    pinned_memory_ids: list[Annotated[str, Field(pattern=r"^mem_[a-fA-F0-9]{8}$")]] = Field(
+        description=(
+            "IDs of supplied passages about query_expansion's topic. Copy exact mem_ "
+            "IDs. Empty array when none match."
+        ),
+    )
+
+
+SUBCORTICAL_TOOL_NAME = "record_subcortical_analysis"
+SUBCORTICAL_TOOL_DESCRIPTION = (
+    "Return search phrases, their proper names, and matching stored passage IDs. "
+    "Data only; no action is executed."
+)
+
+
 @dataclass
 class SubcorticalResult:
-    """Result of subcortical layer processing and memory retention analysis."""
+    """Retrieval inputs, with retained memory IDs normalized to 8-char hex."""
     query_expansion: str
-    pinned_memory_ids: Set[str] = field(default_factory=set)  # 8-char hex IDs
+    pinned_memory_ids: Set[str] = field(default_factory=set)
     entities: List[str] = field(default_factory=list)
-    complexity: Literal["straightforward", "complex"] = "complex"  # Default to complex for safety
-
-    def get_effort_level(self) -> str:
-        """
-        Return the named effort level based on complexity assessment.
-
-        Maps subcortical complexity vocabulary to provider-neutral effort levels.
-        Only "low" and "high" are produced: both exist in every provider's effort
-        ladder, whereas "medium" is missing from several thinking-oriented models
-        (e.g. DeepSeek V4.1 accepts low/high/xhigh/max only), so deriving it here
-        causes a provider 400 on every straightforward turn.
-
-        - "straightforward" → "low" (simple questions, status updates, casual chat)
-        - "complex" → "high" (multi-step reasoning, debugging, decision-making)
-        """
-        if self.complexity == "straightforward":
-            return "low"
-        return "high"
 
 # Number of user/assistant pairs to include as context (3 pairs = 6 messages).
 # Reduced from 6 based on MI analysis: conv_turns token mass was 9.5x current_message,
@@ -114,6 +141,7 @@ class SubcorticalLayer:
         from config.prompts.loader import load_prompt
         self.system_prompt = load_prompt("subcortical_system.txt")
         self.user_prompt_template = load_prompt("subcortical_user.txt")
+        self._demonstration = self._build_demonstration()
 
         logger.info("SubcorticalLayer initialized")
 
@@ -143,7 +171,11 @@ class SubcorticalLayer:
             SubcorticalResult with query_expansion, pinned_memory_ids, and entities.
 
         Raises:
-            RuntimeError: On empty response or parse failure.
+            SubcorticalAnalysisError: When the response is not exactly one valid
+                record_subcortical_analysis call — prose in its place, two calls,
+                another tool's name, or arguments the per-call schema refused. The
+                orchestrator degrades that turn to its retained memories. Provider
+                and network failures are not this type and propagate.
         """
         user_message, conversation_turns = self._build_user_prompt(
             continuum, current_user_message, previous_memories
@@ -157,28 +189,19 @@ class SubcorticalLayer:
         if previous_memories:
             logger.debug(f"Evaluating retention for {len(previous_memories)} memories")
 
+        # temperature is load-bearing: config.api.temperature defaults to 1.0 and overrides
+        # the GGUF metadata's 0.1. effort="none" reaches llama-server as a reasoning_effort
+        # it ignores — thinking-off there is the service unit's chat-template kwarg.
         response = self.llm_provider.generate_response(
-            messages=[{"role": "user", "content": user_message}],
+            messages=self._analysis_messages(user_message),
+            tools=[self._analysis_tool(previous_memories)],
             model_config="fast",
             system_prompt=self.system_prompt,
+            effort="none",
+            temperature=0.1,
         )
 
-        response_text = self.llm_provider.extract_text_content(response).strip()
-
-        if not response_text:
-            raise RuntimeError("Subcortical returned empty response")
-
-        try:
-            # json_repair can fix common structural issues even in XML-like
-            # responses (documented json_repair capability)
-            repaired_text = json_repair.repair_json(response_text, return_objects=False, skip_json_loads=True)
-            if isinstance(repaired_text, str) and repaired_text.strip():
-                response_text = repaired_text
-                logger.debug("Applied structural repair to response")
-        except Exception as repair_error:
-            logger.debug(f"Repair attempt skipped: {repair_error}, using original response")
-
-        result = self._parse_response(response_text, previous_memories)
+        result = self._parse_response(response)
 
         # Guarantee retention for conversation-pinned memories (union with LLM's picks)
         result.pinned_memory_ids.update(conversation_pinned_ids)
@@ -197,7 +220,7 @@ class SubcorticalLayer:
         # Persist full prompt/response for fine-tuning curation
         self._save_output(
             prompt=user_message,
-            raw_response=response_text,
+            raw_response=json.dumps(response.tool_calls[0].to_message_block(), ensure_ascii=False),
         )
 
         return result
@@ -244,14 +267,97 @@ class SubcorticalLayer:
                 continuum, "", previous_memories
             )
             self.llm_provider.generate_response(
-                messages=[{"role": "user", "content": user_message}],
+                messages=self._analysis_messages(user_message),
+                tools=[self._analysis_tool(previous_memories)],
                 model_config="fast",
                 system_prompt=self.system_prompt,
+                effort="none",
+                temperature=0.1,
                 max_tokens=1,
             )
             logger.debug("Subcortical KV cache warmed")
         except Exception as e:
             logger.warning("Subcortical prefill warmup failed: %s", e)
+
+    @staticmethod
+    def _analysis_tool(previous_memories: list[SurfacedMemory] | None) -> ToolDefinition:
+        """Constrain retention output to IDs supplied on this call.
+
+        The enum is the whole gate: the dialect validates the model's arguments
+        against this schema (openai_chat_base._coerce_tool_input) and reports a
+        violation as ToolCall.invalid_reason, so a fabricated ID never reaches
+        _parse_response as data.
+        """
+        schema = SubcorticalAnalysis.model_json_schema()
+        pinned_schema = schema["properties"]["pinned_memory_ids"]
+        memory_ids = sorted({format_memory_id(memory["id"]) for memory in previous_memories or []})
+        if memory_ids:
+            pinned_schema["items"]["enum"] = memory_ids
+        else:
+            pinned_schema["maxItems"] = 0
+        return ToolDefinition(
+            name=SUBCORTICAL_TOOL_NAME,
+            description=SUBCORTICAL_TOOL_DESCRIPTION,
+            input_schema=schema,
+        )
+
+    def _build_demonstration(self) -> list[dict[str, object]]:
+        """Build the two worked examples that make a small model call the tool.
+
+        Prose instructions alone did not produce a call from a 1.7B model; a
+        completed call in history did. The two examples are a contrast pair: same
+        recent turns, a different current turn, and a different passage on offer.
+        The first resolves a pronoun against the recent turns and pins the matching
+        passage out of two; the second offers that passage alone, asks about
+        something else entirely, and pins nothing — the current turn picks the
+        topic, and an off-topic passage is not pinned.
+
+        Every noun is invented, and that is load-bearing: real case vocabulary
+        leaked the example's details into unrelated answers. The example IDs
+        cannot be emitted by a real call, because a real call's schema enumerates
+        only the IDs that call supplied.
+        """
+        crate_id = "0f0f0f0f-0000-4000-8000-000000000001"
+        crate = {"id": crate_id, "text": "Velmari crate arrived in Ostrek.", "importance_score": 0.5}
+        weather = {"id": "0e0e0e0e-0000-4000-8000-000000000002", "text": "Unrelated note about the weather.", "importance_score": 0.5}
+        recent_turns = (
+            '<turn speaker="user" time="00:00">Velmari sent the crate to Ostrek.</turn>\n'
+            '<turn speaker="assistant" time="00:00">Noted.</turn>'
+        )
+        examples = (
+            ([crate, weather], "When did she get it there?", SubcorticalAnalysis(
+                query_expansion="Velmari crate arrival in Ostrek; Velmari shipment date",
+                entities=["Velmari", "Ostrek"],
+                pinned_memory_ids=[format_memory_id(crate_id)],
+            )),
+            ([crate], "When does the Pelliston ferry sail?", SubcorticalAnalysis(
+                query_expansion="Pelliston ferry departure schedule; Pelliston ferry times",
+                entities=["Pelliston"],
+                pinned_memory_ids=[],
+            )),
+        )
+        messages: list[dict[str, object]] = []
+        for position, (memories, current, example) in enumerate(examples):
+            call = ToolCall(
+                id=f"subcortical_example_{position}",
+                tool_name=SUBCORTICAL_TOOL_NAME,
+                input=example.model_dump(),
+            )
+            messages = append_tool_result_messages(
+                [
+                    *messages,
+                    {"role": "user", "content": self._fill_user_template(
+                        recent_turns, self._format_previous_memories(memories), current
+                    )},
+                ],
+                Result(tool_calls=(call,), stop_reason="tool_use"),
+                (ToolResult(tool_call_id=call.id, content="Recorded."),),
+            )
+        return messages
+
+    def _analysis_messages(self, user_message: str) -> list[dict[str, object]]:
+        """Prepend the worked examples so the real request is the third turn."""
+        return [*self._demonstration, {"role": "user", "content": user_message}]
 
     def _build_user_prompt(
         self,
@@ -284,22 +390,33 @@ class SubcorticalLayer:
         # When under pressure, _format_previous_memories injects a pruning alert
         memories_block = self._format_previous_memories(previous_memories)
 
+        user_prompt = self._fill_user_template(
+            conversation_turns, memories_block, current_user_message
+        )
+        return user_prompt, conversation_turns
+
+    def _fill_user_template(
+        self,
+        conversation_turns: str,
+        memories_block: str,
+        user_message: str,
+    ) -> str:
+        """Fill subcortical_user.txt for the real prompt and the demonstration alike."""
         # Collapse newlines — template is single-line by design, so injected
         # content must not reintroduce them.
         def _collapse(text: str) -> str:
             return " ".join(text.split())
 
-        user_prompt = self.user_prompt_template.replace(
+        return self.user_prompt_template.replace(
             "{conversation_turns}",
             _collapse(conversation_turns)
         ).replace(
             "{user_message}",
-            _collapse(html.escape(current_user_message, quote=False))
+            _collapse(html.escape(user_message, quote=False))
         ).replace(
             "{previous_memories}",
             _collapse(memories_block)
         )
-        return user_prompt, conversation_turns
 
     def _save_output(
         self,
@@ -440,142 +557,37 @@ class SubcorticalLayer:
 
         return "\n".join(lines)
 
-    def _parse_response(
-        self,
-        response_text: str,
-        previous_memories: list[SurfacedMemory] | None
-    ) -> SubcorticalResult:
-        """
-        Parse query expansion, pinned memory IDs, entities, and complexity from LLM response.
-
-        Args:
-            response_text: Raw LLM response
-            previous_memories: Surfaced memories (used to determine if passage parsing needed)
-
-        Returns:
-            SubcorticalResult with parsed query_expansion, pinned_memory_ids, entities, complexity
+    def _parse_response(self, response: Result) -> SubcorticalResult:
+        """Take the one analysis call, or name the shape that arrived instead.
 
         Raises:
-            RuntimeError: If <query_expansion> tag missing or empty
+            SubcorticalAnalysisError: On any shape other than exactly one valid
+                record_subcortical_analysis call.
         """
-        expansion_match = re.search(
-            r'<query_expansion>(.*?)</query_expansion>',
-            response_text,
-            re.DOTALL
-        )
-        if expansion_match:
-            query_expansion = expansion_match.group(1).strip()
-        else:
-            raise RuntimeError("Failed to extract query expansion from response - no <query_expansion> tag found")
-
-        if not query_expansion:
-            raise RuntimeError("Failed to extract query expansion from response - empty <query_expansion>")
-
-        entities = SubcorticalLayer._parse_entities(response_text)
-
-        # Extract complexity from <complexity> tag (default to "complex" if missing/invalid)
-        complexity = SubcorticalLayer._parse_complexity(response_text)
-
-        pinned_ids: Set[str] = set()
-
-        if previous_memories:
-            # UUIDs only contain hex chars (0-9, a-f), which the ID regex depends on.
-            id_matches = re.findall(
-                r'<passage\s+id="mem_([a-fA-F0-9]{8})"',
-                response_text,
-                re.IGNORECASE
+        if response.stop_reason != "tool_use":
+            raise SubcorticalAnalysisError(
+                f"no completed analysis call (stop_reason={response.stop_reason})"
             )
-            pinned_ids = {match.lower() for match in id_matches}
-            logger.debug(f"Parsed {len(pinned_ids)} pinned IDs from response")
-
+        if len(response.tool_calls) != 1:
+            raise SubcorticalAnalysisError(
+                f"expected one analysis call, got {len(response.tool_calls)}"
+            )
+        call = response.tool_calls[0]
+        if call.tool_name != SUBCORTICAL_TOOL_NAME:
+            raise SubcorticalAnalysisError(f"unexpected tool called: {call.tool_name}")
+        if call.invalid_reason is not None:
+            raise SubcorticalAnalysisError(f"arguments rejected: {call.invalid_reason}")
+        try:
+            analysis = SubcorticalAnalysis.model_validate(dict(call.input))
+        except ValidationError as error:
+            raise SubcorticalAnalysisError(f"arguments failed validation: {error}") from error
         return SubcorticalResult(
-            query_expansion=query_expansion,
-            pinned_memory_ids=pinned_ids,
-            entities=entities,
-            complexity=complexity
+            query_expansion=analysis.query_expansion,
+            pinned_memory_ids={
+                memory_id.removeprefix("mem_") for memory_id in analysis.pinned_memory_ids
+            },
+            entities=analysis.entities,
         )
-
-    @staticmethod
-    def _parse_entities(response_text: str) -> List[str]:
-        """
-        Parse extracted entities from <entities> block.
-
-        Expected format:
-        <entities>
-        <ne>Annika</ne>
-        <ne>Mom</ne>
-        </entities>
-
-        Or for no entities:
-        <entities>None</entities>
-
-        Args:
-            response_text: Raw LLM response
-
-        Returns:
-            List of entity names
-        """
-        entities: List[str] = []
-
-        entities_match = re.search(
-            r'<entities>(.*?)</entities>',
-            response_text,
-            re.DOTALL
-        )
-
-        if not entities_match:
-            logger.debug("No <entities> block found in response")
-            return entities
-
-        entities_block = entities_match.group(1).strip()
-
-        if entities_block.lower() == "none":
-            return entities
-
-        entity_matches = re.findall(
-            r'<ne[^>]*>(.*?)</ne>',
-            entities_block,
-            re.DOTALL
-        )
-
-        for name in entity_matches:
-            name = name.strip()
-            if name and name.lower() != "none":
-                entities.append(name)
-
-        logger.debug(f"Parsed {len(entities)} entities from response")
-        return entities
-
-    @staticmethod
-    def _parse_complexity(response_text: str) -> Literal["straightforward", "complex"]:
-        """
-        Parse complexity assessment from <complexity> tag.
-
-        Args:
-            response_text: Raw LLM response
-
-        Returns:
-            "straightforward" or "complex" (defaults to "complex" if missing/invalid)
-        """
-        complexity_match = re.search(
-            r'<complexity>(.*?)</complexity>',
-            response_text,
-            re.DOTALL | re.IGNORECASE
-        )
-
-        if not complexity_match:
-            logger.debug("No <complexity> tag found, defaulting to complex")
-            return "complex"
-
-        value = complexity_match.group(1).strip().lower()
-
-        if value == "straightforward":
-            return "straightforward"
-        elif value == "complex":
-            return "complex"
-        else:
-            logger.warning(f"Invalid complexity value '{value}', defaulting to complex")
-            return "complex"
 
     def _format_recent_turns(
         self,
