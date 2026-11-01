@@ -5,8 +5,8 @@
  * Owns the chat turn on the client: the retry queue for unsent messages,
  * attachments, sending through `miraAPI.chat.sendMessage`, consuming the raw
  * turn frames of the in-flight send, the streaming display filter that hides
- * `<mira:...>` tags and think blocks, markdown rendering, session restore on
- * page load, notices, and proactive messages.
+ * `<mira:...>` tags and think blocks, markdown rendering, session start, notices,
+ * and proactive messages.
  *
  * TURN FRAMES (raw server frames on `eventHandlers.onMessage`):
  * - turn_started      fixes the turn_id this send's frames are matched against
@@ -20,11 +20,12 @@
  * MiraTurnError.
  *
  * DISPLAYED EXCHANGE:
- * The response box shows one exchange (a reply plus any proactive messages
- * that arrived after it). When a new send knocks it off screen it moves into
- * the inline history (InlineHistory.appendExchange). history.js reads
- * `streamingState.displayedExchange` to leave the on-screen exchange out of
- * its first page.
+ * The live region holds the turn in flight and the exchange it produced, which
+ * is the newest thing in the thread. When the next send starts, beginTurn hands
+ * it to the inline history and empties the region in the same step, so the
+ * conversation never blinks between turns. history.js reads
+ * `streamingState.displayedExchange` only to keep a retried first page from
+ * rendering that exchange a second time.
  *
  * DEPENDENCIES:
  * - core.js: AppState, elements
@@ -496,16 +497,24 @@ function renderMarkdown(text) {
 // Displayable text of one history row's content: a plain string, or a
 // JSON-stringified array of provider content blocks (only `text` blocks are
 // conversation; `reasoning` and `tool_call` blocks are not).
-function messageDisplayText(content) {
-	if (typeof content !== 'string' || !content.trim()) return '';
-	let parsed;
+// A row's content is either plain text or a JSON array of content blocks. An
+// assistant row that called a tool is stored as blocks — reasoning, text, tool
+// calls — which is the only place a past turn's thinking survives.
+function contentBlocksOf(content) {
+	if (Array.isArray(content)) return content;
+	if (typeof content !== 'string') return [];
+	const trimmed = content.trim();
+	if (!trimmed.startsWith('[')) return [{ type: 'text', text: content }];
 	try {
-		parsed = JSON.parse(content);
+		const parsed = JSON.parse(trimmed);
+		return Array.isArray(parsed) ? parsed : [{ type: 'text', text: content }];
 	} catch {
-		return content;
+		return [{ type: 'text', text: content }];
 	}
-	if (!Array.isArray(parsed)) return content;
-	return parsed
+}
+
+function messageDisplayText(content) {
+	return contentBlocksOf(content)
 		.filter(block => block && block.type === 'text' && typeof block.text === 'string' && block.text)
 		.map(block => block.text)
 		.join('\n');
@@ -522,23 +531,85 @@ function replyPartsFromRows(rows) {
 	const parts = [];
 	for (const row of rows) {
 		if (row.role === 'tool') {
+			// The tool row carries the whole record: name and arguments in
+			// metadata, the result in content, failure in is_error.
 			const name = row.metadata.tool_name;
 			if (typeof name === 'string') {
-				parts.push({ kind: 'tool', name, ok: !row.is_error });
+				parts.push({
+					kind: 'tool',
+					name,
+					input: row.metadata.tool_arguments ?? null,
+					output: typeof row.content === 'string' ? row.content : '',
+					ok: !row.is_error
+				});
 			}
-		} else if (row.role === 'assistant') {
-			const text = filterReplyText(messageDisplayText(row.content));
-			if (text) parts.push({ kind: 'text', text });
+			continue;
+		}
+		if (row.role !== 'assistant') continue;
+		for (const block of contentBlocksOf(row.content)) {
+			if (block.type === 'reasoning' && typeof block.text === 'string' && block.text.trim()) {
+				parts.push({ kind: 'thinking', text: block.text });
+			} else if (block.type === 'text' && typeof block.text === 'string') {
+				const text = filterReplyText(block.text);
+				if (text) parts.push({ kind: 'text', text });
+			}
 		}
 	}
 	return parts;
 }
 
+// Pretty-print a tool payload for the expandable body: arguments arrive as an
+// object live and as a JSON string in history, results are always strings.
+function toolPayloadText(value) {
+	if (value === null || value === undefined || value === '') return '';
+	if (typeof value === 'string') {
+		const trimmed = value.trim();
+		if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+			try {
+				return JSON.stringify(JSON.parse(trimmed), null, 2);
+			} catch {
+				return value;
+			}
+		}
+		return value;
+	}
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch {
+		return String(value);
+	}
+}
+
+function renderThinkingDrawer(text) {
+	return '<div class="thinking-drawer">'
+		+ '<button type="button" class="thinking-drawer-toggle" aria-expanded="false">'
+		+ '<span class="thinking-drawer-arrow" aria-hidden="true">&#x25B8;</span> Thinking</button>'
+		+ `<div class="thinking-drawer-body">${escapeHtml(text)}</div>`
+		+ '</div>';
+}
+
+function renderToolCall(part) {
+	const input = toolPayloadText(part.input);
+	const output = toolPayloadText(part.output);
+	const status = part.ok ? 'ok' : 'failed';
+	return `<div class="tool-call" data-status="${part.ok ? 'ok' : 'error'}">`
+		+ '<button type="button" class="tool-call-header" aria-expanded="false">'
+		+ '<span class="tool-call-arrow" aria-hidden="true">&#x25B8;</span>'
+		+ `<span class="tool-call-name">${escapeHtml(part.name)}</span>`
+		+ `<span class="tool-call-status">${status}</span>`
+		+ '</button>'
+		+ '<div class="tool-call-body">'
+		+ (input ? `<div class="tool-call-section"><span class="tool-call-label">input</span><pre class="tool-call-pre">${escapeHtml(input)}</pre></div>` : '')
+		+ (output ? `<div class="tool-call-section"><span class="tool-call-label">output</span><pre class="tool-call-pre">${escapeHtml(output)}</pre></div>` : '')
+		+ '</div></div>';
+}
+
 function renderReplyParts(parts) {
-	return parts.map(part => part.kind === 'tool'
-		? `<span class="tool-indicator">${escapeHtml(part.ok ? part.name : `${part.name} failed`)}</span>`
-		: renderMarkdown(part.text)
-	).join('');
+	return parts.map(part => {
+		if (part.kind === 'tool') return renderToolCall(part);
+		if (part.kind === 'thinking') return renderThinkingDrawer(part.text);
+		return renderMarkdown(part.text);
+	}).join('');
 }
 
 // Index of the last user row, or -1.
@@ -618,12 +689,6 @@ async function sendMessage() {
 
 	resetBadges();
 
-	// Knock gate: prepareResponseContainer awaits this before proceeding.
-	// Resolved after plunger completes + impact delay, so the woosh-out
-	// fires at the right moment instead of simultaneously with send.
-	let resolveKnockGate;
-	AppState.knockGate = new Promise((resolve) => { resolveKnockGate = resolve; });
-
 	// Start the turn immediately (don't wait for animation)
 	runTurn(message, attachment);
 
@@ -633,75 +698,10 @@ async function sendMessage() {
 	// 500ms settle pause after plunger completes
 	await new Promise((resolve) => setTimeout(resolve, 500));
 
-	if (AppState.responseActive) {
-		// Compute travel delay based on actual distance between elements
-		const impactDelay = computeImpactDelay();
-		await new Promise((resolve) => setTimeout(resolve, impactDelay));
-
-		// Impact: knock the previous response off screen
-		elements.responseContent.classList.add('exiting');
-		resolveKnockGate();
-
-		// Crossfade loading screen in 400ms after impact (during woosh)
-		scheduleLoadingScreen(400);
-	} else {
-		// No previous response to knock — just show loading screen
-		resolveKnockGate();
-		scheduleLoadingScreen();
-	}
+	scheduleLoadingScreen();
 
 	elements.sendButton.disabled = false;
 	elements.inputContainer.classList.remove('firing');
-}
-
-function prepareResponseContainer(callback) {
-	const doTransition = () => {
-		if (AppState.responseActive) {
-			const box = elements.responseBox;
-			const content = elements.responseContent;
-
-			const proceed = () => {
-				box.style.display = 'none';
-				content.classList.remove('exiting');
-				box.classList.remove('no-scroll');
-				AppState.responseActive = false;
-				callback();
-			};
-
-			if (content.classList.contains('exiting')) {
-				let done = false;
-				const onEnd = (e) => {
-					if (e && e.animationName && !/woosh-out/.test(e.animationName)) return;
-					if (done) return;
-					done = true;
-					content.removeEventListener('animationend', onEnd);
-					proceed();
-				};
-				content.addEventListener('animationend', onEnd);
-				setTimeout(() => {
-					if (!done) {
-						content.removeEventListener('animationend', onEnd);
-						proceed();
-					}
-				}, 1100);
-			} else {
-				setTimeout(proceed, 50);
-			}
-		} else {
-			callback();
-		}
-	};
-
-	// If a knock gate exists, wait for the plunger sequence to complete
-	// before starting the exit transition
-	if (AppState.knockGate) {
-		AppState.knockGate.then(() => {
-			AppState.knockGate = null;
-			doTransition();
-		});
-	} else {
-		doTransition();
-	}
 }
 
 // ========================================
@@ -713,6 +713,7 @@ const streamingState = {
 	buffer: '',                  // committed display text of the current turn
 	turnId: null,                // turn_id from this send's turn_started
 	tools: [],                   // [{kind: 'tool', name, ok}] finished tool calls of the turn
+	toolCalls: new Map(),        // tool_id -> in-flight card, live only
 	userMessage: null,           // the message that started the current turn
 	inCodeFence: false,
 	fenceLanguage: '',
@@ -733,7 +734,6 @@ const streamingState = {
 };
 
 const DEFAULT_EMOTION = '🤖';
-const RESTORE_HISTORY_LIMIT = 30;
 const TURN_FRAME_TYPES = new Set(['assistant_delta', 'thinking', 'tool', 'context_reset', 'model_error']);
 
 // Resolved once the page-load restore has decided what the response box shows;
@@ -886,10 +886,24 @@ function extractCompleteBlocks(text, state) {
 	return { blocks, consumedLength: currentPos };
 }
 
+// Follow the newest content unless the reader has scrolled away from it.
+const FOLLOW_BOTTOM_SLACK_PX = 80;
+
+function isNearBottom() {
+	const box = elements.responseBox;
+	return box.scrollHeight - box.scrollTop - box.clientHeight <= FOLLOW_BOTTOM_SLACK_PX;
+}
+
+function followNewest(wasNearBottom) {
+	if (wasNearBottom) elements.responseBox.scrollTop = elements.responseBox.scrollHeight;
+}
+
 function appendToResponse(html) {
 	const wrapper = document.createElement('div');
 	wrapper.className = 'response-block';
 	wrapper.innerHTML = html;
+
+	const stick = isNearBottom();
 
 	streamingState.activeAnimations++;
 	elements.responseBox.classList.add('no-scroll');
@@ -908,6 +922,7 @@ function appendToResponse(html) {
 	wrapper.addEventListener('animationend', onAnimEnd);
 
 	elements.responseContent.appendChild(wrapper);
+	followNewest(stick);
 	ensureResponseStatusBadgePosition();
 	scheduleInitialStatusBadge();
 
@@ -937,6 +952,19 @@ function renderStreamingBlocks(options = {}) {
 	}
 }
 
+// A live tool card is appended in the thread's own markup, so it carries the
+// same expandable input/output a reload renders from the stored row.
+function appendToolCall(part) {
+	const stick = isNearBottom();
+	const holder = document.createElement('div');
+	holder.innerHTML = renderToolCall(part);
+	const el = holder.firstElementChild;
+	part.el = el;
+	elements.responseContent.appendChild(el);
+	followNewest(stick);
+	return el;
+}
+
 function appendDisplayText(text) {
 	if (!text) return;
 	streamingState.buffer += text;
@@ -957,6 +985,7 @@ function resetStreamDisplay() {
 	streamingState.thinkingBuffer = '';
 	streamingState.thinkingElement = null;
 	streamingState.renderBlocked = false;
+	streamingState.toolCalls = new Map();
 }
 
 // Render the rest of the turn's text and release the response box.
@@ -977,46 +1006,57 @@ function finishStreamDisplay() {
 // TURN LIFECYCLE
 // ========================================
 
-function archiveDisplayedExchange() {
-	const exchange = streamingState.displayedExchange;
-	if (!exchange) return;
-	streamingState.displayedExchange = null;
-	window.InlineHistory.appendExchange(exchange);
+// Every turn renders into a bubble in the thread, so a reply wears one chrome
+// whether it is live or a later page load re-renders it from history.
+function openExchange(userText) {
+	elements.responseContent = window.InlineHistory.beginExchange(userText);
+	return elements.responseContent;
+}
+
+function ensureExchange(userText) {
+	if (elements.responseContent === elements.responseRoot) openExchange(userText);
+	return elements.responseContent;
+}
+
+// A turn that produced nothing leaves no pair behind: the server holds no such
+// exchange, so an empty bubble would be the one thing a reload could not show.
+function discardExchange() {
+	if (elements.responseContent === elements.responseRoot) return;
+	elements.responseContent.parentElement.remove();
+	elements.responseContent = elements.responseRoot;
 }
 
 function beginTurn(userMessage) {
-	archiveDisplayedExchange();
+	streamingState.displayedExchange = null;
 	resetStreamDisplay();
 	streamingState.filter = new ReplyFilter();
 	streamingState.turnId = null;
 	streamingState.tools = [];
 	streamingState.userMessage = userMessage;
-	streamingState.containerReady = false;
+	streamingState.containerReady = true;
 	streamingState.pendingSettle = null;
 	setGenerating(true);
 
 	clearCompletionBadgeTimer();
 	removeExistingCompletionBadge();
 
-	prepareResponseContainer(() => {
-		streamingState.containerReady = true;
-		elements.responseContent.innerHTML = '';
-		elements.responseBox.style.display = 'block';
-		elements.responseBox.classList.add('no-scroll');
-		AppState.responseActive = true;
+	// The finished exchange already sits in the thread as a pair; this turn opens
+	// a fresh bubble below it, which is also where the user's own message shows.
+	openExchange(userMessage);
+	elements.responseBox.classList.add('no-scroll');
+	AppState.responseActive = true;
 
-		if (streamingState.thinkingActive) {
-			renderThinkingBuffer();
-		} else {
-			renderStreamingBlocks();
-		}
+	if (streamingState.thinkingActive) {
+		renderThinkingBuffer();
+	} else {
+		renderStreamingBlocks();
+	}
 
-		if (streamingState.pendingSettle) {
-			const settle = streamingState.pendingSettle;
-			streamingState.pendingSettle = null;
-			settle();
-		}
-	});
+	if (streamingState.pendingSettle) {
+		const settle = streamingState.pendingSettle;
+		streamingState.pendingSettle = null;
+		settle();
+	}
 }
 
 async function runTurn(message, attachment) {
@@ -1067,8 +1107,26 @@ function handleTurnFrame(frame) {
 		case 'tool':
 			// A tool event ends the provider step.
 			appendDisplayText(streamingState.filter.flush());
-			if (frame.event === 'tool_completed' || frame.event === 'tool_error') {
-				streamingState.tools.push({ kind: 'tool', name: frame.tool_name, ok: frame.event === 'tool_completed' });
+			if (frame.event === 'tool_executing') {
+				const part = { name: frame.tool_name, input: frame.arguments ?? null, output: '', ok: true, settled: false };
+				streamingState.toolCalls.set(frame.tool_id, part);
+				appendToolCall(part);
+			} else if (frame.event === 'tool_completed' || frame.event === 'tool_error') {
+				const ok = frame.event === 'tool_completed';
+				const part = streamingState.toolCalls.get(frame.tool_id) || { name: frame.tool_name, input: null };
+				part.ok = ok;
+				part.output = frame.result ?? '';
+				part.settled = true;
+				// Re-render in place: the card grows the result and never keeps a
+				// stale "ok" while the tool was still running.
+				if (part.el && part.el.isConnected) {
+					const holder = document.createElement('div');
+					holder.innerHTML = renderToolCall(part);
+					part.el.replaceWith(holder.firstElementChild);
+					part.el = holder.firstElementChild;
+				}
+				streamingState.toolCalls.delete(frame.tool_id);
+				streamingState.tools.push({ kind: 'tool', name: frame.tool_name, ok });
 			}
 			break;
 		case 'context_reset':
@@ -1168,6 +1226,7 @@ function settleUnfinishedTurn(persisted) {
 	streamingState.displayedExchange = (text || streamingState.tools.length)
 		? { user: streamingState.userMessage, parts: [...streamingState.tools, ...(text ? [{ kind: 'text', text }] : [])], persisted }
 		: null;
+	if (!streamingState.displayedExchange) discardExchange();
 }
 
 // Reply parts for the persisted rows of one turn (core.js restores an
@@ -1180,6 +1239,7 @@ function assembleTurnContent(turnMessages) {
 // A turn started since then owns the response box, so it is left alone.
 function showResponse(parts) {
 	if (streamingState.isGenerating || parts.length === 0) return;
+	ensureExchange(streamingState.userMessage);
 	elements.responseContent.innerHTML = renderReplyParts(parts);
 	addCodeBlockButtons(elements.responseContent);
 	elements.responseBox.style.display = 'block';
@@ -1206,19 +1266,21 @@ function showProactiveMessage(content) {
 	if (!text) return;
 
 	if (!streamingState.displayedExchange) {
-		elements.responseContent.innerHTML = '';
+		openExchange(null);
 		streamingState.displayedExchange = { user: null, parts: [], persisted: true };
 	}
 	streamingState.displayedExchange.parts.push({ kind: 'text', text });
 
 	const block = document.createElement('div');
+	const stick = isNearBottom();
+
 	block.className = 'response-block';
 	block.innerHTML = renderMarkdown(text);
 	elements.responseContent.appendChild(block);
 	addCodeBlockButtons(block);
 	elements.responseBox.style.display = 'block';
 	AppState.responseActive = true;
-	block.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+	followNewest(stick);
 
 	hapticFeedback(30);
 	window.InlineHistory.notifyNewMessage();
@@ -1306,7 +1368,7 @@ function addCodeBlockButtons(container) {
 // ========================================
 
 function showWelcomeMessage() {
-	elements.responseContent.innerHTML = `
+	elements.responseRoot.innerHTML = `
 		<div id="welcome-message">
 			<p>Welcome to MIRA! I'm ready to assist you.</p>
 			<p>Start by typing a message below.</p>
@@ -1316,65 +1378,12 @@ function showWelcomeMessage() {
 	AppState.responseActive = true;
 }
 
-function blurClassForAge(timestamp) {
-	const minutesAway = (Date.now() - new Date(timestamp).getTime()) / (1000 * 60);
-	if (minutesAway < 5) return 'blur-fresh';
-	if (minutesAway < 60) return 'blur-recent';
-	if (minutesAway < 120) return 'blur-older';
-	return 'blur-stale';
-}
-
 // Show the newest exchange from history: the rows after the last user row.
-async function loadLastSessionResponse() {
-	try {
-		if (AppState.responseActive) return;
-
-		const page = await AppState.apiClient.history.getHistory({ limit: RESTORE_HISTORY_LIMIT });
-		const rows = page.messages.filter(row => !isSegmentSentinel(row));
-		const userIndex = lastUserIndex(rows);
-		const replyRows = rows.slice(userIndex + 1).filter(row => row.role === 'assistant' || row.role === 'tool');
-		const parts = replyPartsFromRows(replyRows);
-
-		if (parts.length === 0) {
-			showWelcomeMessage();
-		} else {
-			const headerDiv = document.createElement('div');
-			headerDiv.id = 'session-header';
-			headerDiv.textContent = 'Where we left off last session:';
-
-			// Initial (fully blurred) state first so the age-based blur transitions in
-			const contentDiv = document.createElement('div');
-			contentDiv.classList.add('blur-initial');
-			contentDiv.innerHTML = renderReplyParts(parts);
-
-			elements.responseContent.innerHTML = '';
-			elements.responseContent.appendChild(headerDiv);
-			elements.responseContent.appendChild(contentDiv);
-			addCodeBlockButtons(elements.responseContent);
-
-			elements.responseBox.classList.add('active');
-			AppState.responseActive = true;
-			streamingState.displayedExchange = {
-				user: userIndex >= 0 ? messageDisplayText(rows[userIndex].content) : null,
-				parts,
-				persisted: true
-			};
-
-			// Give the compositor time to paint the initial state before the class change
-			const blurClass = blurClassForAge(replyRows[replyRows.length - 1].timestamp);
-			setTimeout(() => {
-				contentDiv.classList.remove('blur-initial');
-				contentDiv.classList.add(blurClass);
-			}, 50);
-		}
-	} catch (error) {
-		console.error('Failed to load the last session response:', error);
-		showWelcomeMessage();
-		showNotice(`Could not load the last conversation: ${error.message}`, 'error');
-	} finally {
-		resolveSessionRestored();
-	}
-
+// The thread is the conversation: history.js renders it, including the empty
+// case. Startup only releases the pager and fetches the announcement.
+async function prepareSession() {
+	// history.js awaits this before its first page, so it resolves first.
+	resolveSessionRestored();
 	await showAnnouncement();
 }
 
@@ -1481,27 +1490,13 @@ function transitionThinkingToText() {
 	}, 200);
 }
 
+// The same markup history renders for a past turn's reasoning. The expand is a
+// delegated click on .thinking-drawer-toggle, so a re-rendered drawer behaves
+// identically without rebinding.
 function createThinkingDrawer(thinkingText) {
-	const drawer = document.createElement('div');
-	drawer.className = 'thinking-drawer';
-
-	const toggle = document.createElement('div');
-	toggle.className = 'thinking-drawer-toggle';
-	toggle.innerHTML = '<span class="thinking-drawer-arrow">&#x25B8;</span> Thinking';
-
-	const body = document.createElement('div');
-	body.className = 'thinking-drawer-body';
-	body.textContent = thinkingText;
-
-	toggle.addEventListener('click', () => {
-		const isExpanded = drawer.classList.toggle('expanded');
-		toggle.querySelector('.thinking-drawer-arrow').innerHTML =
-			isExpanded ? '&#x25BE;' : '&#x25B8;';
-	});
-
-	drawer.appendChild(toggle);
-	drawer.appendChild(body);
-	return drawer;
+	const holder = document.createElement('div');
+	holder.innerHTML = renderThinkingDrawer(thinkingText);
+	return holder.firstElementChild;
 }
 
 // ========================================
@@ -1519,7 +1514,8 @@ window.removeQueuedMessage = removeQueuedMessage;
 window.editQueuedMessage = editQueuedMessage;
 window.saveQueuedMessageEdit = saveQueuedMessageEdit;
 window.cancelQueuedMessageEdit = cancelQueuedMessageEdit;
-window.loadLastSessionResponse = loadLastSessionResponse;
+window.prepareSession = prepareSession;
+window.showWelcomeMessage = showWelcomeMessage;
 window.handleProactiveMessage = handleProactiveMessage;
 window.assembleTurnContent = assembleTurnContent;
 window.showResponse = showResponse;

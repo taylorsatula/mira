@@ -10,9 +10,9 @@
  *   - window.miraSetTheme(mode) — called by the Settings Appearance picker.
  *   - window.miraGetTheme() — returns the stored mode ('auto'|'light'|'dark').
  *
- * The token block in style.css consumes <html data-theme="light"> as the only
- * light-mode trigger. Auto is resolved here, never in CSS, so there is no
- * @media interaction to reason about.
+ * The token block in style.css holds the paper (light) values on :root, with
+ * the dusk overrides under <html data-theme="dark">. Auto is resolved here,
+ * never in CSS, so there is no @media interaction to reason about.
  */
 (function() {
 	'use strict';

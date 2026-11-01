@@ -2,71 +2,76 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
-    <title>MIRA Domain Docs</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>MIRA — Domain Docs</title>
     <script>
     /* Theme bootstrap: resolve Appearance preference before paint to avoid FOUC.
        theme.js (loaded below) takes over for matchMedia subscription + setter. */
     (function(){try{var m=localStorage.getItem('mira-theme');var t=(m==='light'||m==='dark')?m:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
     </script>
-    <script src="/assets/javascript/theme.js?v=ui-20261012"></script>
-    <link rel="stylesheet" href="/assets/style.css?v=ui-20261012">
-    <link rel="icon" href="/favicon.ico?v=ui-20261012">
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=ui-20261012">
-    <link rel="manifest" href="/manifest.json?v=ui-20261012">
+    <script src="/assets/javascript/theme.js?v=ui-20261104"></script>
+    <link rel="stylesheet" href="/assets/style.css?v=ui-20261104">
+    <link rel="icon" href="/favicon.ico?v=ui-20261104">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=ui-20261104">
+    <link rel="manifest" href="/manifest.json?v=ui-20261104">
     <meta name="apple-mobile-web-app-title" content="MIRA">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="theme-color" content="#000000">
+    <meta name="theme-color" content="#FFFEFA" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#201D18" media="(prefers-color-scheme: dark)">
 
     <!-- Preload URLs match the @font-face src URLs in style.css exactly so the preloaded response is reused. -->
     <link rel="preload" href="/assets/fonts/IBM_Plex_Mono.woff2" as="font" type="font/woff2" crossorigin>
-    <link rel="preload" href="/assets/fonts/Roboto.woff2"       as="font" type="font/woff2" crossorigin>
-    <link rel="preload" href="/assets/fonts/Noto_Emoji.woff2"   as="font" type="font/woff2" crossorigin>
-    <link rel="preload" href="/assets/fonts/Minni.woff2"        as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/assets/fonts/Roboto.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/assets/fonts/Noto_Emoji.woff2" as="font" type="font/woff2" crossorigin>
 </head>
-<body>
-<a href="#main-content" class="skip-nav">Skip to content</a>
-<button id="sidebar-toggle" aria-label="Open navigation" aria-expanded="false" aria-controls="app-sidebar"><img src="/assets/images/icons/menubar_chevron.png?v=ui-20261012" alt="" class="sidebar-chevron-icon"></button>
-<div id="sidebar-backdrop" aria-hidden="true"></div>
-<nav id="app-sidebar" aria-label="Main navigation">
-    <div class="sidebar-header">
-        <div class="sidebar-brand"><img src="/assets/images/logo.png?v=ui-20261012" alt="MIRA"></div>
-        <button id="sidebar-collapse-toggle" aria-label="Collapse sidebar">
-            <img src="/assets/images/icons/menubar_chevron.png?v=ui-20261012" alt="" class="sidebar-chevron-icon">
-        </button>
-    </div>
-    <ul class="sidebar-nav" role="list">
-        <li><a href="/chat" class="sidebar-nav-item">
-            <img src="/assets/images/icons/chat.png?v=ui-20261012" alt="">
-            <span class="nav-label">Chat</span>
-        </a></li>
-        <li><a href="/domaindocs" class="sidebar-nav-item active" aria-current="page">
-            <img src="/assets/images/icons/book.png?v=ui-20261012" alt="">
-            <span class="nav-label">Docs</span>
-        </a></li>
-        <li><a href="/memories" class="sidebar-nav-item">
-            <img src="/assets/images/icons/memory.png?v=ui-20261012" alt="">
-            <span class="nav-label">Memories</span>
-        </a></li>
-        <li><a href="/settings" class="sidebar-nav-item">
-            <img src="/assets/images/icons/settings.png?v=ui-20261012" alt="">
-            <span class="nav-label">Settings</span>
-        </a></li>
-    </ul>
-    <div class="sidebar-divider" role="separator"></div>
-    <div class="sidebar-actions">
-        <button class="sidebar-action-pill magenta" id="sidebar-history-btn">Show Chat History</button>
-        <button class="sidebar-action-pill lime" id="sidebar-pause-btn" style="display: none">
-            <span id="sidebar-pause-label">Pause</span>
-        </button>
-        <button class="sidebar-action-pill red" id="sidebar-collapse-btn">Wrap Up</button>
-    </div>
-</nav>
-<button id="sidebar-expand-toggle" aria-label="Expand sidebar">
-    <img src="/assets/images/icons/menubar_chevron.png?v=ui-20261012" alt="" class="sidebar-chevron-icon">
-</button>
+<body class="app-shell" data-page="domaindocs">
+    <div class="ambient-grain" aria-hidden="true"></div>
+    <div class="ambient-grid" aria-hidden="true"></div>
+    <div class="ambient-vignette" aria-hidden="true"></div>
 
+    <a href="#main-content" class="skip-link">Skip to content</a>
+
+    <button id="sidebar-toggle" aria-label="Open navigation" aria-expanded="false" aria-controls="app-sidebar"><img src="/assets/images/icons/menubar_chevron.png?v=ui-20261104" alt="" class="sidebar-chevron-icon"></button>
+    <div id="sidebar-backdrop" aria-hidden="true"></div>
+    <nav id="app-sidebar" aria-label="Main navigation">
+        <div class="sidebar-header">
+            <div class="sidebar-brand"><img src="/assets/images/logo.png?v=ui-20261104" alt="MIRA"></div>
+            <button id="sidebar-collapse-toggle" aria-label="Collapse sidebar">
+                <img src="/assets/images/icons/menubar_chevron.png?v=ui-20261104" alt="" class="sidebar-chevron-icon">
+            </button>
+        </div>
+        <ul class="sidebar-nav" role="list">
+            <li><a href="/chat" class="sidebar-nav-item">
+                <img src="/assets/images/icons/chat.png?v=ui-20261104" alt="">
+                <span class="nav-label">Chat</span>
+            </a></li>
+            <li><a href="/domaindocs" class="sidebar-nav-item active" aria-current="page">
+                <img src="/assets/images/icons/book.png?v=ui-20261104" alt="">
+                <span class="nav-label">Docs</span>
+            </a></li>
+            <li><a href="/memories" class="sidebar-nav-item">
+                <img src="/assets/images/icons/memory.png?v=ui-20261104" alt="">
+                <span class="nav-label">Memories</span>
+            </a></li>
+            <li><a href="/settings" class="sidebar-nav-item">
+                <img src="/assets/images/icons/settings.png?v=ui-20261104" alt="">
+                <span class="nav-label">Settings</span>
+            </a></li>
+        </ul>
+        <div class="sidebar-divider" role="separator"></div>
+        <div class="sidebar-actions">
+            <button class="sidebar-action-pill lime" id="sidebar-pause-btn" style="display: none">
+                <span id="sidebar-pause-label">Pause</span>
+            </button>
+            <button class="sidebar-action-pill red" id="sidebar-collapse-btn">Wrap Up</button>
+        </div>
+    </nav>
+    <button id="sidebar-expand-toggle" aria-label="Expand sidebar">
+        <img src="/assets/images/icons/menubar_chevron.png?v=ui-20261104" alt="" class="sidebar-chevron-icon">
+    </button>
+
+    <div class="app">
 <main id="main-content" class="page-main" tabindex="-1">
     <header class="page-header">
         <h1 class="page-title">Domain Docs</h1>
@@ -222,9 +227,9 @@
     </div>
 </div>
 
-<script src="/assets/javascript/api-client.js?v=ui-20261012"></script>
-<script src="/assets/javascript/sidebar.js?v=ui-20261012"></script>
-<script src="/assets/javascript/domain-knowledge.js?v=ui-20261012"></script>
+<script src="/assets/javascript/api-client.js?v=ui-20261104"></script>
+<script src="/assets/javascript/sidebar.js?v=ui-20261104"></script>
+<script src="/assets/javascript/domain-knowledge.js?v=ui-20261104"></script>
 <script>
 /**
  * DomaindocsCompanion - Real-time collaborative editing of domain knowledge
@@ -1291,5 +1296,6 @@ window.addEventListener('beforeunload', () => {
 initPage();
 </script>
 
+    </div>
 </body>
 </html>

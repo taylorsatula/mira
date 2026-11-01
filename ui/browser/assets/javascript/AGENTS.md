@@ -3,14 +3,14 @@
 ## Files
 
 - `api-client.js` — the one transport: WebSocket lifecycle and the single HTTP path. Open it before changing a request, the CSRF or 401 handling, reconnect, or how a server frame is classified.
-- `core.js` — shared page state, the DOM element cache, and the client's turn-independent listener set, plus startup and segment collapse. Open it before adding page-wide state or a listener that must outlive one turn.
+- `core.js` — shared page state, the DOM element cache, and the client's turn-independent listener set, plus startup, the announcement-dismiss listener, and segment collapse. Open it before adding page-wide state or a listener that must outlive one turn.
 - `ui.js` — the visual layer for indicators, badges, popovers, send animations and the loading wave. Open it before changing anything the user sees move or any toolbar indicator.
 - `messaging.js` — the turn's client half and the display filter. Open it before changing how a reply is displayed or how a turn settles.
-- `history.js` — the inline paged history above the response box. Open it before changing paging, row grouping, or the collapsed-segment summaries.
-- `events.js` — the chat page's DOM wiring: send and stop, keyboard, file picker and image paste, popover open/close, Retry Send buttons. Open it before adding a control to the chat page.
-- `sidebar.js` — navigation chrome on all four pages. Open it before changing sidebar state, the History/Pause/Wrap Up buttons, or mobile drawer behaviour.
+- `history.js` — the conversation itself: rows above the live turn, paging backward without a trigger. Open it before changing paging, row grouping, the collapsed-segment summaries, or what an empty conversation shows.
+- `events.js` — the chat page's DOM wiring: send and stop, keyboard, file picker and image paste, popover open/close, the Retry Send buttons, and the idle prompt's suggestion buttons. Open it before adding a control to the chat page.
+- `sidebar.js` — navigation chrome on all four pages. Open it before changing sidebar state, the Pause and Wrap Up buttons, or mobile drawer behaviour.
 - `inactivity-warning.js` — the session status bar and the `get_segment_status` poll behind it. Open it before changing session-state display, the countdown, or pause and resume.
-- `domain-knowledge.js` — the domaindoc client plus the chat page's domain popover. Open it before changing domaindoc or section CRUD, or the enabled-domain indicator.
+- `domain-knowledge.js` — the domaindoc client plus the chat page's domain popover and its Manage Domains button. Open it before changing domaindoc or section CRUD, or the enabled-domain indicator.
 - `tool-config.js` — the settings page's tool-config forms over the tools API. Open it before changing how a tool's config form is built, validated, or saved.
 - `repulsion-feedback.js` — the AI-tell bank and the "Repulsed!" popover. Open it before editing a tell pattern or the feedback payload.
 - `location.js` — the consent modal and the geolocation POST. Open it before changing consent state, the permission gate, or the location request.
@@ -56,16 +56,19 @@
 - Every page's controller registers a logout handler — grep `rg 'onAuthChange' ui/browser`. `MiraAPIClient` emits the event and stops; nothing navigates on its own, so a page without a handler keeps a dead session and fails every later write with 401.
 - Adding a tool icon is two edits: the PNG in `ui/browser/assets/images/icons/toolicons/` and its stem in `ui.js:TOOL_ICONS`. The lookup drops the `_tool` suffix, `reminder_tool` → `reminders` is the one override, and an unlisted stem renders `default.png` without complaint.
 
-Elsewhere: this map does not own the pages that load these modules, nor the stylesheet whose class names they toggle. The ids, class selectors and `data-indicator` attributes that `core.js:elements` captures live in the page files under `ui/browser/`, and every class these modules add or remove by name (`.active`, `.hidden`, `.converted`/`.falling`, the session-status states) is declared in `ui/browser/assets/style.css`. Every other destination this directory reaches is an edge — see `## Wiring` above.
+- Pages in the paper shell: the two clicks that used to be inline `onclick` are listeners here — `core.js:setupAnnouncementDismiss` completes the dismissal that `messaging.js:showAnnouncement` records, and `domain-knowledge.js:initDomainKnowledge` opens `/domaindocs` from `#domain-manage-btn` — and `events.js:setupDelegatedEvents` turns a `.ambient-suggestion[data-prompt]` click into a submit of the composer form. Each is guarded on its element, so a page without that markup loads and behaves as before. Counterpart: `ui/browser/AGENTS.md` owns the markup those ids live in.
 
-## How an exchange leaves the response box for history
+Elsewhere: this map does not own the pages that load these modules, nor the stylesheet whose class names they toggle. The ids, class selectors and `data-indicator` attributes that `core.js:elements` captures live in the page files under `ui/browser/`, and every class these modules add or remove by name (`.active`, `.hidden`, `.converted`/`.falling`, the session-status states) is declared in `ui/browser/assets/style.css`. `elements.responseContent` is not a page element for the length of a turn: it is repointed at a thread bubble, while `elements.responseRoot` keeps addressing `#response_content` itself. Every other destination this directory reaches is an edge — see `## Wiring` above.
 
-The one path that crosses three modules and decides what the history view shows.
+## How a turn reaches the thread
 
-1. `messaging.js:beginTurn` calls `archiveDisplayedExchange`: whatever was in the response box goes to `window.InlineHistory.appendExchange`, and `streamingState.displayedExchange` is cleared. `history.js:appendExchange` returns without rendering while the first page has not been fetched — that first fetch includes the exchange, so rendering it here as well would double it.
-2. The turn settles and records a new `displayedExchange`. `completeTurn` marks it `persisted: true`, and so does `stopTurn`, because a stopped turn's partial reply is committed server-side. `failTurn` records one with `persisted: false` when text or a tool row reached the screen: that content never reached the server, so no history page holds it.
-3. Expanding the view runs `history.js:loadInlineHistory`, which awaits `messaging.js`'s `sessionRestored` before its first fetch. `loadLastSessionResponse` resolves that promise in a `finally`, so a failed restore still releases the pager instead of leaving it waiting forever.
-4. That first page passes through `withoutDisplayedExchange`, which drops every row at or after the last user row except segment sentinels, while the exchange on screen is marked persisted. `persisted` is what keeps the exclusion honest in both directions: treating a failed turn's on-screen text as persisted would make the first page drop the newest rows the server actually holds, and treating a completed exchange as virtual would render the same reply twice.
-5. An interrupted reply re-enters at the same place: `api-client.js:_handleClose` settles the send `stopped` with reason `disconnect`, `stopTurn` sets `AppState.responseInterrupted`, and `core.js` restores the reply from history through `assembleTurnContent` and `showResponse`, which records a fresh persisted exchange for the first page to exclude.
+The one path that crosses two modules and decides what the thread shows.
 
-Ordering invariant behind all five: a recorded exchange always describes what the response box shows, so the screen and the history pager never disagree about which rows are already displayed.
+1. The thread is the conversation: `history.js` renders it on load and pages backward as the reader scrolls up, with no trigger and no collapsed state. The first page opens at the newest message; later pages are older and are inserted above, so scroll anchoring holds the reader's place instead.
+2. `history.js:loadInlineHistory` awaits `messaging.js`'s `sessionRestored` before its first fetch. `messaging.js:prepareSession` resolves that promise as its first act, so the pager never waits on a network round-trip of its own.
+3. An empty conversation is history's call, because nothing else fetches to find out: when the first page yields nothing and holds no older pages, it calls `window.showWelcomeMessage`, which is what the idle prompt keys on.
+4. A turn does not render beside the thread — it renders *in* it. `messaging.js:beginTurn` calls `openExchange`, which asks `history.js:beginExchange` for a fresh pair at the foot of the thread and repoints `elements.responseContent` at its assistant bubble. The user's own message appears there at send time, and every streaming write lands in that bubble, so a reply never changes chrome when the next turn starts.
+5. Nothing moves at turn end, so there is no hand-off to make: `archiveDisplayedExchange` and `InlineHistory.appendExchange` are gone. `withoutDisplayedExchange` survives for one case only — a first page that arrives late drops the rows of a finished exchange already on screen, so a retried fetch cannot render the same reply twice.
+6. An interrupted reply re-enters through the same builder: `api-client.js:_handleClose` settles the send `stopped` with reason `disconnect`, `stopTurn` sets `AppState.responseInterrupted`, and `core.js` restores the reply through `assembleTurnContent` and `showResponse`, whose `ensureExchange` opens a bubble if the last turn has none.
+
+Ordering invariant behind all six: one exchange, one element. The live turn and every later page load render the same `.inline-history-pair`, which is why the appearance does not change when a turn becomes history.

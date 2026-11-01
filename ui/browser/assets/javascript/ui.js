@@ -24,7 +24,7 @@
  */
 
 // Cache-bust tag shared with the page's static asset URLs.
-const ASSET_VERSION = 'ui-20261012';
+const ASSET_VERSION = 'ui-20261104';
 
 // ========================================
 // TOOL INDICATOR
@@ -288,41 +288,13 @@ function removeExistingCompletionBadge() {
 	destroyToolbarStatusBadge(true);
 }
 
-const RESPONSE_STATUS_STYLES = {
-	'in-progress': {
-		color: '#ffd166'
-	},
-	complete: {
-		color: 'lime'
-	}
-};
-
+// The badge is styled entirely by ui/browser/assets/style.css from these two
+// data attributes, so it follows the theme like every other element.
 function createStatusBadgeElement(context = 'response') {
 	const badge = document.createElement('span');
 	badge.className = 'response-status-indicator';
-	badge.style.backgroundColor = 'black';
-	badge.style.padding = '5px 20px';
-	badge.style.fontWeight = 'bold';
-	badge.style.fontSize = '0.7em';
-	badge.style.display = 'inline-flex';
-	badge.style.alignItems = 'center';
-	badge.style.position = 'relative';
-	badge.style.pointerEvents = 'none';
-	badge.style.whiteSpace = 'nowrap';
-	badge.style.border = '1px solid transparent';
-
-	if (context === 'response') {
-		badge.dataset.context = 'response';
-		badge.style.display = 'inline-block';
-		badge.style.alignItems = '';
-		badge.style.top = '-2px';
-	} else if (context === 'toolbar') {
-		badge.dataset.context = 'toolbar';
-		badge.classList.add('toolbar-status-indicator');
-		badge.style.top = '0';
-		badge.style.alignSelf = 'center';
-	}
-
+	badge.dataset.context = context;
+	if (context === 'toolbar') badge.classList.add('toolbar-status-indicator');
 	return badge;
 }
 
@@ -337,9 +309,6 @@ function insertCompletionBadge(label = '/complete', status = 'complete', options
 		badge = createStatusBadgeElement('response');
 	}
 
-	const style = RESPONSE_STATUS_STYLES[status] || RESPONSE_STATUS_STYLES.complete;
-	badge.style.color = style.color;
-	badge.style.border = `1px solid ${style.color}`;
 	badge.dataset.status = status;
 	badge.textContent = label;
 
@@ -393,11 +362,8 @@ function showToolbarStatusBadge(label = '/in-progress') {
 		}
 	}
 
-	const style = RESPONSE_STATUS_STYLES['in-progress'];
 	toolbarStatusBadge.textContent = label;
 	toolbarStatusBadge.dataset.status = 'in-progress';
-	toolbarStatusBadge.style.border = `1px solid ${style.color}`;
-	toolbarStatusBadge.style.color = style.color;
 	toolbarStatusBadge.style.transition = 'none';
 	toolbarStatusBadge.style.opacity = '1';
 }
@@ -646,18 +612,6 @@ async function runPlungerAnimation(messageText) {
 	await Promise.all([animationPromise, projectilePromise]);
 }
 
-function computeImpactDelay() {
-	const inputRect = elements.inputContainer.getBoundingClientRect();
-	const responseRect = elements.responseBox.getBoundingClientRect();
-	const distance = Math.max(0, inputRect.top - responseRect.top);
-	// Projectile velocity: 150px / 544ms ≈ 0.276 px/ms
-	// Air resistance: slight drag proportional to distance
-	const effectiveSpeed = Math.max(0.276 - (distance * 0.0003), 0.1);
-	return Math.round(Math.max(80, Math.min(distance / effectiveSpeed, 200)));
-}
-
-window.computeImpactDelay = computeImpactDelay;
-
 function animateTextDissolve(totalDuration) {
 	return new Promise((resolve) => {
 		const startTime = performance.now();
@@ -668,13 +622,14 @@ function animateTextDissolve(totalDuration) {
 			const progress = Math.min(elapsed / duration, 1);
 
 			const alpha = 1 - progress;
-			elements.messageInput.style.color = `rgba(255, 255, 255, ${alpha})`;
+			// Fade to transparent, not to white: the same dissolve works on any surface.
+			elements.messageInput.style.opacity = String(alpha);
 
 			if (progress < 1) {
 				requestAnimationFrame(animate);
 			} else {
 				elements.messageInput.value = '';
-				elements.messageInput.style.color = '';
+				elements.messageInput.style.opacity = '';
 				elements.messageInput.style.height = '';
 				elements.messageInput.focus();
 				resolve();
@@ -848,7 +803,7 @@ function showLoadingScreen() {
 		console.warn('Loading animation timeout reached, showing slow-response message');
 		cancelLoadingAnimationFrame();
 		elements.asciiContainer.innerHTML =
-			'<p style="color: var(--color-text-secondary, #aaa); font-size: 0.9rem; text-align: center; padding: 2rem; line-height: 1.6;">' +
+			'<p class="loading-slow-note">' +
 			'Mira is running slow or generating a super long response. ' +
 			'The request has <em>not</em> timed out yet. If it doesn\'t show up in a moment ' +
 			'please try refreshing the page (sometimes the UI gets stuck).</p>';

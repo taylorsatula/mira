@@ -163,7 +163,38 @@ function setupEventListeners() {
 
 }
 
+// Reasoning drawers and tool calls expand by delegation: history re-renders a
+// past turn from stored rows and a live turn appends the same markup, so neither
+// may carry its own listener.
+function setupExchangeToggles() {
+	document.addEventListener('click', (event) => {
+		const drawerToggle = event.target.closest('.thinking-drawer-toggle');
+		if (drawerToggle) {
+			const drawer = drawerToggle.closest('.thinking-drawer');
+			const expanded = drawer.classList.toggle('expanded');
+			drawerToggle.setAttribute('aria-expanded', String(expanded));
+			return;
+		}
+		const callToggle = event.target.closest('.tool-call-header');
+		if (callToggle) {
+			const call = callToggle.closest('.tool-call');
+			const expanded = call.classList.toggle('expanded');
+			callToggle.setAttribute('aria-expanded', String(expanded));
+		}
+	});
+}
+
 function setupDelegatedEvents() {
+	const ambientOverlay = document.querySelector('.ambient-overlay');
+	if (ambientOverlay) {
+		ambientOverlay.addEventListener('click', (e) => {
+			const suggestion = e.target.closest('.ambient-suggestion[data-prompt]');
+			if (!suggestion) return;
+			elements.messageInput.value = suggestion.getAttribute('data-prompt');
+			elements.inputContainer.requestSubmit();
+		});
+	}
+
 	if (elements.queueMessages) {
 		elements.queueMessages.addEventListener('click', async (e) => {
 			const index = parseInt(e.target.dataset.index);
@@ -197,5 +228,7 @@ function setupDelegatedEvents() {
 // ========================================
 
 // Export setup functions needed by core.js
+setupExchangeToggles();
+
 window.setupEventListeners = setupEventListeners;
 window.setupDelegatedEvents = setupDelegatedEvents;

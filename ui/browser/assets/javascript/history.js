@@ -1,10 +1,12 @@
 /**
- * HISTORY.JS - Inline Conversation History
+ * HISTORY.JS - the conversation above the live turn
  *
  * PURPOSE:
- * Shows earlier conversation inside #response_box, above the current
- * response, paging backward through `history.getHistory({before, limit})`
- * (pages arrive oldest→newest; `nextBefore` pages further back).
+ * Renders the conversation inside #response_box, above the current response,
+ * paging backward through `history.getHistory({before, limit})` (pages arrive
+ * oldest→newest; `nextBefore` pages further back). There is no collapsed state
+ * and no trigger: the thread is the conversation, so paging starts on load and
+ * continues as the reader scrolls up.
  *
  * ROW PRESENTATION (mirrors ui/tui/history.py):
  * - A `user` row starts a pair; the `assistant` and `tool` rows that share a
@@ -17,9 +19,10 @@
  * - Leading reply rows of a page whose user row lives in the next older page
  *   are carried over and rendered with that page.
  *
- * The exchange on screen in the response box is left out of the first page
- * (rows from the last user row onward) while it is a persisted exchange; when
- * a send knocks it off screen messaging.js hands it to appendExchange.
+ * The live turn renders into the last pair of this same thread — beginExchange
+ * creates it — so nothing moves when the turn ends and the next one starts. The
+ * exchange on screen is left out of a first page that arrives late (rows from
+ * the last user row onward) while it is a persisted exchange.
  *
  * DEPENDENCIES:
  * - core.js: AppState, elements
@@ -29,7 +32,7 @@
  * - ui.js: hapticFeedback
  *
  * DEPENDENTS:
- * - sidebar.js (toggle, expand, isExpanded), messaging.js (appendExchange, notifyNewMessage)
+ * - messaging.js (beginExchange, notifyNewMessage)
  *
  * LOAD ORDER:
  * After messaging.js.
@@ -39,52 +42,14 @@ const HISTORY_PAGE_LIMIT = 30;
 const HISTORY_LOADER_SELECTOR = '.inline-history-loading:not(.inline-history-message)';
 
 const InlineHistoryState = {
-	isExpanded: false,
 	loaded: false,           // the newest page has been fetched
 	hasMore: true,
 	nextBefore: null,        // keyset cursor for the next older page
 	carry: [],               // leading reply rows held for the next older page
 	renderedAny: false,
 	isLoading: false,
-	savedScrollPosition: null,
 	scrollObserver: null
 };
-
-function toggleInlineHistory() {
-	if (InlineHistoryState.isExpanded) {
-		collapseInlineHistory();
-	} else {
-		expandInlineHistory();
-	}
-}
-
-function expandInlineHistory() {
-	InlineHistoryState.isExpanded = true;
-	elements.inlineHistoryContainer.classList.remove('hidden');
-
-	if (InlineHistoryState.savedScrollPosition !== null) {
-		elements.responseBox.scrollTop = InlineHistoryState.savedScrollPosition;
-	}
-
-	// The observer's first callback loads the newest page when the sentinel is visible
-	setupInlineScrollObserver();
-
-	hapticFeedback(30);
-}
-
-function collapseInlineHistory() {
-	InlineHistoryState.savedScrollPosition = elements.responseBox.scrollTop;
-
-	InlineHistoryState.isExpanded = false;
-	elements.inlineHistoryContainer.classList.add('hidden');
-
-	InlineHistoryState.scrollObserver.disconnect();
-	InlineHistoryState.scrollObserver = null;
-
-	hideNewMessageToast();
-
-	hapticFeedback(30);
-}
 
 // Drop the persisted exchange that is on screen in the response box from the newest page.
 function withoutDisplayedExchange(rows) {
@@ -103,6 +68,7 @@ async function loadInlineHistory() {
 	if (InlineHistoryState.isLoading || !InlineHistoryState.hasMore) return;
 
 	InlineHistoryState.isLoading = true;
+	const isFirstPage = !InlineHistoryState.loaded;
 	showInlineHistoryLoading();
 
 	// Scroll anchoring: content is inserted above what the user is reading
@@ -138,8 +104,12 @@ async function loadInlineHistory() {
 			elements.inlineHistoryContainer.querySelector('.inline-history-message')?.remove();
 			InlineHistoryState.renderedAny = true;
 			elements.inlineHistorySentinel.after(fragment);
-		} else if (!InlineHistoryState.renderedAny) {
-			showInlineHistoryMessage('No earlier conversation yet');
+		} else if (!InlineHistoryState.renderedAny && !InlineHistoryState.hasMore) {
+			// An empty conversation. Nothing else will say so, and a turn already
+			// under way owns the live region.
+			if (!AppState.responseActive && !streamingState.isGenerating) {
+				window.showWelcomeMessage();
+			}
 		}
 	} catch (error) {
 		console.error('Failed to load inline history:', error);
@@ -149,7 +119,11 @@ async function loadInlineHistory() {
 		hideInlineHistoryLoading();
 
 		const heightDifference = elements.responseBox.scrollHeight - scrollHeightBefore;
-		elements.responseBox.scrollTop = scrollTopBefore + heightDifference;
+		// The first page opens at the newest message; every later page is older
+		// and is inserted above, so anchoring holds the reader's place instead.
+		elements.responseBox.scrollTop = (isFirstPage && InlineHistoryState.renderedAny)
+			? elements.responseBox.scrollHeight
+			: scrollTopBefore + heightDifference;
 
 		// Re-observing re-reports a still-visible sentinel, so short pages keep loading
 		const observer = InlineHistoryState.scrollObserver;
@@ -262,19 +236,20 @@ function createHistoryReply(parts) {
 }
 
 /**
- * Append the exchange that just left the response box. Before the first page
- * is fetched there is nothing to append to: that fetch includes it.
+ * Open the live exchange at the foot of the thread and return the element a
+ * turn renders into. It is the same pair shape a reload renders from history,
+ * so a reply keeps one appearance from the first token to a later page load.
  */
-function appendExchange(exchange) {
-	if (!InlineHistoryState.loaded) return;
-	const pair = createHistoryPair(exchange.user);
-	if (exchange.parts.length > 0) {
-		pair.appendChild(createHistoryReply(exchange.parts));
-	}
-	if (!pair.hasChildNodes()) return;
+function beginExchange(userText) {
+	const pair = createHistoryPair(userText);
+	const bubble = document.createElement('div');
+	bubble.className = 'inline-history-assistant';
+	pair.appendChild(bubble);
+
 	elements.inlineHistoryContainer.querySelector('.inline-history-message')?.remove();
 	InlineHistoryState.renderedAny = true;
 	elements.inlineHistoryContainer.appendChild(pair);
+	return bubble;
 }
 
 function setupInlineScrollObserver() {
@@ -326,8 +301,6 @@ function showInlineHistoryMessage(text) {
  * within one viewport of the bottom auto-scroll silently, otherwise show the toast.
  */
 function showNewMessageToast() {
-	if (!InlineHistoryState.isExpanded) return;
-
 	const viewportHeight = elements.responseBox.clientHeight;
 	const scrollBottom = elements.responseBox.scrollHeight - elements.responseBox.scrollTop - viewportHeight;
 
@@ -358,9 +331,10 @@ function scrollToLatest() {
 elements.toastScrollBtn.addEventListener('click', scrollToLatest);
 
 window.InlineHistory = {
-	get isExpanded() { return InlineHistoryState.isExpanded; },
-	toggle: toggleInlineHistory,
-	expand: expandInlineHistory,
-	notifyNewMessage: showNewMessageToast,
-	appendExchange: appendExchange
+	beginExchange: beginExchange,
+	notifyNewMessage: showNewMessageToast
 };
+
+// Paging is the thread's own behaviour, not a mode: the observer's first
+// callback fetches the newest page once the session restore has settled.
+setupInlineScrollObserver();

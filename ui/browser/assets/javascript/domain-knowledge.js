@@ -188,7 +188,7 @@ class DomainKnowledgeManager {
             if (domain.shared) {
                 const sharedTag = document.createElement('span');
                 sharedTag.textContent = ` (shared by ${domain.shared_by})`;
-                sharedTag.style.cssText = 'color: #0af; font-size: 11px;';
+                sharedTag.className = 'domain-shared-tag';
                 labelEl.appendChild(sharedTag);
             }
 
@@ -210,13 +210,12 @@ class DomainKnowledgeManager {
                 text-align: center;
                 padding: 8px;
                 margin-top: 8px;
-                border-top: 1px solid rgba(255, 255, 255, 0.1);
+                border-top: 1px solid var(--line-soft);
                 color: var(--text-inline-muted);
                 font-size: 12px;
                 text-decoration: none;
             `;
-            archivedLink.addEventListener('mouseenter', () => { archivedLink.style.color = '#ffa500'; });
-            archivedLink.addEventListener('mouseleave', () => { archivedLink.style.color = '#888'; });
+            archivedLink.classList.add('domain-archived-link');
             containerElement.appendChild(archivedLink);
         }).catch(error => {
             console.error('Failed to count archived domains; the "View Archived" link is not shown:', error);
@@ -236,6 +235,11 @@ function initDomainKnowledge(apiClient) {
     const domainPopover = document.getElementById('domain-popover');
     const domainList = document.getElementById('domain-list');
     const domainPopoverClose = domainPopover?.querySelector('.popover-close');
+
+    const domainManageBtn = document.getElementById('domain-manage-btn');
+    if (domainManageBtn) {
+        domainManageBtn.addEventListener('click', () => window.open('/domaindocs', '_blank'));
+    }
 
     // Fetch domains on init so the indicator shows whether any domain is enabled
     domainManager.fetchDomains().catch(error => {

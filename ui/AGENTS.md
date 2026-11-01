@@ -4,6 +4,7 @@
 
 - `__init__.py` — docstring only; no re-exports.
 - `browser/` — the browser client: four served page documents, the asset tree, the client half of the turn protocol; `ui/browser/AGENTS.md` indexes it.
+- `browser.oldref/` — parked pre-reskin reference copy of the browser client (neon design), kept for archaeology; served nowhere, no map.
 - `tui/` — the terminal client: the strict frame mirror, the turn state machine, the single-writer screen, the install's maintenance commands; `ui/tui/AGENTS.md` indexes it.
 
 ## Wiring

@@ -269,7 +269,7 @@ class ToolConfigManager {
             await this.fetchTools();
         } catch (error) {
             console.error('[ToolConfig] Failed to fetch tools:', error);
-            container.innerHTML = `<p style="color: #f66;">Failed to load tools: ${this._escapeHtml(error.message)}</p>`;
+            container.innerHTML = `<p class="tool-load-error">Failed to load tools: ${this._escapeHtml(error.message)}</p>`;
             return;
         }
 

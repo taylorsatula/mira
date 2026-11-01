@@ -1,18 +1,17 @@
 /**
  * SIDEBAR.JS — navigation chrome on all four pages: desktop collapse persisted
  * in localStorage `mira-sidebar-collapsed`, the mobile drawer with its swipe,
- * focus trap and Escape close, and the History, Pause and Wrap Up buttons.
+ * focus trap and Escape close, and the Pause and Wrap Up buttons.
  *
  * The file itself has no dependencies, which is what lets every page load it.
  * Its chat-page wiring does have them: the pause button subscribes to
- * `window.inactivityWarningManager` and the History button calls
- * `window.InlineHistory`, both defined by scripts that load after this one, so
+ * `window.inactivityWarningManager` and the Wrap Up button calls
+ * `window.Functions`, both defined by scripts that load after this one, so
  * that wiring waits for DOMContentLoaded. Reading either at eval time would
  * throw and end this file's execution there.
  *
  * Collapse state is applied without animation on load and with animation on
- * every later toggle; `?history=1` arriving from another page is consumed here
- * and replaced out of the URL.
+ * every later toggle.
  */
 (function() {
 	'use strict';
@@ -234,20 +233,6 @@
 		if (link) closeSidebar();
 	});
 
-	// --- History button ---
-
-	var historyBtn = document.getElementById('sidebar-history-btn');
-	historyBtn.addEventListener('click', function() {
-		if (isOnChatPage()) {
-			window.InlineHistory.toggle();
-			historyBtn.textContent = window.InlineHistory.isExpanded
-				? 'Hide Chat History'
-				: 'Show Chat History';
-		} else {
-			window.location.href = '/chat?history=1';
-		}
-	});
-
 	// --- Pause/Unpause button (chat page: state from the session status bar) ---
 
 	var pauseBtn = document.getElementById('sidebar-pause-btn');
@@ -283,14 +268,6 @@
 				updateSidebarPauseUI(state.isPaused, state.hasActiveSegment);
 			});
 			updateSidebarPauseUI(manager.isPaused, manager.hasActiveSegment);
-
-			// ?history=1 (from the History button on another page) opens the inline history
-			var params = new URLSearchParams(window.location.search);
-			if (params.get('history') === '1') {
-				window.history.replaceState({}, '', window.location.pathname);
-				window.InlineHistory.expand();
-				historyBtn.textContent = 'Hide Chat History';
-			}
 		});
 	} else {
 		collapseBtn.style.display = 'none';

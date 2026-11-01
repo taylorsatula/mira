@@ -54,8 +54,11 @@ const elements = {
 	loadingScreen: document.getElementById('loading-screen'),
 	asciiContainer: document.getElementById('ascii-container'),
 
-	// Response - responseBox is the scroll container, responseContent the inner wrapper
+	// Response - responseBox is the scroll container. responseRoot holds what the
+	// thread itself says (the welcome message); responseContent is the element the
+	// current turn renders into, repointed at a thread bubble for every turn.
 	responseBox: document.getElementById('response_box'),
+	responseRoot: document.getElementById('response_content'),
 	responseContent: document.getElementById('response_content'),
 
 	// Input
@@ -171,6 +174,20 @@ function initializeAPIClient() {
 // APPLICATION INITIALIZATION
 // ========================================
 
+// messaging.js records the dismissal id on this same button; hiding the banner
+// belongs here because that module is frozen.
+function setupAnnouncementDismiss() {
+	const dismiss = document.querySelector('#announcement-banner .system-alert-dismiss');
+	if (!dismiss) return;
+	dismiss.addEventListener('click', () => {
+		const banner = dismiss.parentElement;
+		banner.classList.add('dismissing');
+		banner.addEventListener('animationend', () => {
+			banner.style.display = 'none';
+		}, { once: true });
+	});
+}
+
 async function initializeMira() {
 	initializeAPIClient();
 
@@ -181,9 +198,10 @@ async function initializeMira() {
 
 	window.initDomainKnowledge(AppState.apiClient);
 	window.updateQueueIndicator();
-	await window.loadLastSessionResponse();
+	await window.prepareSession();
 	window.setupEventListeners();
 	window.setupDelegatedEvents();
+	setupAnnouncementDismiss();
 }
 
 if (document.readyState === 'loading') {
@@ -222,7 +240,7 @@ const Functions = {
 					const result = await outcome;
 					responseBox.className = 'active';
 					if (result.kind === 'failed') {
-						responseContent.innerHTML = '<span style="color: #ff6b6b;"></span><br><br>Please try again.';
+						responseContent.innerHTML = '<span class="collapse-error"></span><br><br>Please try again.';
 						responseContent.querySelector('span').textContent = `Failed to collapse segment: ${result.message}`;
 					} else if (result.kind === 'deferred') {
 						responseContent.textContent = result.message;
