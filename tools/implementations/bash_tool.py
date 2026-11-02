@@ -205,7 +205,7 @@ class BashToolConfig(BaseModel):
         description="Directory for run_background logs. Must resolve inside root.",
     )
     default_timeout_seconds: int = Field(default=120, description="Timeout applied when the caller gives none.")
-    max_timeout_seconds: int = Field(default=1800, description="Ceiling a caller-supplied timeout is clamped to.")
+    max_timeout_seconds: int = Field(default=3601, description="Ceiling a caller-supplied timeout is clamped to.")
     max_output_bytes: int = Field(default=100_000, description="Per-stream cap on returned stdout/stderr bytes.")
     background_start_timeout_seconds: int = Field(
         default=30,
