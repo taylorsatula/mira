@@ -105,6 +105,7 @@ class ToolUpdate:
     arguments: dict | None
     result: str | None
     is_error: bool | None
+    summary: str | None
 
 
 @dataclass
@@ -664,6 +665,7 @@ class MiraClient:
                 arguments=frame.arguments,
                 result=None if frame.result is None else str(frame.result),
                 is_error=frame.is_error,
+                summary=frame.summary,
             )
         if kind == "model_error":
             return ModelError(

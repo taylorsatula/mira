@@ -1117,6 +1117,10 @@ function handleTurnFrame(frame) {
 				part.ok = ok;
 				part.output = frame.result ?? '';
 				part.settled = true;
+				// The server swaps in a one-sentence description once its summary
+				// resolves; history rows carry no summary, so a reload shows the
+				// raw input again.
+				if (frame.summary) part.input = frame.summary;
 				// Re-render in place: the card grows the result and never keeps a
 				// stale "ok" while the tool was still running.
 				if (part.el && part.el.isConnected) {

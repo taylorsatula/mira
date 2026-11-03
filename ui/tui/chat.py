@@ -906,7 +906,7 @@ class ChatSession:
             ok = event.event == "tool_completed" and not event.is_error
             arguments = event.arguments if event.arguments is not None else run and run.arguments
             seconds = time.monotonic() - run.started if run else None
-            bodies.append(transcript.tool_line(event.tool_name, ok, arguments, seconds))
+            bodies.append(transcript.tool_line(event.tool_name, ok, arguments, seconds, event.summary))
             if not ok and event.result and event.result.strip():
                 bodies.append(transcript.tool_error(event.result))
         if bodies:
