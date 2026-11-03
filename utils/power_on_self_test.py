@@ -312,6 +312,7 @@ def run_pre_server_post(
         CheckSpec("injection_screen", True, _check_injection_screen),
         CheckSpec("llm_configuration", True, _check_llm_configuration),
         CheckSpec("llm_provider_reachability", True, _check_llm_provider_reachability),
+        CheckSpec("tool_call_summary", True, _check_tool_call_summary),
         CheckSpec("tools", True, _check_tools),
         CheckSpec("dependency_initialization", True, _check_dependency_initialization),
         CheckSpec("scheduler_registration", True, _check_scheduler_registration),
@@ -1388,6 +1389,33 @@ def _check_llm_provider_reachability() -> dict[str, Any]:
         "targets_probed": len(successes),
         "providers": successes,
     }
+
+
+def _check_tool_call_summary() -> dict[str, Any]:
+    from cns.services.tool_call_summary_service import is_summarizable, summarize_tool_call
+    from utils.user_context import load_model_configs
+
+    # Self-sufficient: this check runs before dependency_initialization loads
+    # the shared cache, and load_model_configs() is idempotent.
+    load_model_configs()
+
+    arguments = {
+        "operation": "run",
+        "command": (
+            "cd ~/Programming/Scratch/mira && grep -rn 'def tool_line' ui/tui/transcript.py "
+            "| head -5 && python3 -m py_compile ui/tui/protocol.py && echo done"
+        ),
+    }
+    if not is_summarizable(arguments):
+        raise RuntimeError(
+            "tool-call summary eligibility is broken: a long call no longer qualifies"
+        )
+    summary = summarize_tool_call("bash_tool", arguments)
+    if not summary or "\n" in summary:
+        raise RuntimeError(
+            f"fast route returned a non-display tool-call summary: {summary!r}"
+        )
+    return {"summary": summary}
 
 
 def _llm_probe_targets(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

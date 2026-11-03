@@ -5,7 +5,7 @@
 - `__init__.py` — package marker only; nothing is defined or re-exported here.
 - `base.py` — the response envelope, the error taxonomy, and the two handler bases the handler-backed routers inherit. Open it before deciding how a new route reports failure.
 - `chat.py` — one synchronous HTTP chat turn. Open it before changing turn-lock acquisition, the attachment gates, or where a pending restart fires on the HTTP path.
-- `websocket_chat.py` — the socket, every frame model, and the server side of the turn protocol. Open it before touching a frame shape, the reader and writer tasks, or the streamed-frame timeout.
+- `websocket_chat.py` — the socket, every frame model, and the server side of the turn protocol. Open it before touching a frame shape, the reader and writer tasks, the streamed-frame timeout, or the frame chain and tool-summary hold.
 - `actions.py` — domain-routed mutations plus the whitelisted tool query surface. Open it before adding an action domain, mutating a domaindoc, or moving a value across the storage boundary.
 - `data.py` — the read surface, one `_get_*` per `DataType`. Open it before adding a read or changing history pagination.
 - `federation.py` — the inbound Lattice delivery webhook, mounted only when federation is enabled. Open it before changing what Lattice's retry contract sees.
@@ -25,7 +25,7 @@
 - Turn handoff: `chat_endpoint` and `websocket_chat_endpoint` each open a UnitOfWork, call `orchestrator.process_message`, and commit it themselves. The commit belongs to the transport, never to the orchestrator — a transport that stops committing loses the ability to persist an accepted message whose generation failed. `process_message` is `cns/services/AGENTS.md`; the UnitOfWork's open, staging and commit with its post-commit callbacks are `cns/infrastructure/AGENTS.md`.
 - Live sentinel: `actions.py`'s session-status, pause, resume and collapse actions call `find_active_segment`, `load_segment_messages`, `pause_segment` and `unpause_segment`, and compare `sentinel.metadata["status"]` against the literal `"paused"`. Those status values and the repository methods are shared vocabulary, so a change to either breaks the settings page's pause and resume from this directory with no error; counterpart: `cns/infrastructure/AGENTS.md`.
 - Auth gate: the routes that resolve an identity do it through `auth/api.py:get_current_user`. Four route families run their own gate instead — the socket through `websocket_chat.py:WebSocketChatHandler.authenticate` (auth-frame token, then session cookie, then issued API token), `health.py`'s `GET /health/threads` and `GET /health/thread-dump` through `_require_diagnostics_token`, federation through its Vault token, and MCP through its header-only `_AuthGate` — and three probes are public (`GET /health`, `GET /check_update`, `GET /check_remote_update`). `auth/api.py` imports the envelope from `cns.api.base`, so an envelope change reaches `auth/AGENTS.md` in the same commit.
-- Frame protocol: every frame this path emits is mirrored by `ui/tui/protocol.py` and by the browser client's WebSocket layer, and the `data.py` history envelope is mirrored too. The rule that both clients change in the same commit is owned by `ui/AGENTS.md`; the frame-handling table is `ui/browser/assets/javascript/AGENTS.md`.
+- Frame protocol: every frame this path emits is mirrored by `ui/tui/protocol.py` and by the browser client's WebSocket layer, the `tool` frame's `summary` field included, and the `data.py` history envelope is mirrored too. The rule that both clients change in the same commit is owned by `ui/AGENTS.md`; the frame-handling table is `ui/browser/assets/javascript/AGENTS.md`.
 - MCP surface: `mcp.py`'s `check_in` tool rides `POST /v1/api/chat` rather than reimplementing a turn, and imports `_BUSY_REJECTION_MESSAGE` from `chat.py` to key its busy mapping. A rename on either side breaks the mapping with no error; counterpart: `mcp/AGENTS.md`.
 - Tool boundary: `actions.py` passes action data straight into `run()` and projects tool results back onto API field names; the tool side of that contract is `tools/implementations/AGENTS.md`. `tool_config.py` reaches further into the same layer: `_get_configurable_tools` enumerates the registry's private `_registry` map and the essential-tool rule imports `tools.repo.ESSENTIAL_TOOLS`, so a rename of either returns an empty configurable-tool list rather than an error; counterpart: `tools/AGENTS.md`.
 - Trigger registry: `trigger_rules.py` derives valid trigger ids and matchable fields per request from `agents/triggers/registry.py:registered_trigger_specs`, so what dispatches is exactly what a rule can address; counterpart: `agents/triggers/AGENTS.md`.
@@ -44,6 +44,40 @@
 - Adding an action domain is four coordinated edits: a `DomainType` member; a `BaseDomainHandler` subclass declaring an `ACTIONS` schema of required, optional and typed fields, which `validate_action` enforces against unknown and missing fields; an entry in `ActionsEndpoint.domain_handlers`; and, for a config-gated domain, the persona pattern of omitting the entry at construction when the flag is off. Skip the schema and every action in the domain 400s; skip the registry entry and the domain is unknown; skip the gate and a disabled feature gains a live endpoint.
 
 Elsewhere: this map owns the request boundary — which route answers, what is validated at the edge, how failure is reported, and the order a turn starts and ends — not what happens inside a turn, and not where anything is stored. The Continuum aggregate is `cns/core/AGENTS.md`. Which client code calls which path is a grep, not a list: `rg '/v1/api' ui/browser/assets/javascript`. Every other destination this directory reaches is an edge — see `## Wiring`.
+
+## The frame chain and the tool-summary hold
+
+Streamed frames reach the socket through `_TurnFrameChain`, an ordered chain
+rather than one independent coroutine per send: `stream_to_connection` waits
+`STREAM_SEND_TIMEOUT_SECONDS` only for chain acceptance — one event-loop step
+on a healthy loop — and each accepted frame's send task awaits its
+predecessor, so wire order stays emission order while the orchestrator thread
+is never blocked on a send. The expiry path is unchanged: a wait that exceeds
+the bound still means the loop is wedged and aborts the turn `stall`.
+
+1. An eligible tool call — serialized arguments over the service's
+   `MIN_SERIALIZED_ARGUMENTS_LENGTH` — starts its fast-route summary at
+   `tool_executing`, stored in `pending_summaries` keyed by `tool_id`.
+2. The completing frame (`tool_completed`/`tool_error`) holds for its summary
+   up to `TOOL_SUMMARY_FLUSH_SECONDS`, then attaches it as the frame's
+   `summary` field, or falls back to the raw arguments on expiry or failure;
+   later frames queue behind the held one. Summary trouble never fails the
+   turn and never delays it beyond that bound.
+3. `summary` is display-only: rendered in place of the raw arguments by both
+   clients, never persisted, never in model context — no history row or
+   context rebuild ever carries it. Generation and eligibility are
+   `cns/services/AGENTS.md` (`tool_call_summary_service.py`); the client
+   mirrors are `ui/tui/AGENTS.md` and `ui/browser/assets/javascript/AGENTS.md`.
+4. The terminal frame drains the chain before queueing, so it cannot overtake
+   a held row; summaries of tools still executing at turn end are cancelled
+   in the `finally` — a summary with no row is discarded, never sent after the
+   turn's terminal frame. `_TurnFrameChain._resolve_summary` treats a
+   cancelled summary as no summary: `CancelledError` is not an `Exception`, so
+   letting it escape would cancel that link, every link behind it, and the
+   drain itself, leaving the client with no end-of-turn frame.
+5. A chain link that fails logs and completes rather than raising, so one bad
+   frame cannot take the frames behind it down with it; links check the halt
+   signal on wake and drop their frame.
 
 ## The per-user turn lock
 

@@ -164,6 +164,9 @@ class ToolFrame(ProtocolModel):
     arguments: dict[str, Any] | None = None
     result: Any | None = None
     is_error: bool = False
+    # Display-only fast-route description rendered in place of the raw
+    # arguments; never persisted, so a history replay never carries it.
+    summary: str | None = None
 
     @model_validator(mode="after")
     def validate_event_payload(self) -> "ToolFrame":
@@ -176,6 +179,8 @@ class ToolFrame(ProtocolModel):
             raise ValueError("tool_error requires is_error=true")
         if self.event != "tool_error" and self.is_error:
             raise ValueError(f"{self.event} requires is_error=false")
+        if self.summary is not None and self.event not in ("tool_completed", "tool_error"):
+            raise ValueError(f"{self.event} cannot carry a summary")
         return self
 
 

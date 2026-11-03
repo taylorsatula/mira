@@ -1,0 +1,5 @@
+Tool: {tool_name}
+Arguments:
+{arguments}
+
+Write the one-sentence description of what this tool call does (max 120 characters).

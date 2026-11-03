@@ -341,9 +341,16 @@ def tools_running(tools: list[RunningTool], *, opens: bool) -> RenderableType:
     return _ToolsRunning(tools, opens)
 
 
-def tool_line(name: str, ok: bool, arguments: dict[str, object] | None, seconds: float | None) -> Text:
+def tool_line(
+    name: str,
+    ok: bool,
+    arguments: dict[str, object] | None,
+    seconds: float | None,
+    summary: str | None = None,
+) -> Text:
     """One row: the tool, its operation, how long it ran, and its longest
-    string argument (usually the command, query or content), cut to fit."""
+    string argument (usually the command, query or content) — or the
+    fast-route one-sentence description when one was attached — cut to fit."""
     parts = [f"used {sanitize(name)}" if ok else f"{sanitize(name)} failed"]
     arguments = arguments or {}
     operation = _operation(arguments)
@@ -351,13 +358,16 @@ def tool_line(name: str, ok: bool, arguments: dict[str, object] | None, seconds:
         parts.append(operation)
     if seconds is not None:
         parts.append(_duration(seconds))
-    detail = max(
-        (v for k, v in arguments.items() if k != OPERATION_ARG and isinstance(v, str) and v.strip()),
-        key=len,
-        default=None,
-    )
-    if detail is not None:
-        parts.append(_one_line(detail))
+    if summary is not None:
+        parts.append(_one_line(summary))
+    else:
+        detail = max(
+            (v for k, v in arguments.items() if k != OPERATION_ARG and isinstance(v, str) and v.strip()),
+            key=len,
+            default=None,
+        )
+        if detail is not None:
+            parts.append(_one_line(detail))
     return Text("· " + " · ".join(parts), style="dim" if ok else "dim red", no_wrap=True)
 
 
