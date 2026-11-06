@@ -62,6 +62,8 @@
 - `peanutgallery_user.txt` — the history and execution trace it judges.
 - `domaindoc_summary_system.txt` — the table-of-contents sentence contract; open it before changing what a section's index line says.
 - `domaindoc_summary_user.txt` — the section header and content it summarizes.
+- `tool_call_summary_system.txt` — the tool-row sentence contract for the chat clients' live tool lines. Open it before changing what a tool call's row says.
+- `tool_call_summary_user.txt` — the tool name and arguments it summarizes.
 
 **Untrusted content**
 

@@ -18,9 +18,14 @@ before the terminal frame is queued, so a client that watched a turn end can sen
 its next message immediately; earlier frames were queued while the lock was held,
 so the order on the socket is unaffected. And streamed frames cross from the
 orchestrator's worker thread to the event loop through ``stream_to_connection``,
-which waits ``STREAM_SEND_TIMEOUT_SECONDS``: a wait that expires means the loop
-is wedged, and the turn is cancelled with reason ``stall`` instead of pinning the
-worker thread forever.
+which waits ``STREAM_SEND_TIMEOUT_SECONDS`` on chain acceptance: a wait that
+expires means the loop is wedged, and the turn is cancelled with reason ``stall``
+instead of pinning the worker thread forever. Wire order itself is held by the
+frame chain — each accepted frame's send task awaits its predecessor, so a
+completed tool frame can hold for its fast-route summary
+(``TOOL_SUMMARY_FLUSH_SECONDS``, a display-only description rendered in place
+of the raw arguments and never persisted) without blocking the orchestrator,
+and the terminal frame awaits the chain so it cannot overtake a held row.
 
 The proactive push path (``push_proactive_message_sync``) has no producer in this
 tree — both clients render the ``proactive_message`` frame, but nothing calls the
@@ -35,7 +40,7 @@ import concurrent.futures
 import contextvars
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
@@ -58,6 +63,7 @@ from cns.core.message import ContentBlock
 from cns.infrastructure.continuum_pool import get_continuum_pool
 from cns.infrastructure.continuum_repository import get_continuum_repository
 from cns.services.orchestrator import get_orchestrator
+from cns.services.tool_call_summary_service import is_summarizable, summarize_tool_call
 from config.config_manager import config as app_config
 from utils.distributed_lock import UserRequestLock
 from utils.self_restart import enter_turn, exit_turn, trigger_restart_if_pending
@@ -97,9 +103,11 @@ MAX_IMAGE_SIZE_MB = 5
 MAX_CONTENT_LENGTH = 100_000
 
 # Bounded wait for one streamed frame to cross the thread->asyncio bridge in
-# ``stream_to_connection``. ``ChatConnection.send`` only validates a frame and
-# ``put_nowait``()s it into an in-process queue — it never touches the network
-# — so a healthy send needs a single event-loop turn, effectively instantly.
+# ``stream_to_connection``. The wait covers chain acceptance — one event-loop
+# step on a healthy loop, effectively instantly, because the send itself runs
+# in the chain task and bounds its own waits (TOOL_SUMMARY_FLUSH_SECONDS) —
+# not the send. ``ChatConnection.send`` only validates a frame and
+# ``put_nowait``()s it into an in-process queue — it never touches the network.
 # The bound is therefore sized against the turn's structural envelope, not the
 # send's: one turn is capped at MAX_LOCAL_TOOL_CALLS_PER_TURN local tool calls
 # (orchestrator) at ~180s provider timeout apiece, and this
@@ -109,6 +117,13 @@ MAX_CONTENT_LENGTH = 100_000
 # aborts the turn via the halt signal instead of pinning the worker thread
 # indefinitely (bounded waits at every boundary).
 STREAM_SEND_TIMEOUT_SECONDS = 30.0
+# How long a completed tool frame may be held for its one-sentence summary
+# before the row falls back to its raw-arguments display. The summary call
+# starts at tool_executing, so this is the residual display latency a row can
+# add (the orchestrator is never blocked on it); sized well above the fast
+# route's small-prompt latency while keeping a wedged provider from freezing
+# the frame chain. A link that expires cancels its summary future.
+TOOL_SUMMARY_FLUSH_SECONDS = 8.0
 
 
 class ProtocolModel(BaseModel):
@@ -231,6 +246,10 @@ class ToolFrame(ProtocolModel):
     arguments: dict[str, object] | None = None
     result: object | None = None
     is_error: bool = False
+    # Display-only fast-route description of the call, rendered in place of
+    # the raw arguments by both clients; never persisted, never seen by the
+    # model — no history row or context rebuild ever carries it.
+    summary: str | None = None
 
     @model_validator(mode="after")
     def validate_event_payload(self) -> "ToolFrame":
@@ -243,6 +262,8 @@ class ToolFrame(ProtocolModel):
             raise ValueError("tool_error requires is_error=true")
         if self.event != "tool_error" and self.is_error:
             raise ValueError(f"{self.event} requires is_error=false")
+        if self.summary is not None and self.event not in ("tool_completed", "tool_error"):
+            raise ValueError(f"{self.event} cannot carry a summary")
         return self
 
 
@@ -373,6 +394,105 @@ def get_friendly_error_message(error: Exception) -> str:
     if any(code in error_text for code in ["500", "502", "503"]):
         return "The AI service is experiencing technical difficulties. Please try again in a few moments."
     return "I encountered an unexpected error while processing your message. Please try again."
+
+
+class _TurnFrameChain:
+    """Ordered send chain for one turn's streamed frames.
+
+    Each accepted frame's send task awaits its predecessor, so wire order is
+    emission order while the orchestrator thread is never blocked on a send.
+    A completed tool frame holds, bounded by ``TOOL_SUMMARY_FLUSH_SECONDS``,
+    for its display summary before queueing, so the row and its one-sentence
+    description arrive together.
+
+    Construct on the event loop; ``accept`` must be called from it.
+    """
+
+    def __init__(
+        self,
+        send: Callable[[object], Awaitable[None]],
+        halt: threading.Event,
+    ) -> None:
+        self._send = send
+        self._halt = halt
+        self._tail: asyncio.Task[None] | None = None
+
+    def accept(
+        self,
+        frame: dict[str, object],
+        summary_future: concurrent.futures.Future[str] | None = None,
+    ) -> None:
+        """Queue one frame in the chain. Scheduling order is wire order."""
+        self._tail = asyncio.create_task(self._send_one(frame, summary_future, self._tail))
+
+    async def drain(self, timeout: float) -> bool:
+        """Await every queued frame; False when the loop wedged past ``timeout``.
+
+        Shielded so an expiring wait cannot cancel the links still holding
+        frames — the caller reports the wedge and proceeds regardless.
+        """
+        tail = self._tail
+        if tail is None:
+            return True
+        try:
+            await asyncio.wait_for(asyncio.shield(tail), timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    async def _send_one(
+        self,
+        frame: dict[str, object],
+        summary_future: concurrent.futures.Future[str] | None,
+        prev: asyncio.Task[None] | None,
+    ) -> None:
+        summary: str | None = None
+        try:
+            if summary_future is not None:
+                summary = await self._resolve_summary(summary_future)
+            if prev is not None:
+                await prev
+            # Check the halt signal on wake, or a stale delta lands after turn_stopped.
+            if self._halt.is_set():
+                return
+            if summary is not None:
+                frame["summary"] = summary
+            await self._send(frame)
+        except Exception:
+            # One bad link must not take the frames behind it down with it —
+            # the chain's order is the turn's wire order.
+            logger.error("chained frame send failed", exc_info=True)
+
+    @staticmethod
+    async def _resolve_summary(summary_future: concurrent.futures.Future[str]) -> str | None:
+        try:
+            return await asyncio.wait_for(
+                asyncio.wrap_future(summary_future),
+                TOOL_SUMMARY_FLUSH_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            # The row falls back to its raw-arguments display rather than
+            # stalling the chain on a slow route. Cancelling the wrapper does
+            # not cancel the concurrent future — asyncio.wrap_future propagates
+            # only inward — so the explicit cancel is what stops the work.
+            summary_future.cancel()
+            return None
+        except asyncio.CancelledError:
+            if summary_future.cancelled():
+                # Turn end cancelled a summary this link was still awaiting.
+                # CancelledError is not an Exception: unhandled here it would
+                # cancel this link, every link behind it, and the terminal
+                # frame's drain — the client would hang with no end-of-turn
+                # frame. A cancelled summary is just no summary.
+                return None
+            raise
+        except Exception:
+            logger.warning(
+                "tool summary generation failed; the tool row "
+                "will show the raw arguments",
+                exc_info=True,
+            )
+            return None
 
 
 class ChatConnection:
@@ -784,6 +904,16 @@ class WebSocketChatHandler:
         renewal_stop = self.user_request_lock.start_renewal(user_id, lock_token)
         enter_turn()
 
+        # Per-turn summary state, defined before the try so the finally can
+        # always reach it: a future starts at tool_executing and is claimed
+        # (popped) when that call's completing event is emitted; what remains
+        # here is a tool that never completed, whose summary has no row to
+        # decorate and is cancelled in the finally.
+        pending_summaries: dict[str, concurrent.futures.Future[str]] = {}
+        # Built before the try for the same reach: the terminal frame drains
+        # the chain so it cannot overtake a held row still flushing.
+        frame_chain = _TurnFrameChain(connection.send, cancel_event)
+
         try:
             content = sanitize_message_content(message.content.strip())
             if not content:
@@ -813,6 +943,20 @@ class WebSocketChatHandler:
 
             loop = asyncio.get_running_loop()
 
+            async def _summarize(tool_name: str, arguments: dict[str, object]) -> str:
+                # to_thread copies the contextvar context so the fast-route
+                # call rides the same user scoping as the turn.
+                return await asyncio.to_thread(summarize_tool_call, tool_name, arguments)
+
+            async def _accept_frame(
+                frame: dict[str, object],
+                summary_future: concurrent.futures.Future[str] | None,
+            ) -> None:
+                # Accepting completes in one loop step, so the callback's
+                # bounded wait below probes loop liveness (the stall path)
+                # rather than waiting on any send or summary.
+                frame_chain.accept(frame, summary_future)
+
             def stream_to_connection(event: dict[str, object]) -> None:
                 frame = self._server_frame_for_event(event, turn_id, segment_id)
                 if frame is None:
@@ -821,13 +965,24 @@ class WebSocketChatHandler:
                 if frame["type"] == "thinking" and not message.include_thinking:
                     return
 
-                async def send_frame() -> None:
-                    # Check the halt signal on wake, or a stale delta lands after turn_stopped.
-                    if cancel_event.is_set():
-                        return
-                    await connection.send(frame)
+                summary_future: concurrent.futures.Future[str] | None = None
+                if frame["type"] == "tool":
+                    tool_id = event["tool_id"]
+                    if event["event"] == "tool_executing":
+                        # Eligibility is a pure decision over the arguments;
+                        # the fast-route call runs off the orchestrator thread.
+                        arguments = event.get("arguments")
+                        if is_summarizable(arguments):
+                            pending_summaries[tool_id] = asyncio.run_coroutine_threadsafe(
+                                _summarize(event["tool_name"], arguments), loop
+                            )
+                    elif event["event"] in ("tool_completed", "tool_error"):
+                        # Hold: the completed frame waits (bounded) for its
+                        # summary and every later frame queues behind it, so
+                        # the row and its description arrive together.
+                        summary_future = pending_summaries.pop(tool_id, None)
 
-                future = asyncio.run_coroutine_threadsafe(send_frame(), loop)
+                future = asyncio.run_coroutine_threadsafe(_accept_frame(frame, summary_future), loop)
                 try:
                     # Bounded wait: an unbounded result() would pin this thread and make a user halt unreachable.
                     future.result(timeout=STREAM_SEND_TIMEOUT_SECONDS)
@@ -923,6 +1078,11 @@ class WebSocketChatHandler:
                 }
         finally:
             renewal_stop.set()
+            # A tool still executing at turn end has no row left to decorate,
+            # so its summary is cancelled; the chain treats a cancelled
+            # summary as no summary (_TurnFrameChain._resolve_summary).
+            for summary_future in pending_summaries.values():
+                summary_future.cancel()
             await run_in_threadpool(self.user_request_lock.release, user_id, lock_token)
             # A restart_mira request from this turn fires now, once no turn
             # is in flight: the terminal frame above is already delivered,
@@ -936,6 +1096,20 @@ class WebSocketChatHandler:
         # queued; a send failure is logged only — this frame was the report.
         # terminal_frame is None only on task cancellation, which continues past here.
         if terminal_frame is not None:
+            # Every streamed frame was accepted into the chain; the terminal
+            # frame must not overtake a held tool row still flushing its
+            # summary. Links bound their own waits and summary waits run
+            # concurrently, so the chain drains within the bound below; an
+            # expiry means the loop is wedged, and the terminal frame goes
+            # out anyway rather than stranding the client.
+            if not await frame_chain.drain(
+                TOOL_SUMMARY_FLUSH_SECONDS + STREAM_SEND_TIMEOUT_SECONDS
+            ):
+                logger.error(
+                    "Frame chain did not drain for turn %s; sending the "
+                    "terminal frame anyway",
+                    turn_id,
+                )
             try:
                 await connection.send(terminal_frame)
             except Exception:
