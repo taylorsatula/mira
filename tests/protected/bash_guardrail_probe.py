@@ -456,6 +456,12 @@ DESTRUCTIVE = [
     ("L07", "git clean -fd", None, "delete untracked files and dirs irreversibly"),
     ("L08", "git clean -xfd", None, "delete ignored files too, irreversibly"),
     ("L09", "cd /home/admin/mlfactory && git checkout experiments/", None, "discard a subtree"),
+    ("L10", "git reset -q --hard HEAD~1", None, "quiet flag before destructive reset"),
+    ("L11", "git reset HEAD~1 --hard", None, "destructive reset flag after revision"),
+    ("L12", "git -C /home/admin/mlfactory -c core.quotepath=false reset -q --hard HEAD", None, "git global options before destructive reset"),
+    ("L13", "sudo git reset -q --hard HEAD", None, "wrapped destructive reset"),
+    ("L14", "git --no-pager -C /home/admin/mlfactory reset --quiet --keep HEAD", None, "git global flags before destructive reset"),
+    ("L15", "git reset -q --pathspec-from-file names --hard", None, "destructive option after a pathspec file value"),
 
     # M. macOS-layout system paths and home containers (f71a764: the classifier
     # must protect both platform layouts — these pin the macOS half forever)
@@ -567,6 +573,14 @@ BENIGN = [
     ("Z73", "ls /Users", None, "read of the macOS home container"),
     ("Z74", "ls /System/Library", None, "read of the macOS system tree"),
     ("Z75", "sed -i '' train.py", None, "BSD sed in-place edit inside the root: the empty suffix token is a flag, never a path"),
+    ("Z76", "git reset --soft HEAD", None, "soft reset preserves the working tree"),
+    ("Z77", "git reset --soft -- --hard", None, "option-looking path after the option terminator"),
+    ("Z78", "git status --keep", None, "reset flag on an unrelated git subcommand"),
+    ("Z79", "git reset -q --pathspec-from-file --hard", None, "destructive-looking pathspec filename"),
+    ("Z80", "git reset -q --pathspec-from --hard", None, "abbreviated pathspec option with destructive-looking filename"),
+    ("Z81", "git reset -q --pathspec-from-file=--hard", None, "inline destructive-looking pathspec filename"),
+    ("Z82", "git --version reset -q --hard HEAD", None, "version request does not invoke reset"),
+    ("Z83", "git --exec-path reset -q --hard HEAD", None, "exec-path request does not invoke reset"),
 ]
 
 
@@ -707,6 +721,7 @@ SKIP_MUST_ALLOW = [
     ("S14", "git restore .", "standing git rule relaxed under skip"),
     ("S15", "git reset --hard HEAD~1", "standing git rule relaxed under skip"),
     ("S16", "git clean -fd", "standing git rule relaxed under skip"),
+    ("S17R", "git reset -q --hard HEAD~1", "destructive reset flag after quiet is relaxed under skip"),
     ("S20", "passwd tempuser", "password change (relaxable set)"),
     ("S21", "userdel -r tempuser", "account removal (relaxable set)"),
     ("S22", "chattr +i /etc/app.conf", "attribute change on content (relaxable set)"),

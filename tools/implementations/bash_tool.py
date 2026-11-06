@@ -1129,6 +1129,41 @@ def _check_prohibited_verb(verb: str, skip: bool = False) -> None:
         )
 
 
+def _check_git_reset(args: List[str], skip: bool = False) -> None:
+    if skip:
+        return
+    index = 0
+    value_options = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
+    flags = {
+        "-p", "-P", "--paginate", "--no-pager", "--bare", "--no-replace-objects",
+        "--no-lazy-fetch", "--no-optional-locks", "--no-advice", "--literal-pathspecs",
+        "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs",
+    }
+    inline_options = ("-C", "-c", "--git-dir=", "--work-tree=", "--namespace=", "--config-env=", "--exec-path=")
+    while index < len(args):
+        arg = args[index]
+        if arg in value_options:
+            index += 2
+        elif arg in flags or arg.startswith(inline_options):
+            index += 1
+        else:
+            break
+    if index >= len(args) or args[index] != "reset":
+        return
+    index += 1
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            break
+        if arg.startswith("--") and "--pathspec-from-file".startswith(arg):
+            index += 2
+            continue
+        if arg in {"--hard", "--merge", "--keep"}:
+            reason = next(reason for name, _, reason in _DESTRUCTIVE_PATTERNS if name == "git-reset-hard")
+            _refuse("git-reset-hard", reason, " ".join(["git"] + args))
+        index += 1
+
+
 def _check_runlevel(args: List[str], skip: bool = False) -> None:
     """Refuse `init N`, which changes the system runlevel.
 
@@ -1686,6 +1721,8 @@ def _analyze_segment(
     _check_prohibited_verb(verb, skip)
     if verb == "init":
         _check_runlevel(rest, skip)
+    elif verb == "git":
+        _check_git_reset(rest, skip)
     _check_service_control(verb, rest, skip)
     if verb in ("pkill", "pgrep"):
         _check_pkill(rest)
