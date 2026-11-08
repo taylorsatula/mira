@@ -233,6 +233,9 @@ When calling code misuses an interface, fix the caller — never adapt the inter
 - **Investigations Need Evidence**: answer with specific files, functions, and observed behavior; separate verified facts from inferences; when inconclusive, say what was checked and why it does not prove the point.
 - **Mechanical Renames Stay Mechanical**: map old names to new, update definitions and references, verify no old symbol remains. No behavior changes mixed in unless the caller asked for both.
 
+### Self-Documenting Codebase
+- As a companion to the well-maintained AGENTS.md directive: please choose filenames that describe what a file does. foo.py and engine.py are not as effective as congitivecore.py. ls-ing a directory should give the reader a hint of the broad domain of logic contained in each file.
+
 ## Codebase Patterns
 
 ### User ID Resolution
