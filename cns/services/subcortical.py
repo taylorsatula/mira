@@ -11,9 +11,12 @@ narrows `pinned_memory_ids` to the IDs this call supplied, and the dialect
 validates the arguments against that schema before returning the call.
 
 `_build_user_prompt` supplies both generate() and the speculative warm_cache()
-request, so their shared prefix stays byte-identical. Retention pins are the
-union of the model's picks and memory IDs already cited in conversation turns.
-Primary thinking effort is configured by the primary route, not this layer.
+request, so their shared prefix stays byte-identical. `pinned_memory_ids` in
+`SubcorticalResult` is the model's own retention picks; the union with memory
+IDs cited in conversation turns is performed by the orchestrator, in
+`recent_turns_plain`, so that union has exactly one home across the normal and
+best-effort paths. Primary thinking effort is configured by the primary route,
+not this layer.
 """
 import contextvars
 import html
@@ -23,7 +26,7 @@ import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, List, Set, TypedDict, TYPE_CHECKING
+from typing import Annotated, Iterator, List, Set, TypedDict, TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -108,6 +111,81 @@ class SubcorticalResult:
 CONTEXT_PAIRS = 3
 
 
+def _is_segment_summary(message: 'Message') -> bool:
+    """True when a message is a collapsed segment's sentinel summary, not a turn."""
+    metadata = getattr(message, 'metadata', {}) or {}
+    return (
+        metadata.get('is_segment_boundary', False) and
+        metadata.get('status') == 'collapsed'
+    )
+
+
+def iter_recent_pairs(
+    continuum: Continuum,
+    max_pairs: int,
+) -> Iterator[tuple['Message', 'Message']]:
+    """Yield the last up-to-max_pairs user/assistant turns, oldest first.
+
+    The one home for the recent-turn walk: collapsed segment summaries are
+    never a pair's assistant half, an assistant message without a preceding
+    user message ends the walk, and the yielded order is chronological. Both
+    the model-facing prompt builder and the best-effort retrieval composer
+    consume this, so the summary-exclusion rule cannot fork between them.
+    """
+    pairs_found = 0
+    discovered: list[tuple['Message', 'Message']] = []
+    i = len(continuum.messages) - 1
+    while i >= 0 and pairs_found < max_pairs:
+        while i >= 0:
+            msg = continuum.messages[i]
+            if msg.role == "assistant" and not _is_segment_summary(msg):
+                break
+            i -= 1
+        if i < 0:
+            break
+        assistant_msg = continuum.messages[i]
+        i -= 1
+
+        while i >= 0 and continuum.messages[i].role != "user":
+            i -= 1
+        if i < 0:
+            break
+        user_msg = continuum.messages[i]
+        i -= 1
+
+        pairs_found += 1
+        discovered.append((user_msg, assistant_msg))
+    yield from reversed(discovered)
+
+
+def recent_turns_plain(
+    continuum: Continuum,
+    max_pairs: int = CONTEXT_PAIRS,
+) -> tuple[str, set[str]]:
+    """Render the recent turns as plain text plus the mem_ IDs they cite.
+
+    The best-effort retrieval query's raw material: no XML, no timestamps, no
+    escaping — embeddings see conversation words, not markup. The mem_ harvest
+    runs over raw assistant content BEFORE the <mira:*> strip, because a cited
+    ID lives inside the very tags the strip removes; the harvest is the single
+    home for the conversation-cited retention union, so it must not miss them.
+    """
+    lines: list[str] = []
+    cited_ids: set[str] = set()
+    for user_msg, assistant_msg in iter_recent_pairs(continuum, max_pairs):
+        user_content = _extract_text_content(user_msg.content)[:2000]
+        assistant_raw = _extract_text_content(assistant_msg.content)
+        cited_ids.update(
+            memory_id.lower()
+            for memory_id in TagParser.MEMORY_ID_PATTERN.findall(assistant_raw)
+        )
+        lines.append(f"User: {user_content}")
+        lines.append(
+            f"Assistant: {_MIRA_TAG_PATTERN.sub('', assistant_raw)[:2000]}"
+        )
+    return "\n".join(lines), cited_ids
+
+
 class SubcorticalLayer:
     """
     Subcortical processing layer for retrieval-optimized query expansion.
@@ -177,12 +255,8 @@ class SubcorticalLayer:
                 orchestrator degrades that turn to its retained memories. Provider
                 and network failures are not this type and propagate.
         """
-        user_message, conversation_turns = self._build_user_prompt(
+        user_message, _ = self._build_user_prompt(
             continuum, current_user_message, previous_memories
-        )
-
-        conversation_pinned_ids = set(
-            m.lower() for m in TagParser.MEMORY_ID_PATTERN.findall(conversation_turns)
         )
 
         logger.debug(f"Generating query expansion for: {current_user_message[:100]}...")
@@ -202,12 +276,6 @@ class SubcorticalLayer:
         )
 
         result = self._parse_response(response)
-
-        # Guarantee retention for conversation-pinned memories (union with LLM's picks)
-        result.pinned_memory_ids.update(conversation_pinned_ids)
-
-        if conversation_pinned_ids:
-            logger.info(f"Conversation pinning: {len(conversation_pinned_ids)} memories auto-retained")
 
         logger.info(f"Generated query expansion: {result.query_expansion[:150]}...")
         if previous_memories:
@@ -612,8 +680,6 @@ class SubcorticalLayer:
             Formatted string with last N pairs as timestamped <turn> elements
         """
         lines = []
-        pairs_found = 0
-        i = len(continuum.messages) - 1
 
         # Resolve the user's timezone from the user-context contextvar — the same
         # source message_formatter's format_messages_for_api reads — so
@@ -624,30 +690,13 @@ class SubcorticalLayer:
         from utils.user_context import get_user_preferences
         user_tz = get_user_preferences().timezone
 
-        while i >= 0 and pairs_found < max_pairs:
-            while i >= 0:
-                msg = continuum.messages[i]
-                if msg.role == "assistant" and not self._is_segment_summary(msg):
-                    break
-                i -= 1
-            if i < 0:
-                break
-            assistant_msg = continuum.messages[i]
-            i -= 1
-
-            while i >= 0 and continuum.messages[i].role != "user":
-                i -= 1
-            if i < 0:
-                break
-            user_msg = continuum.messages[i]
-            i -= 1
-
+        for user_msg, assistant_msg in iter_recent_pairs(continuum, max_pairs):
             user_time = convert_from_utc(user_msg.created_at, user_tz).strftime("%H:%M")
             assistant_time = convert_from_utc(assistant_msg.created_at, user_tz).strftime("%H:%M")
 
             # Prepend pair (we're walking backwards), truncating long messages.
             user_content = html.escape(
-                self._extract_text_content(user_msg.content)[:2000], quote=False
+                _extract_text_content(user_msg.content)[:2000], quote=False
             )
             # Strip all <mira:*> internal tags (emotion emojis, memory refs,
             # etc.) — rare-token attention sinks that waste budget without
@@ -658,42 +707,33 @@ class SubcorticalLayer:
             # natural labeled text first — never str() of a raw structure.
             assistant_content = html.escape(
                 _MIRA_TAG_PATTERN.sub(
-                    '', self._extract_text_content(assistant_msg.content)
+                    '', _extract_text_content(assistant_msg.content)
                 )[:2000],
                 quote=False
             )
-            lines.insert(0, f"<turn speaker=\"assistant\" time=\"{assistant_time}\">{assistant_content}</turn>")
-            lines.insert(0, f"<turn speaker=\"user\" time=\"{user_time}\">{user_content}</turn>")
-            pairs_found += 1
+            lines.append(f"<turn speaker=\"user\" time=\"{user_time}\">{user_content}</turn>")
+            lines.append(f"<turn speaker=\"assistant\" time=\"{assistant_time}\">{assistant_content}</turn>")
 
         return "\n".join(lines)
 
-    def _is_segment_summary(self, message: 'Message') -> bool:
-        """Check if message is a collapsed segment summary."""
-        metadata = getattr(message, 'metadata', {}) or {}
-        return (
-            metadata.get('is_segment_boundary', False) and
-            metadata.get('status') == 'collapsed'
-        )
+def _extract_text_content(content: str | list[dict[str, object]]) -> str:
+    """Extract natural text from potentially structured content.
 
-    def _extract_text_content(self, content: str | list[dict[str, object]]) -> str:
-        """Extract natural text from potentially structured content.
-
-        Delegates to cns.core.message.preprocess_content_blocks (the repo's
-        canonical structured-content preprocessor, mirrored from
-        summary_generator/persona_service): text and reasoning blocks render
-        as text, tool_call blocks as a labeled marker, media blocks are
-        stripped. Never returns str() of a raw structure.
-        """
-        if isinstance(content, str):
+    Delegates to cns.core.message.preprocess_content_blocks (the repo's
+    canonical structured-content preprocessor, mirrored from
+    summary_generator/persona_service): text and reasoning blocks render
+    as text, tool_call blocks as a labeled marker, media blocks are
+    stripped. Never returns str() of a raw structure.
+    """
+    if isinstance(content, str):
             return content
 
-        if isinstance(content, list):
-            preprocessed = preprocess_content_blocks(content)
-            if preprocessed.text_parts:
-                return ' '.join(preprocessed.text_parts)
-            if preprocessed.image_count:
-                return '[image content]'
-            return '[non-text content]'
-
+    if isinstance(content, list):
+        preprocessed = preprocess_content_blocks(content)
+        if preprocessed.text_parts:
+            return ' '.join(preprocessed.text_parts)
+        if preprocessed.image_count:
+            return '[image content]'
         return '[non-text content]'
+
+    return '[non-text content]'

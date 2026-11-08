@@ -150,7 +150,7 @@ class ApiServerConfig(BaseModel):
 class SystemConfig(BaseModel):
     """System-level settings and feature flags."""
 
-    subcortical_enabled: bool = Field(default=True, description="Enable subcortical memory surfacing and complexity assessment")
+    subcortical_enabled: bool = Field(default=True, description="Enable the subcortical LLM memory-surfacing pass. When disabled, memory surfacing falls back to best-effort retrieval on the raw recent conversation: no pronoun resolution, no entity hub discovery, no model retention judgment.")
     peanutgallery_enabled: bool = Field(default=True, description="Enable peanut gallery metacognitive observer")
     persona_enabled: bool = Field(default=True, description="Enable Persona evaluation, refinement, and prompt injection")
     injection_screen_enabled: bool = Field(

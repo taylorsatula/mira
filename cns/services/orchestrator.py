@@ -83,8 +83,9 @@ from clients.llm.types import Result, ToolCall, ToolDefinition, ToolResult, Usag
 from cns.services.tool_loop import CircuitBreaker, ToolLoopExecutor
 from clients.embeddings_provider import get_embeddings_provider
 from cns.services.subcortical import (
+    CONTEXT_PAIRS,
+    recent_turns_plain,
     SubcorticalAnalysisError,
-    SubcorticalResult,
     SurfacedMemory,
 )
 from lt_memory.models import MemoryDict
@@ -96,7 +97,7 @@ from lt_memory.proactive import (
     ASSISTANT_SIMILARITY_THRESHOLD,
     MAX_ASSISTANT_MEMORIES,
 )
-from utils.tag_parser import TagParser, format_memory_id, match_memory_id
+from utils.tag_parser import match_memory_id
 from utils.user_context import get_cancel_reason, get_current_segment_id
 
 CONTEXT_OVERFLOW_FALLBACK_TEXT_LIMIT = 400
@@ -209,6 +210,7 @@ class TurnMetadata(TypedDict, total=False):
     referenced_memories: list[str]
     surfaced_memories: list[str]
     pinned_memory_ids: list[str]
+    memory_surfacing_mode: str
     emotion: str
     thinking: str
     model_error: bool
@@ -234,10 +236,17 @@ class LLMKwargs(TypedDict, total=False):
 
 @dataclass
 class MemorySurfacingResult:
-    """Output of the memory surfacing pipeline."""
+    """Output of the memory surfacing pipeline.
+
+    `mode` names the path that produced it and is recorded in the persisted
+    message metadata: "normal" (the LLM analysis ran), "low_power" (the
+    subcortical flag is off; best-effort retrieval on the raw recent
+    conversation), "degraded" (the analysis call failed mid-turn; the same
+    best-effort retrieval), or "none" (surfacing never ran — cancellation).
+    """
     surfaced_memories: list[SurfacedMemory]
     pinned_ids: set[str]
-    subcortical_result: SubcorticalResult | None
+    mode: str
 
 
 @dataclass
@@ -1166,7 +1175,7 @@ class ContinuumOrchestrator:
         mem = MemorySurfacingResult(
             surfaced_memories=[],
             pinned_ids=set(),
-            subcortical_result=None,
+            mode="none",
         )
         acc = TurnAccumulator()
         continuum_id = str(continuum.id)
@@ -1335,7 +1344,8 @@ class ContinuumOrchestrator:
         assistant_metadata = {
             "referenced_memories": acc.touch_resolved_uuids,
             "surfaced_memories": [m['id'] for m in mem.surfaced_memories],
-            "pinned_memory_ids": list(mem.pinned_ids)
+            "pinned_memory_ids": list(mem.pinned_ids),
+            "memory_surfacing_mode": mem.mode,
         }
 
         if acc.tools_used:
@@ -1361,6 +1371,7 @@ class ContinuumOrchestrator:
         metadata["referenced_memories"] = acc.touch_resolved_uuids
         metadata["surfaced_memories"] = [m['id'] for m in mem.surfaced_memories]
         metadata["pinned_memory_ids"] = list(mem.pinned_ids)
+        metadata["memory_surfacing_mode"] = mem.mode
 
         if parsed_tags.get('emotion'):
             metadata["emotion"] = parsed_tags['emotion']
@@ -1448,11 +1459,16 @@ class ContinuumOrchestrator:
         previous_memories: list[MemoryDict],
     ) -> MemorySurfacingResult:
         """
-        Run subcortical memory surfacing, or return an empty deliberate fast-path result.
+        Surface memories for this turn: LLM analysis, or best-effort retrieval.
 
-        A malformed analysis degrades this turn to the memories already in context and
-        surfaces nothing fresh, warned in the log. Infrastructure failures propagate:
-        they are not evidence that memory surfacing should silently look disabled.
+        Three entries converge on one retrieval tail. The normal path runs the
+        subcortical analysis and retrieves on its expanded query. The flag-off
+        path (no layer constructed) and the failed-analysis path both retrieve
+        best-effort on the raw recent conversation instead — the low-power
+        mode and the mid-turn fallback are the same code, differing only in
+        mode string and log severity. Infrastructure failures propagate from
+        every entry: the fallback triggers on SubcorticalAnalysisError and the
+        absent layer, never on a dead endpoint.
 
         Args:
             continuum: Current continuum state (passed to subcortical layer)
@@ -1460,19 +1476,12 @@ class ContinuumOrchestrator:
             previous_memories: Memories from the previous turn's trinket cache
 
         Returns:
-            MemorySurfacingResult with surfaced_memories, pinned_ids, and subcortical_result
+            MemorySurfacingResult with surfaced_memories, pinned_ids, and mode
         """
         if self.subcortical_layer is None:
-            logger.info("Subcortical fast path: memory surfacing skipped")
-            return MemorySurfacingResult(
-                surfaced_memories=[],
-                pinned_ids=set(),
-                subcortical_result=None,
+            return self._surface_best_effort(
+                continuum, text_for_context, previous_memories, mode="low_power"
             )
-
-        max_pinned = MAX_PINNED_MEMORIES
-        max_surfaced = MAX_SURFACED_MEMORIES
-        min_fresh = MIN_FRESH_MEMORIES
 
         try:
             subcortical_result = self.subcortical_layer.generate(
@@ -1481,42 +1490,109 @@ class ContinuumOrchestrator:
                 previous_memories=previous_memories
             )
         except SubcorticalAnalysisError as error:
-            retained_ids = {
-                format_memory_id(memory["id"]).removeprefix("mem_")
-                for memory in previous_memories if memory.get("id")
-            }
             logger.warning(
-                "Subcortical analysis unusable (%s); this turn keeps the %d memories "
-                "already in context and surfaces no fresh ones",
-                error, len(previous_memories),
+                "Subcortical analysis unusable (%s); falling back to best-effort retrieval",
+                error,
             )
-            return MemorySurfacingResult(
-                surfaced_memories=list(previous_memories),
-                pinned_ids=retained_ids,
-                subcortical_result=None,
+            return self._surface_best_effort(
+                continuum, text_for_context, previous_memories, mode="degraded"
             )
 
-        pinned_ids = subcortical_result.pinned_memory_ids
+        # The retention union's one home: the model's own picks plus every
+        # memory ID the recent conversation cites, harvested by
+        # recent_turns_plain over raw assistant content.
+        _, cited_ids = recent_turns_plain(continuum)
+        pinned_ids = subcortical_result.pinned_memory_ids | cited_ids
         pinned_memories = self._apply_retention(previous_memories, pinned_ids)
 
+        surfaced_memories = self._retrieve_fresh_and_merge(
+            continuum, subcortical_result.query_expansion, pinned_memories,
+            extracted_entities=subcortical_result.entities,
+        )
+
+        return MemorySurfacingResult(
+            surfaced_memories=surfaced_memories,
+            pinned_ids=pinned_ids,
+            mode="normal",
+        )
+
+    def _surface_best_effort(
+        self,
+        continuum: Continuum,
+        text_for_context: str,
+        previous_memories: list[MemoryDict],
+        *,
+        mode: str,
+    ) -> MemorySurfacingResult:
+        """
+        Retrieve on the raw recent conversation — the low-power and fallback path.
+
+        No LLM call, no rewritten query, no entity hub discovery: embed the
+        current message after the last few plain turns and run the same
+        retrieval, merging, and capping the normal path uses. Retention is the
+        conversation-cited union only — a memory not cited must re-earn its
+        place by similarity, exactly what the normal path does when the model
+        pins nothing.
+        """
+        turns_text, cited_ids = recent_turns_plain(continuum, max_pairs=CONTEXT_PAIRS)
+        query_text = f"{turns_text}\n{text_for_context}" if turns_text else text_for_context
+        pinned_memories = self._apply_retention(previous_memories, cited_ids)
+
+        if mode == "low_power":
+            logger.debug("Memory surfacing: low-power best-effort (subcortical flag off)")
+
+        surfaced_memories = self._retrieve_fresh_and_merge(
+            continuum, query_text, pinned_memories, extracted_entities=None
+        )
+
+        return MemorySurfacingResult(
+            surfaced_memories=surfaced_memories,
+            pinned_ids=cited_ids,
+            mode=mode,
+        )
+
+    def _retrieve_fresh_and_merge(
+        self,
+        continuum: Continuum,
+        query_text: str,
+        pinned_memories: list[MemoryDict],
+        *,
+        extracted_entities: list[str] | None,
+    ) -> list[SurfacedMemory]:
+        """
+        The one retrieval tail both surfacing paths share.
+
+        Cap arithmetic lives here and nowhere else: the pinned hard cap, the
+        sliding fresh budget, and the surfaced cap apply identically to the
+        LLM path and the best-effort path, so a cap change cannot fork between
+        modes. Failures here propagate — a dead embeddings provider or a
+        failed search kills the turn from either entry.
+        """
+        max_pinned = MAX_PINNED_MEMORIES
+        max_surfaced = MAX_SURFACED_MEMORIES
+        min_fresh = MIN_FRESH_MEMORIES
+
         if len(pinned_memories) > max_pinned:
-            pinned_memories.sort(key=lambda m: m.get('importance_score', 0.5), reverse=True)
-            pinned_memories = pinned_memories[:max_pinned]
-            logger.info(f"Hard cap: truncated pinned from {len(pinned_ids)} to {max_pinned}")
+            pinned_memories = sorted(
+                pinned_memories,
+                key=lambda m: m.get('importance_score', 0.5),
+                reverse=True,
+            )[:max_pinned]
+            logger.info(f"Hard cap: truncated pinned to {max_pinned}")
 
         fresh_limit = max(min_fresh, max_surfaced - len(pinned_memories))
 
         assistant_text = self._format_assistant_messages(continuum, NUM_ASSISTANT_MESSAGES)
 
         expansion_embedding, assistant_embedding = self._compute_embeddings_parallel(
-            subcortical_result.query_expansion, assistant_text
+            query_text, assistant_text
         )
 
         fresh_memories = self.memory_relevance_service.get_relevant_memories(
-            query_expansion=subcortical_result.query_expansion,
+            query_expansion=query_text,
             expansion_embedding=expansion_embedding,
             limit=fresh_limit,
-            extracted_entities=subcortical_result.entities
+            extracted_entities=extracted_entities
         )
 
         assistant_memories: list[MemoryDict] = []
@@ -1542,7 +1618,7 @@ class ContinuumOrchestrator:
 
         # Hard cap on memories shown to the model/frontend this turn. The merge
         # above is positional (pinned-first, then fresh by effective score), so
-        # this slice keeps the most relevant: LLM-retained pinned fill first, fresh
+        # this slice keeps the most relevant: retained pinned fill first, fresh
         # fills the remaining slots. This also bounds next-turn's retention cache.
         if len(surfaced_memories) > max_surfaced:
             surfaced_memories = surfaced_memories[:max_surfaced]
@@ -1552,12 +1628,7 @@ class ContinuumOrchestrator:
             f"{len(fresh_memories)} fresh = {len(surfaced_memories)} shown "
             f"(cap {max_surfaced})"
         )
-
-        return MemorySurfacingResult(
-            surfaced_memories=surfaced_memories,
-            pinned_ids=pinned_ids,
-            subcortical_result=subcortical_result,
-        )
+        return surfaced_memories
 
     def _apply_retention(
         self,
