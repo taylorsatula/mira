@@ -6,9 +6,20 @@ MIRA is a self-hosted personal AI assistant — persistent long-term memory, a u
 
 **The spine — place every file against this flow.** A chat turn enters at `cns/api/` (HTTP or WS; auth installs the `user_id` contextvar; one turn per user via a Valkey lock) → the orchestrator composes the system prompt through an event-bus round-trip with `working_memory/` trinkets, surfaces memories from `lt_memory/`, and runs the LLM behind a DB-configured route name (`clients/llm/`) plus the tool loop (`tools/`) → `UnitOfWork.commit()` persists Postgres first, then the Valkey cache → events publish post-commit; subscribers react synchronously (`cns/core/events.py` taxonomy, `cns/integration/event_bus.py`): memory extraction on segment collapse, user-model/Persona/portrait pipelines, trinket refresh. Concurrently with turns: APScheduler jobs (segment-collapse sweep, memory scoring, entity merge, auth cleanup) and autonomous sidebar agents (`agents/` — including the Heartbeat brief system's dispatcher trigger) (`agents/`).
 
-**Stack.** PostgreSQL + pgvector with RLS — user isolation is a database property enforced from the contextvar; never hand-filter queries (`clients/postgres_client.py`). Valkey (cache, sessions, queues, locks). Vault holds every credential; env vars and fallbacks are prohibited (`clients/vault_client.py`; per-user secrets via `utils/user_credentials.py`). Per-user encrypted SQLite for tool data (`encrypted__` column prefix). Embeddings and LLM inference resolve from DB config rows — local llama.cpp or any cloud provider, selected by route name, never hardcoded.
+## Stack
 
-**Tribal terms.** Did you encounter a tribal knowledge word that seems out of context in a user message or tool result? Go check it here: `docs/GLOSSARY.md` (one sentence per term, with the owning map).
+- **Web & server**: FastAPI on Hypercorn (HTTP/1.1 + HTTP/2 + WebSocket), Pydantic for schemas.
+- **Database**: PostgreSQL + pgvector with RLS (user isolation is a DB property), psycopg 3.
+- **Cache/locks**: Valkey.
+- **Secrets**: HashiCorp Vault (AppRole), hvac client.
+- **Per-user tool data**: SQLite (std lib) with Fernet-encrypted `encrypted__` columns.
+- **LLM**: Anthropic + OpenAI-compatible (httpx) dialects; llama.cpp optional; routes selected by DB config row name.
+- **Embeddings**: sentence-transformers (local, opt-in) or remote provider; numpy/scikit-learn for vector work.
+- **Scheduling**: APScheduler.
+- **Auth**: WebAuthn passkeys; magic-link email.
+- **Browser client**: plain ES modules (no framework); marked + DOMPurify.
+- **Terminal client**: websockets + rich + prompt_toolkit.
+- **Deploy**: Python 3.12+, Ubuntu 24.04, systemd/launchd or s6-overlay in containers.
 
 ## Nested AGENTS.md Maps — Shape & Maintenance
 
@@ -119,39 +130,35 @@ Probe-ability is a design constraint from the first line of new code, not a veri
 
 ### Technical Integrity
 - **No Shortcuts**: never substitute a cheaper check for the required one — no mock-based verification, no skipped probe, no "improvements" during extraction, no deferred path-probe. Shortcuts ship as silent breakage.
-- **Verify Contracts Before Building On Them**: verify an unfamiliar helper's or internal API's contract at the boundary you depend on — inputs, outputs, types, side effects, failure modes — with the smallest direct probe or existing reference usage before building on it. Most preventable slipups come from trusting names or remembered APIs.
-- **Evidence-Based Position Integrity**: form assessments from evidence and hold them under pushback. Do not adjust conclusions to match the human's apparent preference; when their proposal contradicts the assessment, push back and say why.
-- **Blunt Technical Communication**: reject technically unsound ideas directly — "bad", "infeasible" — and correct wrong assumptions about code or constraints immediately ("That's wrong"). After rejection or correction, provide the working alternative or the accurate facts.
+- **Verify Against the Code, Not Memory, Inference, or Assumption**: never rely on a remembered, inferred, or assumed file, function, or endpoint name — open the code and confirm the symbol exists and behaves as assumed before building on it. Prefer the platform's existing mechanism over a new one; justify any deviation. When reporting, name the exact file and symbol, not "the logic."
+- **Straight Technical Communication**: form assessments from evidence and hold them under pushback — don't adjust conclusions to match the human's apparent preference; when their proposal contradicts the assessment, push back and say why. Reject unsound ideas directly ("bad", "stupid", "infeasible") and correct wrong assumptions immediately ("That's wrong"), then give the working alternative or accurate facts. Example phrasing: "A is a shortsighted approach. Based on what I've seen, this would be better served by doing B. What do you think?" Read "Is this the best solution?" / "Are you sure?" as "I'm not sure this is the right approach and I can't place why" — an open-ended challenge to the assumption that it's the best approach; if the evidence shows it's shaky, rework it rather than defend it. Describe work plainly — a feature is a feature, a fix is a fix; no "revolutionary"/"fundamental shift" framing or buzzwords.
 - **Plain Speech by Audience**: explanations written for the human operator lead in plain English — what the thing does, in ordinary words, symbols and metric names attached only if the subject is the code itself or the operator asks for them. Precision rules still govern artifacts (code, docs, commit messages) and any statement about specific files. Dense terminology in a human-facing explanation is a communication failure even when every word is accurate. How to talk — clause shape, coined terms, and volley-over-dump — is owned by **Prose Discipline**.
 - **Concrete Code Communication**: name exact methods, files, and snippets — "the `extract_topic_changed_tag()` method that calls `tag_parser.extract_topic_changed()`", not "the tag processing logic". No vague referents.
 - **Numeric Precision**: no invented numbers. Qualitative language unless the figure comes from measurement, benchmark, requirement, or calculation.
-- **No Tech-Bro Evangelism**: describe work accurately — a feature is a feature, a fix is a fix. No "revolutionary"/"fundamental shift" framing or buzzwords.
 
 ### Security & Reliability
 - **Credential Management**: all sensitive values stored in Vault via `utils.vault_client` functions; per-user credentials via `UserCredentialService` (`utils.user_credentials`). Never env vars or hardcoded values; missing credentials fail with a clear error, never a fallback.
 - **Fail-Fast Infrastructure**: required-infrastructure failures (Valkey, database, embeddings, event bus) MUST propagate. Never catch and return None/[]/defaults — that masks outages as normal operation. try/except only for: (1) adding context before re-raising, (2) legitimately optional features (telemetry, cache), (3) async handlers that will retry. A database query returning [] means "no data found", not "query failed".
+- **Classify Failures Before Acting**: infrastructure/LLM failures and data failures are different species. A response appropriate to one (retry/backoff vs. tombstone/abandon) is wrong for the other. Never let a transient outage masquerade as bad data, or bad data trigger an infra-style retry loop.
 - **No Optional[X] Hedging**: a function depending on required infrastructure returns the real type or raises. `Optional[str]` for a subcortical result lets generation silently fail; `str` forces the caller to handle the exception. Optional is for genuine "value may not exist" semantics (user preference unset), never "infrastructure might be broken".
 - **Timezone Consistency**: use `utils/timezone_utils.py` functions (`utc_now()`, `format_utc_iso()`) for all datetime operations — never `datetime.now()` directly.
 - **Backwards Compatibility**: don't depreciate; ablate. Breaking changes preferred — notify the human first. Back-compat is not retained unless directed; MIRA is a greenfield system design.
-- **Know Thy Self**: models tend to invent new endpoints or change existing patterns instead of looking at what is there. Always survey the existing code before assuming.
 
 ### Core Engineering Practices
 - **Thoughtful Component Design**: hide complexity internally, expose simple APIs — automatic user scoping, DI for cross-cutting concerns, middleware for infrastructure. Ask how the design eliminates repetitive work and prevents common mistakes.
-- **Integrate Rather Than Invent**: use the platform mechanism (DI, validation, async); deviate only with documented justification.
 - **Root Cause Diagnosis**: examine related files and dependencies before changing code; fix problems at their source — never adapt downstream to compensate for an upstream bug.
 - **Simple Solutions First**: prefer the small fix, never at the cost of correctness. Implement exactly what is requested; unrequested "safety" features create problems.
-- **Handle Pushback Constructively**: "Is this the best solution?" / "Are you sure?" usually means the human thinks it isn't — re-derive the reasoning that led there instead of defending it.
 - **Convergent Path Refactoring**: multiple code paths doing the same thing with divergent implementations is an architectural defect. Map the paths, find the real convergence point, remediate there — no refactoring theater.
 
 ### Design Discipline Principles
-- **Make Strong Choices**: one format/approach unless concrete use cases require alternatives. No "just in case" features, no "if available" fallbacks, no `Any` where the structure is known.
+- **Concrete Until Proven Otherwise**: make one concrete choice per concern — one format, one approach, one value — and hold it until a real second use case appears. No "just in case" features, no "if available" fallbacks; don't parameterize a value that has one known value (hardcode the constant with a comment explaining why); don't extract a method smaller than its own docstring (inline it).
+- **No `Any` Where Structure Is Known**: type what the code expects (`UUID`, not `str`; named structures, not positional tuples). `Any` is a claim that the shape is unknowable — almost never true.
 - **Fail-Fast, Fail-Loud**: don't return `[]`/`{}` when parsing fails — it masks errors as "no data found". `warning`/`error` for problems, not `debug`. Validate inputs at entry; raise `ValueError` with diagnostics, not generic `Exception`.
 - **Types as Documentation**: avoid `Optional[X]` except genuine domain optionality; `TypedDict` over `Dict[str, Any]`; type what the code expects (`UUID`, not `str`). Replace positional tuples with named structures — `result.query_expansion`, not `result[0]`.
 - **Naming Discipline**: `ContinuumRepository` → `continuum_repo`, not `conversation_repo`. One term per concept; method names match action — `get_user()` gets, `validate_user()` validates.
+- **Descriptive Filenames**: a directory listing should convey each file's domain — `cognitive_core.py`, not `foo.py` or `engine.py`. Name the file for what it does.
 - **Forward-Looking Documentation**: write what code does, not what it replaced; history goes in commit messages.
 - **Standardization Over Premature Flexibility**: no flexibility without a concrete second use case — wait for the pattern to emerge from real code.
-- **Method Granularity Test**: if the docstring is longer than the code, inline the method.
-- **Hardcode Known Constraints**: don't parameterize what won't vary; constants with a comment explaining why.
 
 ### Preventive Mechanism Rules
 
@@ -167,7 +174,7 @@ These convert recurring failure modes into mandatory patterns. The banned forms 
 - **Extract by Identity, Not Position or Shape**: data recovered from a probabilistic source (LLM output) or a lossy store is keyed by an identifier emitted alongside it — never "the last one", never "the first match". Persist explicit type tags; never infer structure from content shape (prefix/suffix sniffing). Storage round-trips must be lossless both ways.
 - **Derived State Self-Heals or Computes On Read**: counters and denormalizations incrementally maintained across multiple write paths will drift — one path forgets, another double-counts. Either recompute on read, or schedule a recompute job so drift decays on its own. "Every write path updates every derivation" is a checklist, not a mechanism.
 - **Degrade Only to Acceptable**: exception handling is positional first — critical request-path code propagates; fire-and-forget consumers log and swallow; background durability paths (collapse, extraction) tolerate-and-log because the model is off the call stack. Know which side you are on before writing a try/except. Then: a catch-and-continue site is legal only when the degraded result is still correct for its consumer. Every such site's log message states the user-visible consequence; if the degraded output would silently corrupt the deliverable (missing required sections, wrong shape, empty-required data), propagate instead. A log line is not a user interface.
-- **Retry Counters Never Gate Data on Infrastructure Failure**: attempt counters that trigger destructive or data-losing fallbacks (tombstones, abandons) count only failures the data caused; infrastructure/LLM outages are excluded. Three provider blips must not consume a data-bearing budget.
+- **Retry Counters Gate on Data-Caused Failures Only**: counters that trigger destructive fallbacks (tombstones, abandons) increment only on data-caused failures — three provider blips must not consume a data-bearing budget. (See Classify Failures Before Acting.)
 - **Every Claimed Defense Has a Witness**: any sentence in this tree claiming something is "wrapped", "enforced", "atomic", or "verified" corresponds to a live path-probe. If writing the probe is impractical, delete the claim. Prose that promises an unwitnessed mechanism is where bugs hide longest.
 
 ## Prose Discipline
@@ -177,15 +184,15 @@ Binding wherever the session writes prose a reader must act on. The test is not 
 Talk normal, always — these two mandates go together. First, talk like a person, not a system writing documentation: full clauses with verbs, named actors, one parse per sentence. The compressed register is for maps and registers, not for a prompt, a picker row, or a chat reply. Second, volley instead of dumping: a long turn does convey more per round-trip, and there is a real latency gain — but the human reads pages of dumped text the way they read no text at all: they skim, lose the point, get confused, and decide badly. Say the one thing that matters now, let the human answer, then say the next. One turn, one point; a question beats an essay; a sentence beats a paragraph. When a dump is genuinely needed — a report, a sitrep, a picker — that is a deliberate artifact, not a chat turn, and it says so.
 
 The failure shapes to write against (fix inverted logic first — it is a bug, not a style item):
-- **Postposed aphorism** — "the current tree's own mechanisms lead, history suggests." Main claim and qualifier swap places; the reader parses twice. Fix: say the qualifier plainly ("...lead, and history only suggests").
+- **Postposed aphorism** — "The current tree's own mechanisms lead, history suggests." The downgrading qualifier ("history suggests") is buried after the claim, so the reader first commits to the strong reading "lead" and must re-parse when the qualifier arrives. Fix: lead with the epistemic status — "History only suggests the current tree's own mechanisms lead."
 - **Coined term, no key** — "frequency conjunctions." A term the reader has never seen defined is noise to them. Fix: decode it into plain words or delete it, every time.
 - **Subjectless passive** — "`isolation: 'worktree'` rejected." Rejected by whom? A reader can take it as the tool rejecting the option when the truth is otherwise. Fix: name the actor.
 - **Compressed disjunction** — "gets a rotation sample or a different instrument." Two options indistinguishable as written. Fix: collapse to the real one and flag the collapse as an interpretation call.
-- **Noun pile** — "gates ready", "claiming a queue position." Verb and object fused into two words. Fix: restore the clause.
-- **Garden path** — "neither reads code to synthesize them." Parses two ways and one is nonsense. Fix: restate so only one parse exists.
+- **Noun pile** — "queue position claim", "memory scoring job." Stacked nouns whose relations (possessive, adjectival, verbal) the reader must guess, so the phrase parses multiple ways. Fix: restore the clause and the missing preposition — "the claim on a queue position", "the job that scores memories."
+- **Garden path** — "neither reads code to synthesize them." Parse 1: "neither [reads code to synthesize them]" (neither performs reading-for-synthesis). Parse 2: "[neither reads code] to synthesize them" (neither reads code, in order to synthesize them — but "them" has no antecedent, so it collapses into nonsense). Fix: a single, unambiguous parse — "Neither agent reads code in order to synthesize anything."
 - **Metaphor before definition** — "below the surface," used three times, defined never. Fix: gloss at first use; later uses inherit the idiom.
-- **Ambiguous-polarity word** — "sanctioned mechanisms are exactly where violations recur." Sanction means approve and penalize; one reading inverts the rule. Fix: unambiguous synonym ("prescribed").
-- **Inverted logic** — "Anything outside the out-of-scope list is reverted." As written it reverts every in-scope change too, including the fix itself. Fix: repair the polarity and treat the line as a bug, not a style item.
+- **Ambiguous-polarity word** — "sanctioned" means both "approved" and "penalized", so "sanctioned mechanisms" could read as either prescribed or forbidden, inverting the rule. Fix: use an unambiguous synonym ("prescribed", "required").
+- **Inverted logic** — "Anything outside the out-of-scope list is reverted." The condition is inverted: "outside the out-of-scope list" means "in scope," so this reverts in-scope work instead of out-of-scope work. Fix: write the condition to match the intent ("Anything on the out-of-scope list is reverted.") and verify by substituting a concrete item — if a kept change would be reverted, the polarity is still flipped. Treat a flipped polarity as a bug, not a style item.
 - **Telegraphic rule** — "traced on mechanism, suspected on trigger, unproven part named." The rule's applier must decode the rule before obeying it. Fix: full clauses with verbs.
 - **"The converse"** — "The converse costs nothing." Converse of what? Fix: name the opposite error before pricing it.
 
@@ -215,7 +222,7 @@ These four are labels, not the whole set: the seven shapes a comment may carry, 
 ## Architecture & Design
 
 ### User Context Management
-- **Administrative tasks outside HTTP context** (scheduled jobs, batch operations, cross-user commands): explicitly `set_current_user_id(user_id)` per user, or `AdminSession` to bypass RLS entirely when querying across all users. Request-scoped context flow is covered under Cross-Cutting Patterns.
+Administrative tasks outside HTTP context (scheduled jobs, batch operations, cross-user commands): explicitly `set_current_user_id(user_id)` per user, or `AdminSession` to bypass RLS entirely when querying across all users. Request-scoped context flow is covered under Cross-Cutting Patterns.
 
 ### Tool Architecture
 Entry points: `tools/AGENTS.md`, `tools/implementations/AGENTS.md`, and the `tools/HOW_TO_BUILD_A_TOOL.md` walkthrough (siblings: `agents/HOW_TO_BUILD_AN_AGENT.md`, `working_memory/trinkets/HOW_TO_BUILD_A_TRINKET.md` — all kept aligned with the code they describe; a base-class contract change updates its guide in the same commit). Broad rules: single responsibility per tool; business logic lives in system prompts/working memory, not tools; user data via `self.user_data_path` / `self.db`; recovery guidance in error responses; verification is live probes (see the NO MOCKS pointer) — a tool touching a critical path ships with its path-probe.
@@ -230,11 +237,8 @@ When calling code misuses an interface, fix the caller — never adapt the inter
 - **Minimal Dependencies**: prefer stdlib. New external deps require documented justification; cross-reference Python imports, deploy scripts, Dockerfiles, and optional feature paths before adding or removing. Remove only when nothing imports, invokes, or operationally installs them.
 
 ### Investigation & Mechanical Refactoring
-- **Investigations Need Evidence**: answer with specific files, functions, and observed behavior; separate verified facts from inferences; when inconclusive, say what was checked and why it does not prove the point.
 - **Mechanical Renames Stay Mechanical**: map old names to new, update definitions and references, verify no old symbol remains. No behavior changes mixed in unless the caller asked for both.
 
-### Self-Documenting Codebase
-- As a companion to the well-maintained AGENTS.md directive: please choose filenames that describe what a file does. foo.py and engine.py are not as effective as congitivecore.py. ls-ing a directory should give the reader a hint of the broad domain of logic contained in each file.
 
 ## Codebase Patterns
 
@@ -274,25 +278,6 @@ When modifying files, write as if the new code was always the plan. Never refere
 - Convert specific feedback into general principles. Consider multiple approaches before implementing.
 - Fix issues at the root — there is no test suite to fall back on, so correctness comes from fail-fast behavior and direct verification.
 
-## Reference Material
-
-### Commands
-- **Database**: On a deployed instance, `psql -U postgres -h localhost -d mira_service` (postgres superuser, `mira_service` the primary DB). A development checkout may have no `mira_service` database: for a schema-backed scratch DB call `tests/fixtures/scratch_db.py:scratch_database(user=<local superuser>, host="localhost")`, which applies the shipped schema and drops the DB on exit.
-- **Local dev infrastructure**: gate a probe with `tests/fixtures/live_infra.py:require` — it reports BLOCKED when Postgres (5432), Valkey (6379), or Vault (8200) is not listening. The app's Vault client authenticates only via AppRole (`VAULT_ADDR` + `VAULT_ROLE_ID`/`VAULT_SECRET_ID`); a `~/.vault-token` authenticates the `vault` CLI, not the app. Without AppRole credentials `clients.vault_client` raises, so Vault-backed paths report UNVERIFIED on such a checkout.
-
-### Git Workflow
-- Commit only when the user explicitly asks.
-- Review `git status --short` before staging.
-- Stage explicit paths. Do not use `git add -A` or `git add .` unless the user explicitly asks to stage everything.
-- Use a semantic prefix (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`) and a concise subject.
-- For non-trivial commits, include body sections for `ROOT CAUSE` and `SOLUTION RATIONALE`.
-- After committing, report the commit hash and the high-level file/change summary.
-
-### Pydantic Standards
-Pydantic BaseModel for structured data (configs, API models, DTOs): `from pydantic import BaseModel, Field`; `Field()` with descriptions and defaults; complete annotations; docstrings stating purpose. Naming: `*Config` for configs, `*Request`/`*Response` for API models.
-
-
-
 ---
 
 # Critical Anti-Patterns to Avoid
@@ -301,7 +286,7 @@ Recurring mistakes kept as incident records — the examples are historical, the
 
 | Pattern | Example | Lesson |
 |---|---|---|
-| Git workflow violations | HEREDOC commit messages; `git add -A` without permission; missing ROOT CAUSE / SOLUTION RATIONALE; no post-commit summary | Follow the Git Workflow section before every commit |
+| Git workflow violations | HEREDOC commit messages; `git add -A` without permission; missing ROOT CAUSE / SOLUTION RATIONALE; no post-commit summary | Invoke the `git-workflow` skill before every commit |
 | Over-engineering | Severity levels when binary worked/failed suffices | If you can't explain why it's needed, it probably isn't |
 | Credential fallbacks | Hardcoded API keys; fallback values for missing credentials | Vault + `UserCredentialService`; fail fast when credentials are missing |
 | Cross-user data access | Manual `user_id` filtering in individual queries | Tools get user-scoped access via `self.db`; isolation is architectural |
@@ -311,15 +296,6 @@ Recurring mistakes kept as incident records — the examples are historical, the
 | UUID mismatches at boundaries | `TypeError: Object of type UUID is not JSON serializable` | Native types internally; convert only at serialization boundaries; early conversion breaks comparisons |
 | Incomplete path replacement | Replacing `_generate_non_streaming()` but missing the buried `_write_firehose()` call | Trace ALL side effects — logging, metrics, state, events; verify by booting |
 
-## Dev-instance deployment
-
-Dev-instance VM work — spawning a VM, deploying a dev build, restoring or
-extracting a sarcophagus, refreshing the host's worktree snapshot — is owned
-by `deploy/vm/AGENTS.md` (modes, transports, sarcophagus contract, the
-reference-host recipes); install mechanics by `deploy/AGENTS.md`. Read both
-before any deploy or restore task. The deployed-instance quickbook (token
-minting, chat endpoint, DB probing, turn-in-flight rules) lives on the host at
-$SNAPSHOTS/AGENTS.md.
 
 Elsewhere: this map owns the doctrine every directory obeys and the index of
 what sits at the repo root, not any one directory's implementation detail.
