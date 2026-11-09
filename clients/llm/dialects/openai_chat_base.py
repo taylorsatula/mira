@@ -98,6 +98,42 @@ class ToolNotLoadedError(ProviderProtocolError):
         )
 
 
+@dataclass(frozen=True)
+class ContextOverflowCounts:
+    """Token counts a provider's overflow body states, when it states any."""
+
+    estimated_tokens: int | None = None
+    context_window: int | None = None
+
+
+# llama-server's overflow body: it names both counts, and its envelope code is
+# the bare HTTP status rather than a semantic one.
+_LLAMA_OVERFLOW_RE = re.compile(
+    r"request \((\d+) tokens\) exceeds the available context size \((\d+) tokens\)"
+)
+
+
+def classify_context_overflow(message: str, code: str) -> ContextOverflowCounts | None:
+    """Recognize a provider's context-overflow body and read the counts it states.
+
+    Returns None for any other 400/413. OpenAI and its compatibles carry a
+    ``context_length`` code or say "reduce the length" and state no counts;
+    llama-server matches neither signature, so a classifier limited to those two
+    raises ProviderProtocolError for every local overflow — which never reaches
+    the ContextOverflowError remediation in cns/services/orchestrator.py and
+    surfaces to the caller as an HTTP 500.
+    """
+    if "context_length" in code or "reduce the length" in message.lower():
+        return ContextOverflowCounts()
+    match = _LLAMA_OVERFLOW_RE.search(message)
+    if match:
+        return ContextOverflowCounts(
+            estimated_tokens=int(match.group(1)),
+            context_window=int(match.group(2)),
+        )
+    return None
+
+
 class OpenAIChatBase(Dialect):
     """Abstract base for OpenAI-compatible Chat Completions dialects.
 
@@ -1314,8 +1350,15 @@ class OpenAIChatBase(Dialect):
         # 413 (Groq request-too-large) carries overflow payloads too; tool_use_failed stays 400-only.
         if status in (400, 413):
             error_code = envelope.code or ""
-            if "context_length" in error_code or "reduce the length" in error_message.lower():
-                raise ProviderContextOverflowError(self.endpoint_url, mode, error_message)
+            overflow = classify_context_overflow(error_message, error_code)
+            if overflow is not None:
+                raise ProviderContextOverflowError(
+                    self.endpoint_url,
+                    mode,
+                    error_message,
+                    estimated_tokens=overflow.estimated_tokens,
+                    context_window=overflow.context_window,
+                )
             if status == 400 and error_code == "tool_use_failed":
                 match = re.search(r"attempted to call tool '(\w+)'", error_message)
                 if match:
