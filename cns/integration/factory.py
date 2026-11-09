@@ -188,6 +188,7 @@ class CNSIntegrationFactory:
             from working_memory.trinkets.subagent_results_trinket import SubagentResultsTrinket
             from working_memory.trinkets.lora_trinket import LoraTrinket
             from working_memory.trinkets.persona_trinket import PersonaTrinket
+            from working_memory.trinkets.persona_voice_trinket import PersonaVoiceTrinket
             from working_memory.trinkets.location_trinket import LocationTrinket
             from working_memory.trinkets.asyncactivity_trinket import AsyncActivityTrinket
             from working_memory.trinkets.skills_catalog_trinket import SkillsCatalogTrinket
@@ -202,6 +203,9 @@ class CNSIntegrationFactory:
             DomaindocTrinket(event_bus, self._working_memory)
             SubagentResultsTrinket(event_bus, self._working_memory)
             LoraTrinket(event_bus, self._working_memory)
+            # The install-chosen character: a repo constant, not a revision, so no
+            # refinement path can rewrite it.
+            PersonaVoiceTrinket(event_bus, self._working_memory)
             # Persona is a second parallel system, not a replacement for the user
             # model above. It renders its own slot, so both inject in one prompt.
             if self.config.system.persona_enabled:

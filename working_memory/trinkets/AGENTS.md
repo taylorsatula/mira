@@ -6,6 +6,9 @@
 - `base.py` — both base classes, the constructor that registers a trinket, and the persist-then-publish cycle each render runs. Open it before adding a trinket or changing what a publish writes.
 - `lora_trinket.py` — the user model, plus the check-in guidance that opens the `<mira:checkin_response>` loop. Open it when the model's picture of the user reads wrong or a debrief goes unanswered.
 - `persona_trinket.py` — the current Persona revision's directives in their own slot. Open it before changing how Persona text reaches the prompt.
+- `persona_voice_trinket.py` — the install-chosen character, from a repo constant rather than a
+  revision, so no refinement path can rewrite it. Open it before changing which slot the voice
+  occupies or what wraps the prose; it renders the sentences alone, never the axis labels.
 - `skills_catalog_trinket.py` — the merged skill catalog, names and descriptions only, plus the instruction naming `invoke_skill_tool`. Open it when the model cannot find a skill it should have.
 - `active_skills_trinket.py` — bodies of the skills invoked this segment, in the non-cached half of the system prompt. Open it before changing how a skill body reaches the prompt.
 - `location_trinket.py` — location, sun times, UV index and a two-hour forecast read from Valkey. Open it when local weather or location context is stale or absent.

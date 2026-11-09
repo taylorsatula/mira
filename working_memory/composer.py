@@ -38,6 +38,9 @@ PLACEMENT_NOTIFICATION = "notification"
 SECTION_LAYOUT: Dict[str, List[str]] = {
     PLACEMENT_SYSTEM: [
         'base_prompt',
+        # Who the agent is, chosen at install and frozen; sits before the two learned
+        # slots below because they qualify how it behaves with this person.
+        'persona_voice',
         # Two slots, two subjects: the user model's observations about the user vs. MIRA's prescriptive self-evaluation — must not share a slot.
         'behavioral_directives',
         'persona_directives',

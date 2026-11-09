@@ -2,6 +2,12 @@
 
 ## Files
 
+- `persona_voices.py` — the six install-chosen persona presets: four attribute words each, the
+  glosses the generator receives, and the authored six-sentence prose. The app's only
+  persona-voice source; `PersonaVoiceTrinket` renders it and `SystemConfig.persona_voice`
+  names one. Open it before adding, renaming, or rewording a preset — a renamed preset
+  breaks every `MIRA_PERSONA_VOICE` naming it, and a reworded gloss changes every future
+  authoring pass.
 - `__init__.py` — the package facade whose package-level import of `config.config_manager` triggers construction of the singleton at first `import config`. Open it when an `import config` cycle is suspected, or before adding a config import anywhere else.
 - `config.py` — the section schemas: every operator-settable setting plus the validators that reject a bad one at import, except `validate_compaction_budget`, which runs against the database-owned route. Open it before adding or changing a setting.
 - `config_manager.py` — the singleton, the environment-override loaders, and dynamic tool-config access. Open it before making a setting deploy-settable.
