@@ -468,10 +468,12 @@ CREATE TRIGGER memories_updated_at
 BEFORE UPDATE ON memories
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- Administrator-curated shared memory. Deliberately has no RLS: isolation is
--- enforced by the security-barrier view below, which is the only runtime read
--- path. Direct DML is revoked from the application role in the grants section,
--- so the shared table cannot be written from a request path.
+-- Shared memory every account reads: operator-curated, written by single-user
+-- extraction through lt_memory/global_store.py on the admin role, or mirrored
+-- from a remote store at boot. Deliberately has no RLS: isolation is enforced
+-- by the security-barrier view below, which is the only runtime read path.
+-- Direct DML is revoked from the application role in the grants section, so
+-- the shared table cannot be written from a request path.
 CREATE TABLE global_memories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     text TEXT COMPRESSION lz4 NOT NULL,

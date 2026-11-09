@@ -16,6 +16,7 @@ extraction permanently.
 Malformed optional fields degrade rather than reject: a bad entity list or a
 malformed related-memory entry is dropped with a warning and the memory is kept,
 because the segment is already collapsed and a rejected memory is lost for good.
+An unusable ``scope`` likewise degrades to local (``_resolve_memory_scope``).
 
 Not write-free. Dedup runs a live vector search (``find_similar_for_dedup``) after
 a fuzzy pass over the context texts, and the timezone resolution reads the user's
@@ -31,7 +32,14 @@ from uuid import UUID
 from rapidfuzz import fuzz
 from json_repair import repair_json
 
-from lt_memory.models import ExtractedMemory, ExtractionResult, MemoryContext
+from lt_memory.models import (
+    GLOBAL_MEMORY_SCOPE,
+    LOCAL_MEMORY_SCOPE,
+    ExtractedMemory,
+    ExtractionResult,
+    MemoryContext,
+    MemoryScope,
+)
 from lt_memory.vector_ops import VectorOps
 from utils.tag_parser import parse_memory_id
 from utils.timezone_utils import ensure_utc, parse_time_string, validate_timezone
@@ -42,6 +50,10 @@ logger = logging.getLogger(__name__)
 # Extraction deduplication tuning
 DEDUP_SIMILARITY_THRESHOLD = 0.92  # Cosine similarity for duplicate detection
 DEFAULT_IMPORTANCE_SCORE = 0.5     # Default importance for newly extracted memories
+
+MEMORY_SCOPE_FIELD = "scope"
+# extraction_engine fills this into memory_extraction_system.txt at {GLOBAL_SCOPE_FIELD}.
+GLOBAL_SCOPE_FIELD_EXAMPLE = json.dumps({MEMORY_SCOPE_FIELD: GLOBAL_MEMORY_SCOPE})[1:-1]
 
 
 def sanitize_entity_list(entities: Any) -> List[Dict[str, str]]:
@@ -176,6 +188,44 @@ class RawMemoryDict(TypedDict, total=False):
     happens_at: str | None
     related_memory_ids: list[dict[str, str]]
     entities: list[dict[str, str]]
+    scope: str
+
+
+def _resolve_memory_scope(memory_dict: Dict[str, Any]) -> MemoryScope:
+    """Which store a validated memory goes to; anything short of a usable global tag is local.
+
+    Local is the safe direction: a memory stored local is still surfaced to its
+    user, while a wrong global row is surfaced on every instance sharing the
+    store. Three cases override a global tag. An unrecognized value. A memory
+    carrying `expires_at`, because `global_memories` has no expiry column. And a
+    multi-user install, because every account on it reads the same global rows,
+    so one user's birthday would surface for all of them.
+    """
+    raw_scope = memory_dict.get(MEMORY_SCOPE_FIELD)
+    if raw_scope is None or raw_scope == LOCAL_MEMORY_SCOPE:
+        return LOCAL_MEMORY_SCOPE
+    if raw_scope != GLOBAL_MEMORY_SCOPE:
+        logger.warning(
+            f"Unrecognized memory scope {raw_scope!r}; storing the memory as local: "
+            f"{memory_dict['text'][:60]!r}"
+        )
+        return LOCAL_MEMORY_SCOPE
+    if memory_dict.get("expires_at"):
+        logger.warning(
+            f"Memory tagged global carries expires_at, which the global store cannot hold; "
+            f"storing it as local: {memory_dict['text'][:60]!r}"
+        )
+        return LOCAL_MEMORY_SCOPE
+
+    from auth.mode import auth_mode
+
+    if auth_mode() != "single":
+        logger.info(
+            "Memory tagged global stored as local: on a multi-user install every account "
+            "reads the same global rows"
+        )
+        return LOCAL_MEMORY_SCOPE
+    return GLOBAL_MEMORY_SCOPE
 
 
 class MemoryProcessor:
@@ -275,6 +325,7 @@ class MemoryProcessor:
                 ),
                 related_memory_ids=memory_dict.get("related_memory_ids", []),
                 entities=memory_dict.get("entities", []),
+                scope=memory_dict[MEMORY_SCOPE_FIELD],
                 source_segment_id=UUID(segment_id) if segment_id else None,
             )
 
@@ -611,6 +662,8 @@ class MemoryProcessor:
         # every entity source (extraction responses and the pending drain's
         # entity pass use the same sanitizer).
         memory_dict["entities"] = sanitize_entity_list(memory_dict.get("entities"))
+
+        memory_dict[MEMORY_SCOPE_FIELD] = _resolve_memory_scope(memory_dict)
 
         return True
 

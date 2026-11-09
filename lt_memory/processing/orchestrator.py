@@ -35,6 +35,7 @@ from lt_memory.models import ProcessingChunk, MemoryContextSnapshot
 from lt_memory.processing.extraction_engine import ExtractionEngine
 from lt_memory.processing.execution_strategy import DirectExecutionStrategy
 from lt_memory.processing.memory_processor import LLMResponseFormatError
+from lt_memory.global_store import RemoteGlobalStoreUnreachable
 from lt_memory.db_access import LTMemoryDB
 from utils.user_context import set_current_user_id, get_current_user_id, clear_user_context
 
@@ -50,15 +51,16 @@ def _is_content_caused_extraction_failure(error: Exception) -> bool:
     a segment with no extractable payload (ValueError). Everything else is
     infra/LLM class and must NOT consume the budget — provider transport
     failures are raised as ProviderError (which subclasses RuntimeError, so
-    it is explicitly excluded first) or ContextOverflowError, network/DB
-    outages raise arbitrary library exception types, and degenerate model
-    output raises LLMResponseFormatError (checked first: it subclasses
-    ValueError). Pinned doctrine: retry counters never gate data on
+    it is explicitly excluded first) or ContextOverflowError, the remote
+    global memory store raises RemoteGlobalStoreUnreachable when it cannot be
+    reached, network/DB outages raise arbitrary library exception types, and
+    degenerate model output raises LLMResponseFormatError (checked first: it
+    subclasses ValueError). Pinned doctrine: retry counters never gate data on
     infrastructure failure.
     """
     if isinstance(error, LLMResponseFormatError):
         return False
-    if isinstance(error, (ProviderError, ContextOverflowError)):
+    if isinstance(error, (ProviderError, ContextOverflowError, RemoteGlobalStoreUnreachable)):
         return False
     return isinstance(error, (RuntimeError, ValueError))
 

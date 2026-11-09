@@ -230,7 +230,7 @@ class ProactiveService:
         def effective_score(memory) -> float:
             score = memory.importance_score
 
-            # Global memories skip debut boost (they're curated, not new user memories)
+            # Global memories skip debut boost: their rows carry no per-user activity-day snapshot
             is_global = getattr(memory, 'source', 'personal') == 'global'
 
             # Debut boost logic (apply to score, not early return)
@@ -272,9 +272,9 @@ class ProactiveService:
             memories: List of Memory objects that were retrieved
         """
         for memory in memories:
-            # Global memories are system-curated and have no user row in
-            # update_access_stats' scope — attempting the update only produces
-            # spurious "failed" warnings for every surfaced global memory.
+            # Global memories live in global_memories, outside update_access_stats'
+            # scope — attempting the update only produces spurious "failed"
+            # warnings for every surfaced global memory.
             if memory.source == 'global':
                 continue
             try:

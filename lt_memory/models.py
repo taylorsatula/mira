@@ -38,6 +38,11 @@ RelationshipType = Literal[
     "precedes", "contextualizes", "exemplifies", "null"
 ]
 
+# local → `memories`; global → `global_memories` through lt_memory/global_store.py.
+MemoryScope = Literal["local", "global"]
+LOCAL_MEMORY_SCOPE: MemoryScope = "local"
+GLOBAL_MEMORY_SCOPE: MemoryScope = "global"
+
 
 # Shared TypedDicts — cross-file structures stored in JSONB or returned by
 # multiple modules. File-local types stay in their respective files.
@@ -241,6 +246,7 @@ class ExtractedMemory(BaseModel):
         default_factory=list,
         description="Entities extracted by LLM: [{'name': str, 'type': PERSON|ORG|PRODUCT|PLACE}]"
     )
+    scope: MemoryScope = LOCAL_MEMORY_SCOPE
 
     # Source segment for context exploration
     source_segment_id: Optional[UUID] = None

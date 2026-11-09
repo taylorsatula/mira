@@ -82,7 +82,11 @@ class ExtractionEngine:
             FileNotFoundError: If prompt files not found (fail-fast)
         """
         from config.prompts.loader import load_prompt
-        self.extraction_system_prompt = load_prompt("memory_extraction_system.txt")
+        from lt_memory.processing.memory_processor import GLOBAL_SCOPE_FIELD_EXAMPLE
+
+        self.extraction_system_prompt = load_prompt("memory_extraction_system.txt").replace(
+            "{GLOBAL_SCOPE_FIELD}", GLOBAL_SCOPE_FIELD_EXAMPLE
+        )
         self.extraction_user_template = load_prompt("memory_extraction_user.txt")
         logger.info("Loaded memory extraction prompts")
 

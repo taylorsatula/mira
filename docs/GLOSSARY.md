@@ -9,6 +9,7 @@ Codebase-specific terms, one sentence each. Each entry names the map or file tha
 - **Sentinel**: the stored message that replaces a collapsed segment and carries its summary fields and `segment_embedding` (`cns/infrastructure/AGENTS.md`).
 - **Live context compaction**: shrinking the provider request during an active conversation with a rolling brief, leaving the PostgreSQL history intact (`docs/SEGMENT_SYSTEM.md`).
 - **Continuum**: the aggregate object that holds one user's conversation (`cns/core/AGENTS.md`).
+- **Global memory**: a fixed fact about a person (a birthday, a family member, an allergy) stored in `global_memories` and surfaced for every account and, in remote mode, mirrored across every instance sharing one remote database; everything else is a local memory in `memories` (`lt_memory/AGENTS.md`, `docs/GLOBAL_MEMORY.md`).
 - **Short ID (`mem_XXXXXXXX`)**: an irreversible prefix of a memory's UUID, used on surfaces the LLM reads; persistence uses the full UUID (root `AGENTS.md`).
 - **Domaindoc**: a section-aware knowledge document stored in the user's SQLite database (`tools/implementations/AGENTS.md`).
 - **Persona**: user-directed behavior guidance stored as append-only revisions with per-segment evaluation signals (`cns/infrastructure/AGENTS.md`).

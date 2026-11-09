@@ -47,5 +47,7 @@ if [ -f /opt/mira/systemone.env ]; then
     . /opt/mira/systemone.env
 fi
 export MIRA_INJECTION_SCREEN_ENABLED="${MIRA_INJECTION_SCREEN_ENABLED:-0}"
+# The sourced file assigns without exporting; docs/GLOBAL_MEMORY.md has the operator add this line there.
+export MIRA_GLOBAL_MEMORY_REMOTE_ENABLED="${MIRA_GLOBAL_MEMORY_REMOTE_ENABLED:-0}"
 cd /opt/mira/app
 exec s6-setuidgid mira /opt/mira/venv/bin/python3 main.py

@@ -14,6 +14,12 @@ the segment only after this whole call returns. Every post-store step — entity
 links, candidate hints, the ``on_memories_stored`` callback — is therefore
 tolerate-and-log; a raise from one of them would surface as an unmarked segment
 whose next sweep re-inserts the same memories.
+
+Memories tagged global are stored first, through ``lt_memory.global_store``, and
+never reach tending: entities are per-user rows and the curator edits only
+personal memories. Global goes first because its remote write is the store most
+likely to fail, and failing before any insert leaves the segment clean for the
+retry.
 """
 
 from __future__ import annotations
@@ -24,8 +30,14 @@ from uuid import UUID, uuid4
 
 from clients.llm_provider import LLMProvider
 from lt_memory.db_access import LTMemoryDB
+from lt_memory.global_store import store_global_memories
 from lt_memory.linking import LinkingService
-from lt_memory.models import ExtractedMemory, ProcessingChunk
+from lt_memory.models import (
+    GLOBAL_MEMORY_SCOPE,
+    LOCAL_MEMORY_SCOPE,
+    ExtractedMemory,
+    ProcessingChunk,
+)
 from lt_memory.processing.extraction_engine import ExtractionEngine, ExtractionPayload
 from lt_memory.processing.memory_processor import MemoryProcessor
 from lt_memory.vector_ops import VectorOps
@@ -123,11 +135,25 @@ def store_and_tend_extraction(
     the segment unmarked, so the sweep would re-enter and duplicate the rows.
     The memories are the deliverable and are durable once stored; failures in
     the tending steps are tolerated-and-logged and never propagate.
+
+    Returns:
+        Ids of the memories stored in ``memories``; global rows are not among them.
     """
-    memory_ids = vector_ops.store_memories_with_embeddings(memories)
+    global_memories = [m for m in memories if m.scope == GLOBAL_MEMORY_SCOPE]
+    if global_memories:
+        store_global_memories(
+            global_memories,
+            vector_ops.generate_embeddings_batch([m.text for m in global_memories]),
+            db.session_manager,
+        )
+
+    local_memories = [m for m in memories if m.scope == LOCAL_MEMORY_SCOPE]
+    if not local_memories:
+        return []
+    memory_ids = vector_ops.store_memories_with_embeddings(local_memories)
 
     try:
-        persist_llm_entities(user_id, memories, memory_ids, db)
+        persist_llm_entities(user_id, local_memories, memory_ids, db)
     except Exception:
         logger.exception(
             "Entity persistence failed after %d memories were stored; "
@@ -137,7 +163,7 @@ def store_and_tend_extraction(
 
     candidate_hints: dict[str, list[dict]] = {}
     try:
-        candidate_hints = _build_candidate_hints(memories, memory_ids, linking)
+        candidate_hints = _build_candidate_hints(local_memories, memory_ids, linking)
     except Exception:
         logger.warning(
             "Candidate hint discovery failed after %d memories were stored; "
@@ -155,7 +181,7 @@ def store_and_tend_extraction(
                 user_id=user_id,
                 segment_id=segment_id,
                 memory_ids=memory_ids,
-                memories=memories,
+                memories=local_memories,
                 candidate_hints=candidate_hints,
             )
     except Exception:

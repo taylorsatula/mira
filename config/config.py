@@ -143,6 +143,10 @@ class SystemConfig(BaseModel):
         default=False,
         description="Enable the MCP endpoint at /v1/mcp exposing one tool (check_in: a complete chat turn via the same path as POST /v1/api/chat). Disabled constructs nothing — the route is not mounted and the mcp SDK is never imported. Overridable via MIRA_MCP_ENABLED (strict 0/1)",
     )
+    global_memory_remote_enabled: bool = Field(
+        default=False,
+        description="Make a remote Postgres database (Vault mira/services/global_memory_url) the authority for global memories: boot mirrors it into the local global_memories table, and extraction writes global-tagged memories to it before the local copy. Disabled keeps the local table as the whole store. Overridable via MIRA_GLOBAL_MEMORY_REMOTE_ENABLED (strict 0/1)",
+    )
 
     log_level: str = Field(default="WARNING", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     anthropic_sdk_content_logging: bool = Field(

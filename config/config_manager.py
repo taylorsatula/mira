@@ -78,6 +78,7 @@ SYSTEM_FEATURE_FLAG_ENVIRONMENT_FIELDS: dict[str, str] = {
     "MIRA_PERSONA_ENABLED": "persona_enabled",
     "MIRA_INJECTION_SCREEN_ENABLED": "injection_screen_enabled",
     "MIRA_MCP_ENABLED": "mcp_enabled",
+    "MIRA_GLOBAL_MEMORY_REMOTE_ENABLED": "global_memory_remote_enabled",
 }
 
 # Deploy writes MIRA_TIMEZONE and MIRA_LOCAL_SESSION_FIRST_NAME into /opt/mira/systemone.env

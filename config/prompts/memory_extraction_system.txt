@@ -141,6 +141,27 @@ SKIP:
 - Bare task statuses without behavioral insight: "Grocery list needs updating", "Oil change scheduled for Saturday". These are to-do items, not memories. EXCEPTION: if the user's *behavior* around the task reveals something durable (procrastination pattern, emotional reaction, prioritization logic), extract the behavioral insight — not the task status.
 </durability_filter>
 
+<memory_scope>
+Every memory is either local or global. Local is the default.
+
+GLOBAL — a fixed fact about who a person is that stays true and stays relevant whatever the conversation is about. Global memories are shared with every assistant that serves this user, in every context:
+- Birthdays, anniversaries, and other fixed dates tied to a person
+- Who the people in the user's life are: family members, partners, pets, and how they relate to the user
+- Where the user lives, what languages they speak, what they do for a living
+- Lasting health facts: allergies, chronic conditions, dietary restrictions
+
+LOCAL — everything else, including:
+- Preferences tied to a kind of work: coding style, tool choices, editor settings, writing conventions
+- Episodes and experiences: a day at the beach, a trip, a hard week at work
+- Project state, plans, opinions, and behavioral patterns
+- Any memory with expires_at
+
+The judgment: someone's birthday is a global memory. Their code preferences are not a global memory, and neither is their day at the beach. When unsure, choose local: a local memory still reaches this user, while a wrong global memory reaches every assistant that shares the store.
+
+Mark a global memory by adding this field to its object: {GLOBAL_SCOPE_FIELD}
+Write nothing for a local memory.
+</memory_scope>
+
 <voice_rule>
 Write memories as direct factual statements about the user's world. Third-person, present tense, no hedging.
 
@@ -234,6 +255,20 @@ Extract: nothing (return empty array)
 
 Why: One-time logistics, not a standing preference or recurring pattern.
 
+EXAMPLE 8 — Global and local in one conversation:
+User: "My mom's birthday is June 2nd."
+...
+User: "Took the kids to Orange Beach Saturday. Mila swam in the ocean without her floatie for the first time — she was so proud of herself."
+...
+User: "Back to the refactor. Early returns everywhere, and no if-nesting deeper than two levels."
+
+Extract:
+{"text": "His mother's birthday is June 2", {GLOBAL_SCOPE_FIELD}}
+{"text": "Took the kids to Orange Beach — Mila swam in the ocean without her floatie for the first time and was proud of herself", "entities": [{"name": "Orange Beach", "type": "PLACE"}, {"name": "Mila", "type": "PERSON"}]}
+{"text": "Wants early returns throughout his code, with no if-nesting deeper than two levels"}
+
+Why: The birthday is a fixed fact about his mother that holds in any context, so it is global. The beach day is an episode and the nesting rule is a preference tied to his programming work, so both are local and carry no scope field.
+
 </examples>
 
 <extraction_floor>
@@ -261,6 +296,7 @@ Each memory object:
 Conditional fields — REQUIRED when their condition is met:
 "entities": [{"name": "str", "type": "PERSON|ORG|PRODUCT|PLACE"}]  — required when memory mentions a named person, org, product, or place
 "related_memory_ids": [{"id": "mem_XXXXXXXX", "bond": "3 words max"}]  — required when extending or updating an existing memory referenced via <meta><references_memory>; id must be the exact mem_-prefixed short ID shown in the transcript
+{GLOBAL_SCOPE_FIELD}  — required when the memory is global under <memory_scope>; omit it for a local memory
 
 Time-bound fields — include only when the information is genuinely time-bound:
 "expires_at": "YYYY-MM-DDTHH:MM:SS"    — information becomes invalid after this date; user's local wall time, no UTC conversion. Example: "2026-03-05T17:00:00"
