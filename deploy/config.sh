@@ -29,6 +29,7 @@ CONFIG_SUBCORTICAL_MODEL=""
 CONFIG_BUILD_LLAMA_CPP=""
 CONFIG_TIMEZONE=""                   # IANA name; empty = this host's system timezone
 CONFIG_USER_NAME=""                  # first name for the single-mode local account; empty = "Friend"
+CONFIG_PERSONA_VOICE=""             # persona preset name from config/persona_voices.py; empty = app default
 CONFIG_EMBEDDING_PROVIDER=""         # local / remote
 CONFIG_EMBEDDING_ENDPOINT=""         # remote only: POST /v1/embeddings URL
 CONFIG_EMBEDDING_MODEL=""            # remote only
@@ -47,6 +48,7 @@ STATUS_EMBEDDINGS=""
 STATUS_SYSTEMONE=""
 STATUS_DB_PASSWORD=""
 STATUS_USER_NAME=""
+STATUS_PERSONA_VOICE=""
 STATUS_TIMEZONE=""
 STATUS_PLAYWRIGHT=""
 STATUS_SYSTEMD=""
@@ -787,6 +789,81 @@ elif [ "$OS" = "macos" ]; then
 fi
 
 fi
+
+# Persona. The six presets are authored prose, not generated here: see
+# config/persona_voices.py and docs/persona_voices.txt. One word to answer, so the
+# operator meets their Mira rather than designing one.
+if [ -z "${CONFIG_PERSONA_VOICE:-}" ]; then
+    echo -e "${BOLD}${BLUE}11. Personality${RESET} ${DIM}(who your Mira is; Enter takes the default)${RESET}"
+    # The list is generated from the preset table, never retyped: a name the menu
+    # offers and a name the app accepts come from one source.
+    PYTHONPATH="${SCRIPT_DIR}/.." python3 -c '
+import sys
+from config.persona_voices import DEFAULT_VOICE, PERSONA_VOICES
+for index, name in enumerate(sorted(PERSONA_VOICES), start=1):
+    mark = " (default)" if name == DEFAULT_VOICE else ""
+    print("     %d. %s%s — %s" % (index, name, mark, PERSONA_VOICES[name].pitch))
+' 2>/dev/null || echo "     (preset list unavailable; the default applies)"
+    while true; do
+        read -p "$(echo -e ${CYAN}Choose 1-6 or a name${RESET}) [Enter = default]: " PERSONA_INPUT
+        if [ -z "$PERSONA_INPUT" ]; then
+            CONFIG_PERSONA_VOICE="$(PYTHONPATH="${SCRIPT_DIR}/.." python3 -c 'from config.persona_voices import DEFAULT_VOICE; print(DEFAULT_VOICE)')"
+            break
+        fi
+        if [[ "$PERSONA_INPUT" =~ ^[1-6]$ ]]; then
+            CONFIG_PERSONA_VOICE="$(PYTHONPATH="${SCRIPT_DIR}/.." python3 -c '
+import sys
+from config.persona_voices import PERSONA_VOICES
+print(sorted(PERSONA_VOICES)[int(sys.argv[1]) - 1])
+' "$PERSONA_INPUT")"
+            break
+        fi
+        if PYTHONPATH="${SCRIPT_DIR}/.." python3 -c '
+import sys
+from config.persona_voices import PERSONA_VOICES
+sys.exit(0 if sys.argv[1] in PERSONA_VOICES else 1)
+' "$PERSONA_INPUT" 2>/dev/null; then
+            CONFIG_PERSONA_VOICE="$PERSONA_INPUT"
+            break
+        fi
+        echo "   No persona called '${PERSONA_INPUT}'. Pick a number from the list, or press Enter for the default."
+    done
+fi
+STATUS_PERSONA_VOICE="${CHECKMARK} ${CONFIG_PERSONA_VOICE}"
+
+# Timezone resolution: an empty CONFIG_TIMEZONE (yml "" or interview Enter) The six presets are authored prose, not generated here: see
+# config/persona_voices.py and docs/persona_voices.txt. One word to answer, so the
+# operator meets their Mira rather than designing one.
+if [ -z "${CONFIG_PERSONA_VOICE:-}" ]; then
+    echo -e "${BOLD}${BLUE}11. Personality${RESET} ${DIM}(who your Mira is; Enter takes the default)${RESET}"
+    python3 - <<'PERSONA_MENU'
+import sys
+sys.path.insert(0, "")
+try:
+    from config.persona_voices import DEFAULT_VOICE, PERSONA_VOICES
+except Exception:
+    sys.exit(0)
+for index, (name, voice) in enumerate(sorted(PERSONA_VOICES.items()), start=1):
+    mark = " (default)" if name == DEFAULT_VOICE else ""
+    print(f"     {index}. {name}{mark} — {voice.pitch}")
+PERSONA_MENU
+    read -p "$(echo -e ${CYAN}Choose 1-6 or name${RESET}) [default: accomplice]: " PERSONA_INPUT
+    if [ -z "$PERSONA_INPUT" ]; then
+        CONFIG_PERSONA_VOICE="$(python3 -c 'import sys; sys.path.insert(0,""); from config.persona_voices import DEFAULT_VOICE; print(DEFAULT_VOICE)' 2>/dev/null || echo "accomplice")"
+    elif [[ "$PERSONA_INPUT" =~ ^[1-6]$ ]]; then
+        CONFIG_PERSONA_VOICE="$(python3 - "$PERSONA_INPUT" <<'PERSONA_PICK'
+import sys
+sys.path.insert(0, "")
+from config.persona_voices import PERSONA_VOICES
+names = sorted(PERSONA_VOICES)
+print(names[int(sys.argv[1]) - 1])
+PERSONA_PICK
+)"
+    else
+        CONFIG_PERSONA_VOICE="$PERSONA_INPUT"
+    fi
+fi
+STATUS_PERSONA_VOICE="${CHECKMARK} ${CONFIG_PERSONA_VOICE:-accomplice}"
 
 # Timezone resolution: an empty CONFIG_TIMEZONE (yml "" or interview Enter)
 # means "this host's system timezone" — resolve to a concrete IANA name so

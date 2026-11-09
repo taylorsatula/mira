@@ -51,6 +51,12 @@ SYSTEMONE_ENV_FILE="/opt/mira/systemone.env"
     if [ -n "${CONFIG_USER_NAME:-}" ]; then
         echo "MIRA_LOCAL_SESSION_FIRST_NAME=${CONFIG_USER_NAME}"
     fi
+    # The chosen persona preset. One name, not prose: the six blocks are repo
+    # constants (config/persona_voices.py), so nothing here quotes a sentence and
+    # the character is frozen by construction rather than by a guard.
+    if [ -n "${CONFIG_PERSONA_VOICE:-}" ]; then
+        echo "MIRA_PERSONA_VOICE=${CONFIG_PERSONA_VOICE}"
+    fi
     # The resolved context window and its 80% live-compaction trigger, same
     # mechanism: the app maps MIRA_CONTEXT_WINDOW_TOKENS/MIRA_COMPACTION_TRIGGER_TOKENS
     # onto ApiConfig.context_window_tokens/compaction_trigger_tokens
