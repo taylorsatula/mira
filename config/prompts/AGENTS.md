@@ -52,6 +52,11 @@
 - `persona_critic_user.txt` — the candidate under review.
 - `portrait_synthesis_system.txt` — the User Context portrait contract. Open it before changing how the user is described in the system prompt.
 - `portrait_synthesis_user.txt` — the segment summaries it profiles from.
+- `persona_voice_system.txt` — the persona *generator*: four attribute words in, a six-sentence
+  second-person block out. Open it before changing what a persona may say or how one is shaped.
+  No consumer in the installed app: the six shipped voices are authored prose in
+  `config/persona_voices.py`, and the only caller is `scripts/persona_bench.py`. It carries the
+  house rules itself, because the generator never reads `config/system_prompt.txt`.
 - `portrait_refinement_system.txt` — the portrait reviser on user feedback; its user message is code-built, so it has no user twin.
 
 **Response shaping**
