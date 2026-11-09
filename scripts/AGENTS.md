@@ -6,6 +6,11 @@
 - `export_user_bundle.py` — the exporter a maintainer runs by hand on a hosted instance to build one person's migration zip. Open it before changing what a bundle carries, how a per-user value is decrypted, or the instructions shipped inside the zip.
 - `import_user_bundle.py` — the receiving-install side of that migration, written as a specification rather than an implementation. Open it before performing a per-user import into a fresh install by hand.
 - `migrate.py` — argument parsing and rendering for the database step runner, the surface an operator, the installer, and the updater drive as a subprocess. Open it before changing a subcommand, a flag, an exit code, or a sentence an operator reads.
+- `persona_bench.py` — the persona authoring bench: many samples per preset or per arbitrary
+  four-word set against one endpoint, each graded by the mechanical invariants from
+  `config/prompts/persona_voice_system.txt`, written to a report for cherry-picking. Open it
+  before changing a graded invariant, or when a run returns empty content (a reasoning model
+  that spent its budget thinking has to be told to think less, by `--reasoning-effort`).
 - `post_server_post.py` — a shim over the post-server self-test CLI, holding no logic of its own. Open it before running the post-server checks by hand.
 
 ## Wiring

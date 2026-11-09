@@ -73,6 +73,7 @@ source "${SCRIPT_DIR}/lib/repo_identity.sh"
 source "${SCRIPT_DIR}/lib/provenance.sh"
 source "${SCRIPT_DIR}/lib/venv_stamp.sh"
 source "${SCRIPT_DIR}/lib/state_preserve.sh"
+source "${SCRIPT_DIR}/lib/context_window_config.sh"
 source "${SCRIPT_DIR}/lib/custom_export.sh"
 source "${SCRIPT_DIR}/lib/host_artifacts.sh"
 
@@ -983,6 +984,27 @@ MIGRATE_ARGS=(migrate --stamp "$STAMP" --backups-dir "$BACKUPS_DIR" --env-file "
 MIGRATE_STARTED="yes"
 runner "$OLD_VENV/bin/python3" "$APP_DIR" "${MIGRATE_ARGS[@]}"
 runner "$OLD_VENV/bin/python3" "$APP_DIR" reconcile --env-file "$ENV_FILE"
+
+# An install that predates the context-window block keeps the env file it
+# already had: reconcile drops settings nothing reads any more, it never adds
+# one. Without this the app falls back to ApiConfig's field defaults, which are
+# not tied to the served model, so live compaction is scheduled above the
+# provider's real limit and never fires. Appended, never rewritten, and only
+# when absent, so an operator's own values are untouched. Runs after the
+# pre-update copy above, so a rolled-back update drops the keys with the rest
+# of the file rather than leaving half of a window behind.
+if [ -f "$ENV_FILE" ] && ! grep -q '^MIRA_CONTEXT_WINDOW_TOKENS=' "$ENV_FILE"; then
+    print_header "Resolving the chat model's context window"
+    if resolve_primary_route_window "$OLD_VENV/bin/python3" "$APP_DIR"; then
+        printf 'MIRA_CONTEXT_WINDOW_TOKENS=%s\nMIRA_COMPACTION_TRIGGER_TOKENS=%s\n' \
+            "$CONTEXT_WINDOW_TOKENS" "$COMPACTION_TRIGGER_TOKENS" >> "$ENV_FILE"
+        print_success "Window ${CONTEXT_WINDOW_TOKENS} tokens, compaction trigger ${COMPACTION_TRIGGER_TOKENS}"
+    else
+        print_warning "This install's chat endpoint reported no context window, so it keeps the app-side defaults."
+        print_info "Live compaction cannot fire below the provider's real limit until one is set by hand:"
+        print_info "MIRA_CONTEXT_WINDOW_TOKENS / MIRA_COMPACTION_TRIGGER_TOKENS in $ENV_FILE"
+    fi
+fi
 
 # 7. Restart, health-poll, and confirm the database is at this release's head
 if [ "$CANONICAL" = "yes" ]; then

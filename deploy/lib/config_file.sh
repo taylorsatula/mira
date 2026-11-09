@@ -81,7 +81,7 @@ parse_yaml_config() {
             "'"*) value="${value#\'}"; value="${value%\'}" ;;
         esac
         case "$key" in
-            offline_mode|local_model_choice|custom_gguf|build_llama_cpp|llama_main_url|llama_small_url|llama_main_model|llama_small_model|chat_provider_type|chat_endpoint|chat_api_key|chat_model|anthropic_key|anthropic_batch_key|subcortical_endpoint|subcortical_api_key|subcortical_model|kagi_api_key|embedding_provider|embedding_endpoint|embedding_model|embedding_api_key|injection_screen|systemone_provider|systemone_endpoint|systemone_model|systemone_api_key|user_name|timezone|db_password|install_playwright|install_systemd|start_mira_now|overwrite_existing|stop_occupied_ports)
+            offline_mode|local_model_choice|custom_gguf|build_llama_cpp|llama_main_url|llama_small_url|llama_main_model|llama_small_model|chat_provider_type|chat_endpoint|chat_api_key|chat_model|anthropic_key|anthropic_batch_key|subcortical_endpoint|subcortical_api_key|subcortical_model|kagi_api_key|embedding_provider|embedding_endpoint|embedding_model|embedding_api_key|injection_screen|systemone_provider|systemone_endpoint|systemone_model|systemone_api_key|user_name|persona_voice|timezone|db_password|install_playwright|install_systemd|start_mira_now|overwrite_existing|stop_occupied_ports)
                 yaml_store "$key" "$value" ;;
             *) yaml_fail "Unknown config key: '$key' (see deploy-config.example.yml)" ;;
         esac
@@ -275,6 +275,11 @@ apply_yaml_config() {
         STATUS_USER_NAME="${CHECKMARK} ${CONFIG_USER_NAME}"
     else
         CONFIG_USER_NAME=""   # config.sh resolves "" to "Friend"
+    fi
+    if [ -n "${YAML_persona_voice:-}" ]; then
+        # Optional: absent from a config file written before this feature, so it is
+        # in the whitelist only. config.sh skips its question when this is set.
+        CONFIG_PERSONA_VOICE="$YAML_persona_voice"
     fi
     if [ -n "$YAML_timezone" ]; then
         CONFIG_TIMEZONE="$YAML_timezone"

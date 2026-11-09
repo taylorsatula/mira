@@ -132,6 +132,12 @@ user_name: ""
 # "" = this machine's system timezone (UTC when the platform exposes nothing).
 # Any other value must be a valid IANA name — the app fails fast at boot otherwise.
 timezone: ""
+# OPTIONAL — the only key here that may be omitted entirely. One of the six
+# persona presets in config/persona_voices.py (accomplice, archivist, companion,
+# engineer, forager, straight-talker); each is a finished character, listed with
+# its prose in docs/persona_voices.txt. Omit it, or leave "", to take the default.
+# An unknown name stops the install rather than silently falling back.
+# persona_voice: accomplice
 
 # ---------------------------------------------------------------------------
 # Host-side options

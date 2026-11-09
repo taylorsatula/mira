@@ -30,6 +30,8 @@ from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from config.persona_voices import DEFAULT_VOICE
+
 from utils.timezone_utils import get_default_timezone, validate_timezone
 
 
@@ -163,6 +165,23 @@ class SystemConfig(BaseModel):
     def validate_timezone_name(cls, value: str) -> str:
         """Fail fast on a non-IANA timezone instead of surfacing ZoneInfo errors at runtime."""
         return validate_timezone(value)
+
+    persona_voice: str = Field(
+        default=DEFAULT_VOICE,
+        description="Install-chosen persona preset from config/persona_voices.py, rendered into the persona_voice prompt slot by PersonaVoiceTrinket. Deploy writes MIRA_PERSONA_VOICE; the character is frozen by construction because it is a repo constant no refinement path can reach"
+    )
+
+    @field_validator("persona_voice")
+    @classmethod
+    def validate_persona_voice(cls, value: str) -> str:
+        """Refuse an unknown preset at boot: a named character that does not exist must
+        never degrade into a characterless Mira with no error anywhere."""
+        from config.persona_voices import PERSONA_VOICES
+
+        if value not in PERSONA_VOICES:
+            valid = ", ".join(sorted(PERSONA_VOICES))
+            raise ValueError(f"unknown persona_voice {value!r}; expected one of: {valid}")
+        return value
     segment_timeout: int = Field(
         default=120,
         description="Segment collapse timeout in minutes — staleness at which an active segment collapses, evaluated in the segment owner's local time-of-day windows"
