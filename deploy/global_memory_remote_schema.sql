@@ -1,6 +1,6 @@
 -- The remote global memory store: one table in a Postgres database that every
 -- MIRA instance sharing a person's global memories points at through Vault
--- mira/services/global_memory_url (MIRA_GLOBAL_MEMORY_REMOTE_ENABLED=1).
+-- mira/services/global_memory_url; that field being present is what turns remote mode on.
 --
 -- Run it once against that database as its owner:
 --   psql "postgresql://OWNER@HOST:5432/DBNAME" -f deploy/global_memory_remote_schema.sql

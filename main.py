@@ -7,8 +7,8 @@ raises `RuntimeError` naming the failed component, so a broken dependency
 stops the boot instead of surfacing later as a degraded turn: thread-pool
 sizing, Vault secret preload, announcement, embeddings provider, continuum
 repository, model_configs routes, LLMProvider, dialect-registry warm-up, the
-lt_memory factory, the remote global-memory pull (only when
-`config.system.global_memory_remote_enabled`; an unreachable remote is logged and
+lt_memory factory, the global-memory mode and the remote pull (only when Vault
+`mira/services` carries `global_memory_url`; an unreachable remote is logged and
 the last pulled copy serves), and the CNS orchestrator. The Valkey flush then drops
 every key outside `clients.valkey_client.BOOT_FLUSH_PRESERVE_PREFIXES`;
 sessions, CSRF tokens, rate limits, pending memories, and compaction reports
@@ -187,19 +187,20 @@ async def lifespan(app: FastAPI):
         logger.critical(f"Failed to initialize lt_memory factory: {e}")
         raise RuntimeError(f"lt_memory initialization failed - cannot start MIRA: {e}") from e
 
-    if config.system.global_memory_remote_enabled:
-        from lt_memory.global_store import (
-            RemoteGlobalStoreUnreachable,
-            pull_remote_global_memories,
-            remote_global_memory_url,
-        )
+    from lt_memory.global_store import (
+        RemoteGlobalStoreUnreachable,
+        pull_remote_global_memories,
+        resolve_remote_global_memory_url,
+    )
+    try:
+        global_memory_url = resolve_remote_global_memory_url()
+    except Exception as e:
+        logger.critical(f"Remote global memory store is misconfigured: {e}")
+        raise RuntimeError(f"global memory configuration failed - cannot start MIRA: {e}") from e
 
-        try:
-            remote_global_memory_url()
-        except Exception as e:
-            logger.critical(f"Remote global memory store is misconfigured: {e}")
-            raise RuntimeError(f"global memory configuration failed - cannot start MIRA: {e}") from e
-
+    if global_memory_url is None:
+        logger.info("Global memory store: local (Vault mira/services has no global_memory_url)")
+    else:
         logger.info("Pulling global memories from the remote global store...")
         try:
             pull = pull_remote_global_memories(lt_memory_factory.vector_ops, get_shared_session_manager())
@@ -208,7 +209,7 @@ async def lifespan(app: FastAPI):
                 f"{e}. Serving the global memories from this install's last successful pull: "
                 f"global memories added on other instances since then are missing until a boot "
                 f"reaches the remote, and extraction retries any segment holding a global memory "
-                f"until a connection opens."
+                f"until the remote answers."
             )
         except Exception as e:
             logger.critical(f"Failed to pull remote global memories: {e}")

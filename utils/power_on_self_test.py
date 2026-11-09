@@ -316,6 +316,7 @@ def run_pre_server_post(
         CheckSpec("dependency_initialization", True, _check_dependency_initialization),
         CheckSpec("scheduler_registration", True, _check_scheduler_registration),
         CheckSpec("playwright_service", False, _check_playwright_service),
+        CheckSpec("global_memory_remote", False, _check_global_memory_remote),
     ]
     return _run_specs("pre-server", specs, deadline_seconds=deadline_seconds)
 
@@ -1253,6 +1254,12 @@ def _check_playwright_service() -> dict[str, Any]:
 
     instance = PlaywrightService.get_instance()
     return {"service": type(instance).__name__}
+
+
+def _check_global_memory_remote() -> dict[str, Any]:
+    from lt_memory.global_store import check_remote_global_store
+
+    return check_remote_global_store()
 
 
 def _check_http_health(base_url: str) -> dict[str, Any]:
