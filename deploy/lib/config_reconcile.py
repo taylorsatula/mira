@@ -20,6 +20,10 @@ Drift rules, per field:
     field new in theirs              -> release default
     non-literal default (factory)    -> release-owned, never carried
 
+Container literals (list/tuple/dict/set of literals, e.g. a CORS allowlist) are
+carried like scalars; only non-literal defaults (names, calls, factories) are
+release-owned.
+
 With no baseline (an install's first update under this scheme) the merge is
 two-way: any operator value differing from the release is carried, with one
 warning that release-default drift cannot be distinguished. Structural edits
@@ -42,15 +46,15 @@ from pathlib import Path
 def _literal_value(node: ast.AST) -> object:
     """The Python value of a literal default node, or raise ValueError.
 
-    Accepts constants and a unary minus on a constant (negative numbers);
-    anything else (names, calls, factories) is not a literal default.
+    Accepts anything ast.literal_eval accepts: scalars (int, float, str, bool,
+    None, negative numbers) and container literals (list, tuple, dict, set) whose
+    elements are themselves literals. Names, calls, and factories are not literal
+    defaults and are release-owned.
     """
-    if isinstance(node, ast.Constant):
-        return node.value
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-        if isinstance(node.operand, ast.Constant):
-            return -node.operand.value
-    raise ValueError("not a literal default")
+    try:
+        return ast.literal_eval(node)
+    except (ValueError, SyntaxError, TypeError) as error:
+        raise ValueError("not a literal default") from error
 
 
 def _default_node(value: ast.AST) -> ast.AST | None:
