@@ -21,6 +21,9 @@
 #   4    Elevate once (Linux; macOS only to rewrite /usr/local/bin/mira), stop.
 #   4.5  Save the operator's own changes; failure restarts the old service.
 #   5    Swap rebuilt venvs in; refresh the TOAST shim.
+#   6a   Reconcile the operator's config.py against the release BEFORE the swap
+#        (a parse failure aborts with nothing changed); the merged values go in
+#        after the overlay and the baseline rotates after the commit.
 #   6    Move the old code aside, overlay the release, commit, rewrite the
 #        `mira` command and (Linux) the systemd unit when their bytes differ.
 #   6.5  Run the database steps (backup first, inside the runner), then drop
@@ -223,6 +226,8 @@ TUI_VENV_SWAPPED="no"
 TOAST_REFRESHED="no"
 CODE_MOVED="no"
 OVERLAY_STARTED="no"
+RECONCILED_CONFIG="no"
+BASELINE_SAVED="no"
 INDEX_SAVED="no"
 UPDATE_COMMITTED="no"
 CLI_REWRITTEN="no"
@@ -557,6 +562,9 @@ rollback_install() {
     fi
     if [ "$INDEX_SAVED" = "yes" ]; then
         cp -p "${WORK_DIR}/index" "${APP_DIR}/.git/index" || problems=$((problems + 1))
+    fi
+    if [ "$BASELINE_SAVED" = "yes" ]; then
+        cp -p "${WORK_DIR}/config.baseline.old" "$CONFIG_BASELINE" || problems=$((problems + 1))
     fi
     if [ "$CLI_REWRITTEN" = "yes" ]; then
         install_host_file "${WORK_DIR}/mira-cli.old" "$MIRA_CLI_PATH" || problems=$((problems + 1))
@@ -934,6 +942,26 @@ TOAST_REFRESHED="yes"
 cp "${TREE}/deploy/_mira_log_levels.py" "${LIVE_SITE_PACKAGES}/"
 echo "import _mira_log_levels" > "${LIVE_SITE_PACKAGES}/mira-log-levels.pth"
 
+# 6a. Reconcile the operator's config.py against the release BEFORE the swap,
+# so a parse failure aborts with nothing changed. config.py is the operator's
+# durable configuration surface: the release schema wins, the operator's literal
+# Field(default=...) values carry forward (deploy/lib/config_reconcile.py).
+CONFIG_BASELINE="${APP_DIR}/data/config_release_baseline.py"
+OPERATOR_CONFIG="${WORK_DIR}/config.operator.py"
+MERGED_CONFIG="${WORK_DIR}/config.merged.py"
+if [ -f "${APP_DIR}/config/config.py" ] && [ -f "${TREE}/config/config.py" ]; then
+    cp -p "${APP_DIR}/config/config.py" "$OPERATOR_CONFIG"
+    BASE_ARG=()
+    [ -f "$CONFIG_BASELINE" ] && BASE_ARG=(--base "$CONFIG_BASELINE")
+    if "${OLD_VENV}/bin/python3" "${TREE}/deploy/lib/config_reconcile.py" ${BASE_ARG[@]+"${BASE_ARG[@]}"} \
+        --ours "$OPERATOR_CONFIG" --theirs "${TREE}/config/config.py" --out "$MERGED_CONFIG"; then
+        RECONCILED_CONFIG="yes"
+    else
+        print_error "config.py reconciliation failed (see above); no code was changed. Fix config/config.py and re-run mira update."
+        exit 1
+    fi
+fi
+
 # 6. Swap the code; rewrite the `mira` command
 if [ -f "${APP_DIR}/.git/index" ]; then
     cp -p "${APP_DIR}/.git/index" "${WORK_DIR}/index"
@@ -947,11 +975,25 @@ run_with_status "Overlaying ${TAG}" \
         --exclude='*.pyc' --exclude=.env --exclude=.claude --exclude=.DS_Store \
         --exclude=data --exclude=logs --exclude=scratch \
         -cf - . | tar -C '${APP_DIR}' -xf -"
+if [ "$RECONCILED_CONFIG" = "yes" ]; then
+    cp "$MERGED_CONFIG" "${APP_DIR}/config/config.py"
+fi
 git -C "$APP_DIR" add -A
 UPDATE_COMMITTED="yes"
 git -C "$APP_DIR" commit --quiet --allow-empty \
     -m "$(official_commit_message update "$TAG" "$NEW_SHA")"
 print_success "Recorded $(git -C "$APP_DIR" log -1 --format=%s) in the install's history"
+if [ "$RECONCILED_CONFIG" = "yes" ]; then
+    # Rotate the baseline only after the update commit, so a pre-commit rollback
+    # leaves it untouched; save the old one for rollback_install to restore.
+    mkdir -p "${APP_DIR}/data"
+    if [ -f "$CONFIG_BASELINE" ]; then
+        cp -p "$CONFIG_BASELINE" "${WORK_DIR}/config.baseline.old"
+        BASELINE_SAVED="yes"
+    fi
+    cp "${TREE}/config/config.py" "$CONFIG_BASELINE"
+    print_success "Carried your config.py values forward (release schema applied)"
+fi
 if [ "$CLI_REWRITE" = "yes" ]; then
     cp -p "$MIRA_CLI_PATH" "${WORK_DIR}/mira-cli.old"
     CLI_REWRITTEN="yes"
