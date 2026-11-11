@@ -1207,6 +1207,7 @@ def _check_scheduler_registration() -> dict[str, Any]:
     from cns.services.orchestrator import get_orchestrator
     from utils.scheduled_tasks import (
         initialize_all_scheduled_tasks,
+        register_background_job_notice_job,
         register_segment_timeout_job,
         register_sidebar_dispatcher_job,
     )
@@ -1222,6 +1223,7 @@ def _check_scheduler_registration() -> dict[str, Any]:
         orchestrator.tool_repo,
         orchestrator.event_bus,
     )
+    register_background_job_notice_job(scheduler)
 
     registered = set(scheduler._registered_jobs.keys())
 
@@ -1229,6 +1231,7 @@ def _check_scheduler_registration() -> dict[str, Any]:
     # jobs register unconditionally (utils/scheduled_tasks.py) and must be
     # present everywhere.
     required = {
+        "background_job_notice",
         "lt_memory_extract_unprocessed_segments",
         "lt_memory_temporal_score_recalculation",
         "lt_memory_bulk_score_recalculation",
@@ -1298,6 +1301,7 @@ def _check_http_diagnostics(base_url: str) -> dict[str, Any]:
     registered = set(scheduler.get("registered_jobs") or [])
 
     required = {
+        "background_job_notice",
         "lt_memory_extract_unprocessed_segments",
         "segment_timeout_detection",
         "auth_cleanup",

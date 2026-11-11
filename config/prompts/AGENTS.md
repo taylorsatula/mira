@@ -62,6 +62,7 @@
 - `peanutgallery_user.txt` — the history and execution trace it judges.
 - `domaindoc_summary_system.txt` — the table-of-contents sentence contract; open it before changing what a section's index line says.
 - `domaindoc_summary_user.txt` — the section header and content it summarizes.
+- `background_job_notice_system.txt` — the one-call contract for the message MIRA writes when a background job finishes: no tools, no history, report the record and stop. Open it before changing what a finished job says to the user.
 
 **Untrusted content**
 

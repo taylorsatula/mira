@@ -2,7 +2,7 @@
 
 ## Files
 
-- `bash_tool.py` — guardrailed local shell, with the restart latch. Open it before changing what a command may do, or why one was refused.
+- `bash_tool.py` — guardrailed local shell, with the restart latch and the `run_background` completion record (`background_jobs` rows plus a wrapper-written exit-status file per job). Open it before changing what a command may do, or why one was refused.
 - `contacts_tool.py` — contact CRUD in per-user SQLite, resolved by UUID or by name. Open it when a lookup, a duplicate, or an ambiguous-match reply is wrong.
 - `continuum_tool.py` — conversation-history search over the continuum. Open it when a history search returns nothing, the wrong window, or times that look shifted.
 - `domaindoc_tool.py` — section-aware knowledge documents with per-section versions, sharing, and pinning. Open it before touching the section tree or the version rows.
