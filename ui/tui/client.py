@@ -655,6 +655,10 @@ class MiraClient:
                 content=frame.content,
             )
         if kind == "tool":
+            # tool_summary is a Web-only late decoration; the TUI accepts the
+            # frame (the mirror validates it) but emits no event for it.
+            if frame.event == "tool_summary":
+                return None
             return ToolUpdate(
                 turn_id=str(frame.turn_id),
                 segment_id=str(frame.segment_id),

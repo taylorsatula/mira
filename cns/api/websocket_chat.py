@@ -20,7 +20,11 @@ so the order on the socket is unaffected. And streamed frames cross from the
 orchestrator's worker thread to the event loop through ``stream_to_connection``,
 which waits ``STREAM_SEND_TIMEOUT_SECONDS``: a wait that expires means the loop
 is wedged, and the turn is cancelled with reason ``stall`` instead of pinning the
-worker thread forever.
+worker thread forever. A tool call's one-sentence display summary travels as a
+separate ``tool_summary`` frame sent after the call's completing row, never
+persisted and never seen by the model; the browser swaps it into the settled
+card in place, so a slow summary never holds the stream. The TUI accepts the
+frame and ignores it: an append-only display cannot re-render a settled row.
 
 The proactive push path (``push_proactive_message_sync``) has one producer:
 ``cns/services/background_job_notice.py``, which pushes a wake-up message when a
@@ -59,6 +63,7 @@ from cns.core.message import ContentBlock
 from cns.infrastructure.continuum_pool import get_continuum_pool
 from cns.infrastructure.continuum_repository import get_continuum_repository
 from cns.services.orchestrator import get_orchestrator
+from cns.services.tool_call_summary_service import is_summarizable, summarize_tool_call
 from config.config_manager import config as app_config
 from utils.distributed_lock import UserRequestLock
 from utils.self_restart import enter_turn, exit_turn, trigger_restart_if_pending
@@ -226,12 +231,16 @@ class ToolFrame(ProtocolModel):
     type: Literal["tool"]
     turn_id: UUID
     segment_id: UUID
-    event: Literal["tool_detected", "tool_executing", "tool_completed", "tool_error"]
+    event: Literal["tool_detected", "tool_executing", "tool_completed", "tool_error", "tool_summary"]
     tool_name: str
     tool_id: str
     arguments: dict[str, object] | None = None
     result: object | None = None
     is_error: bool = False
+    # Display-only fast-route description of the call, carried solely by the
+    # tool_summary frame the browser swaps into the settled card; never
+    # persisted, never seen by the model, and ignored by the TUI.
+    summary: str | None = None
 
     @model_validator(mode="after")
     def validate_event_payload(self) -> "ToolFrame":
@@ -244,6 +253,13 @@ class ToolFrame(ProtocolModel):
             raise ValueError("tool_error requires is_error=true")
         if self.event != "tool_error" and self.is_error:
             raise ValueError(f"{self.event} requires is_error=false")
+        if self.event == "tool_summary":
+            if self.summary is None:
+                raise ValueError("tool_summary requires a summary")
+            if self.arguments is not None or self.result is not None:
+                raise ValueError("tool_summary carries no arguments or result")
+        elif self.summary is not None:
+            raise ValueError(f"{self.event} cannot carry a summary")
         return self
 
 
@@ -798,6 +814,14 @@ class WebSocketChatHandler:
         renewal_stop = self.user_request_lock.start_renewal(user_id, lock_token)
         enter_turn()
 
+        # Per-turn summary tasks, defined before the try so the finally can
+        # always reach them: a task starts at tool_executing and sends a late
+        # tool_summary frame when its fast-route call resolves. Whatever is
+        # still pending at turn end is cancelled; the asyncio cancellation
+        # stops the delivery await while the in-flight provider call runs out
+        # its own timeout in a thread and its result is discarded.
+        pending_summaries: dict[str, concurrent.futures.Future[None]] = {}
+
         try:
             content = sanitize_message_content(message.content.strip())
             if not content:
@@ -827,6 +851,47 @@ class WebSocketChatHandler:
 
             loop = asyncio.get_running_loop()
 
+            async def _summarize_and_send(
+                tool_name: str,
+                arguments: dict[str, object],
+                tool_id: str,
+                ctx: contextvars.Context,
+            ) -> None:
+                # The fast-route call runs off the orchestrator thread in the
+                # turn's copied context; its result decorates the settled card
+                # as a late frame, so a slow summary never holds the stream.
+                try:
+                    summary = await asyncio.to_thread(
+                        ctx.run, summarize_tool_call, tool_name, arguments
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.warning(
+                        "tool summary generation failed; the tool row keeps "
+                        "its raw arguments",
+                        exc_info=True,
+                    )
+                    return
+                if cancel_event.is_set():
+                    return
+                try:
+                    await connection.send({
+                        "type": "tool",
+                        "turn_id": turn_id,
+                        "segment_id": segment_id,
+                        "event": "tool_summary",
+                        "tool_name": tool_name,
+                        "tool_id": tool_id,
+                        "summary": summary,
+                    })
+                except Exception:
+                    logger.warning(
+                        "tool summary frame send failed; the tool row keeps "
+                        "its raw arguments",
+                        exc_info=True,
+                    )
+
             def stream_to_connection(event: dict[str, object]) -> None:
                 frame = self._server_frame_for_event(event, turn_id, segment_id)
                 if frame is None:
@@ -834,6 +899,20 @@ class WebSocketChatHandler:
                 # include_thinking must select the reasoning stream: a field the transport accepts and never reads lies to the client.
                 if frame["type"] == "thinking" and not message.include_thinking:
                     return
+
+                if frame["type"] == "tool" and event["event"] == "tool_executing":
+                    # Eligibility is a pure decision over the arguments; the
+                    # fast-route call runs off the orchestrator thread and its
+                    # result arrives as a late tool_summary frame.
+                    arguments = event.get("arguments")
+                    if is_summarizable(arguments):
+                        ctx = contextvars.copy_context()
+                        pending_summaries[event["tool_id"]] = asyncio.run_coroutine_threadsafe(
+                            _summarize_and_send(
+                                event["tool_name"], arguments, event["tool_id"], ctx
+                            ),
+                            loop,
+                        )
 
                 async def send_frame() -> None:
                     # Check the halt signal on wake, or a stale delta lands after turn_stopped.
@@ -937,6 +1016,12 @@ class WebSocketChatHandler:
                 }
         finally:
             renewal_stop.set()
+            # A summary still pending at turn end has no live turn to decorate;
+            # cancel its task. The chained future propagates the cancel to the
+            # asyncio task, stopping the delivery await; an in-flight provider
+            # call runs out its own timeout in a thread, result discarded.
+            for summary_future in pending_summaries.values():
+                summary_future.cancel()
             await run_in_threadpool(self.user_request_lock.release, user_id, lock_token)
             # A restart_mira request from this turn fires now, once no turn
             # is in flight: the terminal frame above is already delivered,

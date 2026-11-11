@@ -163,7 +163,11 @@ function initializeAPIClient() {
 
 	apiClient.eventHandlers.onMessage.push((frame) => {
 		if (frame.type === 'tool') {
-			window.updateToolIndicator(frame.tool_name, TOOL_INDICATOR_STATES[frame.event]);
+			// tool_summary is a late card decoration, not a lifecycle state;
+			// messaging.js swaps it into the card and the badge stays put.
+			if (frame.event !== 'tool_summary') {
+				window.updateToolIndicator(frame.tool_name, TOOL_INDICATOR_STATES[frame.event]);
+			}
 		} else if (frame.type === 'proactive_message') {
 			window.handleProactiveMessage(frame);
 		}

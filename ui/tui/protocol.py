@@ -158,12 +158,16 @@ class ToolFrame(ProtocolModel):
     type: Literal["tool"]
     turn_id: UUID
     segment_id: UUID
-    event: Literal["tool_detected", "tool_executing", "tool_completed", "tool_error"]
+    event: Literal["tool_detected", "tool_executing", "tool_completed", "tool_error", "tool_summary"]
     tool_name: str
     tool_id: str
     arguments: dict[str, Any] | None = None
     result: Any | None = None
     is_error: bool = False
+    # Display-only fast-route description carried by the tool_summary frame.
+    # The TUI accepts the frame (the mirror must not reject it) but never
+    # renders it: an append-only display cannot re-render a settled row.
+    summary: str | None = None
 
     @model_validator(mode="after")
     def validate_event_payload(self) -> "ToolFrame":
@@ -176,6 +180,13 @@ class ToolFrame(ProtocolModel):
             raise ValueError("tool_error requires is_error=true")
         if self.event != "tool_error" and self.is_error:
             raise ValueError(f"{self.event} requires is_error=false")
+        if self.event == "tool_summary":
+            if self.summary is None:
+                raise ValueError("tool_summary requires a summary")
+            if self.arguments is not None or self.result is not None:
+                raise ValueError("tool_summary carries no arguments or result")
+        elif self.summary is not None:
+            raise ValueError(f"{self.event} cannot carry a summary")
         return self
 
 
