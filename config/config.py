@@ -44,8 +44,8 @@ class ApiConfig(BaseModel):
     # take many minutes on a loaded gateway, and a bound that fires first
     # turns a slow success into a failed collapse — observed live killing
     # every large-segment collapse on 2026-10-08 (jammed the sweep for hours).
-    timeout: int = Field(default=900, description="Max seconds an LLM provider HTTP request (socket/connect/read) may run before it is aborted. Distinct from provider_response_timeout, which bounds no-progress stalls. The two move together: an HTTP bound below the stall bound makes the stall bound moot for non-streaming calls.")
-    provider_response_timeout: int = Field(default=900, description="Max seconds an LLM provider call may show no progress before the lifecycle aborts it (stall detection). Distinct from timeout, which bounds the HTTP request itself. The two move together: an HTTP bound below this makes this moot for non-streaming calls.")
+    timeout: int = Field(default=900, description="Max seconds an LLM provider HTTP request (socket/connect/read) may run before it is aborted. Distinct from provider_response_timeout, which bounds no-progress stalls. The two move together: an HTTP bound below the stall bound makes the stall bound moot for non-streaming calls. Multiplied by (provider_retry_max_attempts + 1) for one call's worst-case hold; see provider_retry_max_attempts.")
+    provider_response_timeout: int = Field(default=900, description="Max seconds an LLM provider call may show no progress before the lifecycle aborts it (stall detection). Distinct from timeout, which bounds the HTTP request itself. The two move together: an HTTP bound below this makes this moot for non-streaming calls. Multiplied by (provider_retry_max_attempts + 1) for one call's worst-case hold; see provider_retry_max_attempts.")
 
     context_window_tokens: int = Field(default=256000, description="Total context window size in tokens")
     temperature: float = Field(default=1.0, description="Temperature for response generation (Anthropic default: 1.0)")
@@ -60,11 +60,11 @@ class ApiConfig(BaseModel):
     # route to the backup target carrying the original route name (pricing
     # continuity). Probe/recovery mechanics: see the Field descriptions below
     # and clients/llm/diverter.py.
-    failover_enabled: bool = Field(default=False, description="Enable the provider failover diverter: after N consecutive retryable provider failures, route all LLM calls to the backup target below until the recovery probe confirms the primary recovered.")
+    failover_enabled: bool = Field(default=False, description="Enable the provider failover diverter: after N consecutive retryable provider failures, route all LLM calls to the backup target below until the recovery probe confirms the primary recovered. Operator-editable in this file; mira update preserves your edited values (deploy/lib/config_reconcile.py). To enable: set this True, fill the transport coordinates below, store the backup credential in Vault under failover_api_key_name, and restart.")
     failover_endpoint_url: Optional[str] = Field(default=None, description="Backup provider endpoint (OpenAI-compatible or the dialect's native shape). Required when failover_enabled.")
     failover_model: Optional[str] = Field(default=None, description="Backup provider model name. Required when failover_enabled.")
     failover_dialect_name: Optional[str] = Field(default=None, description="Dialect for the backup provider: openai, anthropic, openrouter, or groq. Required when failover_enabled.")
-    failover_api_key_name: Optional[str] = Field(default=None, description="Vault key name holding the backup provider credential; empty/None for an unauthenticated endpoint (e.g. local llama-server).")
+    failover_api_key_name: Optional[str] = Field(default=None, description="Vault key name holding the backup provider credential; empty/None for an unauthenticated endpoint (e.g. local llama-server). Seed it with the deploy's Vault path (vault kv put secret/mira/<name> key=<credential>), the same mechanism the primary provider_key uses.")
     failover_max_tokens_cap: Optional[int] = Field(default=None, description="Ceiling applied to each route's max_tokens while diverted (the backup may accept fewer output tokens than the primary route allows); None keeps each route's own ceiling.")
     failover_recovery_probe_seconds: int = Field(default=120, ge=30, description="Interval of the recovery probe job while the diverter is tripped: probe every primary target with a first-token reachability probe; flip back after failover_flipback_consecutive_passes consecutive full passes. No probes are billed while healthy.")
     failover_trip_consecutive_failures: int = Field(default=3, ge=1, description="Consecutive retryable provider failures (ProviderRetryableError, including stalls) from the same primary endpoint that trip the diverter. A single success resets the counter; auth and context-overflow errors never count.")
@@ -74,8 +74,8 @@ class ApiConfig(BaseModel):
     # fallback decision. Independent of failover_enabled: retries run with or
     # without a configured backup; the fallback leg fires only when the
     # failover block above is configured.
-    provider_retry_max_attempts: int = Field(default=3, ge=0, description="Retries against the resolved primary after the initial attempt fails retryably (ProviderRetryableError, stalls included) before the fallback decision: with the failover block configured, one attempt on the backup target; otherwise the call raises. 0 disables per-call retry.")
-    provider_retry_backoff_base_seconds: int = Field(default=30, ge=1, description="First retry's backoff wait in seconds; each subsequent retry doubles the wait.")
+    provider_retry_max_attempts: int = Field(default=3, ge=0, description="Retries against the resolved primary after the initial attempt fails retryably (ProviderRetryableError, stalls included) before the fallback decision: with the failover block configured, one attempt on the backup target; otherwise the call raises. 0 disables per-call retry. Worst-case hold: each attempt runs up to provider_response_timeout (default 900s), so the default 3 retries can hold one call about 63 minutes against a stalling primary (4 attempts x 900s, plus 30+60+120s backoff); a provider that fails fast (429/5xx) costs about 3.5 minutes instead. To shorten the wait, lower this value (0 or 1) and/or provider_response_timeout. Operator-editable in this file; mira update preserves your edited values.")
+    provider_retry_backoff_base_seconds: int = Field(default=30, ge=1, description="First retry's backoff wait in seconds; each subsequent retry doubles the wait, so the default 3 retries add base + 2x base + 4x base (210s at the default 30) on top of the attempts themselves. Operator-editable in this file; mira update preserves your edited values.")
     provider_retry_backoff_max_seconds: int = Field(default=180, ge=1, description="Ceiling on any single backoff wait; a doubled delay past this value is clamped to it.")
 
     @model_validator(mode="after")
