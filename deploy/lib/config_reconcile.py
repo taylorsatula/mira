@@ -67,7 +67,8 @@ def _default_node(value: ast.AST) -> ast.AST | None:
         for keyword in value.keywords:
             if keyword.arg == "default":
                 return keyword.value
-        return None
+        # Pydantic's Field also accepts the default as the first positional arg.
+        return value.args[0] if value.args else None
     return value
 
 
@@ -101,15 +102,23 @@ def extract_defaults(source: str) -> dict[tuple[str, str], tuple[ast.AST, object
     return defaults
 
 
-def _offsets(source: str) -> list[int]:
-    """Absolute byte offset of the start of each line (1-indexed lines)."""
-    offsets = [0]
-    for line in source.splitlines(keepends=True):
-        offsets.append(offsets[-1] + len(line))
-    return offsets
+def _line_starts(data: bytes) -> list[int]:
+    """Absolute byte offset of the start of each newline-delimited line.
+
+    Scans only b'\n' (not str.splitlines, which also splits on \f, \u2028, etc.
+    and would misalign with the AST's lineno). Assumes \n or \r\n line endings.
+    """
+    starts = [0]
+    for index, byte in enumerate(data):
+        if byte == 0x0A:
+            starts.append(index + 1)
+    return starts
 
 
-def _span(source: str, offsets: list[int], node: ast.AST) -> tuple[int, int]:
+def _span(offsets: list[int], node: ast.AST) -> tuple[int, int]:
+    # ast col_offset/end_col_offset are UTF-8 BYTE offsets within the line, so
+    # the splice must operate on bytes, not str characters: a non-ASCII char
+    # earlier on the line shifts a character-based span and corrupts the source.
     start = offsets[node.lineno - 1] + node.col_offset
     end = offsets[node.end_lineno - 1] + node.end_col_offset
     return start, end
@@ -143,8 +152,9 @@ def reconcile(
                 "removed this field"
             )
 
-    offsets = _offsets(theirs_source)
-    replacements: list[tuple[int, int, str]] = []
+    theirs_bytes = theirs_source.encode("utf-8")
+    offsets = _line_starts(theirs_bytes)
+    replacements: list[tuple[int, int, bytes]] = []
     for key, (theirs_node, theirs_value) in theirs.items():
         if key not in ours:
             continue
@@ -166,13 +176,13 @@ def reconcile(
                 f"{key[0]}.{key[1]}: no baseline entry; keeping the operator "
                 f"value {ours_value!r} over the release {theirs_value!r}"
             )
-        start, end = _span(theirs_source, offsets, theirs_node)
-        replacements.append((start, end, ast.unparse(ours_node)))
+        start, end = _span(offsets, theirs_node)
+        replacements.append((start, end, ast.unparse(ours_node).encode("utf-8")))
 
-    merged = theirs_source
+    merged = theirs_bytes
     for start, end, text in sorted(replacements, key=lambda r: r[0], reverse=True):
         merged = merged[:start] + text + merged[end:]
-    return merged, warnings
+    return merged.decode("utf-8"), warnings
 
 
 def main(argv: list[str] | None = None) -> int:
