@@ -28,13 +28,6 @@ heartbeat_tool report outcome overwrites last_wake_at a moment later. Change
 the write, the context key, or the comparison and unreported briefs stay
 armed behind a stale stamp until the completion sweep reaches them.
 
-This class defines no on_dispatched. The dispatcher calls that hook
-unconditionally after a successful spawn (agents/sidebar.py:_poll_user), so
-every heartbeat dispatch raises AttributeError once the agent thread is
-already running; the dispatcher catches it per user and logs a poll error for
-the rest of that tick. HeartbeatTrigger is last in TRIGGER_CLASSES today, so
-no later trigger is lost to it.
-
 agent_class is a lazy property because a module-level import of
 HeartbeatAgent drags its tool module (and that module's Postgres session
 machinery) into utils/sidebar_jobs.py's boot-time registration import path.
@@ -51,13 +44,13 @@ registration and check_for_new_items re-check config.heartbeat.enabled.
 import logging
 from typing import Any
 
-from agents.sidebar import WorkItem
+from agents.sidebar import SidebarTrigger, WorkItem
 from agents.triggers.rule_filter import apply_trigger_rules
 
 logger = logging.getLogger(__name__)
 
 
-class HeartbeatTrigger:
+class HeartbeatTrigger(SidebarTrigger):
     """Surfaces due armed briefs as one batched work item per user."""
 
     trigger_id = "heartbeat"
