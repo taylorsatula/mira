@@ -158,7 +158,15 @@ class MemoryTool(Tool):
 
     tool_schema = {
         "name": "memory_tool",
-        "description": "Search and manage long-term memories.",
+        "description": (
+            "Search and manage long-term memories. Required arguments by operation: "
+            "search needs query; create_memory needs content; link_memories needs "
+            "source_memory_id, target_memory_id, link_type, and reasoning; "
+            "annotate_memory needs memory_id and annotation; touch needs memory_ids; "
+            "archive needs memory_id; merge_memories needs memory_ids and "
+            "consolidated_text. A call missing its operation's required arguments "
+            "is rejected and must be retried with every field present."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -215,7 +223,7 @@ class MemoryTool(Tool):
                 },
                 "source_memory_id": {
                     "type": "string",
-                    "description": "Identity of the source memory in the link: full UUID or mem_XXXXXXXX short ID (a short ID works only when unambiguous). The link reads as: source [link_type] target"
+                    "description": "Identity of the source memory in the link: full UUID or mem_XXXXXXXX short ID (a short ID works only when unambiguous). The link reads as: source [link_type] target. Required for 'link_memories'"
                 },
                 "target_memory_id": {
                     "type": "string",
@@ -224,7 +232,7 @@ class MemoryTool(Tool):
                 "link_type": {
                     "type": "string",
                     "enum": ["corroborates", "conflicts", "supersedes", "refines", "precedes", "contextualizes", "exemplifies"],
-                    "description": "Directional relationship from source to target. The link reads: source [link_type] target"
+                    "description": "Directional relationship from source to target. The link reads: source [link_type] target. Required for 'link_memories'"
                 },
                 "reasoning": {
                     "type": "string",
@@ -943,7 +951,12 @@ CURATOR_MEMORY_SCHEMA["description"] = (
     "write typed relationship links, add provenance annotations, record use via "
     "touch, archive low-value memories, or merge redundant memories into one. "
     "Cannot create new memories — new memories arrive only via extraction at "
-    "segment collapse."
+    "segment collapse. Required arguments by operation: search needs query; "
+    "link_memories needs source_memory_id, target_memory_id, link_type, and "
+    "reasoning; annotate_memory needs memory_id and annotation; touch needs "
+    "memory_ids; archive needs memory_id; merge_memories needs memory_ids and "
+    "consolidated_text. A call missing its operation's required arguments is "
+    "rejected and must be retried with every field present."
 )
 _CURATOR_OP_PROPS = CURATOR_MEMORY_SCHEMA["input_schema"]["properties"]
 _CURATOR_OP_PROPS["operation"]["enum"] = _CURATOR_OPERATIONS
