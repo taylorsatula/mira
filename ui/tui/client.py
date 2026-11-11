@@ -105,7 +105,6 @@ class ToolUpdate:
     arguments: dict | None
     result: str | None
     is_error: bool | None
-    summary: str | None
 
 
 @dataclass
@@ -656,6 +655,10 @@ class MiraClient:
                 content=frame.content,
             )
         if kind == "tool":
+            # tool_summary is a Web-only late decoration; the TUI accepts the
+            # frame (the mirror validates it) but emits no event for it.
+            if frame.event == "tool_summary":
+                return None
             return ToolUpdate(
                 turn_id=str(frame.turn_id),
                 segment_id=str(frame.segment_id),
@@ -665,7 +668,6 @@ class MiraClient:
                 arguments=frame.arguments,
                 result=None if frame.result is None else str(frame.result),
                 is_error=frame.is_error,
-                summary=frame.summary,
             )
         if kind == "model_error":
             return ModelError(

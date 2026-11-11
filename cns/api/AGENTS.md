@@ -5,7 +5,7 @@
 - `__init__.py` — package marker only; nothing is defined or re-exported here.
 - `base.py` — the response envelope, the error taxonomy, and the two handler bases the handler-backed routers inherit. Open it before deciding how a new route reports failure.
 - `chat.py` — one synchronous HTTP chat turn. Open it before changing turn-lock acquisition, the attachment gates, or where a pending restart fires on the HTTP path.
-- `websocket_chat.py` — the socket, every frame model, and the server side of the turn protocol, including the `proactive_message` push bridge whose only producer is `cns/services/background_job_notice.py`. Open it before touching a frame shape, the reader and writer tasks, the streamed-frame timeout, or the frame chain and tool-summary hold.
+- `websocket_chat.py` — the socket, every frame model, and the server side of the turn protocol, including the `proactive_message` push bridge whose only producer is `cns/services/background_job_notice.py`. Open it before touching a frame shape, the reader and writer tasks, the streamed-frame timeout, or the tool-summary frame.
 - `actions.py` — domain-routed mutations plus the whitelisted tool query surface. Open it before adding an action domain, mutating a domaindoc, or moving a value across the storage boundary.
 - `data.py` — the read surface, one `_get_*` per `DataType`. Open it before adding a read or changing history pagination.
 - `federation.py` — the inbound Lattice delivery webhook, mounted only when federation is enabled. Open it before changing what Lattice's retry contract sees.
@@ -45,39 +45,39 @@
 
 Elsewhere: this map owns the request boundary — which route answers, what is validated at the edge, how failure is reported, and the order a turn starts and ends — not what happens inside a turn, and not where anything is stored. The Continuum aggregate is `cns/core/AGENTS.md`. Which client code calls which path is a grep, not a list: `rg '/v1/api' ui/browser/assets/javascript`. Every other destination this directory reaches is an edge — see `## Wiring`.
 
-## The frame chain and the tool-summary hold
+## The tool-summary frame
 
-Streamed frames reach the socket through `_TurnFrameChain`, an ordered chain
-rather than one independent coroutine per send: `stream_to_connection` waits
-`STREAM_SEND_TIMEOUT_SECONDS` only for chain acceptance — one event-loop step
-on a healthy loop — and each accepted frame's send task awaits its
-predecessor, so wire order stays emission order while the orchestrator thread
-is never blocked on a send. The expiry path is unchanged: a wait that exceeds
-the bound still means the loop is wedged and aborts the turn `stall`.
+A tool call's one-sentence display description travels as a late `tool_summary`
+event on the `tool` frame, never as a hold on the stream. Streamed frames reach
+the socket through `stream_to_connection`, one independent coroutine per send
+bounded by `STREAM_SEND_TIMEOUT_SECONDS`; a wait that exceeds the bound means
+the loop is wedged and aborts the turn `stall`. The summary never blocks that
+path.
 
 1. An eligible tool call — serialized arguments over the service's
-   `MIN_SERIALIZED_ARGUMENTS_LENGTH` — starts its fast-route summary at
-   `tool_executing`, stored in `pending_summaries` keyed by `tool_id`.
-2. The completing frame (`tool_completed`/`tool_error`) holds for its summary
-   up to `TOOL_SUMMARY_FLUSH_SECONDS`, then attaches it as the frame's
-   `summary` field, or falls back to the raw arguments on expiry or failure;
-   later frames queue behind the held one. Summary trouble never fails the
-   turn and never delays it beyond that bound.
-3. `summary` is display-only: rendered in place of the raw arguments by both
-   clients, never persisted, never in model context — no history row or
-   context rebuild ever carries it. Generation and eligibility are
-   `cns/services/AGENTS.md` (`tool_call_summary_service.py`); the client
-   mirrors are `ui/tui/AGENTS.md` and `ui/browser/assets/javascript/AGENTS.md`.
-4. The terminal frame drains the chain before queueing, so it cannot overtake
-   a held row; summaries of tools still executing at turn end are cancelled
-   in the `finally` — a summary with no row is discarded, never sent after the
-   turn's terminal frame. `_TurnFrameChain._resolve_summary` treats a
-   cancelled summary as no summary: `CancelledError` is not an `Exception`, so
-   letting it escape would cancel that link, every link behind it, and the
-   drain itself, leaving the client with no end-of-turn frame.
-5. A chain link that fails logs and completes rather than raising, so one bad
-   frame cannot take the frames behind it down with it; links check the halt
-   signal on wake and drop their frame.
+   `MIN_SERIALIZED_ARGUMENTS_LENGTH` — starts a fast-route task at
+   `tool_executing`, stored in `pending_summaries` keyed by `tool_id`. The task
+   runs `summarize_tool_call` off the orchestrator thread in the turn's copied
+   context.
+2. When the call resolves, the task sends a `tool_summary` frame for the same
+   `tool_id`; the browser swaps the sentence into the settled card in place.
+   The completing row (`tool_completed`/`tool_error`) goes out immediately with
+   its raw arguments and is never held, so a slow summary delays only its own
+   decoration, never the stream. A summary that resolves before a slow tool
+   completes decorates the running card; one that resolves after turn end is
+   dropped by the clients.
+3. `summary` is display-only and Web-only: the browser renders it in place of
+   the raw arguments, the TUI accepts the frame and ignores it (an append-only
+   display cannot re-render a settled row). It is never persisted, never in
+   model context — no history row or context rebuild carries it. Generation and
+   eligibility are `cns/services/AGENTS.md` (`tool_call_summary_service.py`);
+   the client mirrors are `ui/tui/AGENTS.md` and
+   `ui/browser/assets/javascript/AGENTS.md`.
+4. Summary trouble never fails the turn: a provider failure or a send failure
+   logs and leaves the raw-arguments row. Tasks still pending at turn end are
+   cancelled in the `finally`; the chained future propagates the cancel to the
+   asyncio task, stopping the delivery await while an in-flight provider call
+   runs out its own timeout in a thread, its result discarded.
 
 ## The per-user turn lock
 

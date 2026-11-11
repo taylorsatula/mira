@@ -714,6 +714,7 @@ const streamingState = {
 	turnId: null,                // turn_id from this send's turn_started
 	tools: [],                   // [{kind: 'tool', name, ok}] finished tool calls of the turn
 	toolCalls: new Map(),        // tool_id -> in-flight card, live only
+	settledTools: new Map(),     // tool_id -> settled card, kept for late tool_summary frames
 	userMessage: null,           // the message that started the current turn
 	inCodeFence: false,
 	fenceLanguage: '',
@@ -986,6 +987,7 @@ function resetStreamDisplay() {
 	streamingState.thinkingElement = null;
 	streamingState.renderBlocked = false;
 	streamingState.toolCalls = new Map();
+	streamingState.settledTools = new Map();
 }
 
 // Render the rest of the turn's text and release the response box.
@@ -1105,6 +1107,23 @@ function handleTurnFrame(frame) {
 			handleThinkingToken(frame.content);
 			break;
 		case 'tool':
+			if (frame.event === 'tool_summary') {
+				// A late display description, not a lifecycle event: swap it into
+				// the card in place and do not flush the provider step. The card
+				// may already be settled or still running (a slow tool).
+				const part = streamingState.settledTools.get(frame.tool_id)
+					|| streamingState.toolCalls.get(frame.tool_id);
+				if (part) {
+					part.input = frame.summary;
+					if (part.el && part.el.isConnected) {
+						const holder = document.createElement('div');
+						holder.innerHTML = renderToolCall(part);
+						part.el.replaceWith(holder.firstElementChild);
+						part.el = holder.firstElementChild;
+					}
+				}
+				break;
+			}
 			// A tool event ends the provider step.
 			appendDisplayText(streamingState.filter.flush());
 			if (frame.event === 'tool_executing') {
@@ -1117,10 +1136,6 @@ function handleTurnFrame(frame) {
 				part.ok = ok;
 				part.output = frame.result ?? '';
 				part.settled = true;
-				// The server swaps in a one-sentence description once its summary
-				// resolves; history rows carry no summary, so a reload shows the
-				// raw input again.
-				if (frame.summary) part.input = frame.summary;
 				// Re-render in place: the card grows the result and never keeps a
 				// stale "ok" while the tool was still running.
 				if (part.el && part.el.isConnected) {
@@ -1129,7 +1144,11 @@ function handleTurnFrame(frame) {
 					part.el.replaceWith(holder.firstElementChild);
 					part.el = holder.firstElementChild;
 				}
+				// Keep the settled card handle so a late tool_summary frame can
+				// swap its description in place; history rows carry no summary,
+				// so a reload shows the raw input again.
 				streamingState.toolCalls.delete(frame.tool_id);
+				streamingState.settledTools.set(frame.tool_id, part);
 				streamingState.tools.push({ kind: 'tool', name: frame.tool_name, ok });
 			}
 			break;
