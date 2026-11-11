@@ -1579,6 +1579,21 @@ def _find_spares(args: List[str], name: str) -> bool:
     return False
 
 
+def _copy_destination(args: List[str]) -> Optional[str]:
+    """
+    The destination operand of a cp/install invocation, or None when the
+    call names the destination with -t/--target-directory and every path
+    operand is a source.
+    """
+    for index, arg in enumerate(args):
+        if arg in ("-t", "--target-directory"):
+            return args[index + 1] if index + 1 < len(args) else None
+        if arg.startswith("--target-directory="):
+            return arg.split("=", 1)[1]
+    operands = _path_operands(args)
+    return operands[-1] if operands else None
+
+
 def _check_path_verbs(
     verb: str,
     args: List[str],
@@ -1593,7 +1608,17 @@ def _check_path_verbs(
         for operand in _path_operands(args):
             _check_operand(operand, verb, cwd, root, ancestors, skip, audit_log)
     elif verb in _RELOCATE_VERBS or verb in _TRUNCATE_VERBS or verb in _WRITE_VERBS:
+        # cp/install read their sources; a source of /dev/null is the idiomatic
+        # truncate (cp /dev/null tmpfile) and damages nothing. mv is absent from
+        # the exemption because moving consumes the source, and a /dev/null
+        # destination stays checked because clobbering the device node replaces
+        # it with a regular file. The destination operand keeps its full check
+        # either way, so the exemption never relaxes where the copy lands.
+        destination = _copy_destination(args) if verb in ("cp", "install") else None
         for operand in _path_operands(args):
+            if destination is not None and operand != destination:
+                if _resolve_operand(operand, cwd) == "/dev/null":
+                    continue
             _check_operand(operand, verb, cwd, root, ancestors, skip, audit_log, ssh_keys=True)
     elif verb in _INPLACE_EDIT_VERBS:
         for operand in _inplace_operands(verb, args):

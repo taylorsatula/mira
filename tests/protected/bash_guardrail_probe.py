@@ -581,6 +581,9 @@ BENIGN = [
     ("Z81", "git reset -q --pathspec-from-file=--hard", None, "inline destructive-looking pathspec filename"),
     ("Z82", "git --version reset -q --hard HEAD", None, "version request does not invoke reset"),
     ("Z83", "git --exec-path reset -q --hard HEAD", None, "exec-path request does not invoke reset"),
+    ("Z84", "cp /dev/null /home/admin/mlfactory/scratch.log", None, "reading the bit bucket as a copy source is the idiomatic truncate"),
+    ("Z85", "install /dev/null /home/admin/mlfactory/empty.marker", None, "install from the bit bucket writes an empty file"),
+    ("Z86", "cp -t /home/admin/mlfactory/drop.log /dev/null", None, "-t form: the bit bucket is a source; the -t target stays checked"),
 ]
 
 
@@ -771,6 +774,8 @@ BOTH_MODES_MUST_REFUSE = [
     ("P26", f"mv {APP}/tools {APP}/tools_old", "move the guardrail's directory aside"),
     ("P27", f"sed -i 's/a/b/' {APP}/config/config.py", "edit MIRA's config area"),
     ("P28", f"rm -rf {APP}/config", "delete MIRA's config area"),
+    ("P29", "cp /tmp/evil /dev/null", "clobbering the device node replaces it with a regular file"),
+    ("P30", "cp -t /etc /dev/null", "the -t destination container stays refused while the bit-bucket source is exempt"),
 ]
 
 # Run in BOTH modes; all of these must pass. Shapes the line splitter, the
