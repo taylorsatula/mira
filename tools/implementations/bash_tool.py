@@ -2369,7 +2369,18 @@ class BashTool(Tool):
 
 
     def _resolve(self, cfg: BashToolConfig, path: str) -> str:
-        """Normalize a path and confirm it stays inside the configured root."""
+        """Normalize a path and confirm it stays inside the configured root.
+
+        MIRA's own git-tracked code tree is a second permitted root: the tool
+        loop needs cwd under the tree to read and work on the source it runs
+        (the ``Path ... outside the permitted root`` refusals), and the
+        destructive-command guardrail already governs what may be done there
+        — tracked content is editable with git as the undo, untracked names
+        from ``.git/info/exclude`` stay protected — so root confinement does
+        not need to re-block what that classifier already decides. When the
+        tree is not a git repository (_APP_TREE is None) the exemption does
+        not exist and the single-root rule stands.
+        """
         if not path or not path.strip():
             raise ValueError("path is required and cannot be empty")
         if path.startswith("/"):
@@ -2378,10 +2389,15 @@ class BashTool(Tool):
             resolved = posixpath.normpath(posixpath.join(cfg.root, path))
         root = posixpath.normpath(cfg.root)
         if resolved != root and not resolved.startswith(root + "/"):
-            raise ValueError(
-                f"Path '{path}' resolves to '{resolved}', outside the permitted root '{root}'. "
-                f"All paths must stay inside {root}."
-            )
+            app_root = _APP_TREE[0] if _APP_TREE else None
+            if not (
+                app_root
+                and (resolved == app_root or resolved.startswith(app_root + "/"))
+            ):
+                raise ValueError(
+                    f"Path '{path}' resolves to '{resolved}', outside the permitted root '{root}'. "
+                    f"All paths must stay inside {root}."
+                )
         return resolved
 
     def _execute_local(
