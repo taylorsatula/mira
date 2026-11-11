@@ -73,6 +73,17 @@ chmod 600 "$SYSTEMONE_ENV_FILE"
 chown "$MIRA_USER:$MIRA_GROUP" "$SYSTEMONE_ENV_FILE" 2>/dev/null || chown "$MIRA_USER" "$SYSTEMONE_ENV_FILE"
 echo -e "${CHECKMARK}"
 
+# Seed the config.py reconciliation baseline: the pristine release config.py the
+# operator's future edits are measured against. mira update carries operator
+# values forward against this baseline (deploy/lib/config_reconcile.py); without
+# it the first update falls back to a two-way carry.
+if [ -f /opt/mira/app/config/config.py ]; then
+    mkdir -p /opt/mira/app/data
+    cp /opt/mira/app/config/config.py /opt/mira/app/data/config_release_baseline.py
+    chown "$MIRA_USER:$MIRA_GROUP" /opt/mira/app/data/config_release_baseline.py 2>/dev/null \
+        || chown "$MIRA_USER" /opt/mira/app/data/config_release_baseline.py 2>/dev/null || true
+fi
+
 # Systemd service installation (Linux only, if user opted in)
 if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ] && [ "$OS" = "linux" ]; then
     print_header "Step 15: Systemd Service Configuration"

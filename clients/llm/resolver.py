@@ -7,7 +7,7 @@ required and blank-rejected, while the credential field goes through
 sentinel to `None` so a `ModelSelection` can never carry it. Resolution
 therefore fails the same way whether or not the failover diverter is tripped —
 the requested route is resolved first and only then swapped for
-`_failover_selection`, which keeps the primary's `model_config_name` so cost
+`failover_selection`, which keeps the primary's `model_config_name` so cost
 pricing and route attribution survive an outage. Calling `ModelSelection`
 directly with a raw `''` raises rather than deferring the failure to a Vault
 lookup.
@@ -100,11 +100,11 @@ class ModelResolver:
         # not, and _model_config_cache is never mutated.
         from clients.llm import diverter
         if diverter.tripped():
-            return ModelResolver._failover_selection(selection)
+            return ModelResolver.failover_selection(selection)
         return selection
 
     @staticmethod
-    def _failover_selection(primary: ModelSelection) -> ModelSelection:
+    def failover_selection(primary: ModelSelection) -> ModelSelection:
         """The backup-target selection for one diverted call.
 
         max_tokens is min(route ceiling, failover cap): the caller's own
