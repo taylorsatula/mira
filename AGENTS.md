@@ -219,19 +219,7 @@ These four are labels, not the whole set: the seven shapes a comment may carry, 
 
 ## Naming Discipline
 
-Binding in every session. A name is read at every call site and the body is not, so a name earns its place by letting a reader act without opening the body. **One test:** delete the docstring and the annotations, then read one call site. If you cannot say what happens and what it touches, the name failed.
-
-Three failures cost the most, in this order:
-
-- **A name weaker than its body.** `query_tool` dispatching `delete_contact`; `validate_params` returning its input; `revoke_all_user_sessions` revoking only the current user's. The reader acts on the name and the code does more. The name covers the body's strongest side effect or the name is wrong.
-- **A generic verb over a generic object.** `process_request` appears at four sites doing four different jobs. The verb alone is fine; a generic verb with an unnamed object names nothing twice.
-- **A contentless head noun on a shared type.** `Result` beside `ToolResult`; the `*Data`, `*Info`, `*Manager`, `*Handler` families.
-
-**One concept, one word.** Grep before naming. If the tree says `ToolResult`, a bare `Result` is a defect rather than a taste difference. If the tree says `user` and you write `account`, fix the minority in the same change. Consistency is the part of naming a reviewer can check and two reviewers can agree on.
-
-Predicates take `is_`/`has_`/`should_`. Constants carry their unit when the unit is load-bearing (`_SECONDS`, `_MS`, `_HOURS`). No semantic-free suffix (`_v2`, `_new`, `_tmp`, `_final`). No single letter outside `i`, `j`, `k`, `n`, `e`. Name files for their holdings rather than their role: `cognitive_core.py`, not `engine.py`; `response_envelope.py`, not `base.py`.
-
-Before calling a rename done, run the skill's checker: `python3 ~/.pi/agent/skills/naming-discipline/check_names.py .` It reports surface flags, one name defined at many sites, and one concept spelled several ways. Read the output as a worklist; a flag you can argue against is worth ignoring, and say so in the commit. The ranked failure classes, the rename procedure, and what the checker cannot see are the `naming-discipline` skill.
+Binding in every session. A name states the strongest thing its body does to anything outside itself, so a function that writes, deletes, or raises reads as one at the call site. Where the tree already spells a concept, use that spelling, found by searching the existing definitions before a new term is coined.
 
 ## Architecture & Design
 
