@@ -24,6 +24,7 @@ set -e
 source /opt/mira/app/deploy/lib/output.sh
 source /opt/mira/app/deploy/lib/services.sh
 source /opt/mira/app/deploy/lib/embedding_config.sh
+source /opt/mira/app/deploy/lib/context_window_config.sh
 LOUD_MODE=false
 
 # First-Boot Detection
@@ -224,6 +225,32 @@ EOF
     print_step "Routing all five model_configs at $CONFIG_PROVIDER_NAME..."
     sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 -c "UPDATE model_configs SET dialect_name = 'openai', endpoint_url = '$CONFIG_PROVIDER_ENDPOINT', model = '$CONFIG_PROVIDER_MODEL', api_key_name = 'subcortical_key' WHERE name IN ('primary', 'fast', 'batch', 'assessment', 'other');"
 
+    # One provider model serves all five routes here, so one read of its limits
+    # states both the window the app is told about (written to systemone.env by
+    # init_vault below) and the output ceiling every row carries. The app refuses
+    # a compaction trigger above `context_window_tokens - primary max_tokens`
+    # (config/config.py:validate_compaction_budget), and the seeded ceilings
+    # describe the lunaroute default models rather than the provider collected
+    # here. A provider whose models list reports no ceiling keeps the seeded
+    # value: no install derives a number the endpoint did not state.
+    if resolve_context_window /opt/mira/venv/bin/python \
+            "$CONFIG_PROVIDER_ENDPOINT" "$CONFIG_PROVIDER_MODEL" "$CONFIG_PROVIDER_KEY"; then
+        if [ "$CONTEXT_OUTPUT_RESERVE_TOKENS" -gt 0 ]; then
+            print_step "Recording the provider's output ceiling (${CONTEXT_OUTPUT_RESERVE_TOKENS} tokens)..."
+            if sudo -u postgres psql -d mira_service -v ON_ERROR_STOP=1 \
+                    -c "UPDATE model_configs SET max_tokens = $CONTEXT_OUTPUT_RESERVE_TOKENS;" > /dev/null 2>&1; then
+                print_success "Route ceilings updated"
+            else
+                print_error "Failed to record the provider's output ceiling on the five routes"
+                exit 1
+            fi
+        else
+            print_warning "Provider reports no output ceiling; the seeded route ceilings stand"
+        fi
+    else
+        print_warning "Provider limits unreadable (reason above); the app falls back to its own window defaults and the seeded route ceilings stand"
+    fi
+
     # Update passwords if custom password provided
     if [ "$CONFIG_DB_PASSWORD" != "changethisifdeployingpwd" ]; then
         print_step "Setting custom database password..."
@@ -290,18 +317,25 @@ init_vault() {
     fi
     vault kv put secret/mira/api_keys "${API_KEYS_ARGS[@]}"
 
-    # (40dz) When a System One token was provisioned, also enable the screen:
-    # the s6 launcher sources this file (same file and variable names as the
-    # bare-metal systemd path written by deploy/finalize.sh) and otherwise
-    # defaults the screen to disabled. provider=remote matches the Vault
-    # field just written; endpoint/model keep the app defaults.
-    if [ -n "${CONFIG_SYSTEMONE_API_KEY:-}" ]; then
-        cat > /opt/mira/systemone.env <<EOF
-MIRA_INJECTION_SCREEN_ENABLED=1
-MIRA_SYSTEMONE_PROVIDER=remote
-EOF
-        chmod 600 /opt/mira/systemone.env
-    fi
+    # (40dz) /opt/mira/systemone.env is one variable set for every start path:
+    # the s6 launcher sources this file and the bare-metal systemd path writes
+    # the same names (deploy/finalize.sh). The window pair is written whenever
+    # init_postgresql resolved it, whether or not a System One token was
+    # collected, because without it the app compacts against ApiConfig's own
+    # defaults rather than the provider's real input budget. The screen lines
+    # appear only for a collected token: provider=remote matches the Vault field
+    # written above, and endpoint/model keep the app defaults.
+    {
+        if [ -n "${CONTEXT_WINDOW_TOKENS:-}" ]; then
+            echo "MIRA_CONTEXT_WINDOW_TOKENS=${CONTEXT_WINDOW_TOKENS}"
+            echo "MIRA_COMPACTION_TRIGGER_TOKENS=${COMPACTION_TRIGGER_TOKENS}"
+        fi
+        if [ -n "${CONFIG_SYSTEMONE_API_KEY:-}" ]; then
+            echo "MIRA_INJECTION_SCREEN_ENABLED=1"
+            echo "MIRA_SYSTEMONE_PROVIDER=remote"
+        fi
+    } > /opt/mira/systemone.env
+    chmod 600 /opt/mira/systemone.env
 
     # Percent-encode reserved characters so the embedded password forms
     # a valid URL credential (standard URL parsers percent-decode userinfo).

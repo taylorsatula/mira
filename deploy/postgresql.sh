@@ -2,7 +2,7 @@
 # PostgreSQL service startup, schema deployment, and Vault credential storage
 # Source this file - do not execute directly
 #
-# Requires: lib/output.sh, lib/services.sh, lib/vault.sh sourced first
+# Requires: lib/output.sh, lib/services.sh, lib/vault.sh, lib/context_window_config.sh sourced first
 # Requires: OS, DISTRO, CONFIG_*, LOUD_MODE variables set
 
 # Validate required variables
@@ -277,6 +277,87 @@ apply_fresh_schema_and_bootstrap() {
 }
 
 
+# Every route row carries the output ceiling its own model's endpoint reports.
+# The app refuses a compaction trigger above `context_window_tokens - primary
+# max_tokens` (config/config.py:validate_compaction_budget), so a ceiling left
+# over from the model a route used to point at shrinks the input budget of the
+# model it points at now, and a stale row large enough parks the app at its boot
+# gate without binding the port. The seeded ceilings describe the lunaroute
+# default models, which is not what an operator's config routes to.
+#
+# A row whose endpoint reports no ceiling, or whose dialect the probe cannot
+# read, keeps the value it already had: no install derives a number the endpoint
+# did not state. The resolver reads the endpoint's models list once per distinct
+# (endpoint, model) pair, so the five routes cost at most five requests.
+apply_route_output_ceilings() {
+    local python="/opt/mira/app/venv/bin/python3"
+    local name endpoint model key_name current key reserve entry treatment rows
+    local -a psql_cmd probed
+    psql_cmd=(psql)
+    if [ "$OS" = "linux" ]; then
+        psql_cmd=(sudo -u postgres psql)
+    fi
+
+    if ! rows="$("${psql_cmd[@]}" -d mira_service -tA -F '|' \
+            -c "SELECT name, endpoint_url, model, api_key_name, max_tokens FROM model_configs ORDER BY name;")"; then
+        print_error "Failed to read the model_configs routes while resolving their output ceilings"
+        exit 1
+    fi
+
+    probed=()
+    while IFS='|' read -r name endpoint model key_name current; do
+        [ -n "$name" ] || continue
+
+        key=""
+        if [ -n "$key_name" ]; then
+            key="$(vault kv get -field="$key_name" secret/mira/api_keys 2>/dev/null || true)"
+            if [ -z "$key" ]; then
+                print_warning "Route ${name}: Vault holds no '${key_name}' credential, keeping max_tokens=${current}"
+                continue
+            fi
+        fi
+
+        reserve=""
+        treatment=""
+        for entry in ${probed[@]+"${probed[@]}"}; do
+            if [ "${entry%|*}" = "${endpoint}|${model}" ]; then
+                reserve="${entry##*|}"
+            fi
+        done
+        if [ -z "$reserve" ]; then
+            if resolve_context_window "$python" "$endpoint" "$model" "$key"; then
+                reserve="$CONTEXT_OUTPUT_RESERVE_TOKENS"
+            else
+                reserve="0"
+                treatment="its endpoint reported no readable limits (reason above)"
+            fi
+            probed+=("${endpoint}|${model}|${reserve}")
+        fi
+
+        case "$reserve" in
+            ''|*[!0-9]*)
+                print_error "Route ${name}: resolved a non-numeric output ceiling ('${reserve}')"
+                exit 1
+                ;;
+        esac
+        if [ "$reserve" -le 0 ]; then
+            print_warning "Route ${name} (${model}): ${treatment:-its endpoint reported no output ceiling}, keeping max_tokens=${current}"
+            continue
+        fi
+        if [ "$reserve" = "$current" ]; then
+            continue
+        fi
+
+        if "${psql_cmd[@]}" -d mira_service -v ON_ERROR_STOP=1 \
+                -c "UPDATE model_configs SET max_tokens = ${reserve} WHERE name = '${name}';" > /dev/null 2>&1; then
+            print_info "Route ${name} (${model}): output ceiling ${current} -> ${reserve}"
+        else
+            print_error "Failed to set max_tokens=${reserve} on route ${name}"
+            exit 1
+        fi
+    done <<< "$rows"
+}
+
 # The operator's interview answers applied to the live database's five model
 # routes (never a per-install schema edit). Runs against whichever database
 # this install ends up on: fresh schema, kept-aside fallback, or a database
@@ -401,6 +482,8 @@ apply_model_config_routes() {
             echo -e "${CHECKMARK}"
         fi
     fi
+
+    apply_route_output_ceilings
 }
 
 if [ "$MIRA_DB_PATH" = "fresh" ]; then

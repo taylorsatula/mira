@@ -92,6 +92,14 @@ CREATE TABLE model_configs (
 -- config differs from these defaults are rewritten by deploy/postgresql.sh
 -- with UPDATEs after application (same mechanism as OFFLINE_SQL for truly
 -- offline installs) — the seed rows are not string-patched.
+-- max_tokens is not one of those deployment defaults: it is the route's output
+-- ceiling, and every install that can read its endpoint's models list writes
+-- the served model's own ceiling over this value (deploy/postgresql.sh:
+-- apply_route_output_ceilings on bare metal, deploy/docker/scripts/init-mira.sh
+-- in a container). The seeded numbers therefore describe no served model; they
+-- stand only for a route whose endpoint reported nothing, where a small reserve
+-- is the safe side (the app's compaction trigger is checked against
+-- context_window_tokens minus this value).
 -- Route assignments live in the cns/services call sites: peanut gallery,
 -- forage overwatch, and domaindoc descriptor expansion ride 'fast';
 -- summaries, compaction, persona/portrait/LoRA/user-model, memory curator,

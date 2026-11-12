@@ -322,7 +322,7 @@ class MyAgent(SidebarAgent):
     overwatch_max_tokens = 80                # per-request ceiling -- load-bearing
 ```
 
-`overwatch_max_tokens` is not a hint: the observer's route row ceiling is generous (4096 on `fast`, 16000 on `batch`/`primary`), and this per-request override is the only thing keeping the observer to one summary line.
+`overwatch_max_tokens` is not a hint: the route row's ceiling is the model's own output ceiling, which a hosted install writes from the endpoint's models list, so this per-request override is the only thing keeping the observer to one summary line.
 
 Overwatch is **observability, not results**. Publish failures must be swallowed at `debug` (`forage_agent.py:on_overwatch_update`) -- an observer that raises into the loop turns a progress display into an agent failure. Late-arriving summaries must not downgrade a terminal trinket state; the receiving trinket owns that guard.
 
