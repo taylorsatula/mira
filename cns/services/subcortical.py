@@ -164,11 +164,12 @@ def recent_turns_plain(
 ) -> tuple[str, set[str]]:
     """Render the recent turns as plain text plus the mem_ IDs they cite.
 
-    The best-effort retrieval query's raw material: no XML, no timestamps, no
-    escaping — embeddings see conversation words, not markup. The mem_ harvest
-    runs over raw assistant content BEFORE the <mira:*> strip, because a cited
-    ID lives inside the very tags the strip removes; the harvest is the single
-    home for the conversation-cited retention union, so it must not miss them.
+    Both surfacing callers consume only the cited-ID harvest; the plain text is
+    not the retrieval query (lite retrieves on the current message). The mem_
+    harvest runs over raw assistant content BEFORE the <mira:*> strip, because a
+    cited ID lives inside the very tags the strip removes; the harvest is the
+    single home for the conversation-cited retention union, so it must not miss
+    them.
     """
     lines: list[str] = []
     cited_ids: set[str] = set()
@@ -726,7 +727,7 @@ def _extract_text_content(content: str | list[dict[str, object]]) -> str:
     stripped. Never returns str() of a raw structure.
     """
     if isinstance(content, str):
-            return content
+        return content
 
     if isinstance(content, list):
         preprocessed = preprocess_content_blocks(content)

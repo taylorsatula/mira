@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from tools.repo import ToolRepository
     from working_memory.core import WorkingMemory
     from cns.services.live_context_compaction_service import LiveContextCompactionService
+    from utils.tag_parser import TagParser
 
 from config import config
 from cns.core.continuum import Continuum
@@ -239,10 +240,11 @@ class MemorySurfacingResult:
     """Output of the memory surfacing pipeline.
 
     `mode` names the path that produced it and is recorded in the persisted
-    message metadata: "normal" (the LLM analysis ran), "low_power" (the
-    subcortical flag is off; best-effort retrieval on the raw recent
-    conversation), "degraded" (the analysis call failed mid-turn; the same
-    best-effort retrieval), or "none" (surfacing never ran — cancellation).
+    message metadata: "normal" (the LLM analysis ran), "lite" (the subcortical
+    flag is off; text-only BM25 retrieval on the current message, no
+    embeddings or LLM call), "degraded" (the analysis call failed mid-turn; the
+    same text-only retrieval), or "none" (surfacing never ran; the turn was
+    cancelled).
     """
     surfaced_memories: list[SurfacedMemory]
     pinned_ids: set[str]
@@ -1459,16 +1461,17 @@ class ContinuumOrchestrator:
         previous_memories: list[MemoryDict],
     ) -> MemorySurfacingResult:
         """
-        Surface memories for this turn: LLM analysis, or best-effort retrieval.
+        Surface memories for this turn: LLM analysis, or lite text-only retrieval.
 
         Three entries converge on one retrieval tail. The normal path runs the
         subcortical analysis and retrieves on its expanded query. The flag-off
         path (no layer constructed) and the failed-analysis path both retrieve
-        best-effort on the raw recent conversation instead — the low-power
-        mode and the mid-turn fallback are the same code, differing only in
-        mode string and log severity. Infrastructure failures propagate from
-        every entry: the fallback triggers on SubcorticalAnalysisError and the
-        absent layer, never on a dead endpoint.
+        lite on the current message instead: BM25 text search plus graph
+        traversal, no embeddings and no LLM call. The lite mode and the mid-turn
+        fallback are the same code, differing only in mode string and log
+        severity. Infrastructure failures propagate from every entry: the
+        fallback triggers on SubcorticalAnalysisError and the absent layer, never
+        on a dead endpoint.
 
         Args:
             continuum: Current continuum state (passed to subcortical layer)
@@ -1480,7 +1483,7 @@ class ContinuumOrchestrator:
         """
         if self.subcortical_layer is None:
             return self._surface_best_effort(
-                continuum, text_for_context, previous_memories, mode="low_power"
+                continuum, text_for_context, previous_memories, mode="lite"
             )
 
         try:
@@ -1525,24 +1528,25 @@ class ContinuumOrchestrator:
         mode: str,
     ) -> MemorySurfacingResult:
         """
-        Retrieve on the raw recent conversation — the low-power and fallback path.
+        Retrieve lite on the current message: the flag-off and fallback path.
 
-        No LLM call, no rewritten query, no entity hub discovery: embed the
-        current message after the last few plain turns and run the same
-        retrieval, merging, and capping the normal path uses. Retention is the
-        conversation-cited union only — a memory not cited must re-earn its
-        place by similarity, exactly what the normal path does when the model
-        pins nothing.
+        No LLM call, no embeddings, no rewritten query, no entity hub discovery:
+        BM25 text search on the current message, then the same graph traversal,
+        merging, and capping the normal path uses. The query is the current
+        message alone, not the recent turns composed with it: plainto_tsquery
+        ANDs every term, so a multi-turn query requires words from every turn
+        and matches nothing. The recent turns feed only the cited-ID retention
+        harvest. A memory not cited must re-earn its place by lexical match.
         """
-        turns_text, cited_ids = recent_turns_plain(continuum, max_pairs=CONTEXT_PAIRS)
-        query_text = f"{turns_text}\n{text_for_context}" if turns_text else text_for_context
+        _, cited_ids = recent_turns_plain(continuum, max_pairs=CONTEXT_PAIRS)
+        query_text = text_for_context
         pinned_memories = self._apply_retention(previous_memories, cited_ids)
 
-        if mode == "low_power":
-            logger.debug("Memory surfacing: low-power best-effort (subcortical flag off)")
+        if mode == "lite":
+            logger.debug("Memory surfacing: lite (text-only retrieval, subcortical flag off)")
 
         surfaced_memories = self._retrieve_fresh_and_merge(
-            continuum, query_text, pinned_memories, extracted_entities=None
+            continuum, query_text, pinned_memories, extracted_entities=None, lite=True
         )
 
         return MemorySurfacingResult(
@@ -1558,15 +1562,19 @@ class ContinuumOrchestrator:
         pinned_memories: list[MemoryDict],
         *,
         extracted_entities: list[str] | None,
+        lite: bool = False,
     ) -> list[SurfacedMemory]:
         """
         The one retrieval tail both surfacing paths share.
 
         Cap arithmetic lives here and nowhere else: the pinned hard cap, the
         sliding fresh budget, and the surfaced cap apply identically to the
-        LLM path and the best-effort path, so a cap change cannot fork between
-        modes. Failures here propagate — a dead embeddings provider or a
-        failed search kills the turn from either entry.
+        normal path and the lite path, so a cap change cannot fork between
+        modes. Only candidate generation forks: lite runs one BM25 text search
+        with no embeddings and no assistant search; the normal path embeds the
+        query and assistant text and runs the hybrid plus assistant searches.
+        Failures here propagate: a dead embeddings provider or a failed search
+        kills the turn from either entry.
         """
         max_pinned = MAX_PINNED_MEMORIES
         max_surfaced = MAX_SURFACED_MEMORIES
@@ -1582,37 +1590,43 @@ class ContinuumOrchestrator:
 
         fresh_limit = max(min_fresh, max_surfaced - len(pinned_memories))
 
-        assistant_text = self._format_assistant_messages(continuum, NUM_ASSISTANT_MESSAGES)
-
-        expansion_embedding, assistant_embedding = self._compute_embeddings_parallel(
-            query_text, assistant_text
-        )
-
-        fresh_memories = self.memory_relevance_service.get_relevant_memories(
-            query_expansion=query_text,
-            expansion_embedding=expansion_embedding,
-            limit=fresh_limit,
-            extracted_entities=extracted_entities
-        )
-
-        assistant_memories: list[MemoryDict] = []
-        if assistant_text and assistant_embedding is not None:
-            assistant_memories = self.memory_relevance_service.get_relevant_memories(
-                query_expansion=assistant_text,
-                expansion_embedding=assistant_embedding,
-                limit=MAX_ASSISTANT_MEMORIES,
-                extracted_entities=None
+        if lite:
+            fresh_memories = self.memory_relevance_service.get_relevant_memories_text(
+                query_text=query_text,
+                limit=fresh_limit,
             )
-            assistant_memories = [
-                m for m in assistant_memories
-                if m.get('similarity_score', 0) >= ASSISTANT_SIMILARITY_THRESHOLD
-            ]
-            if assistant_memories:
-                logger.debug(
-                    f"Assistant surfacing: {len(assistant_memories)} passed "
-                    f"threshold ({ASSISTANT_SIMILARITY_THRESHOLD})"
+        else:
+            assistant_text = self._format_assistant_messages(continuum, NUM_ASSISTANT_MESSAGES)
+
+            expansion_embedding, assistant_embedding = self._compute_embeddings_parallel(
+                query_text, assistant_text
+            )
+
+            fresh_memories = self.memory_relevance_service.get_relevant_memories(
+                query_expansion=query_text,
+                expansion_embedding=expansion_embedding,
+                limit=fresh_limit,
+                extracted_entities=extracted_entities
+            )
+
+            assistant_memories: list[MemoryDict] = []
+            if assistant_text and assistant_embedding is not None:
+                assistant_memories = self.memory_relevance_service.get_relevant_memories(
+                    query_expansion=assistant_text,
+                    expansion_embedding=assistant_embedding,
+                    limit=MAX_ASSISTANT_MEMORIES,
+                    extracted_entities=None
                 )
-                fresh_memories = self._merge_assistant_memories(fresh_memories, assistant_memories)
+                assistant_memories = [
+                    m for m in assistant_memories
+                    if m.get('similarity_score', 0) >= ASSISTANT_SIMILARITY_THRESHOLD
+                ]
+                if assistant_memories:
+                    logger.debug(
+                        f"Assistant surfacing: {len(assistant_memories)} passed "
+                        f"threshold ({ASSISTANT_SIMILARITY_THRESHOLD})"
+                    )
+                    fresh_memories = self._merge_assistant_memories(fresh_memories, assistant_memories)
 
         surfaced_memories = self._merge_memories(pinned_memories, fresh_memories)
 

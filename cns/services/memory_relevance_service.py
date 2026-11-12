@@ -99,3 +99,34 @@ class MemoryRelevanceService:
             logger.debug("No relevant memories found")
 
         return memories
+
+    def get_relevant_memories_text(
+        self,
+        query_text: str,
+        limit: int = 10
+    ) -> list[MemoryDict]:
+        """
+        Lite retrieval: BM25-only, no embedding.
+
+        Counterpart to get_relevant_memories for the lite surfacing path. There
+        is no embedding to require, so this entry takes only the query text.
+        Retrieval failures propagate from lt_memory, same as the embedding path.
+
+        Args:
+            query_text: The lite BM25 query (the current message)
+            limit: Maximum memories to return (default: 10)
+
+        Returns:
+            List of memory dicts with hierarchical structure
+
+        Raises:
+            RuntimeError: If memory service infrastructure fails
+        """
+        memories = self.proactive.search_text(query_text=query_text, limit=limit)
+
+        if memories:
+            logger.info(f"Surfaced {len(memories)} relevant memories (lite, text-only)")
+        else:
+            logger.debug("No relevant memories found (lite)")
+
+        return memories

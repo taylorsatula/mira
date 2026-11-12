@@ -1176,8 +1176,15 @@ def _check_subcortical_analysis() -> dict[str, Any]:
     the system prompt still orders the analysis call, the per-call schema
     still makes a fabricated retention ID unrepresentable, and the worked
     examples still carry the invented vocabulary that keeps them from
-    contaminating real answers.
+    contaminating real answers. A disabled install runs no subcortical LLM pass,
+    so the check returns early and the prompt files are not a boot dependency
+    there.
     """
+    from config.config_manager import config
+
+    if not config.system.subcortical_enabled:
+        return {"enabled": False}
+
     from jsonschema import Draft202012Validator
 
     from cns.services.subcortical import SubcorticalLayer

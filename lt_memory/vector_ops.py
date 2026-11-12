@@ -344,6 +344,31 @@ class VectorOps:
             min_importance=min_importance
         )
 
+    def bm25_search(
+        self,
+        query_text: str,
+        limit: int,
+        min_importance: float = 0.1
+    ) -> List[Memory]:
+        """
+        BM25-only retrieval for the lite surfacing path (no query embedding).
+
+        Facade over HybridSearcher.bm25_search, mirroring hybrid_search above.
+
+        Args:
+            query_text: Text query for BM25 search
+            limit: Maximum results to return
+            min_importance: Minimum importance score filter
+
+        Returns:
+            List of Memory models ranked by text rank
+        """
+        return self.hybrid_searcher.bm25_search(
+            query_text=query_text,
+            limit=limit,
+            min_importance=min_importance
+        )
+
     def cleanup(self) -> None:
         """
         Clean up resources.

@@ -306,7 +306,7 @@ class CNSIntegrationFactory:
     def _get_subcortical_layer(self, llm_provider: LLMProvider) -> SubcorticalLayer | None:
         """Get the subcortical layer, or omit it for the configured fast path."""
         if not self.config.system.subcortical_enabled:
-            logger.info("Subcortical LLM pass disabled in config; memory surfacing runs in low-power best-effort mode")
+            logger.info("Subcortical LLM pass disabled in config; memory surfacing runs in lite mode (text-only retrieval)")
             return None
 
         if self._subcortical_layer is None:

@@ -165,6 +165,58 @@ class ProactiveService:
             similarity_pool = similarity_future.result()
             hub_pool = hub_future.result()
 
+        return self._enrich_pools(similarity_pool, hub_pool, limit)
+
+    def search_text(
+        self,
+        query_text: str,
+        limit: Optional[int] = None
+    ) -> List[MemoryDict]:
+        """
+        Lite surfacing: BM25-only candidates through the shared enrichment tail.
+
+        No embedding, no vector arm, no hub discovery. The text arm runs on the
+        caller's context (a single query, no fan-out), so RLS scoping rides the
+        ambient contextvar. Graph traversal, rerank, and access tracking are the
+        same machinery the embedding path uses; only candidate generation differs.
+
+        Args:
+            query_text: The lite BM25 query (the current message)
+            limit: Maximum number of memories to return
+
+        Returns:
+            List of relevant memory dictionaries with metadata
+        """
+        if limit is None:
+            limit = PROACTIVE_MAX_MEMORIES
+
+        similarity_pool = self.vector_ops.bm25_search(
+            query_text=query_text,
+            limit=limit,
+            min_importance=MIN_IMPORTANCE_SCORE
+        )
+        return self._enrich_pools(similarity_pool, [], limit)
+
+    def _enrich_pools(
+        self,
+        similarity_pool: List[Memory],
+        hub_pool: List[Memory],
+        limit: int
+    ) -> List[MemoryDict]:
+        """
+        The shared enrichment tail: importance filter, pool merge, graph
+        traversal, link rerank, access tracking, and dict conversion. One home
+        for both the embedding path (search_with_embedding) and the lite path
+        (search_text), so enrichment cannot fork between modes.
+
+        Args:
+            similarity_pool: Candidate memories from the similarity arm
+            hub_pool: Candidate memories from hub discovery (empty for lite)
+            limit: Maximum number of memories to return
+
+        Returns:
+            List of relevant memory dictionaries with metadata
+        """
         similarity_pool = [
             memory for memory in similarity_pool
             if memory.importance_score >= MIN_IMPORTANCE_SCORE
