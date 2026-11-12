@@ -279,6 +279,7 @@ When modifying files, write as if the new code was always the plan. Never refere
 ## Continuous Improvement
 - Convert specific feedback into general principles. Consider multiple approaches before implementing.
 - Fix issues at the root — there is no test suite to fall back on, so correctness comes from fail-fast behavior and direct verification.
+- **Diagnose before you add**: the safe local move is to add a probe run, a guard, or a clarification, and the burden of proof sits on deletion, so work accumulates regardless of discipline. A failed probe is evidence about the code: before re-running with changed inputs, name what changed in the hypothesis; if nothing changed, read the code instead of running. The one legitimate diagnostic run measures a fact about the platform you cannot derive by reading the code. Refinement collapses near-duplicates into the generalization and changes the default; it does not append a mechanism to compensate for another mechanism. This is a working default, not a self-enforcing rule. The enforcement is the structure, the harness and the order of operations; this paragraph only points at it.
 
 ---
 
