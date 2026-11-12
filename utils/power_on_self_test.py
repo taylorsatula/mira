@@ -314,6 +314,7 @@ def run_pre_server_post(
         CheckSpec("llm_provider_reachability", True, _check_llm_provider_reachability),
         CheckSpec("tool_call_summary", False, _check_tool_call_summary),
         CheckSpec("tools", True, _check_tools),
+        CheckSpec("subcortical_analysis", True, _check_subcortical_analysis),
         CheckSpec("dependency_initialization", True, _check_dependency_initialization),
         CheckSpec("scheduler_registration", True, _check_scheduler_registration),
         CheckSpec("playwright_service", False, _check_playwright_service),
@@ -1163,6 +1164,71 @@ def _check_tools() -> dict[str, Any]:
         "enabled_essential_tools": sorted(repo.enabled_tools),
         "static_schemas_validated": static_schema_count,
         "dynamic_schema_tools": dynamic_schema_tools,
+    }
+
+
+def _check_subcortical_analysis() -> dict[str, Any]:
+    """Boot-holdable slice of the subcortical prompt/schema contract.
+
+    The full byte-identity of the built prompt is a per-change probe (the
+    rendered prompt embeds per-user timezone and wall clock, which boot has no
+    user contextvar to produce); this gate holds the invariants boot can reach:
+    the system prompt still orders the analysis call, the per-call schema
+    still makes a fabricated retention ID unrepresentable, and the worked
+    examples still carry the invented vocabulary that keeps them from
+    contaminating real answers. A disabled install runs no subcortical LLM pass,
+    so the check returns early and the prompt files are not a boot dependency
+    there.
+    """
+    from config.config_manager import config
+
+    if not config.system.subcortical_enabled:
+        return {"enabled": False}
+
+    from jsonschema import Draft202012Validator
+
+    from cns.services.subcortical import SubcorticalLayer
+
+    layer = SubcorticalLayer(None)
+    if "record_subcortical_analysis" not in layer.system_prompt:
+        raise RuntimeError(
+            "subcortical_system.txt no longer orders the record_subcortical_analysis "
+            "call — the fast route would answer in prose and every turn would degrade"
+        )
+
+    supplied = [{"id": "7e7e7e7e-0000-4000-8000-000000000001",
+                 "text": "probe", "importance_score": 0.5}]
+    tool = layer._analysis_tool(supplied)
+    violations = list(Draft202012Validator(dict(tool.input_schema)).iter_errors({
+        "query_expansion": "desk height", "entities": [],
+        "pinned_memory_ids": ["mem_deadbeef"],
+    }))
+    if not violations:
+        raise RuntimeError(
+            "subcortical per-call schema accepts a fabricated retention ID — "
+            "the pinned_memory_ids enum gate is gone"
+        )
+    empty_tool = layer._analysis_tool(None)
+    if empty_tool.input_schema["properties"]["pinned_memory_ids"].get("maxItems") != 0:
+        raise RuntimeError(
+            "subcortical per-call schema allows retention IDs with no passages supplied"
+        )
+
+    demonstration_text = " ".join(
+        str(message.get("content", "")) for message in layer._demonstration
+    )
+    for token in ("velmari", "ostrek", "pelliston"):
+        if token not in demonstration_text.lower():
+            raise RuntimeError(
+                f"subcortical worked examples lost their invented vocabulary ({token!r} "
+                "absent) — real-vocabulary examples contaminate retrieval answers"
+            )
+
+    return {
+        "directive_present": True,
+        "fabricated_id_refused": violations[0].message,
+        "empty_supply_max_items_zero": True,
+        "demonstration_vocabulary": "invented",
     }
 
 

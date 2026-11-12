@@ -137,11 +137,44 @@ class HybridSearcher:
 
         return fused_results
 
+    def bm25_search(
+        self,
+        query_text: str,
+        limit: int,
+        min_importance: float = HYBRID_DEFAULT_MIN_IMPORTANCE,
+    ) -> List['Memory']:
+        """
+        BM25-only candidate generation for the lite surfacing path.
+
+        The text arm alone: no vector arm and no fusion, because the caller has
+        no query embedding. The lexemes are OR-matched (match_all=False): a
+        natural-language message carries framing words no memory contains, and
+        AND-matching them would retrieve nothing. `similarity_score` is left
+        unset (None): lite has no similarity measure, and the proactive trinket's
+        relevance gate guards None, so it renders no relevance attribute.
+
+        Args:
+            query_text: Text query for BM25 search
+            limit: Maximum results to return (before the arm's oversample)
+            min_importance: Minimum importance score filter
+
+        Returns:
+            List of Memory models ranked by text rank
+        """
+        tuples = self._bm25_search(
+            query_text,
+            limit=limit * HYBRID_OVERSAMPLE_MULTIPLIER,
+            min_importance=min_importance,
+            match_all=False,
+        )
+        return [memory for memory, _rank in tuples]
+
     def _bm25_search(
         self,
         query_text: str,
         limit: int,
-        min_importance: float
+        min_importance: float,
+        match_all: bool = True,
     ) -> List[Tuple['Memory', float]]:
         """
         Perform BM25 text search using PostgreSQL full-text search.
@@ -153,12 +186,22 @@ class HybridSearcher:
         and vector-sourced duplicates overwrite the map entry with the
         vector-search row (which carries the embedding).
 
+        match_all=True ANDs the query lexemes (plainto_tsquery), the hybrid arm's
+        behavior. match_all=False ORs them for the lite arm: a whole message
+        carries framing words no memory contains, and AND-matching them would
+        retrieve nothing, so the lite arm matches any lexeme and ranks by ts_rank.
+
         Returns list of (Memory, score) tuples.
         """
         resolved_user_id = self.db._resolve_user_id()
 
+        if match_all:
+            tsquery = "plainto_tsquery('english', %(query)s)"
+        else:
+            tsquery = "to_tsquery('english', replace(plainto_tsquery('english', %(query)s)::text, '&', '|'))"
+
         with self.db.session_manager.get_session(resolved_user_id) as session:
-            query = """
+            query = f"""
             (
                 SELECT m.id, m.user_id, m.text, NULL::jsonb AS embedding, m.importance_score,
                        m.created_at, m.updated_at, m.expires_at, m.access_count,
@@ -167,10 +210,10 @@ class HybridSearcher:
                        m.is_archived, m.archived_at,
                        m.activity_days_at_creation, m.activity_days_at_last_access,
                        m.annotations, m.source_segment_id,
-                       ts_rank(m.search_vector, plainto_tsquery('english', %(query)s)) as rank,
+                       ts_rank(m.search_vector, {tsquery}) as rank,
                        'personal' as source
                 FROM memories m
-                WHERE m.search_vector @@ plainto_tsquery('english', %(query)s)
+                WHERE m.search_vector @@ {tsquery}
                   AND m.importance_score >= %(min_importance)s
                   AND (m.expires_at IS NULL OR m.expires_at > NOW())
                   AND m.is_archived = FALSE
@@ -185,10 +228,10 @@ class HybridSearcher:
                        NULL::int as activity_days_at_creation, NULL::int as activity_days_at_last_access,
                        '[]'::jsonb as annotations,
                        NULL::uuid as source_segment_id,
-                       ts_rank(gm.search_vector, plainto_tsquery('english', %(query)s)) as rank,
+                       ts_rank(gm.search_vector, {tsquery}) as rank,
                        'global' as source
                 FROM global_memories_runtime gm
-                WHERE gm.search_vector @@ plainto_tsquery('english', %(query)s)
+                WHERE gm.search_vector @@ {tsquery}
                   AND gm.is_archived = FALSE
             )
             ORDER BY rank DESC
