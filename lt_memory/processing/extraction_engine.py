@@ -51,13 +51,15 @@ class ExtractionPayload:
         user_prompt: str,
         short_to_uuid: Dict[str, str],
         memory_context: MemoryContext,
-        chunk_index: int
+        chunk_index: int,
+        global_scope_offered: bool = False,
     ):
         self.system_prompt = system_prompt
         self.user_prompt = user_prompt
         self.short_to_uuid = short_to_uuid
         self.memory_context = memory_context
         self.chunk_index = chunk_index
+        self.global_scope_offered = global_scope_offered
 
 
 class ExtractionEngine:
@@ -80,9 +82,31 @@ class ExtractionEngine:
 
         Raises:
             FileNotFoundError: If prompt files not found (fail-fast)
+            ValueError: If the system template lost its {GLOBAL_SCOPE_SECTION}
+                token, or the scope section still holds an unsubstituted token
         """
         from config.prompts.loader import load_prompt
-        self.extraction_system_prompt = load_prompt("memory_extraction_system.txt")
+        from lt_memory.models import MEMORY_SCOPE_FIELD, MEMORY_SCOPE_GLOBAL, MEMORY_SCOPE_PERSONAL
+
+        system_template = load_prompt("memory_extraction_system.txt")
+        if "{GLOBAL_SCOPE_SECTION}" not in system_template:
+            raise ValueError(
+                "memory_extraction_system.txt is missing the {GLOBAL_SCOPE_SECTION} token; "
+                "the global-scope section would never be offered"
+            )
+        scope_section = load_prompt("memory_extraction_global_scope.txt")
+        for token, value in (
+            ("{SCOPE_FIELD}", MEMORY_SCOPE_FIELD),
+            ("{SCOPE_GLOBAL}", MEMORY_SCOPE_GLOBAL),
+            ("{SCOPE_PERSONAL}", MEMORY_SCOPE_PERSONAL),
+        ):
+            scope_section = scope_section.replace(token, value)
+        leftover = [t for t in ("{SCOPE_FIELD}", "{SCOPE_GLOBAL}", "{SCOPE_PERSONAL}") if t in scope_section]
+        if leftover:
+            raise ValueError(f"memory_extraction_global_scope.txt still contains {leftover} after substitution")
+
+        self.extraction_system_prompt = system_template.replace("{GLOBAL_SCOPE_SECTION}", "")
+        self.extraction_system_prompt_with_scope = system_template.replace("{GLOBAL_SCOPE_SECTION}", scope_section)
         self.extraction_user_template = load_prompt("memory_extraction_user.txt")
         logger.info("Loaded memory extraction prompts")
 
@@ -110,6 +134,10 @@ class ExtractionEngine:
                 f"Chunks should be filtered before payload building."
             )
 
+        from lt_memory.global_store import global_store_is_active
+
+        scope_offered = global_store_is_active()
+
         memory_context = self._get_memory_context_for_chunk(chunk)
         short_to_uuid = memory_context.get("short_to_uuid", {})
 
@@ -117,14 +145,18 @@ class ExtractionEngine:
             chunk,
             memory_texts=memory_context.get("memory_texts", {})
         )
-        extraction_prompt = self._build_extraction_prompt(formatted_messages)
+        extraction_prompt = self._build_extraction_prompt(
+            formatted_messages,
+            speaker_line=self._speaker_line(scope_offered),
+        )
 
         return ExtractionPayload(
-            system_prompt=self.extraction_system_prompt,
+            system_prompt=self.extraction_system_prompt_with_scope if scope_offered else self.extraction_system_prompt,
             user_prompt=extraction_prompt,
             short_to_uuid=short_to_uuid,
             memory_context=memory_context,
             chunk_index=chunk.chunk_index,
+            global_scope_offered=scope_offered,
         )
 
     def _build_identifier_maps(
@@ -358,8 +390,29 @@ class ExtractionEngine:
         lines.append("</meta>")
         return "\n".join(lines)
 
-    def _build_extraction_prompt(self, formatted_messages: str) -> str:
+    def _speaker_line(self, scope_offered: bool) -> str:
+        if not scope_offered:
+            return ""
+        from utils.user_context import get_user_preferences
+
+        try:
+            prefs = get_user_preferences()
+            name = " ".join(part for part in (prefs.first_name, prefs.last_name) if part).strip()
+        except Exception:
+            # Background path: raising here would lose the segment's memories.
+            logger.warning(
+                "User preferences unavailable during extraction; speaker name omitted — "
+                "facts about the speaker stay personal for this segment",
+                exc_info=True,
+            )
+            return "Speaker: name not on file"
+        if not name:
+            return "Speaker: name not on file"
+        return f"Speaker: {html.escape(name)}"
+
+    def _build_extraction_prompt(self, formatted_messages: str, speaker_line: str = "") -> str:
         """Build extraction user prompt from formatted conversation text."""
         return self.extraction_user_template.format(
             formatted_messages=formatted_messages,
+            speaker_line=speaker_line,
         )

@@ -175,12 +175,25 @@ class SystemConfig(BaseModel):
         default="Friend",
         description="First name for the single-mode local account (auth/service.py create_local_session) and its orientation content; deploy collects it and writes MIRA_LOCAL_SESSION_FIRST_NAME, and the app-side default is the historical 'Friend'"
     )
+    global_memory_store_url: str = Field(
+        default="",
+        description="Base URL of the shared global memory store (e.g. http://host:8471). Empty disables the store: the local global_memories copy is left untouched and no writes are shared. Overridable via MIRA_GLOBAL_MEMORY_STORE_URL"
+    )
 
     @field_validator("timezone")
     @classmethod
     def validate_timezone_name(cls, value: str) -> str:
         """Fail fast on a non-IANA timezone instead of surfacing ZoneInfo errors at runtime."""
         return validate_timezone(value)
+
+    @field_validator("global_memory_store_url")
+    @classmethod
+    def validate_global_memory_store_url(cls, value: str) -> str:
+        if value == "":
+            return value
+        if not value.startswith(("http://", "https://")):
+            raise ValueError(f"global_memory_store_url must be an http(s) URL or empty, got {value!r}")
+        return value.rstrip("/")
     segment_timeout: int = Field(
         default=120,
         description="Segment collapse timeout in minutes — staleness at which an active segment collapses, evaluated in the segment owner's local time-of-day windows"

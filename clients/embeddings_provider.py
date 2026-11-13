@@ -35,6 +35,10 @@ from utils import http_client
 
 logger = logging.getLogger(__name__)
 
+# CROSS-FILE-COUPLING: the global memory store keeps a second implementation of
+# the document-side encode (global_memory_store/src/global_memory_store/embedding.py).
+# A change here — model, normalization, or input handling — must land there too,
+# or every instance reports the store as mismatched at boot.
 LOCAL_EMBEDDING_MODEL = "MongoDB/mdbr-leaf-ir-asym"
 LOCAL_EMBEDDING_DIMENSIONS = 768
 
@@ -256,6 +260,8 @@ class LocalEmbeddingsProvider(EmbeddingsProvider):
         return _LOCAL_ENCODE_BOUND_SECONDS
 
     def _encode(self, texts: List[str], role: EmbeddingRole) -> np.ndarray:
+        # CROSS-FILE-COUPLING: the document branch is mirrored by the store's
+        # embedding.py (see LOCAL_EMBEDDING_MODEL above).
         batch_size = config.lt_memory.embeddings_batch_size
         # Serialized: the MPS backend is not thread-safe (_LOCAL_INFERENCE_LOCK).
         with _LOCAL_INFERENCE_LOCK:
@@ -356,6 +362,8 @@ class RemoteEmbeddingsProvider(EmbeddingsProvider):
         )
 
     def _encode(self, texts: List[str], role: EmbeddingRole) -> np.ndarray:
+        # CROSS-FILE-COUPLING: the remote branch is mirrored by the store's
+        # embedding.py (_embed_remote).
         batch_size = config.lt_memory.embeddings_batch_size
         vectors = np.concatenate([
             request_embeddings(self._http, self.endpoint_url, self.model_name, self._headers, texts[start:start + batch_size])

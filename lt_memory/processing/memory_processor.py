@@ -31,7 +31,14 @@ from uuid import UUID
 from rapidfuzz import fuzz
 from json_repair import repair_json
 
-from lt_memory.models import ExtractedMemory, ExtractionResult, MemoryContext
+from lt_memory.models import (
+    DEFAULT_IMPORTANCE_SCORE,
+    MEMORY_SCOPE_GLOBAL,
+    MEMORY_SCOPE_PERSONAL,
+    ExtractedMemory,
+    ExtractionResult,
+    MemoryContext,
+)
 from lt_memory.vector_ops import VectorOps
 from utils.tag_parser import parse_memory_id
 from utils.timezone_utils import ensure_utc, parse_time_string, validate_timezone
@@ -41,7 +48,6 @@ logger = logging.getLogger(__name__)
 
 # Extraction deduplication tuning
 DEDUP_SIMILARITY_THRESHOLD = 0.92  # Cosine similarity for duplicate detection
-DEFAULT_IMPORTANCE_SCORE = 0.5     # Default importance for newly extracted memories
 
 
 def sanitize_entity_list(entities: Any) -> List[Dict[str, str]]:
@@ -176,6 +182,7 @@ class RawMemoryDict(TypedDict, total=False):
     happens_at: str | None
     related_memory_ids: list[dict[str, str]]
     entities: list[dict[str, str]]
+    scope: str
 
 
 class MemoryProcessor:
@@ -200,6 +207,7 @@ class MemoryProcessor:
         short_to_uuid: Dict[str, str],
         memory_context: MemoryContext,
         segment_id: Optional[str] = None,
+        global_scope_offered: bool = False,
     ) -> ExtractionResult:
         """
         Process a direct extraction result from the LLM response.
@@ -214,6 +222,9 @@ class MemoryProcessor:
                 into every built ExtractedMemory as source_segment_id so
                 db_access.store_memories persists the extraction provenance
                 anchor. None only when the chunk genuinely has no segment.
+            global_scope_offered: Whether the prompt offered the scope field for
+                this call. A `global` scope from a call that did not offer it is
+                normalized to personal.
 
         Returns:
             ExtractionResult containing validated memories
@@ -235,7 +246,7 @@ class MemoryProcessor:
         original_to_filtered_idx = {}
 
         for original_idx, memory_dict in enumerate(memories_data):
-            if not self._validate_extracted_memory(memory_dict):
+            if not self._validate_extracted_memory(memory_dict, global_scope_offered):
                 continue
 
             is_duplicate, similarity, duplicate_id = self._is_duplicate_memory(
@@ -276,6 +287,7 @@ class MemoryProcessor:
                 related_memory_ids=memory_dict.get("related_memory_ids", []),
                 entities=memory_dict.get("entities", []),
                 source_segment_id=UUID(segment_id) if segment_id else None,
+                scope=memory_dict.get("scope", MEMORY_SCOPE_PERSONAL),
             )
 
             filtered_idx = len(extracted_memories)
@@ -544,7 +556,7 @@ class MemoryProcessor:
 
         return memories_data
 
-    def _validate_extracted_memory(self, memory_dict: Dict[str, Any]) -> bool:
+    def _validate_extracted_memory(self, memory_dict: Dict[str, Any], global_scope_offered: bool = False) -> bool:
         """
         Validate and sanitize extracted memory structure.
 
@@ -556,6 +568,9 @@ class MemoryProcessor:
 
         Args:
             memory_dict: Memory dictionary from LLM (modified in-place)
+            global_scope_offered: Whether the extraction prompt offered the scope
+                field. A `global` scope from a call that did not offer it is
+                normalized to personal.
 
         Returns:
             True if valid (possibly after fixes), False if unrecoverable
@@ -576,6 +591,18 @@ class MemoryProcessor:
         if len(text) < 10:
             logger.warning(f"Rejecting memory: text too short ({len(text)} chars): {text}")
             return False
+
+        scope = memory_dict.get("scope", MEMORY_SCOPE_PERSONAL)
+        if scope != MEMORY_SCOPE_GLOBAL:
+            if scope != MEMORY_SCOPE_PERSONAL:
+                logger.warning(f"Unknown scope {scope!r}; storing as personal")
+            memory_dict["scope"] = MEMORY_SCOPE_PERSONAL
+        elif not global_scope_offered:
+            logger.warning("Model emitted scope=global though the scope section was not offered; storing as personal")
+            memory_dict["scope"] = MEMORY_SCOPE_PERSONAL
+        elif memory_dict.get("expires_at"):
+            logger.info("Memory marked global carries expires_at; the store holds no expiry, storing as personal")
+            memory_dict["scope"] = MEMORY_SCOPE_PERSONAL
 
         # related_memory_ids are optional links; the segment is already
         # collapsed, so rejecting the memory here loses it permanently.
@@ -638,8 +665,13 @@ class MemoryProcessor:
         if not memory_text:
             return DuplicateCheckResult(False, None, None)
 
-        # Fuzzy text matching (wider net than exact, cheaper than vector)
-        if memory_context:
+        is_global_candidate = memory_dict.get("scope") == MEMORY_SCOPE_GLOBAL
+
+        # Fuzzy text matching (wider net than exact, cheaper than vector).
+        # A global candidate skips this pass: the context holds the speaker's
+        # personal memories, and a shared-fact match against them would block
+        # promotion to the store.
+        if memory_context and not is_global_candidate:
             context_texts = memory_context.get("memory_texts", [])
 
             # Dict format: {uuid: text} — produced by extraction_engine.py
@@ -662,6 +694,8 @@ class MemoryProcessor:
             similarity_threshold=DEDUP_SIMILARITY_THRESHOLD,
             min_importance=0.001  # Filter cold storage (0.0) memories
         )
+        if is_global_candidate:
+            similar_memories = [m for m in similar_memories if m.source == 'global']
 
         if not similar_memories:
             return DuplicateCheckResult(False, None, None)
