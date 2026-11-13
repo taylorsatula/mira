@@ -154,3 +154,41 @@ to, no dependency rebuild, no database steps. Expect the update to report
 that it carried your `config/config.py` values forward; if it instead
 reports that reconciliation failed, nothing has been changed and the file
 needs to parse as Python before the update is re-run.
+
+## Verification
+
+- Gate rows a-c verified at build time against the tagged asset:
+  `build_release_artifact v2026.11.13-2.3.0` passed `scripts.migrate lint`
+  (3 versioned and 1 repeatable step follow the rules), and
+  `verify_release_identity` confirmed tag = v + VERSION, the artifact's
+  VERSION matches the repo, and the artifact's RELEASE_COMMIT equals the
+  tagged commit (9f322a9).
+- Row c (convergence) ran on the build host against a local PostgreSQL 17
+  superuser. Every origin and revision reached the fresh-install structure,
+  and the command rewrote `deploy/migrations/BASELINE` and
+  `HEAD_FINGERPRINT.json` with byte-identical content, so the checked-in
+  generated files still extend correctly.
+- Gate rows d (skip-chain) and e (restore round trip): not run at cut time.
+  The build host holds no frozen base template, no sarcophagus and no dev
+  VM, so the `deploy/vm` toolkit had nothing to spawn. The first `mira
+  update` onto the operator's own install is the witness taken in place of
+  these two rows, accepted by the operator before publication.
+- `config/config.py` reconciliation exercised against the real deployed
+  operator file (`/opt/mira/app/config/config.py`, 86 fields) rather than a
+  fixture. The live path, a first update with no baseline, produced a merge
+  byte-identical to the release copy with one warning naming the missing
+  baseline. The three-way form against the v2026.11.01-2.2.0 config.py as
+  baseline produced the same bytes with no warning. The merged file
+  compiles. A deliberately truncated operator file exited 2 and wrote no
+  output, and `deploy/update.sh` exits before the code swap on that result,
+  so a config.py that does not parse changes nothing.
+- `mira update` invokes neither `deploy/finalize.sh` nor
+  `deploy/postgresql.sh`, so an update does not re-resolve the context
+  window and does not rewrite the `model_configs` output ceilings. The
+  install's `systemone.env` window pair and its route ceilings carry over
+  unchanged, and the update's own restore path puts the env file back if a
+  later step fails.
+- The dependency set is unchanged from v2026.11.01-2.2.0, so the pinned
+  requirement set carries its install result from that cut.
+- Known residuals: unchanged from v2026.11.01-2.2.0, plus the bash guardrail
+  residues named above.
