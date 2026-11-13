@@ -71,6 +71,12 @@ SYSTEMONE_ENV_FILE="/opt/mira/systemone.env"
     else
         echo "MIRA_INJECTION_SCREEN_ENABLED=0"
     fi
+    # The shared memory store's base URL, when the operator runs one. The app
+    # maps MIRA_GLOBAL_MEMORY_STORE_URL → SystemConfig.global_memory_store_url;
+    # absent means the store is disabled and the local copy is left untouched.
+    if [ -n "${MIRA_GLOBAL_MEMORY_STORE_URL:-}" ]; then
+        echo "MIRA_GLOBAL_MEMORY_STORE_URL=${MIRA_GLOBAL_MEMORY_STORE_URL}"
+    fi
 } > "$SYSTEMONE_ENV_FILE"
 chmod 600 "$SYSTEMONE_ENV_FILE"
 chown "$MIRA_USER:$MIRA_GROUP" "$SYSTEMONE_ENV_FILE" 2>/dev/null || chown "$MIRA_USER" "$SYSTEMONE_ENV_FILE"

@@ -476,10 +476,13 @@ CREATE TRIGGER memories_updated_at
 BEFORE UPDATE ON memories
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- Administrator-curated shared memory. Deliberately has no RLS: isolation is
--- enforced by the security-barrier view below, which is the only runtime read
--- path. Direct DML is revoked from the application role in the grants section,
--- so the shared table cannot be written from a request path.
+-- Local copy of the shared memory store (global_memory_store/). The serving
+-- instance replaces this table's contents at boot from the store, and adds a
+-- row at write time when extraction produces a global memory; both writes run
+-- under the admin role. Deliberately has no RLS: isolation is enforced by the
+-- security-barrier view below, which is the only runtime read path. Direct DML
+-- is revoked from the application role in the grants section, so the shared
+-- table cannot be written from a request path.
 CREATE TABLE global_memories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     text TEXT COMPRESSION lz4 NOT NULL,
@@ -872,10 +875,10 @@ GRANT EXECUTE ON FUNCTION can_read_global_memories() TO mira_dbuser;
 GRANT EXECUTE ON FUNCTION resolve_active_user_identity(text) TO mira_dbuser;
 GRANT EXECUTE ON FUNCTION active_user_identity(uuid) TO mira_dbuser;
 
--- The shared curated table is read through global_memories_runtime only, and is
--- curated out-of-band via psql as mira_admin. 1.x granted the runtime role full
--- DML here, which at N>1 lets any authenticated request path write every other
--- user's shared context.
+-- The shared table is read through global_memories_runtime only, and is written
+-- only by the admin role (the boot-time copy from the store and the extraction
+-- write path). 1.x granted the runtime role full DML here, which at N>1 lets
+-- any authenticated request path write every other user's shared context.
 REVOKE ALL ON global_memories FROM mira_dbuser;
 
 REVOKE EXECUTE ON FUNCTION set_updated_at() FROM PUBLIC;
@@ -913,7 +916,7 @@ COMMENT ON TABLE persona_state IS 'Current Persona pointer and automatic-refinem
 COMMENT ON TABLE persona_signals IS 'Evidence about MIRA behavior consumed by Persona revisions.';
 COMMENT ON TABLE feedback_signals IS 'Assessment signals for the user-model pipeline.';
 COMMENT ON TABLE feedback_synthesis_tracking IS 'User-model synthesis state; last_synthesis_output holds the user-model XML.';
-COMMENT ON TABLE global_memories IS 'Administrator-curated global memory; runtime reads go through global_memories_runtime.';
+COMMENT ON TABLE global_memories IS 'Local copy of the shared global memory store; runtime reads go through global_memories_runtime.';
 COMMENT ON TABLE domaindoc_shares IS 'Cross-user domaindoc sharing with consent flow (pending to accepted).';
 COMMENT ON TABLE user_feedback IS 'User-submitted friction signals captured proactively by Mira - developer queries this directly for rapid iteration.';
 COMMENT ON TABLE domain_knowledge_blocks IS 'Domain-specific knowledge blocks for the Letta agent memory system.';

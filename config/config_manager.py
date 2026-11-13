@@ -87,6 +87,7 @@ SYSTEM_FEATURE_FLAG_ENVIRONMENT_FIELDS: dict[str, str] = {
 SYSTEM_STRING_ENVIRONMENT_FIELDS: dict[str, str] = {
     "MIRA_TIMEZONE": "timezone",
     "MIRA_LOCAL_SESSION_FIRST_NAME": "local_session_first_name",
+    "MIRA_GLOBAL_MEMORY_STORE_URL": "global_memory_store_url",
 }
 
 # Deploy writes /opt/mira/systemone.env (EnvironmentFile for the unit, sourced by the

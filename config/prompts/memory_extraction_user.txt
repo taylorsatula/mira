@@ -1,3 +1,4 @@
+{speaker_line}
 <conversation>
 {formatted_messages}
 </conversation>

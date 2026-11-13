@@ -446,6 +446,11 @@ class MemoryTool(Tool):
             )
 
             for memory in paginated_results[:5]:
+                if getattr(memory, 'source', 'personal') == 'global':
+                    # Global rows live outside the per-user memories table; a
+                    # traversal finds nothing and would run remove_dead_links.
+                    memory.linked_memories = []
+                    continue
                 related: List[TraversalResult] = linking_service.traverse_related(memory.id, depth=traversal_depth)
                 memory.linked_memories = [r["memory"] for r in related]
                 for i, linked in enumerate(memory.linked_memories):
@@ -522,6 +527,7 @@ class MemoryTool(Tool):
         result = {
             "memory_id": format_memory_id(str(memory.id)),
             "full_uuid": str(memory.id),
+            "source": getattr(memory, 'source', 'personal'),
             "text": memory.text,
             "importance_score": round(memory.importance_score, 3),
             "similarity_score": round(memory.similarity_score, 3) if memory.similarity_score else None,
