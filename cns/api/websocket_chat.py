@@ -26,10 +26,12 @@ persisted and never seen by the model; the browser swaps it into the settled
 card in place, so a slow summary never holds the stream. The TUI accepts the
 frame and ignores it: an append-only display cannot re-render a settled row.
 
-The proactive push path (``push_proactive_message_sync``) has one producer:
-``cns/services/background_job_notice.py``, which pushes a wake-up message when a
-detached shell job exits. Both clients render the frame; anything else that
-wants to push builds on that module rather than calling the bridge directly.
+The proactive push path (``push_proactive_message_sync``) has two producers:
+``cns/services/background_job_notice.py`` (a wake-up message when a detached
+shell job exits) and ``cns/services/follow_up_service.py`` (a single short
+nudge when the user has been silent for two minutes after a completed turn).
+Both clients render the frame; anything else that wants to push builds on one
+of those modules rather than calling the bridge directly.
 """
 
 from __future__ import annotations
