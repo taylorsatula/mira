@@ -1210,7 +1210,6 @@ class ContinuumOrchestrator:
 
             try:
                 from clients.valkey_client import get_valkey_client
-                from utils.user_context import get_current_user_id
 
                 valkey = get_valkey_client()
                 override_value = valkey.get(f"effort_override:{get_current_user_id()}")
