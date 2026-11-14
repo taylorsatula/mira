@@ -152,7 +152,7 @@ class SystemConfig(BaseModel):
 
     subcortical_enabled: bool = Field(default=True, description="Enable the subcortical LLM memory-surfacing pass. When disabled, memory surfacing runs in lite mode: text-only BM25 retrieval plus graph traversal on the current message, with no embeddings, no vector search, and no LLM call.")
     peanutgallery_enabled: bool = Field(default=True, description="Enable peanut gallery metacognitive observer")
-    follow_up_enabled: bool = Field(default=False, description="Enable the follow-up nudge: one short, unprompted assistant message after a user goes quiet for two minutes following a completed turn. Off by default; overridable via MIRA_FOLLOW_UP_ENABLED (strict 0/1)")
+    follow_up_enabled: bool = Field(default=True, description="Enable the follow-up nudge: one short, unprompted assistant message after a user goes quiet for two minutes following a completed turn. On by default; overridable via MIRA_FOLLOW_UP_ENABLED (strict 0/1)")
     persona_enabled: bool = Field(default=True, description="Enable Persona evaluation, refinement, and prompt injection")
     injection_screen_enabled: bool = Field(
         default=True,
