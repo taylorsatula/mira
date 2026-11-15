@@ -48,7 +48,7 @@ set -e
 # sites are pinned to this tag: the bootstrap clone below and python.sh's
 # release-asset download. Cut a release by moving this constant, then tagging and
 # publishing per deploy/RELEASE.md.
-RELEASE_TAG="v2026.11.14-2.3.1"
+RELEASE_TAG="v2026.11.15-2.3.2"
 export RELEASE_TAG
 
 # Get the directory where this script lives
