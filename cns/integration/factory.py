@@ -140,6 +140,9 @@ class CNSIntegrationFactory:
 
         self._initialize_inbox_poller(event_bus)
 
+        from cns.services.follow_up_service import install_follow_up
+        install_follow_up(event_bus)
+
         orchestrator = ContinuumOrchestrator(
             llm_provider=llm_provider,
             continuum_repo=continuum_repo,

@@ -166,6 +166,7 @@ class MessageMetadata(TypedDict, total=False):
     model_error: bool
     model_error_reason: str
     turn_id: str
+    follow_up: bool
     partial_response: bool
     stop_reason: CancelReason
     provider_stop_reason: str

@@ -99,7 +99,7 @@ from lt_memory.proactive import (
     MAX_ASSISTANT_MEMORIES,
 )
 from utils.tag_parser import match_memory_id
-from utils.user_context import get_cancel_reason, get_current_segment_id
+from utils.user_context import get_cancel_reason, get_current_segment_id, get_current_user_id
 
 CONTEXT_OVERFLOW_FALLBACK_TEXT_LIMIT = 400
 CONTEXT_OVERFLOW_RECENT_USER_TURNS = 10
@@ -1118,6 +1118,9 @@ class ContinuumOrchestrator:
             raise RuntimeError("Message processing requires an active segment ID")
         if unit_of_work is None:
             raise ValueError("Unit of Work is required for message persistence")
+        if not _internal_continuation:
+            from cns.services.follow_up_service import cancel_follow_up
+            cancel_follow_up(get_current_user_id())
 
         user_metadata: MessageMetadata = {
             "turn_id": str(active_turn_id),
@@ -1207,7 +1210,6 @@ class ContinuumOrchestrator:
 
             try:
                 from clients.valkey_client import get_valkey_client
-                from utils.user_context import get_current_user_id
 
                 valkey = get_valkey_client()
                 override_value = valkey.get(f"effort_override:{get_current_user_id()}")
