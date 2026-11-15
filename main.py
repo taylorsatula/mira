@@ -185,6 +185,24 @@ async def lifespan(app: FastAPI):
         logger.critical(f"Failed to initialize lt_memory factory: {e}")
         raise RuntimeError(f"lt_memory initialization failed - cannot start MIRA: {e}") from e
 
+    # Global memory store: advisory. A configured store that fails leaves the
+    # instance serving with the local copy's last contents; nothing is shared
+    # until the next restart. KeyError/FileNotFoundError are the missing-token
+    # cases from Vault; a Vault policy failure (PermissionError) propagates.
+    from lt_memory.global_store import GlobalMemoryStoreMismatch, replace_global_memories_from_store
+    from clients.global_memory_store_client import GlobalMemoryStoreError
+    try:
+        store_result = replace_global_memories_from_store(lt_memory_factory.db, embeddings_provider)
+        if store_result.configured:
+            logger.info(f"Global memory store active: {store_result.memories_loaded} memories loaded into the local copy")
+    except (GlobalMemoryStoreError, GlobalMemoryStoreMismatch, KeyError, FileNotFoundError) as e:
+        logger.error(
+            f"Global memory store unavailable: {e}. "
+            "Shared memories are served from the last successful pull and nothing new is shared until restart."
+        )
+    except Exception as e:
+        raise RuntimeError(f"global_memory_store initialization failed - cannot start MIRA: {e}") from e
+
     logger.info("Initializing continuum orchestrator...")
     from cns.integration.factory import create_cns_orchestrator
     from cns.services.orchestrator import initialize_orchestrator
@@ -368,6 +386,9 @@ async def lifespan(app: FastAPI):
     from utils.userdata_manager import clear_manager_cache
     clear_manager_cache()
     logger.info("UserDataManager cache cleared (SQLite connections closed)")
+
+    from lt_memory.global_store import close_global_store
+    close_global_store()
 
     from clients.postgres_client import PostgresClient as ShutdownPostgresClient
     ShutdownPostgresClient.close_all_pools()

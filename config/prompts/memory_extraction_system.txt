@@ -248,6 +248,8 @@ Before finalizing your JSON array, scan the transcript one more time against the
 4. MOMENT SKIPPING. When the user expresses surprise, enthusiasm, or reflection about how something is working — especially reactions to the system itself, spontaneous evaluations, or "I love when X happens" moments — those are extractable memories. They reveal what the user values and how they evaluate their experience. Do not discard them because they weren't the main topic.
 </extraction_floor>
 
+{GLOBAL_SCOPE_SECTION}
+
 <output_format>
 Respond with only a valid JSON array. No additional text before or after.
 

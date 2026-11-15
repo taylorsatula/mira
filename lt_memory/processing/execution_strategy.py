@@ -14,6 +14,18 @@ the segment only after this whole call returns. Every post-store step — entity
 links, candidate hints, the ``on_memories_stored`` callback — is therefore
 tolerate-and-log; a raise from one of them would surface as an unmarked segment
 whose next sweep re-inserts the same memories.
+
+Global memories (scope="global", offered only when the store is active) are
+written to the store and the local copy BEFORE the personal path runs, and
+never reach ``store_and_tend_extraction``: the store write is the only step
+whose failure must abort the segment before any personal row lands, because
+the sweep re-runs the whole segment and the store answers a repeated POST
+with ``duplicate``. A failure after personal rows are inserted would
+re-insert them. A deterministic rejection (4xx other than 408/429) demotes
+the memory to personal instead of aborting the segment — retrying cannot
+help, and the user keeps the memory. Global rows get no entity links,
+candidate hints, or curator callback — no retrieval path from a global row
+follows them.
 """
 
 from __future__ import annotations
@@ -22,10 +34,11 @@ import logging
 from typing import Optional
 from uuid import UUID, uuid4
 
+from clients.global_memory_store_client import GlobalMemoryStoreError
 from clients.llm_provider import LLMProvider
 from lt_memory.db_access import LTMemoryDB
 from lt_memory.linking import LinkingService
-from lt_memory.models import ExtractedMemory, ProcessingChunk
+from lt_memory.models import MEMORY_SCOPE_GLOBAL, ExtractedMemory, ProcessingChunk
 from lt_memory.processing.extraction_engine import ExtractionEngine, ExtractionPayload
 from lt_memory.processing.memory_processor import MemoryProcessor
 from lt_memory.vector_ops import VectorOps
@@ -230,17 +243,47 @@ class DirectExecutionStrategy:
             short_to_uuid=payload.short_to_uuid,
             memory_context=payload.memory_context,
             segment_id=segment_id,
+            global_scope_offered=payload.global_scope_offered,
         )
         if not result.memories:
             return []
-        return store_and_tend_extraction(
-            user_id=user_id,
-            segment_id=segment_id,
-            memories=result.memories,
-            vector_ops=self.vector_ops,
-            db=self.db,
-            linking=self.linking,
+
+        global_memories = [m for m in result.memories if m.scope == MEMORY_SCOPE_GLOBAL]
+        personal_memories = [m for m in result.memories if m.scope != MEMORY_SCOPE_GLOBAL]
+
+        from lt_memory.global_store import write_global_memory
+
+        stored_ids: list[UUID] = []
+        for memory in global_memories:
+            try:
+                stored_ids.append(write_global_memory(memory, UUID(user_id), self.db))
+            except GlobalMemoryStoreError as e:
+                # A deterministic rejection (4xx other than 408/429) will not heal
+                # by retrying: demote the memory to personal so the segment can
+                # complete and the user keeps the memory. Outages (5xx, transport)
+                # raise, leaving the segment unmarked for the sweep.
+                if e.status_code is not None and 400 <= e.status_code < 500 and e.status_code not in (408, 429):
+                    logger.warning(
+                        "Global memory store rejected a memory with HTTP %s; storing it as personal: %s",
+                        e.status_code, e,
+                    )
+                    personal_memories.append(memory)
+                else:
+                    raise
+
+        if not personal_memories:
+            return stored_ids
+        stored_ids.extend(
+            store_and_tend_extraction(
+                user_id=user_id,
+                segment_id=segment_id,
+                memories=personal_memories,
+                vector_ops=self.vector_ops,
+                db=self.db,
+                linking=self.linking,
+            )
         )
+        return stored_ids
 
 
 def create_execution_strategy(

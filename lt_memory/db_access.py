@@ -32,9 +32,12 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from uuid import UUID
 
+import numpy as np
 from psycopg.types.json import Jsonb
 
 from lt_memory.models import (
+    DEFAULT_IMPORTANCE_SCORE,
+    GlobalMemoryRow,
     Memory,
     ExtractedMemory,
     MemoryLink,
@@ -1506,6 +1509,62 @@ class LTMemoryDB:
                     f"Merged entity {source_id} into {target_id}: "
                     f"updated {affected_count} memories"
                 )
+
+    def replace_global_memories(self, rows: List[GlobalMemoryRow]) -> int:
+        """
+        Replace the local copy of the shared store's memories.
+
+        One transaction: delete every row, then insert the given rows. Used by
+        the boot pull; the local copy is a mirror of the store, never a union.
+        Returns the number of rows inserted.
+        """
+        with self.session_manager.get_admin_session() as session:
+            session.execute_update("DELETE FROM global_memories")
+            rows = list(rows)
+            for start in range(0, len(rows), 200):
+                chunk = rows[start:start + 200]
+                values, params = [], {}
+                for i, row in enumerate(chunk):
+                    values.append(
+                        f"(%(id_{i})s, %(text_{i})s, %(embedding_{i})s, "
+                        f"%(importance_score_{i})s, %(created_at_{i})s, %(happens_at_{i})s)"
+                    )
+                    params.update({
+                        f"id_{i}": str(row["id"]),
+                        f"text_{i}": row["text"],
+                        f"embedding_{i}": np.asarray(row["embedding"], dtype=np.float32),
+                        f"importance_score_{i}": DEFAULT_IMPORTANCE_SCORE,
+                        f"created_at_{i}": row["created_at"],
+                        f"happens_at_{i}": row["happens_at"],
+                    })
+                if values:
+                    session.execute_update(
+                        f"""
+                        INSERT INTO global_memories (id, text, embedding, importance_score, created_at, happens_at)
+                        VALUES {", ".join(values)}
+                        """,
+                        params,
+                    )
+            return len(rows)
+
+    def insert_global_memory(self, row: GlobalMemoryRow) -> None:
+        """Insert one row into the local copy; a repeated id is a no-op."""
+        with self.session_manager.get_admin_session() as session:
+            session.execute_update(
+                """
+                INSERT INTO global_memories (id, text, embedding, importance_score, created_at, happens_at)
+                VALUES (%(id)s, %(text)s, %(embedding)s, %(importance_score)s, %(created_at)s, %(happens_at)s)
+                ON CONFLICT (id) DO NOTHING
+                """,
+                {
+                    "id": str(row["id"]),
+                    "text": row["text"],
+                    "embedding": np.asarray(row["embedding"], dtype=np.float32),
+                    "importance_score": DEFAULT_IMPORTANCE_SCORE,
+                    "created_at": row["created_at"],
+                    "happens_at": row["happens_at"],
+                },
+            )
 
     def get_users_with_memory_enabled(self) -> List[UserMemorySettings]:
         """

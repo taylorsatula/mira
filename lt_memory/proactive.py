@@ -357,6 +357,12 @@ class ProactiveService:
             return []
 
         for primary_memory in primary_memories:
+            if primary_memory.source == 'global':
+                # Global rows live outside the per-user memories table; a
+                # traversal finds nothing and would run remove_dead_links.
+                primary_memory.linked_memories = []
+                continue
+
             linked_with_metadata = self.linking.traverse_related(
                 memory_id=primary_memory.id,
                 depth=PROACTIVE_MAX_LINK_TRAVERSAL_DEPTH

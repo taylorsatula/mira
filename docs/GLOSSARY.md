@@ -10,6 +10,8 @@ Codebase-specific terms, one sentence each. Each entry names the map or file tha
 - **Live context compaction**: shrinking the provider request during an active conversation with a rolling brief, leaving the PostgreSQL history intact (`docs/SEGMENT_SYSTEM.md`).
 - **Continuum**: the aggregate object that holds one user's conversation (`cns/core/AGENTS.md`).
 - **Short ID (`mem_XXXXXXXX`)**: an irreversible prefix of a memory's UUID, used on surfaces the LLM reads; persistence uses the full UUID (root `AGENTS.md`).
+- **Global memory**: a memory shared across every instance that points at the same global memory store; stored in the store and copied into each instance's `global_memories` table at boot (`lt_memory/AGENTS.md`).
+- **Global memory store**: the standalone service that holds the shared memory set; instances pull from it at boot and write to it at extraction time (`global_memory_store/AGENTS.md`).
 - **Domaindoc**: a section-aware knowledge document stored in the user's SQLite database (`tools/implementations/AGENTS.md`).
 - **Persona**: user-directed behavior guidance stored as append-only revisions with per-segment evaluation signals (`cns/infrastructure/AGENTS.md`).
 - **Portrait**: a synthesized description of the user, stored on `users.portrait` (`cns/services/AGENTS.md`).

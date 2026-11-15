@@ -38,6 +38,15 @@ RelationshipType = Literal[
     "precedes", "contextualizes", "exemplifies", "null"
 ]
 
+# Extraction scope: where a memory is stored. "personal" is the speaker's own
+# store; "global" is the shared store every instance reads.
+MEMORY_SCOPE_FIELD = "scope"
+MEMORY_SCOPE_PERSONAL = "personal"
+MEMORY_SCOPE_GLOBAL = "global"
+MemoryScope = Literal["personal", "global"]
+
+DEFAULT_IMPORTANCE_SCORE = 0.5  # Default importance for newly extracted memories
+
 
 # Shared TypedDicts — cross-file structures stored in JSONB or returned by
 # multiple modules. File-local types stay in their respective files.
@@ -48,6 +57,15 @@ class MemoryLinkEntry(TypedDict):
     reasoning: str
     created_at: str
     extraction_bond: NotRequired[str]
+
+
+class GlobalMemoryRow(TypedDict):
+    """A row of the global_memories table, as copied from the store."""
+    id: UUID
+    text: str
+    embedding: List[float]
+    happens_at: Optional[datetime]
+    created_at: datetime
 
 
 class EntityLinkEntry(TypedDict):
@@ -236,6 +254,7 @@ class ExtractedMemory(BaseModel):
     importance_score: float = Field(ge=0.0, le=1.0, default=0.5)
     expires_at: Optional[datetime] = None
     happens_at: Optional[datetime] = None
+    scope: MemoryScope = MEMORY_SCOPE_PERSONAL
     related_memory_ids: List[ExtractionRef] = Field(default_factory=list)
     entities: List[Dict[str, str]] = Field(
         default_factory=list,

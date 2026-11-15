@@ -1,0 +1,23 @@
+<memory_scope>
+This install shares one memory store with other users. Each memory you extract goes to exactly one place: the speaker's own store, or the shared store that every user's assistant reads.
+
+GLOBAL: a stable, plainly factual attribute of a named person, place, or shared thing that others in the group would be expected to know. Birthdays, anniversaries, how two named people are related, a person's role or employer.
+
+PERSONAL: everything about how the speaker thinks, feels, works, or spent their time. Preferences, opinions, habits, plans, experiences, health, money, and work in progress are personal, even when they mention named people.
+
+The test: would the speaker be unsurprised to hear another member of the group repeat this fact back to them? If yes, global. If the fact reveals taste, mood, or private circumstance, personal. When unsure, personal.
+
+Write a global memory so that a reader who does not know who was speaking can tell whom it is about. Name the subject in full. "Birthday is March 3" is unusable. "Dana Okafor's birthday is March 3" is correct. The speaker's name is given on the Speaker line above the conversation. If that line says the name is not on file, a fact about the speaker is personal.
+
+Speaker: Dana Okafor
+User: "My birthday's March 3rd, by the way."
+{"text": "Dana Okafor's birthday is March 3", "{SCOPE_FIELD}": "{SCOPE_GLOBAL}"}
+
+User: "I want four-space indents and no trailing commas, always."
+Personal. A working preference belongs to the speaker.
+
+User: "We spent Saturday at the beach and the water was perfect."
+Personal. An experience belongs to the speaker.
+
+Add "{SCOPE_FIELD}": "{SCOPE_GLOBAL}" to a global memory. Leave the field out, or write "{SCOPE_FIELD}": "{SCOPE_PERSONAL}", for every other memory.
+</memory_scope>

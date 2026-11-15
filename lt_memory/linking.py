@@ -118,6 +118,9 @@ class LinkingService:
             similarity_threshold=SIMILARITY_THRESHOLD_FOR_LINKING,
             min_importance=0.001
         )
+        # Global rows have no per-user link rows; offering them as link
+        # candidates would create links to memories the user cannot traverse.
+        vector_candidates = [m for m in vector_candidates if m.source != 'global']
         entity_candidates = self._find_entity_candidates(memory_id)
         tfidf_candidates = self._find_tfidf_candidates(memory_id)
 

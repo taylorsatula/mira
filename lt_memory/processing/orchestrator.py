@@ -18,6 +18,13 @@ contextvar per user and clears it after, isolates failures per segment, and
 bumps the content-failure budget only for failures
 ``_is_content_caused_extraction_failure`` classifies as caused by the segment's
 own data.
+
+Global memories (scope="global") are written to the shared store before the
+personal insert, inside ``DirectExecutionStrategy._process_and_store_memories``.
+A store failure raises before any personal row lands, so the sweep re-runs the
+segment; the store answers a repeated write with ``duplicate``, so the re-run
+does not double-store. Store outages are excluded from the content-failure
+budget for the same reason.
 """
 import json
 import logging
@@ -31,6 +38,8 @@ from cns.infrastructure.continuum_repository import (
 )
 from clients.llm.dialects.base import ProviderError
 from clients.llm_provider import ContextOverflowError
+from clients.global_memory_store_client import GlobalMemoryStoreError
+from lt_memory.global_store import GlobalMemoryStoreMismatch
 from lt_memory.models import ProcessingChunk, MemoryContextSnapshot
 from lt_memory.processing.extraction_engine import ExtractionEngine
 from lt_memory.processing.execution_strategy import DirectExecutionStrategy
@@ -59,6 +68,10 @@ def _is_content_caused_extraction_failure(error: Exception) -> bool:
     if isinstance(error, LLMResponseFormatError):
         return False
     if isinstance(error, (ProviderError, ContextOverflowError)):
+        return False
+    # A store outage is infrastructure, not the segment's data: the sweep must
+    # re-run the segment, not spend its abandonment budget.
+    if isinstance(error, (GlobalMemoryStoreError, GlobalMemoryStoreMismatch)):
         return False
     return isinstance(error, (RuntimeError, ValueError))
 

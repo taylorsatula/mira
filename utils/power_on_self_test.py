@@ -318,6 +318,7 @@ def run_pre_server_post(
         CheckSpec("dependency_initialization", True, _check_dependency_initialization),
         CheckSpec("scheduler_registration", True, _check_scheduler_registration),
         CheckSpec("playwright_service", False, _check_playwright_service),
+        CheckSpec("global_memory_store", False, _check_global_memory_store),
     ]
     return _run_specs("pre-server", specs, deadline_seconds=deadline_seconds)
 
@@ -1323,6 +1324,39 @@ def _check_playwright_service() -> dict[str, Any]:
 
     instance = PlaywrightService.get_instance()
     return {"service": type(instance).__name__}
+
+
+def _check_global_memory_store() -> dict[str, Any]:
+    """Witness that the shared memory store answers and embeds like this instance.
+
+    Non-required: a configured-but-unreachable or mismatched store leaves the
+    instance serving with its local copy, so this check reports and never
+    blocks boot. Writes nothing; the local copy is replaced only by the
+    serving process at boot.
+    """
+    from clients.embeddings_provider import get_embeddings_provider
+    from clients.global_memory_store_client import GlobalMemoryStoreClient
+    from clients.vault_client import get_api_key
+    from config import config
+    from lt_memory.global_store import check_store_compatibility
+
+    url = config.system.global_memory_store_url.strip()
+    if not url:
+        return {"configured": False}
+
+    provider = get_embeddings_provider(cache_enabled=False)
+    client = GlobalMemoryStoreClient(url, get_api_key("global_memory_store"))
+    try:
+        identity, cosine = check_store_compatibility(client, provider)
+    finally:
+        client.close()
+    return {
+        "configured": True,
+        "model": identity.model,
+        "dimensions": identity.dimensions,
+        "memory_count": identity.memory_count,
+        "probe_cosine": round(cosine, 6),
+    }
 
 
 def _check_http_health(base_url: str) -> dict[str, Any]:

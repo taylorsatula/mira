@@ -60,6 +60,8 @@ check_env_vars() {
         print_info "  MIRA_PROVIDER_MODEL       - Model name (defaults are verified live per provider)"
         print_info "  MIRA_KAGI_KEY             - Kagi search API key"
         print_info "  MIRA_SYSTEMONE_API_KEY    - Injection-screen System One gateway token (enables the screen)"
+        print_info "  MIRA_GLOBAL_MEMORY_STORE_URL   - Shared global memory store base URL (enables the store)"
+        print_info "  MIRA_GLOBAL_MEMORY_STORE_TOKEN - Bearer token for the store (stored in Vault as global_memory_store)"
         print_info "  MIRA_DB_PASSWORD          - Database password"
         print_info ""
         print_info "Or run with -it flag for interactive setup:"
@@ -74,6 +76,8 @@ setup_from_env_vars() {
     # Set defaults
     export CONFIG_PROVIDER_KEY="$MIRA_PROVIDER_KEY"
     export CONFIG_SYSTEMONE_API_KEY="${MIRA_SYSTEMONE_API_KEY:-}"
+    export CONFIG_GLOBAL_MEMORY_STORE_URL="${MIRA_GLOBAL_MEMORY_STORE_URL:-}"
+    export CONFIG_GLOBAL_MEMORY_STORE_TOKEN="${MIRA_GLOBAL_MEMORY_STORE_TOKEN:-}"
     export CONFIG_PROVIDER_NAME="${MIRA_PROVIDER_NAME:-Lunaroute}"
     export CONFIG_KAGI_KEY="${MIRA_KAGI_KEY:-}"
     export CONFIG_DB_PASSWORD="${MIRA_DB_PASSWORD:-changethisifdeployingpwd}"
@@ -315,6 +319,11 @@ init_vault() {
     if [ -n "${CONFIG_SYSTEMONE_API_KEY:-}" ]; then
         API_KEYS_ARGS+=(systemone_key="${CONFIG_SYSTEMONE_API_KEY}")
     fi
+    # Global memory store: the bearer token the instance presents to the store.
+    # Written only when the operator set it; absent means the store stays disabled.
+    if [ -n "${CONFIG_GLOBAL_MEMORY_STORE_TOKEN:-}" ]; then
+        API_KEYS_ARGS+=(global_memory_store="${CONFIG_GLOBAL_MEMORY_STORE_TOKEN}")
+    fi
     vault kv put secret/mira/api_keys "${API_KEYS_ARGS[@]}"
 
     # (40dz) /opt/mira/systemone.env is one variable set for every start path:
@@ -333,6 +342,9 @@ init_vault() {
         if [ -n "${CONFIG_SYSTEMONE_API_KEY:-}" ]; then
             echo "MIRA_INJECTION_SCREEN_ENABLED=1"
             echo "MIRA_SYSTEMONE_PROVIDER=remote"
+        fi
+        if [ -n "${CONFIG_GLOBAL_MEMORY_STORE_URL:-}" ]; then
+            echo "MIRA_GLOBAL_MEMORY_STORE_URL=${CONFIG_GLOBAL_MEMORY_STORE_URL}"
         fi
     } > /opt/mira/systemone.env
     chmod 600 /opt/mira/systemone.env

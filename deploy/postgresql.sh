@@ -629,6 +629,11 @@ fi
 if [ "$CONFIG_INJECTION_SCREEN" = "yes" ] && [ "$CONFIG_SYSTEMONE_PROVIDER" = "remote" ]; then
     API_KEYS_ARGS+=("${SYSTEMONE_VAULT_KEY_NAME}=${CONFIG_SYSTEMONE_API_KEY}")
 fi
+# Global memory store: the bearer token the instance presents to the store.
+# Written only when the operator set it; absent means the store stays disabled.
+if [ -n "${MIRA_GLOBAL_MEMORY_STORE_TOKEN:-}" ]; then
+    API_KEYS_ARGS+=(global_memory_store="${MIRA_GLOBAL_MEMORY_STORE_TOKEN}")
+fi
 vault_put_with_backup "${API_KEYS_ARGS[@]}"
 
 # Preserved, never overwritten — see vault_put_if_not_exists: on a re-run that

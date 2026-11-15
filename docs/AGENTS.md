@@ -8,6 +8,7 @@
 - `MANUAL_INSTALL.md` — the hand-executed install for platforms the installer rejects. Open it when `deploy/deploy.sh` refuses a platform, or when a step of the automated install must be reproduced by hand.
 - `OFFLINE_MODELS.md` — the local llama-server endpoints, model-name configuration, and pre-start checklist. Open it before an offline-mode install.
 - `SEGMENT_SYSTEM.md` — the operator-level account of segments, sentinels, collapse, and live context compaction. Open it when explaining stored conversation history to an operator.
+- `GLOBAL_MEMORY_STORE.md` — the operator guide for the shared global memory store: host prerequisites, install, config, the `init`/`serve` commands, pointing an instance at it, deleting a memory, and the limits. Open it before setting up or troubleshooting the store.
 - `GLOSSARY.md` — one sentence per codebase-specific term, each naming the map or file that owns the detail. Open it when a term in a user message or a tool result does not decode.
 
 ## Wiring
