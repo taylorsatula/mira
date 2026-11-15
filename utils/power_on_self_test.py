@@ -2,11 +2,17 @@
 Power-on self-test: the boot gate that runs before Hypercorn binds, and the
 live checks that run against the bound server.
 
-The pre-server phase runs in a child process (``run_pre_server_post_gate``
-spawns ``python -m utils.power_on_self_test pre-server``) so the probe's own
+The pre-server rounds run in a child process (``run_pre_server_post_gate``
+spawns ``python -m utils.power_on_self_test pre-server``) so the checks' own
 singletons never land in the serving process's memory, and so the parent can
-kill a round at a hard deadline. Rounds retry a bounded number of times; on the
-final failure the gate does not return at all — it parks (default) or exits per
+kill a round at a hard deadline. (The dependency wait below runs in the
+serving process and does create the Valkey/Vault singletons early — the app
+would create them anyway.) Before the rounds, the gate waits a bounded
+time for Postgres, Valkey and Vault to answer (``MIRA_DEPENDENCY_WAIT_SECONDS``,
+default 180; 0 disables) — supervisor ordering starts services, it does not
+wait for readiness, and a slow-booting dependency must not consume the round
+budget. Rounds retry a bounded number of times; on the final failure the gate
+does not return at all — it parks (default) or exits per
 ``MIRA_POST_GATE_FAILURE_ACTION``, because returning or exiting into a
 restart-on-exit supervisor re-runs the billed provider reachability probes on
 every restart. ``run_post_server_post`` does the live HTTP checks instead.
@@ -25,6 +31,7 @@ import argparse
 import inspect
 import json
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -32,7 +39,7 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, NoReturn
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request as UrlRequest
@@ -60,6 +67,10 @@ PRE_SERVER_POST_DEADLINE_SECONDS = 300
 # exit-and-restart: set MIRA_POST_GATE_FAILURE_ACTION=exit.
 PRE_SERVER_GATE_ATTEMPTS = 3
 PRE_SERVER_GATE_RETRY_SECONDS = 10
+DEPENDENCY_WAIT_SECONDS_ENV = "MIRA_DEPENDENCY_WAIT_SECONDS"
+DEPENDENCY_WAIT_DEFAULT_SECONDS = 180.0
+DEPENDENCY_WAIT_POLL_SECONDS = 2.0
+DEPENDENCY_WAIT_LOG_INTERVAL_SECONDS = 30.0
 POST_GATE_FAILURE_ACTION_ENV = "MIRA_POST_GATE_FAILURE_ACTION"
 POST_GATE_FAILURE_ACTIONS = ("park", "exit")
 POST_SERVER_POST_DEADLINE_SECONDS = 60
@@ -135,8 +146,164 @@ def _post_gate_failure_action() -> str:
     return value
 
 
+def _dependency_wait_seconds() -> float:
+    """Parse MIRA_DEPENDENCY_WAIT_SECONDS. Strict, like the failure action."""
+    raw = os.environ.get(DEPENDENCY_WAIT_SECONDS_ENV)
+    if raw is None:
+        return DEPENDENCY_WAIT_DEFAULT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(
+            f"{DEPENDENCY_WAIT_SECONDS_ENV} must be a finite number of seconds; got {raw!r}"
+        ) from None
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(
+            f"{DEPENDENCY_WAIT_SECONDS_ENV} must be a finite number of seconds >= 0; got {raw!r}"
+        )
+    return value
+
+
+def _probe_postgres() -> None:
+    import psycopg
+
+    from clients.vault_client import get_database_url
+
+    try:
+        database_url = get_database_url("mira_service")
+    except Exception as exc:
+        # The URL comes from Vault, so a Vault outage surfaces here first;
+        # say so, or the operator reads a Vault failure as a Postgres one.
+        raise RuntimeError(f"cannot read the database URL from Vault: {exc}") from exc
+    with psycopg.connect(database_url, connect_timeout=2) as conn:
+        conn.execute("SELECT 1")
+
+
+def _probe_valkey() -> None:
+    from clients.valkey_client import get_valkey_client
+
+    get_valkey_client()  # construction pings; raises while Valkey is unreachable
+
+
+def _probe_vault() -> None:
+    from clients.vault_client import _ensure_vault_client
+
+    _ensure_vault_client()  # AppRole login; raises while Vault is sealed or down
+
+
+_DEPENDENCY_PROBES: dict[str, Callable[[], None]] = {
+    "postgres": _probe_postgres,
+    "valkey": _probe_valkey,
+    "vault": _probe_vault,
+}
+
+
+def _short_error(exc: Exception | None) -> str:
+    if exc is None:
+        return "unknown error"
+    return " ".join(str(exc).split())[:200]
+
+
+def _wait_for_dependencies(deadline_seconds: float) -> list[str]:
+    """Poll local infrastructure until it answers or the deadline passes.
+
+    Cheap probes only — no LLM calls — so a dependency that is merely slow to
+    boot is not mistaken for a broken one. The deadline is soft by up to one
+    probe's duration: a blackholed (not refused) Vault can hold a probe for
+    its client timeout. Returns the names of the dependencies still down at
+    the deadline; empty means all answered.
+
+    The vault_client logger is held at CRITICAL for the duration: every failed
+    probe logs full tracebacks there, and a boot with Vault down would bury
+    the one CRITICAL line that names the missing dependency.
+    """
+    pending = dict(_DEPENDENCY_PROBES)
+    started = time.monotonic()
+    deadline = started + deadline_seconds
+    last_log = started
+    last_errors: dict[str, Exception] = {}
+    reported: set[str] = set()
+    vault_logger = logging.getLogger("clients.vault_client")
+    previous_vault_level = vault_logger.level
+    vault_logger.setLevel(logging.CRITICAL)
+    logger.info(
+        "Waiting up to %.0fs for dependencies to come up: %s",
+        deadline_seconds,
+        ", ".join(sorted(pending)),
+    )
+    try:
+        while pending:
+            for name in list(pending):
+                if time.monotonic() >= deadline:
+                    break
+                try:
+                    _DEPENDENCY_PROBES[name]()
+                except Exception as exc:
+                    last_errors[name] = exc
+                    if name not in reported:
+                        reported.add(name)
+                        logger.info("Dependency not ready yet: %s: %s", name, _short_error(exc))
+                else:
+                    del pending[name]
+                    logger.info(
+                        "Dependency ready: %s (after %.1fs)",
+                        name,
+                        time.monotonic() - started,
+                    )
+            if not pending:
+                logger.info("All dependencies ready after %.1fs", time.monotonic() - started)
+                return []
+            now = time.monotonic()
+            if now >= deadline:
+                break
+            if now - last_log >= DEPENDENCY_WAIT_LOG_INTERVAL_SECONDS:
+                waiting = ", ".join(
+                    f"{name} ({_short_error(last_errors[name])})" for name in sorted(pending)
+                )
+                logger.info(
+                    "Still waiting (%.0fs of %.0fs): %s",
+                    now - started,
+                    deadline_seconds,
+                    waiting,
+                )
+                last_log = now
+            time.sleep(min(DEPENDENCY_WAIT_POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+    finally:
+        vault_logger.setLevel(previous_vault_level)
+    for name in sorted(pending):
+        logger.critical(
+            "Dependency never came up after %.0fs: %s: %s",
+            deadline_seconds,
+            name,
+            _short_error(last_errors.get(name)),
+        )
+    return sorted(pending)
+
+
+def _park_or_exit(reason: str, remedy: str) -> NoReturn:
+    action = _post_gate_failure_action()
+    logger.critical(
+        "%s; %s the process %s. %s",
+        reason,
+        action,
+        "(server never binds)" if action == "park" else "(supervisor may restart)",
+        remedy,
+    )
+    if action == "exit":
+        raise SystemExit(1)
+    while True:
+        time.sleep(300)
+
+
 def run_pre_server_post_gate(deadline_seconds: int = PRE_SERVER_POST_DEADLINE_SECONDS) -> PostReport:
     """Run the pre-server POST as a bounded hard startup gate.
+
+    First waits (bounded by MIRA_DEPENDENCY_WAIT_SECONDS, default 180; 0
+    disables) for Postgres, Valkey and Vault to answer, so a dependency that is
+    merely slow to boot is not mistaken for a broken one and does not consume
+    the round budget. If the wait expires, the gate takes the park/exit action
+    without running the rounds — the rounds would re-run the billed provider
+    probes against a boot whose infrastructure never came up.
 
     Rounds retry in-process up to PRE_SERVER_GATE_ATTEMPTS times, sleeping
     PRE_SERVER_GATE_RETRY_SECONDS between failures. On the final failure the
@@ -150,24 +317,25 @@ def run_pre_server_post_gate(deadline_seconds: int = PRE_SERVER_POST_DEADLINE_SE
             bounded loop; it only escapes if a future caller opts into
             single-round semantics).
     """
+    wait_seconds = _dependency_wait_seconds()
+    if wait_seconds > 0:
+        missing = _wait_for_dependencies(wait_seconds)
+        if missing:
+            # The rounds would re-run the billed provider probes against a
+            # boot whose infrastructure never came up; park instead.
+            _park_or_exit(
+                f"Dependencies did not come up within {wait_seconds:.0f}s: {', '.join(missing)}",
+                "Fix the failing dependency, then restart the mira service manually.",
+            )
     for attempt in range(1, PRE_SERVER_GATE_ATTEMPTS + 1):
         try:
             return _run_pre_server_post_round(deadline_seconds)
         except PostFailure:
             if attempt == PRE_SERVER_GATE_ATTEMPTS:
-                action = _post_gate_failure_action()
-                logger.critical(
-                    "Pre-server POST failed %d consecutive times; %s the process "
-                    "%s. Fix the failing configuration, then restart the mira "
-                    "service manually.",
-                    attempt,
-                    action,
-                    "(server never binds)" if action == "park" else "(supervisor may restart)",
+                _park_or_exit(
+                    f"Pre-server POST failed {attempt} consecutive rounds",
+                    "Fix the failing configuration, then restart the mira service manually.",
                 )
-                if action == "exit":
-                    raise SystemExit(1)
-                while True:
-                    time.sleep(300)
             logger.error(
                 "Pre-server POST attempt %d/%d failed; retrying in %ds",
                 attempt,
