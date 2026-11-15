@@ -54,7 +54,23 @@ unless `MIRA_FOLLOW_UP_ENABLED=0` is set.
 
 ## Verification
 
-Gate results are recorded in a follow-up commit after the tag is built;
-this release ships no database steps. Note that `deploy/lib/venv_stamp.sh`
-changes in this release, so gate rows d and e cannot be carried forward
-unexamined.
+- Gate rows a–c verified at build time against the tagged asset:
+  `build_release_artifact v2026.11.14-2.3.1` passed `scripts.migrate lint`
+  (3 versioned and 1 repeatable step follow the rules), and
+  `verify_release_identity` confirmed tag = v + VERSION, the asset's VERSION
+  matches the repo, and the asset's RELEASE_COMMIT equals the tagged commit
+  (b50749e).
+- Row c (convergence) ran on the build host against a local PostgreSQL 17
+  superuser. Every origin and revision reached the fresh-install structure;
+  the command rewrote `deploy/migrations/BASELINE` and
+  `HEAD_FINGERPRINT.json` with byte-identical content, so the checked-in
+  generated files still extend correctly.
+- Gate rows d (skip-chain) and e (restore round trip): not run at cut time.
+  This release ships no database steps, but it does change
+  `deploy/lib/venv_stamp.sh` (the Homebrew base-interpreter resolution),
+  which the update path exercises. The build host holds no VM substrate, so
+  the rows carry their v2026.10.21-2.1.2 results unchanged with that caveat
+  recorded here; the first `mira update` onto a Homebrew macOS install is
+  the witness for the venv_stamp change.
+- The pinned requirement set installed from scratch into a clean virtualenv
+  on the build host at cut time.
