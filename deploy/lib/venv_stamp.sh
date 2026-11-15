@@ -31,12 +31,30 @@ python_version_of() {
     "$1" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])'
 }
 
-# Prints the base interpreter a venv runs on (sys.base_prefix/bin/python3).
+# Prints the base interpreter a venv runs on.
 # Usage: venv_base_python <venv>
+#
+# The base interpreter's filename is not portable: Linux and the python.org
+# macOS framework ship an unversioned `python3`, but Homebrew's python@3.x keg
+# ships only `python3.X` in its Framework bin. Blindly appending `/bin/python3`
+# therefore names a nonexistent file on Homebrew macOS, which later breaks
+# python_version_of. Probe for the interpreter that actually exists under the
+# base prefix, preferring the unversioned name, and fall back to the exact
+# interpreter Python recorded when the venv was created.
 venv_base_python() {
-    local base
-    base="$("$1/bin/python3" -c 'import sys; print(sys.base_prefix)')" || return 1
-    printf '%s/bin/python3\n' "$base"
+    "$1/bin/python3" -c '
+import os, sys
+prefix = sys.base_prefix
+ver = "%d.%d" % sys.version_info[:2]
+for cand in (os.path.join(prefix, "bin", "python3"),
+             os.path.join(prefix, "bin", "python" + ver),
+             getattr(sys, "_base_executable", None)):
+    if cand and os.path.exists(cand):
+        print(cand)
+        break
+else:
+    sys.exit(1)
+' || return 1
 }
 
 # Writes <venv>/.mira-build-stamp (mode 0644).
