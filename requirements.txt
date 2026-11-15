@@ -47,7 +47,7 @@ hvac==2.4.0
 
 # == IMAGE PROCESSING ==
 Pillow==13.0.0
-pypdf==6.21.2
+pypdf==6.21.4
 
 # == UTILITIES & HELPERS ==
 pydantic==2.14.1
