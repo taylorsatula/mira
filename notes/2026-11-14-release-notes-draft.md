@@ -6,6 +6,24 @@ for installs on Homebrew macOS. No database steps and no dependency
 changes, so an update has nothing to consent to and no virtualenv to
 rebuild.
 
+## Amendment (2026-11-15): tag moved to ship the boot-gate fix
+
+The tag `v2026.11.14-2.3.1` was moved from `b50749e` to `cf43eed` and the
+asset was rebuilt and re-uploaded under the same name and release id. The
+release id, `VERSION`, and the asset filename are unchanged; what changed is
+what the tag points at. `cf43eed` adds one fix on top of the original tag:
+the pre-server boot gate now waits for Postgres, Valkey and Vault to answer
+before running its verification rounds (`MIRA_DEPENDENCY_WAIT_SECONDS`,
+default 180 seconds, `0` disables), so a slow-starting database no longer
+consumes the round budget and parks a healthy-but-slow boot. If the wait
+expires, the gate takes the park/exit action without running the rounds, so
+the billed provider probes never run against a boot whose infrastructure
+never came up. No database steps, no dependency changes, no `VERSION`
+change. Gate rows a–c were re-verified at rebuild time (lint, tag/version/
+asset identity, `RELEASE_COMMIT` = `cf43eed`); rows d and e remain as
+recorded below. Anyone who downloaded the asset before this amendment holds
+the pre-fix build; re-download to get the fix.
+
 ## A quiet user gets one nudge, not a stream
 
 After a completed turn, MIRA now arms a one-shot two-minute timer. If the
@@ -59,7 +77,8 @@ unless `MIRA_FOLLOW_UP_ENABLED=0` is set.
   (3 versioned and 1 repeatable step follow the rules), and
   `verify_release_identity` confirmed tag = v + VERSION, the asset's VERSION
   matches the repo, and the asset's RELEASE_COMMIT equals the tagged commit
-  (b50749e).
+  (b50749e at cut time; cf43eed after the 2026-11-15 amendment, re-verified
+  at rebuild).
 - Row c (convergence) ran on the build host against a local PostgreSQL 17
   superuser. Every origin and revision reached the fresh-install structure;
   the command rewrote `deploy/migrations/BASELINE` and
