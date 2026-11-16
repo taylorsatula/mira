@@ -28,7 +28,7 @@
 - `live_context_compaction_user.txt` — the newly compacted range. Open it when the compaction input format changes.
 - `subcortical_system.txt` — the per-turn retrieval filter. Open it before changing which memories and entities a turn sees.
 - `subcortical_user.txt` — the turn half of that pair.
-- `behavioral_primer.txt` — a rehearsal correction dialogue spliced into the session cache. Open it before editing its turns; its shape is a parser contract, see `## Rules`.
+- `behavioral_primer.txt` — rehearsal correction dialogue retained for optional session-cache injection, disabled by `cns/core/segment_cache_loader.py:BEHAVIORAL_PRIMER_ENABLED`. Open it before editing its turns; its shape is a parser contract, see `## Rules`.
 
 **User model: assess, synthesize, validate, revise**
 

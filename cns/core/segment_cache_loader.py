@@ -21,9 +21,10 @@ The ordering contract: the returned list is chronological end to end, so
 marker reads that tail for its gap line, so reordering the concatenation
 makes the boundary state the wrong session's end time.
 
-Primer turns are parsed once in `__init__` and those same `Message` instances
-enter every user's cache; they are never persisted, so nothing may stamp
-per-user data onto their metadata.
+Behavioral primer injection is disabled by `BEHAVIORAL_PRIMER_ENABLED`.
+When enabled, primer turns are parsed once in `__init__` and those same
+`Message` instances enter every user's cache. They are never persisted,
+so nothing may stamp per-user data onto their metadata.
 """
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ SESSION_SUMMARY_COMPLEXITY_LIMIT = 4.5  # Max total complexity for Tier 1 extend
 SESSION_SUMMARY_MAX_COUNT = 4           # Max Tier 1 extended summaries
 SESSION_SUMMARY_QUERY_WINDOW = 14       # Recent segments to query for selection
 SESSION_PRECIS_MAX_COUNT = 4            # Max Tier 2 precis-only summaries
+BEHAVIORAL_PRIMER_ENABLED = False
 
 
 class SegmentCacheLoader:
@@ -57,7 +59,7 @@ class SegmentCacheLoader:
             repository: Continuum repository for persistence
         """
         self.repository = repository
-        self._primer_turns = self._load_behavioral_primer()
+        self._primer_turns = self._load_behavioral_primer() if BEHAVIORAL_PRIMER_ENABLED else []
 
     def _load_behavioral_primer(self) -> list[Message]:
         """Load behavioral primer dialogue and create Message objects.
