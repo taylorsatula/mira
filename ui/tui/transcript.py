@@ -9,9 +9,9 @@ leading blank line is part of the block; spacing lives here and nowhere else.
 Conversation turns are open boxes inside a band narrower than the terminal
 (``_band``), word-wrapped here at render time so the gutter repeats on every
 wrapped row. MIRA's box opens with the ``:MIRA`` label on its first row,
-continues with a ``╵`` gutter, and closes with a ``╰`` border along the
-bottom left; the user's box carries ``ME:`` / ``╵`` on the right edge and
-closes with a ``╯`` border along the bottom right. Both borders run
+continues with a ``║`` gutter, and closes with a ``╚`` border along the
+bottom left; the user's box carries ``ME:`` / ``║`` on the right edge and
+closes with a ``╝`` border along the bottom right. Both borders run
 ``BORDER_WIDTH`` cells from their own side. Both are printable top to
 bottom without knowing their final height, which is what append-only
 scrollback requires: the user's box prints whole, MIRA's prints row by row
@@ -40,10 +40,9 @@ ME_STYLE = "bright_magenta"
 CODE_STYLE = "cyan"
 
 MIRA_LABEL = ":MIRA "
-MIRA_GUTTER = "╵     "  # same width as MIRA_LABEL: the ╵ sits under the ":"
+MIRA_GUTTER = "║     "  # same width as MIRA_LABEL: the ║ sits under the ":"
 ME_LABEL = "  ME:"
-ME_GUTTER = "    ╵"  # same width as ME_LABEL: the ╵ sits under the ":"
-BORDER_CHAR = "╴"
+ME_GUTTER = "    ║"  # same width as ME_LABEL: the ║ sits under the ":"
 
 # The band is the turn area: five sixths of the terminal width, so turns
 # never run to the window edge and scale with the window.
@@ -172,7 +171,7 @@ class _MiraRows:
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         band = _band(options.max_width)
-        out = Text("\n" if self._opens else "")
+        out = Text("\n\n" if self._opens else "")
         for i, row in enumerate(_wrap(console, self._body, band - len(MIRA_LABEL))):
             if i:
                 out.append("\n")
@@ -230,7 +229,7 @@ class _MiraClose:
     """The bottom-left border that ends MIRA's box."""
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-        yield Text("╰" + BORDER_CHAR * BORDER_WIDTH, style=MIRA_STYLE)
+        yield Text("╚" + "═" * BORDER_WIDTH, style=MIRA_STYLE)
 
 
 class _You:
@@ -247,7 +246,7 @@ class _You:
         rows = _wrap(console, Text(self._text), width)
         box = width if len(rows) > 1 else rows[0].cell_len
         indent = " " * max(0, band - len(ME_LABEL) - box)
-        out = Text()
+        out = Text("\n")
         for i, row in enumerate(rows):
             out.append("\n" + indent)
             out.append_text(row)
@@ -257,7 +256,7 @@ class _You:
             else:
                 out.append(ME_GUTTER, style=ME_STYLE)
         out.append("\n" + " " * max(0, band - 1 - BORDER_WIDTH))
-        out.append(BORDER_CHAR * BORDER_WIDTH + "╯", style=ME_STYLE)
+        out.append("═" * BORDER_WIDTH + "╝", style=ME_STYLE)
         yield out
 
 
