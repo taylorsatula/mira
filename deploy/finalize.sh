@@ -307,6 +307,38 @@ install_host_file "$MIRA_CLI_TMP" "$MIRA_CLI_PATH"
 rm -f "$MIRA_CLI_TMP"
 echo -e "${CHECKMARK}"
 
+# Remote access gate: one shared secret required from any non-loopback peer
+# (browser, PWA, API client) before MIRA answers. The app reads it from
+# Vault (secret/mira/gate) at request time; loopback is never gated. An
+# existing secret is kept, never rotated, so re-installs don't strand phones
+# that already passed the gate. The token is copied into the credential dump
+# below, never printed to stdout.
+print_header "Step 15e: Remote Access Gate"
+GATE_TOKEN=""
+if [ "${CONFIG_REMOTE_GATE:-no}" = "yes" ]; then
+    if vault kv get secret/mira/gate >/dev/null 2>&1; then
+        GATE_TOKEN="$(vault kv get -field=token secret/mira/gate 2>/dev/null || true)"
+        print_info "Remote gate already configured (secret/mira/gate) — keeping the existing secret"
+        STATUS_REMOTE_GATE="${CHECKMARK} Enabled (existing secret kept)"
+    else
+        GATE_TOKEN="$(openssl rand -hex 24 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+        if vault kv put secret/mira/gate token="$GATE_TOKEN" >/dev/null 2>&1; then
+            print_success "Remote gate enabled — secret written to Vault (secret/mira/gate)"
+            STATUS_REMOTE_GATE="${CHECKMARK} Enabled (secret in credential dump)"
+        else
+            print_warning "Could not write secret/mira/gate to Vault — remote gate NOT enabled"
+            print_info "Enable later: vault kv put secret/mira/gate token=\"\$(openssl rand -hex 24)\", then restart MIRA"
+            GATE_TOKEN=""
+            STATUS_REMOTE_GATE="${YELLOW}Failed — see above${RESET}"
+        fi
+    fi
+else
+    print_info "Remote gate skipped. If you ever open MIRA from your phone or another device,"
+    print_info "turn it on then — one command and a restart:"
+    print_info "  vault kv put secret/mira/gate token=\"\$(openssl rand -hex 24)\"  &&  sudo systemctl restart mira"
+    STATUS_REMOTE_GATE="${DIM}Skipped (off by default)${RESET}"
+fi
+
 # Write one-time credential dump to user's home directory
 print_header "Step 15c: Credential Dump"
 
@@ -367,6 +399,17 @@ CREDS
     else
         cat >> "$CRED_FILE" <<CREDS
   (Offline/local mode — no external API keys configured)
+CREDS
+    fi
+
+    if [ -n "$GATE_TOKEN" ]; then
+        cat >> "$CRED_FILE" <<CREDS
+
+Remote Access Gate secret: ${GATE_TOKEN}
+  Required from any browser or API client connecting from OUTSIDE this
+  machine (e.g. your phone over Tailscale). Local access is unaffected.
+  Rotate:  vault kv put secret/mira/gate token="\$(openssl rand -hex 24)"  (then restart MIRA)
+  Disable: vault kv delete secret/mira/gate  (then restart MIRA)
 CREDS
     fi
 
@@ -528,6 +571,22 @@ else
         echo -e "  ${CYAN}→${RESET} Logs: ${BOLD}tail -f /opt/mira/logs/mira-launchd.log${RESET}"
         echo -e "  ${CYAN}→${RESET} Stop: ${BOLD}launchctl bootout gui/$(id -u)/com.mira.app${RESET}"
     fi
+fi
+
+if [ "${CONFIG_REMOTE_GATE:-no}" = "yes" ]; then
+    echo ""
+    echo -e "${BOLD}${BLUE}Remote Access${RESET}"
+    print_info "The remote gate is ON: anything outside this machine needs the gate secret."
+    if [ "${_cred_write_failed:-false}" = "true" ]; then
+        print_info "The secret is in Vault (secret/mira/gate) — the credential dump could not be written."
+    else
+        print_info "The secret is in ${CRED_FILE} and in Vault (secret/mira/gate)."
+    fi
+    print_info "Reach MIRA from another device (e.g. a phone) over Tailscale:"
+    print_info "  1. Install Tailscale on this machine and the other device, same account"
+    print_info "  2. tailscale serve --bg 1993   # https://<host>.<tailnet>.ts.net"
+    print_info "  3. Open that URL on the other device and enter the gate secret once"
+    print_info "Disable: vault kv delete secret/mira/gate, then restart MIRA"
 fi
 
 # Harden /opt/vault/ permissions — restrict to MIRA_USER only

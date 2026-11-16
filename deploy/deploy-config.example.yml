@@ -146,3 +146,13 @@ overwrite_existing: no
 # Answer to the occupied-ports prompt (1993/8200/6379/5432): stop the
 # occupying services, or abort?
 stop_occupied_ports: yes
+# Require a shared secret from any peer that is not loopback (browsers, PWAs,
+# API clients reaching MIRA over e.g. Tailscale). Local access is unaffected.
+# Recommended if you will ever open MIRA from your phone or another device:
+# one shared secret, checked only for outside connections. The installer
+# generates the secret, stores it in Vault (secret/mira/gate), and copies it
+# into the credential dump. Enable later with:
+#   vault kv put secret/mira/gate token="$(openssl rand -hex 24)"  (then restart MIRA)
+# Disable with:
+#   vault kv delete secret/mira/gate   (then restart MIRA)
+remote_gate: no

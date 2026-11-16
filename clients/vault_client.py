@@ -103,8 +103,13 @@ class VaultClient:
                 path=path, raise_on_deleted_version=True
             )
 
-    def get_secret(self, path: str, field: str) -> str:
-        """Retrieves single field from KV v2 API with structured error handling."""
+    def get_secret(self, path: str, field: str, *, quiet_missing: bool = False) -> str:
+        """Retrieves single field from KV v2 API with structured error handling.
+
+        quiet_missing suppresses the ERROR log for a missing path — for
+        callers for whom absence is a normal state (an optional secret), not
+        a failure. The FileNotFoundError is raised either way.
+        """
         try:
             response = self._read_secret_version(path)
             secret_data = response['data']['data']
@@ -116,7 +121,8 @@ class VaultClient:
             return secret_data[field]
 
         except InvalidPath:
-            logger.error(f"Secret path not found: {path}", exc_info=True)
+            if not quiet_missing:
+                logger.error(f"Secret path not found: {path}", exc_info=True)
             raise FileNotFoundError(f"Secret path '{path}' not found in Vault")
 
         except (Unauthorized, Forbidden) as e:
@@ -126,6 +132,22 @@ class VaultClient:
         except VaultError as e:
             logger.error(f"Vault API error for {path}/{field}: {e}", exc_info=True)
             raise RuntimeError(f"Vault API error retrieving '{path}/{field}': {str(e)}")
+
+def get_secret(path: str, field: str, *, quiet_missing: bool = False) -> str:
+    """Read a single field from an arbitrary KV v2 path, cached for the process lifetime.
+
+    Same caching contract as the named helpers below; raises FileNotFoundError
+    when the path or field does not exist, so callers can distinguish
+    "not configured" from a Vault outage. quiet_missing suppresses the ERROR
+    log for a missing path, for callers for whom absence is a normal state.
+    """
+    cache_key = f"{path}/{field}"
+    if cache_key in _secret_cache:
+        return _secret_cache[cache_key]
+    value = _ensure_vault_client().get_secret(path, field, quiet_missing=quiet_missing)
+    _secret_cache[cache_key] = value
+    return value
+
 
 def get_database_url(service: str, admin: bool = False) -> str:
     """

@@ -56,6 +56,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from auth import api as auth_api
 from auth.mode import auth_mode
+from auth.remote_gate import RemoteGateMiddleware, router as remote_gate_router
 from auth.security_middleware import SecurityHeadersMiddleware
 from config.config_manager import config
 from config.announcement import load_announcement
@@ -513,6 +514,11 @@ def create_app() -> FastAPI:
             allow_methods=["GET", "POST", "PUT", "DELETE"],
             allow_headers=["*"],
         )
+
+    # Outermost layer: the optional remote gate. No-op for loopback peers and
+    # for installs with no `mira/gate` secret in Vault; otherwise every
+    # non-loopback HTTP/WebSocket request needs the gate cookie.
+    app.add_middleware(RemoteGateMiddleware)
     
     app.include_router(health.router, prefix="/v1/api", tags=["health"])
     app.include_router(update.router, prefix="/v1/api", tags=["update"])  # Public update check
@@ -520,6 +526,7 @@ def create_app() -> FastAPI:
     # authenticates through the shared credential ladder (session cookie →
     # issued API token).
     app.include_router(auth_api.router, prefix="/v1/auth", tags=["auth"])
+    app.include_router(remote_gate_router)
     app.include_router(chat_api.router, prefix="/v1/api", tags=["chat"])
     app.include_router(data.router, prefix="/v1/api", tags=["data"])
     app.include_router(actions.router, prefix="/v1/api", tags=["actions"])

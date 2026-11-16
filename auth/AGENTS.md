@@ -14,6 +14,7 @@
 - `seed_lora.py` — the feedback-tracking row every new account starts with. Open it before changing what a fresh account owes the user-model pipeline.
 - `email_service.py` — the mail transport seam and the SMTP backend. Open it before changing how a magic link reaches an inbox, or where its settings come from.
 - `rate_limiter.py` — Valkey fixed-window limiting on the pre-auth surfaces; `reset` is dead surface, so do not build on it. Open it when a signup or link request is refused for rate limits.
+- `remote_gate.py` — the optional shared-secret gate for non-loopback peers (`mira/gate` in Vault); a pure-ASGI middleware plus the `/remote-gate` page and its submit endpoint. Open it before changing how a request from off-box is admitted.
 - `security_logger.py` — structured auth event logging with masked identifiers. Open it before adding a security event.
 - `security_middleware.py` — the response security headers and the `MIRA_CSP` gate. Open it before changing a header, or before proposing a CSP posture.
 - `webauthn_service.py` — passkey ceremonies and their failure taxonomy. Open it before touching a ceremony or a WebAuthn error class.

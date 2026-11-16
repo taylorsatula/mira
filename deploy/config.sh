@@ -50,6 +50,7 @@ STATUS_USER_NAME=""
 STATUS_TIMEZONE=""
 STATUS_PLAYWRIGHT=""
 STATUS_SYSTEMD=""
+STATUS_REMOTE_GATE=""
 STATUS_MIRA_SERVICE=""
 LUNAROUTE_MODE=""                    # yes when the LunaRoute shortcut prefilled the hosted stack
 
@@ -786,6 +787,28 @@ elif [ "$OS" = "macos" ]; then
     fi
 fi
 
+# Remote access gate (optional): one shared secret required from any peer that
+# is not loopback — browsers, PWAs, and API clients connecting over e.g.
+# Tailscale. Local access is unaffected. The secret is written to Vault
+# (secret/mira/gate) by finalize.sh and copied into the credential dump.
+echo -e "${BOLD}${BLUE}11. Remote Access Gate${RESET} ${DIM}(recommended — takes 5 seconds, off by default)${RESET}"
+echo -e "${DIM}    If you ever want to open MIRA from your phone or another device (e.g. over${RESET}"
+echo -e "${DIM}    Tailscale), this is the one thing standing between that and full access for${RESET}"
+echo -e "${DIM}    anyone who can reach the port. One shared secret, checked only for connections${RESET}"
+echo -e "${DIM}    from outside this machine — local use is never affected. Easy to turn on now${RESET}"
+echo -e "${DIM}    or later (one command + a restart). If you might use your phone someday, press y.${RESET}"
+read -p "$(echo -e ${CYAN}Require a secret for remote access?${RESET}) (y/n, default=n): " REMOTE_GATE_INPUT
+if [ -z "$REMOTE_GATE_INPUT" ]; then
+    REMOTE_GATE_INPUT="n"
+fi
+if [[ "$REMOTE_GATE_INPUT" =~ ^[Yy](es)?$ ]]; then
+    CONFIG_REMOTE_GATE="yes"
+    STATUS_REMOTE_GATE="${CHECKMARK} Enabled (secret written to Vault)"
+else
+    CONFIG_REMOTE_GATE="no"
+    STATUS_REMOTE_GATE="${DIM}Skipped${RESET}"
+fi
+
 fi
 
 # Timezone resolution: an empty CONFIG_TIMEZONE (yml "" or interview Enter)
@@ -832,6 +855,7 @@ echo -e "  DB Password:     ${STATUS_DB_PASSWORD}"
 echo -e "  Your Name:       ${STATUS_USER_NAME}"
 echo -e "  Timezone:        ${STATUS_TIMEZONE}"
 echo -e "  Playwright:      ${STATUS_PLAYWRIGHT}"
+echo -e "  Remote Gate:     ${STATUS_REMOTE_GATE}"
 # The label names the supervisor that actually exists: systemd is Linux-only,
 # so macOS gets the honest word for the same thing (the LaunchAgent).
 if [ "$OS" = "macos" ]; then

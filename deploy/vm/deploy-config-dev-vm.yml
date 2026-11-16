@@ -42,3 +42,6 @@ install_systemd: yes
 start_mira_now: yes
 overwrite_existing: yes
 stop_occupied_ports: yes
+# Remote gate: off by default; the dev VM is disposable and reached over the
+# host's NAT, but flip to yes to exercise the gate end to end.
+remote_gate: no

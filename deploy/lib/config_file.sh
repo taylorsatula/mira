@@ -81,7 +81,7 @@ parse_yaml_config() {
             "'"*) value="${value#\'}"; value="${value%\'}" ;;
         esac
         case "$key" in
-            offline_mode|local_model_choice|custom_gguf|build_llama_cpp|llama_main_url|llama_small_url|llama_main_model|llama_small_model|chat_provider_type|chat_endpoint|chat_api_key|chat_model|anthropic_key|anthropic_batch_key|subcortical_endpoint|subcortical_api_key|subcortical_model|kagi_api_key|embedding_provider|embedding_endpoint|embedding_model|embedding_api_key|injection_screen|systemone_provider|systemone_endpoint|systemone_model|systemone_api_key|user_name|timezone|db_password|install_playwright|install_systemd|start_mira_now|overwrite_existing|stop_occupied_ports)
+            offline_mode|local_model_choice|custom_gguf|build_llama_cpp|llama_main_url|llama_small_url|llama_main_model|llama_small_model|chat_provider_type|chat_endpoint|chat_api_key|chat_model|anthropic_key|anthropic_batch_key|subcortical_endpoint|subcortical_api_key|subcortical_model|kagi_api_key|embedding_provider|embedding_endpoint|embedding_model|embedding_api_key|injection_screen|systemone_provider|systemone_endpoint|systemone_model|systemone_api_key|user_name|timezone|db_password|install_playwright|install_systemd|start_mira_now|overwrite_existing|stop_occupied_ports|remote_gate)
                 yaml_store "$key" "$value" ;;
             *) yaml_fail "Unknown config key: '$key' (see deploy-config.example.yml)" ;;
         esac
@@ -90,7 +90,7 @@ parse_yaml_config() {
     # every key is required — the template ships one line per key, so a
     # missing key means the file was hand-edited badly; name it.
     local k
-    for k in offline_mode local_model_choice custom_gguf build_llama_cpp llama_main_url llama_small_url llama_main_model llama_small_model chat_provider_type chat_endpoint chat_api_key chat_model anthropic_key subcortical_endpoint subcortical_api_key subcortical_model kagi_api_key embedding_provider embedding_endpoint embedding_model embedding_api_key injection_screen systemone_provider systemone_endpoint systemone_model systemone_api_key user_name timezone db_password install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports; do
+    for k in offline_mode local_model_choice custom_gguf build_llama_cpp llama_main_url llama_small_url llama_main_model llama_small_model chat_provider_type chat_endpoint chat_api_key chat_model anthropic_key subcortical_endpoint subcortical_api_key subcortical_model kagi_api_key embedding_provider embedding_endpoint embedding_model embedding_api_key injection_screen systemone_provider systemone_endpoint systemone_model systemone_api_key user_name timezone db_password install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports remote_gate; do
         case ",$YAML_SEEN_KEYS," in
             *",$k,"*) : ;;
             *) yaml_fail "Config file is missing required key: '$k'" ;;
@@ -99,7 +99,7 @@ parse_yaml_config() {
 
     # unfilled template placeholders abort before sudo is requested
     local bad="" v
-    for k in offline_mode local_model_choice custom_gguf build_llama_cpp llama_main_url llama_small_url llama_main_model llama_small_model chat_provider_type chat_endpoint chat_api_key chat_model anthropic_key subcortical_endpoint subcortical_api_key subcortical_model kagi_api_key embedding_provider embedding_endpoint embedding_model embedding_api_key injection_screen systemone_provider systemone_endpoint systemone_model systemone_api_key user_name timezone db_password install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports; do
+    for k in offline_mode local_model_choice custom_gguf build_llama_cpp llama_main_url llama_small_url llama_main_model llama_small_model chat_provider_type chat_endpoint chat_api_key chat_model anthropic_key subcortical_endpoint subcortical_api_key subcortical_model kagi_api_key embedding_provider embedding_endpoint embedding_model embedding_api_key injection_screen systemone_provider systemone_endpoint systemone_model systemone_api_key user_name timezone db_password install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports remote_gate; do
         eval "v=\"\$YAML_$k\""
         [ "$v" = "__SET_ME__" ] && bad="$bad $k"
     done
@@ -159,7 +159,7 @@ parse_yaml_config() {
         yaml_fail "systemone_* keys apply only when injection_screen is yes; set them to \"\""
     fi
     local k2 v2
-    for k2 in build_llama_cpp install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports injection_screen; do
+    for k2 in build_llama_cpp install_playwright install_systemd start_mira_now overwrite_existing stop_occupied_ports injection_screen remote_gate; do
         eval "v2=\"\$YAML_$k2\""
         [ "$v2" = "yes" ] || [ "$v2" = "no" ] || yaml_fail "$k2 must be yes or no"
     done
@@ -300,5 +300,12 @@ apply_yaml_config() {
         STATUS_SYSTEMD="${DIM}Skipped${RESET}"
     fi
     CONFIG_START_MIRA_NOW="$YAML_start_mira_now"
+    if [ "$YAML_remote_gate" = "yes" ]; then
+        CONFIG_REMOTE_GATE="yes"
+        STATUS_REMOTE_GATE="${CHECKMARK} Enabled (secret written to Vault)"
+    else
+        CONFIG_REMOTE_GATE="no"
+        STATUS_REMOTE_GATE="${DIM}Skipped${RESET}"
+    fi
     print_info "Configuration loaded from $CONFIG_FILE"
 }

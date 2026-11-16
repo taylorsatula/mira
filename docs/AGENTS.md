@@ -6,6 +6,7 @@
 - `AGENTS_MAP_RESEARCH.md` — the pointer list grounding each rule of the map law, one source per design element that source produced. Open it before amending or culling a law rule.
 - `MAINTAINER_UPGRADE_GUIDE.md` — the maintainer's plain-English account of `mira update` on a user's install, the habits a database-structure change demands, and the plain-terms restatement of `deploy/RELEASE.md`'s checklist. Open it before writing a migration step or answering a failed-update report.
 - `MANUAL_INSTALL.md` — the hand-executed install for platforms the installer rejects. Open it when `deploy/deploy.sh` refuses a platform, or when a step of the automated install must be reproduced by hand.
+- `REMOTE_GATE.md` — the remote-access gate: what it protects, how the installer enables it, and how to enable, rotate, or disable it by hand. Open it when exposing an install beyond loopback.
 - `OFFLINE_MODELS.md` — the local llama-server endpoints, model-name configuration, and pre-start checklist. Open it before an offline-mode install.
 - `SEGMENT_SYSTEM.md` — the operator-level account of segments, sentinels, collapse, and live context compaction. Open it when explaining stored conversation history to an operator.
 - `GLOSSARY.md` — one sentence per codebase-specific term, each naming the map or file that owns the detail. Open it when a term in a user message or a tool result does not decode.
