@@ -58,13 +58,6 @@ an unauthenticated request is refused (tearing the serve config down if it
 is not), and leaves an existing non-MIRA `tailscale serve` configuration
 untouched.
 
-Gate behavior verified on a live install: 401 without a cookie, gate page
-served, 307 with a valid cookie, 401 with an invalid one, over both a direct
-tailnet connection and `tailscale serve`; spoofed `X-Forwarded-For` headers
-(including `127.0.0.1`) do not bypass the gate. The installer's phone-access
-flow was not run end to end on a fresh machine; it is covered by review, not
-by a live install.
-
 ## TUI
 
 - First run now configures the local install automatically: with an empty
@@ -84,16 +77,30 @@ configuration migration. The gate is off unless you enable it.
 
 ## Verification
 
-- Gate rows a–c verified at build time against the tagged asset:
+Re-released 2026-11-16: the tag was moved from 562a342 to the commit
+carrying the phone-access installer flow and the gate fix, and the asset was
+rebuilt from the moved tag.
+
+- Gate rows a–b verified at build time against the tagged asset:
   `build_release_artifact v2026.11.15-2.4.0` passed `scripts.migrate lint`
   (3 versioned and 1 repeatable step follow the rules), and
   `verify_release_identity` confirmed tag = v + VERSION, the asset's VERSION
   matches the repo, and the asset's `RELEASE_COMMIT` equals the tagged
-  commit (562a342).
-- Row c (convergence) ran on the build host against a local PostgreSQL 17
-  superuser; `scripts.migrate generate` rewrote `deploy/migrations/BASELINE`
-  and `HEAD_FINGERPRINT.json` byte-identically (no diff).
+  commit.
+- Row c (convergence) re-ran clean on a throwaway local PostgreSQL 17
+  cluster (initdb, trust auth, no production data): `scripts.migrate
+  generate` rewrote `deploy/migrations/BASELINE` and
+  `HEAD_FINGERPRINT.json` byte-identically (git diff empty).
 - Gate rows d (skip-chain) and e (restore round trip): not run. This
   release ships no database steps and no changes under `deploy/migrations/`
-  (verified: no diff against v2026.11.15-2.3.2) and no updater changes.
-  The rows carry their v2026.10.21-2.1.2 results unchanged.
+  or the schema files (verified: empty diff against v2026.11.15-2.3.2 and
+  against the previous tag) and no updater changes. The rows carry their
+  v2026.10.21-2.1.2 results unchanged.
+- Gate behavior verified on a live install: 401 without a cookie, gate page
+  served, 307 with a valid cookie, 401 with an invalid one, over both a
+  direct tailnet connection and `tailscale serve`; spoofed `X-Forwarded-For`
+  (including `127.0.0.1`, `garbage, 127.0.0.1`, and duplicate header lines)
+  does not bypass the gate, and a loopback peer sending XFF is gated.
+- The installer's phone-access flow was not run end to end on a fresh
+  machine; it is covered by review and shell-level checks, not a live
+  install. The macOS path is written but untested.
