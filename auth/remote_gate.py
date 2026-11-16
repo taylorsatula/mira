@@ -11,6 +11,13 @@ clients) or a redirect to `/remote-gate` (browser navigations). Loopback peers
 are never gated, so local tooling, the installer's health checks, and the
 Docker healthcheck are unaffected.
 
+A loopback peer that sets X-Forwarded-For is treated as a reverse proxy
+(e.g. tailscale serve) and is no longer exempt: the gate engages. The header
+is never parsed for the gate decision — its presence is what disqualifies the
+loopback exemption — so no header content can make a proxied request look
+local. The header is ignored from non-loopback peers. The rightmost entry is
+read only for the security log, never for the gate decision.
+
 The gate is enabled by writing the secret and disabled by deleting it; both
 take effect on the next process start (the token is read once per process and
 cached). A Vault read failure fails closed: the gate engages with an
@@ -101,6 +108,31 @@ def _is_loopback(host: Optional[str]) -> bool:
     return host is None or host in _LOOPBACK_HOSTS
 
 
+def _has_forwarded_for(scope) -> bool:
+    """True when the request carries any X-Forwarded-For header line.
+
+    Only consulted for loopback peers (a local reverse proxy such as
+    tailscale serve). Presence alone disqualifies the loopback exemption;
+    the value is never parsed for the gate decision, so no header content
+    can make a proxied request look local.
+    """
+    headers = scope.get("headers") or []
+    return any(k.lower() == b"x-forwarded-for" for k, _ in headers)
+
+
+def _forwarded_for_ip(scope) -> Optional[str]:
+    """Rightmost X-Forwarded-For entry, for the security log only."""
+    headers = scope.get("headers") or []
+    raw = None
+    for k, v in headers:
+        if k.lower() == b"x-forwarded-for":
+            raw = v  # last line wins, matching proxy-append order
+    if not raw:
+        return None
+    parts = [p.strip() for p in raw.decode("latin-1").split(",") if p.strip()]
+    return parts[-1] if parts else None
+
+
 def _wants_html(headers: list[tuple[bytes, bytes]]) -> bool:
     for name, value in headers:
         if name.lower() == b"accept":
@@ -140,7 +172,7 @@ class RemoteGateMiddleware:
 
         client = scope.get("client")
         host = client[0] if client else None
-        if _is_loopback(host):
+        if _is_loopback(host) and not _has_forwarded_for(scope):
             await self.app(scope, receive, send)
             return
 
@@ -261,6 +293,13 @@ def submit_gate(submission: GateSubmission, request: Request):
     from auth.service import get_auth_service
 
     client_ip = request.client.host if request.client else "unknown"
+    # Behind a loopback proxy (tailscale serve) every client shares the
+    # proxy's address, so the bucket is shared too. That is deliberate:
+    # keying the limiter on X-Forwarded-For would let a client rotate the
+    # header and bypass the limit entirely. The log line, by contrast, wants
+    # the best-effort real client.
+    xff = request.headers.get("x-forwarded-for")
+    log_ip = xff.split(",")[-1].strip() if xff else client_ip
     auth_service = get_auth_service()
 
     allowed, retry_after = auth_service.rate_limiter.is_allowed(f"remote-gate:{client_ip}", client_ip)
@@ -283,7 +322,7 @@ def submit_gate(submission: GateSubmission, request: Request):
         security_logger.log_event(
             "auth.remote_gate_failure",
             success=False,
-            ip_address=client_ip,
+            ip_address=log_ip,
             user_agent=request.headers.get("user-agent"),
         )
         return JSONResponse(
@@ -297,7 +336,7 @@ def submit_gate(submission: GateSubmission, request: Request):
     security_logger.log_event(
         "auth.remote_gate_success",
         success=True,
-        ip_address=client_ip,
+        ip_address=log_ip,
         user_agent=request.headers.get("user-agent"),
     )
     cookie_settings = auth_service.get_cookie_settings()
