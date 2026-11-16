@@ -25,15 +25,28 @@ absence. There is no config file and no environment variable.
 
 The installer asks about this (question 11, default no; `remote_gate:` in a
 `--config` file) and recommends it for anyone who might open MIRA from a phone
-or another device. When enabled, it generates the secret, writes it to
-`secret/mira/gate`, and copies it into the credential dump
-(`~/MIRA_credentials.txt`). Re-running the installer keeps an existing secret
-rather than rotating it.
+or another device. When enabled, it generates the secret — four EFF
+large-wordlist words separated by hyphens, about 52 bits, chosen to be
+typable on a phone keyboard — writes it to `secret/mira/gate`, and copies it
+into the credential dump (`~/MIRA_credentials.txt`). Re-running the installer
+keeps an existing secret rather than rotating it. If you want more entropy,
+set your own token instead: any string works, e.g. a longer diceware run or a
+hashed random key — `vault kv put secret/mira/gate token="$(diceware -n 7 --no-caps -d '-')"`.
+
+Question 12 (`tailscale:` in a `--config` file) goes one step further and
+sets up phone access end to end: it installs Tailscale on the machine, signs
+it into your tailnet (you open a login link during the install), and serves
+MIRA at `https://<machine>.<tailnet>.ts.net` with `tailscale serve`. It
+implies the gate. Your phone needs the free Tailscale app, signed into the
+same account; opening the URL and entering the gate secret once is all the
+phone-side setup there is. The installer refuses to expose MIRA via
+`tailscale serve` when the gate is not enabled, and after serving it checks
+that an unauthenticated request is refused before reporting success.
 
 To enable it by hand on an existing install:
 
 ```bash
-vault kv put secret/mira/gate token="$(openssl rand -hex 24)"
+vault kv put secret/mira/gate token="$(diceware -n 4 --no-caps -d '-')"
 ```
 
 Then restart MIRA. The token is read once per process; enabling or disabling
@@ -62,6 +75,11 @@ Restart MIRA.
   outstanding gate cookies (they are HMACs of the old token).
 - WebSocket handshakes without a valid gate cookie are closed with code 4401
   before acceptance.
+- A loopback peer that sets `X-Forwarded-For` is treated as a reverse proxy
+  (e.g. `tailscale serve`) and is no longer exempt from the gate. The header
+  is never parsed for the gate decision — its presence alone disqualifies the
+  loopback exemption — so no header content can make a proxied request look
+  local. The header is ignored from non-loopback peers.
 - `/remote-gate` and `/v1/auth/remote-gate` are the only exempt paths.
 - For HTTPS (recommended for a PWA over cellular), put `tailscale serve` in
   front: `tailscale serve --bg 1993` gives `https://<host>.<tailnet>.ts.net`

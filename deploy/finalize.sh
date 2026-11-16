@@ -315,27 +315,63 @@ echo -e "${CHECKMARK}"
 # below, never printed to stdout.
 print_header "Step 15e: Remote Access Gate"
 GATE_TOKEN=""
+GATE_ENABLED="no"
 if [ "${CONFIG_REMOTE_GATE:-no}" = "yes" ]; then
-    if vault kv get secret/mira/gate >/dev/null 2>&1; then
+    VAULT_GET_ERR="$(vault kv get secret/mira/gate 2>&1 >/dev/null)"
+    if [ $? -eq 0 ]; then
         GATE_TOKEN="$(vault kv get -field=token secret/mira/gate 2>/dev/null || true)"
+        GATE_ENABLED="yes"
         print_info "Remote gate already configured (secret/mira/gate) — keeping the existing secret"
         STATUS_REMOTE_GATE="${CHECKMARK} Enabled (existing secret kept)"
-    else
-        GATE_TOKEN="$(openssl rand -hex 24 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-        if vault kv put secret/mira/gate token="$GATE_TOKEN" >/dev/null 2>&1; then
+    elif printf '%s' "$VAULT_GET_ERR" | grep -qi "No value found"; then
+        # Human-typable secret: 4 EFF large-wordlist words (~52 bits),
+        # hyphen-separated, so it can be typed on a phone keyboard. A hex
+        # token is stronger per character but nobody transcribes it reliably.
+        if ! command -v diceware >/dev/null 2>&1; then
+            echo -ne "${ARROW} Installing diceware (passphrase generator)... "
+            if [ "$OS" = "linux" ]; then
+                if command -v apt-get >/dev/null 2>&1; then
+                    sudo apt-get install -y diceware >/dev/null 2>&1 || true
+                elif command -v dnf >/dev/null 2>&1; then
+                    sudo dnf install -y diceware >/dev/null 2>&1 || true
+                elif command -v pacman >/dev/null 2>&1; then
+                    sudo pacman -S --noconfirm diceware >/dev/null 2>&1 || true
+                fi
+            elif [ "$OS" = "macos" ] && command -v brew >/dev/null 2>&1; then
+                brew install diceware >/dev/null 2>&1 || true
+            fi
+            if command -v diceware >/dev/null 2>&1; then
+                echo -e "${CHECKMARK}"
+            else
+                echo -e "${CROSS}"
+            fi
+        fi
+        GATE_TOKEN="$(diceware -n 4 --no-caps -d '-' 2>/dev/null || true)"
+        if [ -z "$GATE_TOKEN" ]; then
+            print_warning "Could not generate a diceware passphrase (install the 'diceware' package) — remote gate NOT enabled"
+            print_info "Enable later: vault kv put secret/mira/gate token=\"\$(diceware -n 4 --no-caps -d '-')\", then restart MIRA"
+            GATE_TOKEN=""
+            STATUS_REMOTE_GATE="${YELLOW}Failed — see above${RESET}"
+        elif vault kv put secret/mira/gate token="$GATE_TOKEN" >/dev/null 2>&1; then
+            GATE_ENABLED="yes"
             print_success "Remote gate enabled — secret written to Vault (secret/mira/gate)"
             STATUS_REMOTE_GATE="${CHECKMARK} Enabled (secret in credential dump)"
         else
             print_warning "Could not write secret/mira/gate to Vault — remote gate NOT enabled"
-            print_info "Enable later: vault kv put secret/mira/gate token=\"\$(openssl rand -hex 24)\", then restart MIRA"
+            print_info "Enable later: vault kv put secret/mira/gate token=\"\$(diceware -n 4 --no-caps -d '-')\", then restart MIRA"
             GATE_TOKEN=""
             STATUS_REMOTE_GATE="${YELLOW}Failed — see above${RESET}"
         fi
+    else
+        print_warning "Could not read secret/mira/gate from Vault (${VAULT_GET_ERR})"
+        print_warning "Refusing to overwrite an existing secret — remote gate NOT enabled"
+        print_info "Check Vault, then enable: vault kv put secret/mira/gate token=\"\$(diceware -n 4 --no-caps -d '-')\", then restart MIRA"
+        STATUS_REMOTE_GATE="${YELLOW}Failed — see above${RESET}"
     fi
 else
     print_info "Remote gate skipped. If you ever open MIRA from your phone or another device,"
     print_info "turn it on then — one command and a restart:"
-    print_info "  vault kv put secret/mira/gate token=\"\$(openssl rand -hex 24)\"  &&  sudo systemctl restart mira"
+    print_info "  vault kv put secret/mira/gate token=\"\$(diceware -n 4 --no-caps -d '-')\"  &&  sudo systemctl restart mira"
     STATUS_REMOTE_GATE="${DIM}Skipped (off by default)${RESET}"
 fi
 
@@ -408,7 +444,7 @@ CREDS
 Remote Access Gate secret: ${GATE_TOKEN}
   Required from any browser or API client connecting from OUTSIDE this
   machine (e.g. your phone over Tailscale). Local access is unaffected.
-  Rotate:  vault kv put secret/mira/gate token="\$(openssl rand -hex 24)"  (then restart MIRA)
+  Rotate:  vault kv put secret/mira/gate token="\$(diceware -n 4 --no-caps -d '-')"  (then restart MIRA)
   Disable: vault kv delete secret/mira/gate  (then restart MIRA)
 CREDS
     fi
@@ -432,6 +468,95 @@ else
     print_info "Credentials are still accessible via Vault CLI with your root token."
 fi
 echo ""
+
+# Phone access over Tailscale (optional): install Tailscale, sign this
+# machine into the user's tailnet, and serve MIRA at
+# https://<host>.<tailnet>.ts.net with the gate in front. The login step is
+# interactive — `tailscale up` prints a link the user opens on any device.
+# Any failure prints manual steps and never fails the install.
+TS_URL=""
+if [ "${CONFIG_TAILSCALE:-no}" = "yes" ]; then
+    print_header "Step 15f: Phone Access (Tailscale)"
+
+    if [ "${GATE_ENABLED:-no}" != "yes" ]; then
+        print_warning "Remote gate is not enabled — refusing to expose MIRA to the tailnet."
+        print_info "Fix the gate problem above (or enable it: vault kv put secret/mira/gate token=\"$(diceware -n 4 --no-caps -d '-')\", then restart MIRA),"
+        print_info "then finish phone access with: sudo tailscale up && sudo tailscale serve --bg 1993"
+    else
+        if ! command -v tailscale >/dev/null 2>&1; then
+            echo -ne "${ARROW} Installing Tailscale... "
+            TS_INSTALL_OK="no"
+            if [ "$OS" = "linux" ]; then
+                if curl -fsSL https://tailscale.com/install.sh -o /tmp/tailscale-install.sh && sh /tmp/tailscale-install.sh >/dev/null 2>&1; then
+                    TS_INSTALL_OK="yes"
+                fi
+            elif [ "$OS" = "macos" ]; then
+                if command -v brew >/dev/null 2>&1 && brew install --cask tailscale >/dev/null 2>&1; then
+                    TS_INSTALL_OK="yes"
+                fi
+            fi
+            if [ "$TS_INSTALL_OK" = "yes" ] && command -v tailscale >/dev/null 2>&1; then
+                echo -e "${CHECKMARK}"
+            else
+                echo -e "${CROSS}"
+                if [ "$OS" = "macos" ]; then
+                    print_warning "Install the Tailscale app from https://tailscale.com/download, open it once, then run: /Applications/Tailscale.app/Contents/MacOS/Tailscale up && /Applications/Tailscale.app/Contents/MacOS/Tailscale serve --bg 1993"
+                else
+                    print_warning "Tailscale install failed — see https://tailscale.com/download, then run: sudo tailscale up && sudo tailscale serve --bg 1993"
+                fi
+            fi
+        else
+            print_info "Tailscale already installed ($(tailscale version 2>/dev/null | head -1))"
+        fi
+
+        if command -v tailscale >/dev/null 2>&1; then
+            TS_SUDO=""
+            [ "$OS" = "linux" ] && TS_SUDO="sudo"
+            if [ "$OS" = "linux" ]; then
+                sudo systemctl enable --now tailscaled >/dev/null 2>&1 || true
+            fi
+            if tailscale status --json 2>/dev/null | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("BackendState") == "Running" else 1)' 2>/dev/null; then
+                print_info "Tailscale is already signed in."
+            else
+                echo ""
+                echo -e "${BOLD}Open the link below in any browser and log in to your Tailscale account.${RESET}"
+                echo -e "${DIM}The install waits here until you finish (5 minute limit).${RESET}"
+                if ! $TS_SUDO tailscale up --timeout=5m; then
+                    print_warning "Tailscale login did not complete — finish later with: ${TS_SUDO:+$TS_SUDO }tailscale up"
+                fi
+            fi
+            SERVE_STATUS="$($TS_SUDO tailscale serve status 2>/dev/null || true)"
+            if [ -n "$SERVE_STATUS" ] && ! printf '%s' "$SERVE_STATUS" | grep -q '1993'; then
+                print_warning "tailscale serve already has a config that does not point at MIRA (1993) — leaving it alone."
+                print_info "To serve MIRA instead, run: ${TS_SUDO:+$TS_SUDO }tailscale serve --bg 1993"
+            elif $TS_SUDO tailscale serve --bg 1993; then
+                TS_URL="$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print("https://" + json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)"
+                if [ -n "$TS_URL" ]; then
+                    CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 10 -H 'Accept: text/html' "$TS_URL/" || true)"
+                    case "$CODE" in
+                        401|303|302)
+                            print_success "MIRA is served at ${TS_URL} (tailnet only), gate verified (HTTP ${CODE} without a cookie)"
+                            ;;
+                        000)
+                            print_warning "MIRA is served at ${TS_URL} but could not be reached to verify the gate — check that MIRA is running."
+                            ;;
+                        *)
+                            print_warning "GATE NOT ENGAGED at ${TS_URL} (HTTP ${CODE} without a cookie) — disabling tailscale serve to avoid exposing MIRA"
+                            $TS_SUDO tailscale serve --https=443 off >/dev/null 2>&1 || true
+                            print_info "Restart MIRA (sudo systemctl restart mira), then re-run: ${TS_SUDO:+$TS_SUDO }tailscale serve --bg 1993"
+                            TS_URL=""
+                            ;;
+                    esac
+                else
+                    print_success "tailscale serve configured for port 1993"
+                fi
+            else
+                print_warning "Could not configure 'tailscale serve' — run: ${TS_SUDO:+$TS_SUDO }tailscale serve --bg 1993"
+                print_info "If the URL does not load, open the enable-HTTPS link tailscale prints, then re-run that command."
+            fi
+        fi
+    fi
+fi
 
 print_header "Step 16: Cleanup"
 
@@ -576,16 +701,33 @@ fi
 if [ "${CONFIG_REMOTE_GATE:-no}" = "yes" ]; then
     echo ""
     echo -e "${BOLD}${BLUE}Remote Access${RESET}"
-    print_info "The remote gate is ON: anything outside this machine needs the gate secret."
-    if [ "${_cred_write_failed:-false}" = "true" ]; then
-        print_info "The secret is in Vault (secret/mira/gate) — the credential dump could not be written."
+    if [ "${GATE_ENABLED:-no}" = "yes" ]; then
+        print_info "The remote gate is ON: anything outside this machine needs the gate secret."
+        if [ "${_cred_write_failed:-false}" = "true" ]; then
+            print_info "The secret is in Vault (secret/mira/gate) — the credential dump could not be written."
+        else
+            print_info "The secret is in ${CRED_FILE} and in Vault (secret/mira/gate)."
+        fi
     else
-        print_info "The secret is in ${CRED_FILE} and in Vault (secret/mira/gate)."
+        print_warning "The remote gate is NOT enabled — see the errors above."
+        print_info "Fix it with: vault kv put secret/mira/gate token=\"\$(diceware -n 4 --no-caps -d '-')\", then restart MIRA"
     fi
-    print_info "Reach MIRA from another device (e.g. a phone) over Tailscale:"
-    print_info "  1. Install Tailscale on this machine and the other device, same account"
-    print_info "  2. tailscale serve --bg 1993   # https://<host>.<tailnet>.ts.net"
-    print_info "  3. Open that URL on the other device and enter the gate secret once"
+    if [ "${CONFIG_TAILSCALE:-no}" = "yes" ]; then
+        if [ -n "${TS_URL:-}" ]; then
+            print_info "Phone access is set up. On your phone:"
+            print_info "  1. Install the Tailscale app and sign in with the same account"
+            print_info "  2. Open ${TS_URL}"
+            print_info "  3. Enter the gate secret once when asked"
+        else
+            print_info "Phone access was not finished — see the messages above."
+            print_info "To finish later: sudo tailscale up && sudo tailscale serve --bg 1993"
+        fi
+    else
+        print_info "Reach MIRA from another device (e.g. a phone) over Tailscale:"
+        print_info "  1. Install Tailscale on this machine and the other device, same account"
+        print_info "  2. sudo tailscale up && sudo tailscale serve --bg 1993"
+        print_info "  3. Open https://<machine>.<tailnet>.ts.net and enter the gate secret once"
+    fi
     print_info "Disable: vault kv delete secret/mira/gate, then restart MIRA"
 fi
 

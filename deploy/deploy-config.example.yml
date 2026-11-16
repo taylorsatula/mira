@@ -152,7 +152,15 @@ stop_occupied_ports: yes
 # one shared secret, checked only for outside connections. The installer
 # generates the secret, stores it in Vault (secret/mira/gate), and copies it
 # into the credential dump. Enable later with:
-#   vault kv put secret/mira/gate token="$(openssl rand -hex 24)"  (then restart MIRA)
+#   vault kv put secret/mira/gate token="$(diceware -n 4 --no-caps -d '-')"  (then restart MIRA)
 # Disable with:
 #   vault kv delete secret/mira/gate   (then restart MIRA)
 remote_gate: no
+# Reach MIRA from your phone anywhere: installs Tailscale on this machine,
+# signs it into your tailnet (you open a login link during the install), and
+# serves MIRA at https://<machine>.<tailnet>.ts.net with the gate in front.
+# Your phone needs the free Tailscale app, signed into the same account.
+# Implies remote_gate: yes. Takes a few minutes and needs your interaction
+# (the login link), so leave this no for unattended installs. Optional key:
+# omitting it is the same as no.
+tailscale: no

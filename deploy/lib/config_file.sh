@@ -81,7 +81,7 @@ parse_yaml_config() {
             "'"*) value="${value#\'}"; value="${value%\'}" ;;
         esac
         case "$key" in
-            offline_mode|local_model_choice|custom_gguf|build_llama_cpp|llama_main_url|llama_small_url|llama_main_model|llama_small_model|chat_provider_type|chat_endpoint|chat_api_key|chat_model|anthropic_key|anthropic_batch_key|subcortical_endpoint|subcortical_api_key|subcortical_model|kagi_api_key|embedding_provider|embedding_endpoint|embedding_model|embedding_api_key|injection_screen|systemone_provider|systemone_endpoint|systemone_model|systemone_api_key|user_name|timezone|db_password|install_playwright|install_systemd|start_mira_now|overwrite_existing|stop_occupied_ports|remote_gate)
+            offline_mode|local_model_choice|custom_gguf|build_llama_cpp|llama_main_url|llama_small_url|llama_main_model|llama_small_model|chat_provider_type|chat_endpoint|chat_api_key|chat_model|anthropic_key|anthropic_batch_key|subcortical_endpoint|subcortical_api_key|subcortical_model|kagi_api_key|embedding_provider|embedding_endpoint|embedding_model|embedding_api_key|injection_screen|systemone_provider|systemone_endpoint|systemone_model|systemone_api_key|user_name|timezone|db_password|install_playwright|install_systemd|start_mira_now|overwrite_existing|stop_occupied_ports|remote_gate|tailscale)
                 yaml_store "$key" "$value" ;;
             *) yaml_fail "Unknown config key: '$key' (see deploy-config.example.yml)" ;;
         esac
@@ -300,6 +300,19 @@ apply_yaml_config() {
         STATUS_SYSTEMD="${DIM}Skipped${RESET}"
     fi
     CONFIG_START_MIRA_NOW="$YAML_start_mira_now"
+    if [ "${YAML_tailscale:-no}" = "yes" ]; then
+        CONFIG_TAILSCALE="yes"
+        STATUS_TAILSCALE="${CHECKMARK} Will be set up during install"
+        # Phone access without the gate would expose single-user MIRA to the
+        # whole tailnet; force it on, mirroring the interactive path.
+        if [ "$YAML_remote_gate" != "yes" ]; then
+            YAML_remote_gate="yes"
+            print_info "remote_gate forced on: phone access without it would expose MIRA to the tailnet"
+        fi
+    else
+        CONFIG_TAILSCALE="no"
+        STATUS_TAILSCALE="${DIM}Skipped${RESET}"
+    fi
     if [ "$YAML_remote_gate" = "yes" ]; then
         CONFIG_REMOTE_GATE="yes"
         STATUS_REMOTE_GATE="${CHECKMARK} Enabled (secret written to Vault)"

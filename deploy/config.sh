@@ -51,6 +51,7 @@ STATUS_TIMEZONE=""
 STATUS_PLAYWRIGHT=""
 STATUS_SYSTEMD=""
 STATUS_REMOTE_GATE=""
+STATUS_TAILSCALE=""
 STATUS_MIRA_SERVICE=""
 LUNAROUTE_MODE=""                    # yes when the LunaRoute shortcut prefilled the hosted stack
 
@@ -809,6 +810,29 @@ else
     STATUS_REMOTE_GATE="${DIM}Skipped${RESET}"
 fi
 
+# Phone access over Tailscale (optional): installs Tailscale on this machine,
+# signs it into the user's tailnet (they open a login link), and serves MIRA
+# at https://<machine>.<tailnet>.ts.net with the gate in front. Implies the
+# gate: without it, anyone on the tailnet gets full single-user access.
+echo -e "${BOLD}${BLUE}12. Phone Access (Tailscale)${RESET} ${DIM}(optional — reach MIRA from your phone anywhere)${RESET}"
+echo -e "${DIM}    Installs Tailscale on this machine, signs it into your tailnet (you open a${RESET}"
+echo -e "${DIM}    login link), and serves MIRA at https://<machine>.<tailnet>.ts.net. Your${RESET}"
+echo -e "${DIM}    phone needs the free Tailscale app, signed into the same account.${RESET}"
+echo -e "${DIM}    Requires the remote gate above — it is what keeps the tailnet honest.${RESET}"
+read -p "$(echo -e ${CYAN}Set up phone access now?${RESET}) (y/n, default=n): " PHONE_INPUT
+if [[ "$PHONE_INPUT" =~ ^[Yy](es)?$ ]]; then
+    CONFIG_TAILSCALE="yes"
+    STATUS_TAILSCALE="${CHECKMARK} Will be set up during install"
+    if [ "$CONFIG_REMOTE_GATE" != "yes" ]; then
+        CONFIG_REMOTE_GATE="yes"
+        STATUS_REMOTE_GATE="${CHECKMARK} Enabled (required for phone access)"
+        echo -e "${DIM}    Remote gate turned on — phone access without it would expose MIRA to the whole tailnet.${RESET}"
+    fi
+else
+    CONFIG_TAILSCALE="no"
+    STATUS_TAILSCALE="${DIM}Skipped${RESET}"
+fi
+
 fi
 
 # Timezone resolution: an empty CONFIG_TIMEZONE (yml "" or interview Enter)
@@ -856,6 +880,7 @@ echo -e "  Your Name:       ${STATUS_USER_NAME}"
 echo -e "  Timezone:        ${STATUS_TIMEZONE}"
 echo -e "  Playwright:      ${STATUS_PLAYWRIGHT}"
 echo -e "  Remote Gate:     ${STATUS_REMOTE_GATE}"
+echo -e "  Phone Access:    ${STATUS_TAILSCALE}"
 # The label names the supervisor that actually exists: systemd is Linux-only,
 # so macOS gets the honest word for the same thing (the LaunchAgent).
 if [ "$OS" = "macos" ]; then

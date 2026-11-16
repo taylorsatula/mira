@@ -250,6 +250,13 @@ The browser client works only in single-user mode. A multi-user install
 (`MIRA_AUTH_MODE=multi`) has no browser sign-in page; use the terminal client
 below.
 
+To reach MIRA from your phone while you're away from home, answer yes to the
+installer's phone-access question (or set `tailscale: yes` in a `--config`
+file). It installs Tailscale on the machine, signs it into your tailnet, and
+serves MIRA at `https://<machine>.<tailnet>.ts.net` behind the remote gate.
+Install the Tailscale app on the phone, sign in with the same account, open
+that URL, and enter the gate secret once. See `docs/REMOTE_GATE.md`.
+
 ## Chatting with MIRA in your terminal
 
 The terminal client (`ui/tui/`) is the other chat interface for a local

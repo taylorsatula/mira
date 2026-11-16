@@ -1,8 +1,9 @@
 # MIRA v2026.11.15-2.4.0
 
 A feature release: an optional shared-secret gate for anyone reaching MIRA
-from outside the machine, and a first-run experience that configures the
-local install by itself. No database steps, no updater changes.
+from outside the machine, a guided phone-access setup in the installer, and a
+first-run experience that configures the local install by itself. No database
+steps, no updater changes.
 
 ## Remote access gate (new, opt-in)
 
@@ -29,14 +30,40 @@ installer's health checks, and the Docker healthcheck are unaffected.
   When enabled, the installer generates the secret, writes it to
   `secret/mira/gate`, and copies it into the credential dump; an existing
   secret is kept, never rotated.
+- The gate secret is four EFF large-wordlist words separated by hyphens
+  (about 52 bits), chosen to be typable on a phone keyboard. Anyone wanting
+  more entropy can set their own token — any string works.
+- Behind a loopback reverse proxy such as `tailscale serve`, the gate no
+  longer stands aside: a loopback peer that sets `X-Forwarded-For` is treated
+  as proxied and the gate engages. The header is never parsed for the gate
+  decision — its presence alone disqualifies the loopback exemption — so no
+  header content can make a proxied request look local. The header is
+  ignored from non-loopback peers.
 - Enable or disable at any time: `vault kv put secret/mira/gate
-  token="$(openssl rand -hex 24)"` / `vault kv delete secret/mira/gate`,
+  token="$(diceware -n 4 --no-caps -d '-')"` / `vault kv delete secret/mira/gate`,
   then restart MIRA. See `docs/REMOTE_GATE.md`.
 
-Verified end to end on a disposable Ubuntu 26.04 VM installed from this
-tree: gate on, 401 without a cookie, gate page served, 200 with the cookie,
-browser flow lands on `/v1/auth/local/session`, WebSocket refused without
-the cookie. Also verified over Tailscale from a second machine.
+## Phone access from the installer (new)
+
+Question 12 (`tailscale: yes` in a `--config` file) walks a fresh install the
+rest of the way to MIRA on your phone: it installs Tailscale on the machine,
+signs it into your tailnet (you open a login link during the install), and
+serves MIRA at `https://<machine>.<tailnet>.ts.net` with `tailscale serve`.
+It implies the gate — without it, anyone on the tailnet would get full
+single-user access. Your phone needs the free Tailscale app signed into the
+same account; opening the URL and entering the gate secret once is all the
+phone-side setup there is. The installer refuses to expose MIRA via
+`tailscale serve` when the gate is not enabled, verifies after serving that
+an unauthenticated request is refused (tearing the serve config down if it
+is not), and leaves an existing non-MIRA `tailscale serve` configuration
+untouched.
+
+Gate behavior verified on a live install: 401 without a cookie, gate page
+served, 307 with a valid cookie, 401 with an invalid one, over both a direct
+tailnet connection and `tailscale serve`; spoofed `X-Forwarded-For` headers
+(including `127.0.0.1`) do not bypass the gate. The installer's phone-access
+flow was not run end to end on a fresh machine; it is covered by review, not
+by a live install.
 
 ## TUI
 
