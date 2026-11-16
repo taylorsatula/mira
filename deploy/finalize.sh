@@ -495,7 +495,7 @@ fi
 
 echo ""
 echo -e "${BOLD}${GREEN}Next Steps${RESET}"
-echo -e "  ${CYAN}→${RESET} Chat from any terminal: ${BOLD}mira${RESET} (first run: ${BOLD}mira --login --base-url http://localhost:1993 --chat${RESET})"
+echo -e "  ${CYAN}→${RESET} Chat from any terminal: ${BOLD}mira${RESET} (first run auto-configures the local install)"
 if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ] && [ "$OS" = "linux" ]; then
     if [[ "${STATUS_MIRA_SERVICE}" == *"Running"* ]]; then
         echo -e "  ${CYAN}→${RESET} MIRA is running at: ${BOLD}http://localhost:1993${RESET}"

@@ -254,21 +254,27 @@ below.
 
 The terminal client (`ui/tui/`) is the other chat interface for a local
 install. Its dependencies are separate from the server's — install them once,
-then log in:
+then just run it:
 
 ```bash
 pip install -r ui/tui/requirements.txt
-python3 -m ui.tui --login
-```
-
-`--login` mints an API token against your MIRA instance over its auth API
-(zero prompts on single-user instances; an emailed magic-link token on
-multi-user) and stores it in the 0600 endpoint store
-(`~/.config/mira-tui/config.json`). Then start chatting:
-
-```bash
 python3 -m ui.tui
 ```
+
+The first run with no endpoint configured mints an API token against the
+local install over its auth API (zero prompts on single-user instances; an
+emailed magic-link token on multi-user) and stores it in the 0600 endpoint
+store (`~/.config/mira-tui/config.json`) as the `local` endpoint — no setup
+step needed. To point the client at a remote instance instead, mint against
+it explicitly:
+
+```bash
+python3 -m ui.tui --login --base-url https://your-mira.example.com --save-as remote
+```
+
+`--login` runs the same headless mint (zero prompts on single-user instances;
+an emailed magic-link token on multi-user) and stores the token in the
+endpoint store.
 
 `/exit` quits. `/pause`, `/resume`, `/status` and `/collapse` manage the
 conversation segment (an unrecognized `/word` is an error, not a message).

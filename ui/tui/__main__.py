@@ -34,8 +34,9 @@ CLI:
   then exit 0.
 - default: load the store and run the streaming chat app (WebSocket turns,
   prompt_toolkit input bar pinned under native scrollback, Rich-rendered
-  transcript). First run with no usable endpoint prints setup guidance
-  and exits 1.
+  transcript). First run with no endpoint configured mints a token against
+  the local install (http://localhost:1993) and stores it as the ``local``
+  endpoint; if that fails it prints setup guidance and exits 1.
 
 Exit codes: 0 on a user quit (``/exit``, Ctrl+D on an empty box, a second
 Ctrl+C within the quit window on an idle empty box); 1 on fatal startup

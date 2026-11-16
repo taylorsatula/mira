@@ -24,7 +24,7 @@ render_mira_cli() {
 #!/bin/sh
 # MIRA terminal chat client — written by deploy/lib/host_artifacts.sh
 # (install and every update). Talk to this instance from any directory:
-# `mira` (first run: mira --login --base-url http://localhost:1993 --chat).
+# `mira` (first run auto-configures the local install; remote: mira --login --base-url URL --chat).
 export PYTHONPATH="/opt/mira/app${PYTHONPATH:+:$PYTHONPATH}"
 # -P: `python3 -m` prepends the CURRENT DIRECTORY to sys.path ahead of
 # PYTHONPATH, so `mira` run from inside a mira checkout silently resolved
