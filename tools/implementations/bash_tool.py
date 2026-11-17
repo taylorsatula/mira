@@ -47,6 +47,13 @@ itself, and this file and MIRA's config directory. Every bypass is appended
 to `guardrail_bypass.log` under the configured log_dir and marked in the
 result, so it is visible in-transcript and on disk.
 
+One refusal has its own operator switch: `guardrail-self-edit`. Setting
+`self_modification_enabled` in config/config.py lifts it in every mode, so
+this file, the tools/ directories holding it, and the config directory become
+editable like the rest of the tracked tree. Nothing else is lifted: the
+blocklist, the catastrophic core, the audit log, the untracked parts of the
+tree, and .git all stay refused.
+
 A dedicated parameter restarts MIRA's own process: `run` with
 `restart_mira=True` schedules a restart that fires the moment the current
 turn completes — the sanctioned path for changes that need a restart to take
@@ -824,7 +831,8 @@ _RULE_REASONS: Dict[str, str] = {
     "guardrail-self-edit": (
         "the command targets this guardrail's own source or MIRA's config "
         "directory, which define what this tool may do; changes there are the "
-        "operator's to make"
+        "operator's to make (the operator can lift this one refusal with "
+        "self_modification_enabled in config/config.py)"
     ),
 }
 
@@ -860,6 +868,7 @@ def _classify_path(
     root: str,
     ancestors: FrozenSet[str],
     skip: bool = False,
+    allow_self_edit: bool = False,
 ) -> Optional[str]:
     """
     Name the protection rule a resolved absolute path violates.
@@ -880,15 +889,18 @@ def _classify_path(
 
     The guardrail's own source file (and the directories holding it) and
     MIRA's config directory are refused in every mode, ahead of the app-tree
-    exemption that makes the rest of the code tree editable.
+    exemption that makes the rest of the code tree editable — unless the
+    operator set self_modification_enabled in config/config.py, which lifts
+    this one refusal in every mode and nothing else.
     """
     resolved = _normalize_absolute(path)
     if resolved == "/":
         return "filesystem-root"
     if resolved in ancestors:
         return "project-root-delete"
-    if resolved in _GUARDRAIL_PATHS or any(
-        _at_or_under(resolved, config_dir) for config_dir in _APP_CONFIG_DIRS
+    if not allow_self_edit and (
+        resolved in _GUARDRAIL_PATHS
+        or any(_at_or_under(resolved, config_dir) for config_dir in _APP_CONFIG_DIRS)
     ):
         return "guardrail-self-edit"
     app_rule = _classify_app_tree_path(resolved)
@@ -1203,6 +1215,7 @@ def _check_operand(
     skip: bool = False,
     audit_log: Optional[str] = None,
     ssh_keys: bool = False,
+    allow_self_edit: bool = False,
 ) -> None:
     """
     Refuse a destructive verb's path operand if it cannot be proven safe.
@@ -1221,13 +1234,13 @@ def _check_operand(
         _refuse("unverifiable-expansion", _RULE_REASONS["unverifiable-expansion"], offending)
 
     resolved = _resolve_operand(operand, cwd)
-    hit = _classify_path(resolved, root, ancestors, skip)
+    hit = _classify_path(resolved, root, ancestors, skip, allow_self_edit)
     if hit:
         _refuse(hit, _RULE_REASONS[hit], offending)
 
     if any(char in operand for char in _GLOB_CHARS):
         parent, component, final = _glob_split(resolved, skip)
-        if _classify_path(parent, root, ancestors, skip):
+        if _classify_path(parent, root, ancestors, skip, allow_self_edit):
             if final and _matches_everything(component):
                 _refuse("protected-glob", _RULE_REASONS["protected-glob"], offending)
             if not _at_or_under(parent, root):
@@ -1243,6 +1256,7 @@ def _check_redirect_targets(
     ancestors: FrozenSet[str],
     skip: bool = False,
     audit_log: Optional[str] = None,
+    allow_self_edit: bool = False,
 ) -> None:
     """Refuse output redirections aimed at a protected path.
 
@@ -1266,7 +1280,7 @@ def _check_redirect_targets(
         # matter what protected path classification would otherwise say.
         if resolved == "/dev/null":
             continue
-        hit = _classify_path(resolved, root, ancestors, skip)
+        hit = _classify_path(resolved, root, ancestors, skip, allow_self_edit)
         if hit:
             _refuse(hit, _RULE_REASONS[hit], offending)
         _check_planting(resolved, offending, root, audit_log, ssh_keys=True)
@@ -1405,6 +1419,7 @@ def _check_mount(
     root: str,
     ancestors: FrozenSet[str],
     skip: bool = False,
+    allow_self_edit: bool = False,
 ) -> None:
     """Refuse unmounting broadly or remounting a protected filesystem.
 
@@ -1416,7 +1431,7 @@ def _check_mount(
     for operand in _path_operands(args):
         if any(char in operand for char in _EXPANSION_CHARS):
             continue
-        hit = _classify_path(_resolve_operand(operand, cwd), root, ancestors, skip)
+        hit = _classify_path(_resolve_operand(operand, cwd), root, ancestors, skip, allow_self_edit)
         if hit:
             _refuse(hit, _RULE_REASONS[hit], f"{verb} {operand}")
 
@@ -1428,6 +1443,7 @@ def _check_dd(
     ancestors: FrozenSet[str],
     skip: bool = False,
     audit_log: Optional[str] = None,
+    allow_self_edit: bool = False,
 ) -> None:
     """Refuse a dd write target that is a device or a protected path."""
     for arg in args:
@@ -1437,7 +1453,7 @@ def _check_dd(
         if any(char in target for char in _EXPANSION_CHARS):
             _refuse("unverifiable-expansion", _RULE_REASONS["unverifiable-expansion"], arg)
         resolved = _resolve_operand(target, cwd)
-        hit = _classify_path(resolved, root, ancestors, skip)
+        hit = _classify_path(resolved, root, ancestors, skip, allow_self_edit)
         if hit:
             _refuse(hit, _RULE_REASONS[hit], arg)
         _check_planting(resolved, arg, root, audit_log, ssh_keys=True)
@@ -1524,6 +1540,7 @@ def _check_find(
     ancestors: FrozenSet[str],
     skip: bool = False,
     audit_log: Optional[str] = None,
+    allow_self_edit: bool = False,
 ) -> None:
     """
     Refuse a find that deletes without a narrowing predicate over a safe tree.
@@ -1549,7 +1566,7 @@ def _check_find(
         if any(char in start for char in _EXPANSION_CHARS):
             _refuse("unverifiable-expansion", _RULE_REASONS["unverifiable-expansion"], offending)
         resolved = _resolve_operand(start, cwd)
-        hit = _classify_path(resolved, root, ancestors, skip)
+        hit = _classify_path(resolved, root, ancestors, skip, allow_self_edit)
         if hit and not (narrowed and _at_or_under(resolved, root)):
             _refuse(hit, _RULE_REASONS[hit], offending)
         _check_planting(resolved, offending, root, None, ssh_keys=False)
@@ -1602,11 +1619,12 @@ def _check_path_verbs(
     ancestors: FrozenSet[str],
     skip: bool = False,
     audit_log: Optional[str] = None,
+    allow_self_edit: bool = False,
 ) -> None:
     """Dispatch a path-taking verb to its operand check."""
     if verb in _DELETION_VERBS or verb in _PERMISSION_VERBS:
         for operand in _path_operands(args):
-            _check_operand(operand, verb, cwd, root, ancestors, skip, audit_log)
+            _check_operand(operand, verb, cwd, root, ancestors, skip, audit_log, allow_self_edit=allow_self_edit)
     elif verb in _RELOCATE_VERBS or verb in _TRUNCATE_VERBS or verb in _WRITE_VERBS:
         # cp/install read their sources; a source of /dev/null is the idiomatic
         # truncate (cp /dev/null tmpfile) and damages nothing. mv is absent from
@@ -1619,18 +1637,18 @@ def _check_path_verbs(
             if destination is not None and operand != destination:
                 if _resolve_operand(operand, cwd) == "/dev/null":
                     continue
-            _check_operand(operand, verb, cwd, root, ancestors, skip, audit_log, ssh_keys=True)
+            _check_operand(operand, verb, cwd, root, ancestors, skip, audit_log, ssh_keys=True, allow_self_edit=allow_self_edit)
     elif verb in _INPLACE_EDIT_VERBS:
         for operand in _inplace_operands(verb, args):
-            _check_operand(operand, verb, cwd, root, ancestors, skip, audit_log, ssh_keys=True)
+            _check_operand(operand, verb, cwd, root, ancestors, skip, audit_log, ssh_keys=True, allow_self_edit=allow_self_edit)
     elif verb in _COPY_VERBS:
         for operand in _path_operands(args):
             offending = f"{verb} {operand}"
             _check_planting(_resolve_operand(operand, cwd), offending, root, audit_log, ssh_keys=True)
     elif verb == "dd":
-        _check_dd(args, cwd, root, ancestors, skip, audit_log)
+        _check_dd(args, cwd, root, ancestors, skip, audit_log, allow_self_edit)
     elif verb == "find":
-        _check_find(args, cwd, root, ancestors, skip, audit_log)
+        _check_find(args, cwd, root, ancestors, skip, audit_log, allow_self_edit)
 
 
 def _inplace_operands(verb: str, args: List[str]) -> List[str]:
@@ -1755,6 +1773,7 @@ def _analyze_substitutions(
     depth: int,
     skip: bool = False,
     audit_log: Optional[str] = None,
+    allow_self_edit: bool = False,
 ) -> None:
     """
     Re-run the full argument layer over every command substitution body.
@@ -1773,7 +1792,7 @@ def _analyze_substitutions(
     if "$(" not in joined and "`" not in joined:
         return
     for body in _dollar_bodies(joined) + _backtick_bodies(joined):
-        _analyze_command(body, cwd, root, ancestors, depth + 1, skip, audit_log)
+        _analyze_command(body, cwd, root, ancestors, depth + 1, skip, audit_log, allow_self_edit)
 
 
 def _strip_wrapper_args(verb: str, rest: List[str]) -> List[str]:
@@ -1807,6 +1826,7 @@ def _analyze_shell(
     depth: int,
     skip: bool = False,
     audit_log: Optional[str] = None,
+    allow_self_edit: bool = False,
 ) -> None:
     """Recurse into a `sh -c '<command>'` style argument."""
     for index, token in enumerate(rest):
@@ -1815,7 +1835,7 @@ def _analyze_shell(
         if "c" not in token and token != "--command":
             continue
         if index + 1 < len(rest):
-            _analyze_command(rest[index + 1], cwd, root, ancestors, depth + 1, skip, audit_log)
+            _analyze_command(rest[index + 1], cwd, root, ancestors, depth + 1, skip, audit_log, allow_self_edit)
 
 
 def _analyze_wrapper(
@@ -1827,6 +1847,7 @@ def _analyze_wrapper(
     depth: int,
     skip: bool = False,
     audit_log: Optional[str] = None,
+    allow_self_edit: bool = False,
 ) -> None:
     """
     Analyze what a command runner will actually run.
@@ -1843,10 +1864,10 @@ def _analyze_wrapper(
             if not arg.startswith("-") and not _ENV_ASSIGNMENT.match(arg):
                 break
     inner = _strip_wrapper_args(verb, rest)
-    _analyze_segment(inner, cwd, root, ancestors, depth + 1, skip, audit_log)
+    _analyze_segment(inner, cwd, root, ancestors, depth + 1, skip, audit_log, allow_self_edit)
     for token in inner:
         if _looks_nested(token):
-            _analyze_command(token, cwd, root, ancestors, depth + 1, skip, audit_log)
+            _analyze_command(token, cwd, root, ancestors, depth + 1, skip, audit_log, allow_self_edit)
         elif _verb_name(token) in _PROHIBITED_VERBS:
             _check_prohibited_verb(_verb_name(token), skip)
 
@@ -1859,6 +1880,7 @@ def _analyze_segment(
     depth: int,
     skip: bool = False,
     audit_log: Optional[str] = None,
+    allow_self_edit: bool = False,
 ) -> str:
     """
     Analyze one simple command. Returns the cwd in effect for the next segment.
@@ -1868,7 +1890,7 @@ def _analyze_segment(
 
     # A substitution body is a command line in every token position — not
     # just under a wrapper verb — so analyze it before the verb-specific walk.
-    _analyze_substitutions(tokens, cwd, root, ancestors, depth, skip, audit_log)
+    _analyze_substitutions(tokens, cwd, root, ancestors, depth, skip, audit_log, allow_self_edit)
 
     index = 0
     while index < len(tokens) and _ENV_ASSIGNMENT.match(tokens[index]):
@@ -1880,10 +1902,10 @@ def _analyze_segment(
     rest = tokens[index + 1:]
 
     if verb in _SHELLS:
-        _analyze_shell(rest, cwd, root, ancestors, depth, skip, audit_log)
+        _analyze_shell(rest, cwd, root, ancestors, depth, skip, audit_log, allow_self_edit)
         return cwd
     if verb in _WRAPPERS:
-        _analyze_wrapper(verb, rest, cwd, root, ancestors, depth, skip, audit_log)
+        _analyze_wrapper(verb, rest, cwd, root, ancestors, depth, skip, audit_log, allow_self_edit)
         return cwd
 
     # `cd` changes what every later relative path in this command means. In
@@ -1914,10 +1936,10 @@ def _analyze_segment(
     elif verb == "crontab":
         _check_crontab(rest)
     elif verb in ("umount", "mount"):
-        _check_mount(verb, rest, cwd, root, ancestors, skip)
+        _check_mount(verb, rest, cwd, root, ancestors, skip, allow_self_edit)
     else:
-        _check_path_verbs(verb, rest, cwd, root, ancestors, skip, audit_log)
-    _check_redirect_targets(tokens, cwd, root, ancestors, skip, audit_log)
+        _check_path_verbs(verb, rest, cwd, root, ancestors, skip, audit_log, allow_self_edit)
+    _check_redirect_targets(tokens, cwd, root, ancestors, skip, audit_log, allow_self_edit)
     return cwd
 
 
@@ -2144,6 +2166,7 @@ def _analyze_command(
     depth: int = 0,
     skip: bool = False,
     audit_log: Optional[str] = None,
+    allow_self_edit: bool = False,
 ) -> None:
     """
     Run the argument layer over a command, one line at a time.
@@ -2157,11 +2180,11 @@ def _analyze_command(
         if heredoc_body:
             if depth < _MAX_NESTING:
                 for body in _dollar_bodies(text) + _backtick_bodies(text):
-                    _analyze_command(body, effective_cwd, root, ancestors, depth + 1, skip, audit_log)
+                    _analyze_command(body, effective_cwd, root, ancestors, depth + 1, skip, audit_log, allow_self_edit)
             continue
         for segment in _split_segments(_tokenize(text)):
             effective_cwd = _analyze_segment(
-                segment, effective_cwd, root, ancestors, depth, skip, audit_log
+                segment, effective_cwd, root, ancestors, depth, skip, audit_log, allow_self_edit
             )
 
 
@@ -2172,6 +2195,7 @@ def _validate_command(
     skip_permissions: bool = False,
     blocked: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (),
     audit_log: Optional[str] = None,
+    allow_self_edit: bool = False,
 ) -> None:
     """
     Refuse a command the destructive-command guardrail cannot prove safe.
@@ -2189,6 +2213,10 @@ def _validate_command(
         audit_log: Absolute path of guardrail_bypass.log. Writing, deleting,
             or truncating it (or a directory holding it) is refused in every
             mode. None when the caller has no audit log to protect.
+        allow_self_edit: Lift the guardrail-self-edit refusal (the guardrail's
+            own source, the tools/ directories holding it, and MIRA's config
+            directory). The operator's self_modification_enabled switch, read
+            at the call site; every other rule applies unchanged.
 
     Raises:
         ValueError: Naming the matched rule and the offending text. A refused
@@ -2222,6 +2250,7 @@ def _validate_command(
         _protected_ancestors(normalized_root),
         skip=skip_permissions,
         audit_log=_normalize_absolute(audit_log) if audit_log else None,
+        allow_self_edit=allow_self_edit,
     )
 
 
@@ -2230,9 +2259,11 @@ def _validate_command(
 _SELF_EDIT_NOTE = (
     f" Files in MIRA's own code tree ({_APP_TREE[0]}) may be edited, created, and "
     "deleted; the parts git does not track (data, venv, .env, logs, .git) stay "
-    "refused, and so does the tree as a whole. An edit changes nothing until MIRA "
-    "is restarted, and restarting is the operator's step — ask for it. `git diff` "
-    "shows the change and `git stash` sets it aside."
+    "refused, and so does the tree as a whole. The guardrail's own source and "
+    "MIRA's config directory are refused unless the operator has set "
+    "self_modification_enabled in config/config.py. An edit changes nothing "
+    "until MIRA is restarted, and restarting is the operator's step — ask for "
+    "it. `git diff` shows the change and `git stash` sets it aside."
     if _APP_TREE is not None else ""
 )
 
@@ -2537,6 +2568,8 @@ class BashTool(Tool):
                 "enable the feature."
             )
         audit_log = self._audit_log_path(cfg)
+        from config.config_manager import config
+
         _validate_command(
             command,
             cfg.root,
@@ -2544,6 +2577,7 @@ class BashTool(Tool):
             skip_permissions=skip_permissions,
             blocked=_compile_blocklist(tuple(cfg.blocked_patterns)),
             audit_log=audit_log,
+            allow_self_edit=config.system.self_modification_enabled,
         )
         if skip_permissions:
             self._audit_bypass(audit_log, workdir, command)

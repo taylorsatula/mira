@@ -72,7 +72,11 @@ in skip mode while the recoverable classes pass), the operator-blocklist
 matrix (entries refuse in BOTH modes and `*` crosses slashes, spaces, quotes,
 and newlines), and the both-modes matrix (persistence respellings, newline
 chains, the bypass audit log, and guardrail self-edits refused in default and
-skip mode alike; heredocs, comments, and the editing skill's patterns allowed).
+skip mode alike; heredocs, comments, and the editing skill's patterns allowed), and the
+self_modification_enabled matrix (with allow_self_edit=True — the operator's
+config/config.py switch — the guardrail-self-edit refusal is lifted in both
+modes while .git, the tree root, the untracked top-level names, the audit
+log, and the catastrophic core stay refused).
 DESTRUCTIVE and BENIGN are the parity baseline: a change aimed at one mode adds
 its cases to that mode's table and leaves the default corpus standing, because
 every other matrix is judged relative to it, and editing it in place silently
@@ -799,6 +803,32 @@ BOTH_MODES_MUST_ALLOW = [
 ]
 
 
+# The self_modification_enabled matrix: with allow_self_edit=True (the
+# operator's config/config.py switch), the guardrail-self-edit refusal is
+# lifted and nothing else is. Each case runs in both modes.
+SELF_EDIT_MUST_ALLOW = [
+    ("S01", f"perl -pi -e 's/default=False/default=True/' {APP}/tools/implementations/bash_tool.py", "rewrite the guardrail's own source"),
+    ("S02", f"echo x > {APP}/tools/implementations/bash_tool.py", "overwrite the guardrail's own source"),
+    ("S03", f"mv {APP}/tools {APP}/tools_old", "move the guardrail's directory aside"),
+    ("S04", f"sed -i 's/a/b/' {APP}/config/config.py", "edit MIRA's config area"),
+    ("S05", f"rm -rf {APP}/config", "delete MIRA's config area"),
+    ("S06", f"rm {APP}/tools/implementations/bash_tool.py", "delete the guardrail's source"),
+]
+
+# The untracked top-level names come from the module's own computed _APP_TREE
+# (deploy/lib/state_preserve.sh writes .git/info/exclude), so the battery
+# asserts the refusal for whatever this install protects instead of hardcoding
+# one deploy's list — a fresh clone's exclude file lists only .git.
+_UNTRACKED = sorted(mbt._APP_TREE[1]) if mbt._APP_TREE else [".git"]
+SELF_EDIT_MUST_REFUSE = [
+    (f"T{i + 1:02d}", f"rm -rf {APP}/{name}", f"untracked top-level {name} stays refused")
+    for i, name in enumerate(_UNTRACKED)
+] + [
+    ("T08", f"rm -rf {APP}", "the tree root stays refused"),
+    ("T09", "rm -f .mira_logs/guardrail_bypass.log", "the audit log stays refused"),
+    ("T10", "rm -rf /", "the catastrophic core stays refused"),
+]
+
 # -- operator-blocklist matrix ----------------------------------------------
 #
 # Each case: (id, command, compiled-at-runtime entries, expectation, why).
@@ -820,12 +850,12 @@ BLOCKED_CASES = [
 
 # -- runner -------------------------------------------------------------------
 
-def _verdict(command, cwd, skip=False, blocked=()):
+def _verdict(command, cwd, skip=False, blocked=(), allow_self_edit=False):
     """Return (blocked: bool, message: str|None) from the real validator."""
     try:
         mbt._validate_command(
             command, ROOT, cwd or ROOT, skip_permissions=skip, blocked=blocked,
-            audit_log=AUDIT_LOG,
+            audit_log=AUDIT_LOG, allow_self_edit=allow_self_edit,
         )
         return False, None
     except ValueError as exc:
@@ -919,6 +949,39 @@ def main():
         if not ok:
             blocklist_failures.append((case_id, command, expect, why))
 
+    # -- self_modification_enabled matrix ------------------------------------
+    print()
+    print(f"self-edit must-allow cases (flag on, both modes): {len(SELF_EDIT_MUST_ALLOW)}")
+    self_edit_failures = []
+    for case_id, command, why in SELF_EDIT_MUST_ALLOW:
+        line = f"{case_id} {command!r}"
+        ok = True
+        for mode, skip in (("default", False), ("skip", True)):
+            blocked, message = _verdict(command, None, skip=skip, allow_self_edit=True)
+            line += f"  {mode}:{'refused' if blocked else 'allowed'}"
+            if blocked:
+                line += f"[{_rule_of(message)}]"
+                ok = False
+        print(("OK       " if ok else "FAIL!!   ") + line)
+        if not ok:
+            self_edit_failures.append((case_id, command, False, why))
+
+    print()
+    print(f"self-edit must-refuse cases (flag on, both modes): {len(SELF_EDIT_MUST_REFUSE)}")
+    for case_id, command, why in SELF_EDIT_MUST_REFUSE:
+        line = f"{case_id} {command!r}"
+        ok = True
+        for mode, skip in (("default", False), ("skip", True)):
+            blocked, message = _verdict(command, None, skip=skip, allow_self_edit=True)
+            line += f"  {mode}:{'refused' if blocked else 'allowed'}"
+            if blocked:
+                line += f"[{_rule_of(message)}]"
+            if not blocked:
+                ok = False
+        print(("OK       " if ok else "FAIL!!   ") + line)
+        if not ok:
+            self_edit_failures.append((case_id, command, True, why))
+
     # -- both-modes matrix ---------------------------------------------------
     both_failures = []
     for title, cases, expect_refused in (
@@ -948,6 +1011,7 @@ def main():
     print(f"skip must-allow:    {len(SKIP_MUST_ALLOW)}   allowed: {len(SKIP_MUST_ALLOW) - len(skip_false_positives)}   FALSE POSITIVES: {len(skip_false_positives)}")
     print(f"blocklist cases:    {len(BLOCKED_CASES)}   failed: {len(blocklist_failures)}")
     print(f"both-modes cases:   {len(BOTH_MODES_MUST_REFUSE) + len(BOTH_MODES_MUST_ALLOW)}   failed: {len(both_failures)}")
+    print(f"self-edit cases:    {len(SELF_EDIT_MUST_ALLOW) + len(SELF_EDIT_MUST_REFUSE)}   failed: {len(self_edit_failures)}")
     print("=" * 72)
 
     if bypasses:
@@ -988,9 +1052,15 @@ def main():
             print(f"  {case_id}  {command!r} (expected {'refused' if expect_refused else 'allowed'})")
             print(f"        {why}")
 
+    if self_edit_failures:
+        print("\nSELF-EDIT FAILURES (self_modification_enabled matrix behaved wrongly):")
+        for case_id, command, expect_refused, why in self_edit_failures:
+            print(f"  {case_id}  {command!r} (expected {'refused' if expect_refused else 'allowed'})")
+            print(f"        {why}")
+
     return 1 if (
         bypasses or false_positives or skip_bypasses or skip_false_positives
-        or blocklist_failures or both_failures
+        or blocklist_failures or both_failures or self_edit_failures
     ) else 0
 
 

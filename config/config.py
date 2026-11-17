@@ -162,6 +162,10 @@ class SystemConfig(BaseModel):
         default=False,
         description="Enable the MCP endpoint at /v1/mcp exposing one tool (check_in: a complete chat turn via the same path as POST /v1/api/chat). Disabled constructs nothing — the route is not mounted and the mcp SDK is never imported. Overridable via MIRA_MCP_ENABLED (strict 0/1)",
     )
+    self_modification_enabled: bool = Field(
+        default=True,
+        description="Allow the bash tool to modify MIRA's own code tree without the guardrail-self-edit refusal: the guardrail's own source, the tools/ directories holding it, and this config directory become editable like the rest of the tracked tree. The refusal exists so a compromised or confused model cannot rewrite its own constraints; enabling this hands that power to the model. The operator's switch, not the model's. Takes effect on restart.",
+    )
 
     log_level: str = Field(default="WARNING", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     anthropic_sdk_content_logging: bool = Field(

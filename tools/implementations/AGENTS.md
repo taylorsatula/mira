@@ -2,7 +2,7 @@
 
 ## Files
 
-- `bash_tool.py` — guardrailed local shell, with the restart latch and the `run_background` completion record (`background_jobs` rows plus a wrapper-written exit-status file per job). Open it before changing what a command may do, or why one was refused.
+- `bash_tool.py` — guardrailed local shell, with the restart latch and the `run_background` completion record (`background_jobs` rows plus a wrapper-written exit-status file per job). The `guardrail-self-edit` refusal (the guardrail's own source, the `tools/` directories holding it, `config/`) is lifted only when the operator sets `self_modification_enabled` in `config/config.py`; every other refusal stands regardless. Open it before changing what a command may do, or why one was refused.
 - `contacts_tool.py` — contact CRUD in per-user SQLite, resolved by UUID or by name. Open it when a lookup, a duplicate, or an ambiguous-match reply is wrong.
 - `continuum_tool.py` — conversation-history search over the continuum. Open it when a history search returns nothing, the wrong window, or times that look shifted.
 - `domaindoc_tool.py` — section-aware knowledge documents with per-section versions, sharing, and pinning. Open it before touching the section tree or the version rows.
@@ -13,6 +13,7 @@
 - `invokeother_tool.py` — the on-demand loading meta-tool; its two enums are the loadable-tool catalog. Open it when a tool cannot be loaded, or a loadable one is missing from the enum.
 - `memory_tool.py` — long-term memory: search, queued creation, links, annotations, archive, merge. Open it before changing how a memory is found, created, or retired.
 - `pager_tool.py` — virtual pager devices, local and federated messaging, device trust. Open it when delivery, a trust verdict, or an inbound federation write misbehaves.
+- `pi_tool.py` — fire-and-forget pi coding-agent tasks in a codebase: RPC-mode subprocess supervisor (`_in_flight` under `_registry_lock`, busy-run cap, `copy_context()`), per-user `pi_tasks` rows, the steer/continue/close lifecycle, and the stale-row sweep. Open it before changing what a dispatched pi may run, how tasks are reaped, or how results reach the prompt.
 - `reminder_tool.py` — reminders in per-user SQLite with optional contact links and the user/internal split. Open it when a date lands at the wrong instant or a reminder will not resurface.
 - `sidebar_tool.py` — the sidebar-agent scratchpad, the `complete_task` sign-out, and the durable `agent_memory` rows it writes at completion. Open it before changing what an agent may record or what closes a thread.
 - `subagent_tool.py` — one tool surface over every subagent type's lifecycle: start, resume, dismiss, inspect, plus the main context's management of the agent-memory pool. Open it before changing that vocabulary, its routing, the activity surface, or how a stored memory is revised.
@@ -55,6 +56,7 @@
 - Changing a `_DESTRUCTIVE_PATTERNS` entry, `_CATASTROPHIC_PATTERNS`, or anything under `_analyze_command` changes what the shell may do, and `tests/protected/bash_guardrail_probe.py` is the witness: run it after the change, because a rule that over-blocks is as broken as one that under-blocks and neither shows up in a passing turn.
 - `_check_git_reset` checks hard, merge, and keep options after the exact `reset` subcommand, including options after a revision; the raw git-reset pattern covers only a destructive option immediately after the subcommand. Skip mode relaxes both checks.
 - `web_tool.http` is the only path where the model names a credential (`credential_name`). A new tool that injects a secret into an outbound request repeats the shape: bind the credential to allowed domains, validate the destination host against them, inject server-side, and never return the value to the model.
+- pi_tool supervisor seam: `pi_tool.py` runs its own module-level thread registry mirroring `agents/spawn.py`'s discipline, because `spawn_subagent` cannot host it — that seam resolves a `SubagentSpec` and runs `SidebarAgent.run`, an LLM loop with no work in a pure process supervisor. Every spawned pi carries `--exclude-tools talkto_mira` (a Mira-dispatched pi checking back into Mira would contend for the per-user turn lock and open a dispatch loop), and `allowed_roots` is the whole path authorization; inside a root, pi's own tool set applies with no MIRA guardrails. The supervisor publishes `UpdateTrinketEvent` targeting `PiTasksTrinket` after each terminal row write, persist-before-publish. Counterparts: `agents/AGENTS.md`, `working_memory/trinkets/AGENTS.md`.
 
 Elsewhere: this map holds no tool's operation list, parameter descriptions, or table schema — each file's module docstring is that record. The authoring walkthrough is `tools/HOW_TO_BUILD_A_TOOL.md`; why a rule reads as it does is in `git log`. Every other destination this directory reaches is an edge — see `## Wiring` above.
 

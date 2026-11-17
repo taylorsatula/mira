@@ -2,7 +2,7 @@
 
 ## Files
 
-- `bash_guardrail_probe.py` — the destructive-command guardrail's witness: the real `_validate_command` driven over the default, skip-mode, operator-blocklist, and both-modes case tables. Open it before changing a guardrail pattern, `_analyze_command`, `_compile_blocklist`, or a `_validate_command` parameter.
+- `bash_guardrail_probe.py` — the destructive-command guardrail's witness: the real `_validate_command` driven over the default, skip-mode, operator-blocklist, both-modes, and self_modification_enabled (`allow_self_edit=True`) case tables. Open it before changing a guardrail pattern, `_analyze_command`, `_compile_blocklist`, or a `_validate_command` parameter.
 - `injection_defense_probe.py` — the untrusted-content boundary's witness: `_reveal_hidden`, `wrap_untrusted`, and tier-1 `InjectionScreen.assess()` over labeled attack and benign corpora. Open it before rewording a screen question, moving a band edge, or changing either wrapper function.
 
 ## Wiring
