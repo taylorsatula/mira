@@ -282,7 +282,6 @@ class TurnAccumulator:
     response_text: str = ""
     thinking_content: str = ""
     raw_response: Result | None = None
-    invoked_tool_loader: bool = False
     touch_resolved_uuids: list[str] = field(default_factory=list)
     tools_used: list[str] = field(default_factory=list)
     events: list[StreamEvent] = field(default_factory=list)
@@ -334,7 +333,6 @@ class TurnAccumulator:
         self.response_text = ""
         self.thinking_content = ""
         self.raw_response = None
-        self.invoked_tool_loader = False
         self.touch_resolved_uuids = []
         self.tools_used = []
         self.events = []
@@ -913,22 +911,6 @@ class ContinuumOrchestrator:
                                     acc.touch_resolved_uuids.append(uuid)
                     except (json.JSONDecodeError, AttributeError):
                         logger.warning("Failed to parse memory_tool touch result")
-                elif event.tool_name == "invokeother_tool":
-                    # invokeother_tool's schema declares load and
-                    # load_for_rest_of_session and forbids additional
-                    # properties, so no caller can supply a `mode` argument.
-                    # Detect on the tool's own success contract instead: a
-                    # failed load must not auto-continue the turn.
-                    try:
-                        tool_result = json.loads(event.result) if isinstance(event.result, str) else event.result
-                        if isinstance(tool_result, dict) and tool_result.get("success"):
-                            acc.invoked_tool_loader = True
-                            logger.info(
-                                "Detected invokeother_tool execution loading %s",
-                                tool_result.get("loaded", []),
-                            )
-                    except (json.JSONDecodeError, AttributeError):
-                        logger.warning("Failed to parse invokeother_tool result")
                 elif isinstance(event.result, list):
                     text_block_count = sum(1 for b in event.result if b.get('type') == 'text')
                     logger.info(
@@ -1080,7 +1062,6 @@ class ContinuumOrchestrator:
         message_id: UUID | None = None,
         turn_id: UUID | None = None,
         user_metadata_extra: MessageMetadata | None = None,
-        _internal_continuation: bool = False,
     ) -> tuple[Continuum, str, TurnMetadata]:
         """
         Process user message through complete continuum flow.
@@ -1105,8 +1086,6 @@ class ContinuumOrchestrator:
             user_metadata_extra: Extra metadata merged into the persisted user
                         message (e.g. the heartbeat marker). Callers other than
                         the heartbeat service leave it unset.
-            _internal_continuation: Whether this is the transient provider prompt
-                                  used after loading an on-demand tool.
 
         Returns:
             Tuple of (updated_continuum, final_response, metadata)
@@ -1118,16 +1097,13 @@ class ContinuumOrchestrator:
             raise RuntimeError("Message processing requires an active segment ID")
         if unit_of_work is None:
             raise ValueError("Unit of Work is required for message persistence")
-        if not _internal_continuation:
-            from cns.services.follow_up_service import cancel_follow_up
-            cancel_follow_up(get_current_user_id())
+        from cns.services.follow_up_service import cancel_follow_up
+        cancel_follow_up(get_current_user_id())
 
         user_metadata: MessageMetadata = {
             "turn_id": str(active_turn_id),
             "segment_id": segment_id,
         }
-        if _internal_continuation:
-            user_metadata["transient_system_scaffold"] = True
         if user_metadata_extra:
             user_metadata.update(user_metadata_extra)
 
@@ -1139,26 +1115,24 @@ class ContinuumOrchestrator:
         self._publish_events(user_events)
 
         # Stage the accepted user message before any model work, so a later
-        # failure still commits what the user was told was received. The
-        # transient scaffold prompt is cache-only and never staged.
-        if not _internal_continuation:
-            if isinstance(user_msg_obj.content, list):
-                has_image = any(item.get('type') == 'image' for item in user_msg_obj.content)
-                if has_image and storage_content is None:
-                    raise ValueError(
-                        "storage_content is required when user_message contains images. "
-                        "Callers must provide the 512px WebP storage tier for image persistence."
-                    )
-            persist_content = storage_content if storage_content is not None else user_msg_obj.content
-            from cns.core.message import Message
-            persist_user_msg = Message(
-                content=persist_content,
-                role=user_msg_obj.role,
-                id=user_msg_obj.id,
-                created_at=user_msg_obj.created_at,
-                metadata=user_msg_obj.metadata,
-            )
-            unit_of_work.add_messages(persist_user_msg)
+        # failure still commits what the user was told was received.
+        if isinstance(user_msg_obj.content, list):
+            has_image = any(item.get('type') == 'image' for item in user_msg_obj.content)
+            if has_image and storage_content is None:
+                raise ValueError(
+                    "storage_content is required when user_message contains images. "
+                    "Callers must provide the 512px WebP storage tier for image persistence."
+                )
+        persist_content = storage_content if storage_content is not None else user_msg_obj.content
+        from cns.core.message import Message
+        persist_user_msg = Message(
+            content=persist_content,
+            role=user_msg_obj.role,
+            id=user_msg_obj.id,
+            created_at=user_msg_obj.created_at,
+            metadata=user_msg_obj.metadata,
+        )
+        unit_of_work.add_messages(persist_user_msg)
 
         text_for_context = user_message
         if isinstance(user_message, list):
@@ -1404,11 +1378,10 @@ class ContinuumOrchestrator:
                 self.subcortical_layer.warm_cache(continuum, mem.surfaced_memories)
 
             # Turn numbering counts user-role rows only: tool and assistant rows
-            # must not inflate it, and the transient scaffold is excluded by its
-            # own metadata flag.
+            # must not inflate it.
             user_message_count = sum(
                 1 for m in continuum.messages
-                if m.role == "user" and not m.metadata.get("transient_system_scaffold")
+                if m.role == "user"
             )
             turn_number = user_message_count
             completed_event = TurnCompletedEvent.create(

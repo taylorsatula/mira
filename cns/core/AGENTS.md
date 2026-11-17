@@ -3,12 +3,12 @@
 ## Files
 
 - `__init__.py` — package root re-exports; nothing in the repo imports the root, so the only reason to open it is a boot-time ImportError whose traceback runs through this chain.
-- `continuum.py` — the aggregate root and its hot message cache. Open it before adding anything that appends to a conversation; `add_tool_message`, `discard_transient_user_message` and its `to_dict`/`from_dict` pair have no caller.
+- `continuum.py` — the aggregate root and its hot message cache. Open it before adding anything that appends to a conversation.
 - `events.py` — the event taxonomy and the `create()` factories that build events. Open it before publishing, subscribing, or naming a new event.
 - `message.py` — the `Message` value object. Open it before adding a metadata field, or before reading message content on a model's behalf.
 - `message_formatter.py` — message list to neutral request dicts. Open it before changing what the model receives as history.
 - `segment_cache_loader.py` — the cache-miss load, and the past conversation a returning session opens with. Open it before changing what a new session sees of older history.
-- `state.py` — the frozen identity dataclass for one continuum. Open it when constructing or persisting a continuum's identity; its `to_dict`/`from_dict` pair is unexercised.
+- `state.py` — the frozen identity dataclass for one continuum. Open it when constructing or persisting a continuum's identity.
 
 ## Wiring
 

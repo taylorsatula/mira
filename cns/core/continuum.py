@@ -13,10 +13,8 @@ to it, and the pool calls it on both the cache-miss and cache-hit paths, so a
 `Message` reference held across that call points at a message no longer in
 the conversation.
 
-`add_tool_message`, `discard_transient_user_message`, and
-`Continuum.to_dict`/`from_dict` have no caller. The event lists the `add_*`
-methods return are always empty: a turn's events are published by whoever
-completed the turn, never by the aggregate.
+The event lists the `add_*` methods return are always empty: a turn's events
+are published by whoever completed the turn, never by the aggregate.
 """
 from __future__ import annotations
 
@@ -24,7 +22,7 @@ import logging
 from uuid import UUID, uuid4
 
 from .message import Message, MessageMetadata, ContentBlock
-from .state import ContinuumState, ContinuumStateDict
+from .state import ContinuumState
 from .events import ContinuumEvent
 
 logger = logging.getLogger(__name__)
@@ -107,27 +105,6 @@ class Continuum:
 
         return message, []
 
-    # ACCEPTED-RESIDUAL: `add_tool_message`, `discard_transient_user_message` and
-    # `to_dict`/`from_dict` have no caller anywhere in the repo; kept unexercised.
-    def discard_transient_user_message(self, message_id: UUID) -> bool:
-        """Remove one internal continuation prompt from the hot cache.
-
-        Internal system scaffolds may be present while composing a provider
-        continuation, but they are not conversation records. Refuse to remove
-        ordinary messages through this narrow cache-only operation.
-        """
-        for index, message in enumerate(self._message_cache):
-            if message.id != message_id:
-                continue
-            if (
-                message.role != "user"
-                or message.metadata.get("transient_system_scaffold") is not True
-            ):
-                raise ValueError("Only a transient system-scaffold user message can be discarded")
-            del self._message_cache[index]
-            return True
-        return False
-    
     def add_assistant_message(self, content: str, metadata: MessageMetadata | None = None) -> tuple[Message, list[ContinuumEvent]]:
         """
         Add assistant message to continuum.
@@ -144,24 +121,6 @@ class Continuum:
 
         return message, []
     
-    def add_tool_message(self, content: str | list[ContentBlock], tool_call_id: str, is_error: bool = False) -> list[ContinuumEvent]:
-        """
-        Add tool result message to continuum.
-
-        Returns:
-            List of domain events (empty for tool messages)
-        """
-        message = Message(
-            content=content,
-            role="tool",
-            tool_call_id=tool_call_id,
-            is_error=is_error,
-        )
-
-        self._message_cache.append(message)
-
-        return []
-
     def add_tool_history(self, messages: list[Message]) -> None:
         """
         Insert tool history messages into the cache.
@@ -170,14 +129,3 @@ class Continuum:
         so subsequent turns can see what tools returned.
         """
         self._message_cache.extend(messages)
-
-
-    def to_dict(self) -> ContinuumStateDict:
-        """Convert continuum to dictionary for persistence."""
-        return self._state.to_dict()
-
-    @classmethod
-    def from_dict(cls, data: ContinuumStateDict) -> Continuum:
-        """Create continuum from dictionary."""
-        state = ContinuumState.from_dict(data)
-        return cls(state)

@@ -147,7 +147,6 @@ class MessageMetadata(TypedDict, total=False):
     complexity_score: int
     display_mode: Literal["extended", "precis"]  # ephemeral, set by cache loader
     tools_used: list[str]
-    transient_system_scaffold: bool
     segment_embedding_value: list[float]
     has_segment_embedding: bool
     collapse_attempts: int
