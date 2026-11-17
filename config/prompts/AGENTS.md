@@ -65,6 +65,7 @@
 - `background_job_notice_system.txt` — the one-call contract for the message MIRA writes when a background job finishes: no tools, no history, report the record and stop. Open it before changing what a finished job says to the user.
 - `tool_call_summary_system.txt` — the tool-card sentence contract for the browser's live tool cards. Open it before changing what a tool call's card says.
 - `tool_call_summary_user.txt` — the tool name and arguments it summarizes.
+- `follow_up_system.txt` — the two-minute quiet-nudge decision contract: what the check may say or must stay silent on, and the output shape. Open it before changing what a follow-up may claim.
 
 **Untrusted content**
 

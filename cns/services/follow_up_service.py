@@ -204,6 +204,8 @@ def _load_anchor(pool, user_id: str, segment_id: str | None, anchor_id: str):
 
 def _render_transcript(messages: list[Message]) -> str:
     lines = []
+    if len(messages) > FOLLOW_UP_CONTEXT_MESSAGES:
+        lines.append("[messages older than this point are truncated.]")
     for m in messages[-FOLLOW_UP_CONTEXT_MESSAGES:]:
         text = m.content if isinstance(m.content, str) else "[non-text content]"
         lines.append(f"{m.role}: {text.strip()}")
