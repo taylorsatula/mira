@@ -52,6 +52,7 @@ from utils.url_safety import (
     validate_public_http_url,
 )
 
+import requests
 from kagiapi import KagiClient
 from ddgs import DDGS
 from bs4 import BeautifulSoup, Comment
@@ -226,8 +227,23 @@ class WebTool(Tool):
                             "snippet": wrap_untrusted(item.get("snippet", ""), "web_search")
                         })
                 return {"success": True, "results": results, "provider": "kagi"}
+            except requests.HTTPError as e:
+                status = e.response.status_code if e.response is not None else None
+                if status in (401, 403):
+                    self.logger.error(
+                        f"Kagi rejected the API key (HTTP {status}); falling back to DuckDuckGo. "
+                        "Rotate kagi_api_key in Vault (mira/api_keys) — retrying will not help."
+                    )
+                elif status == 429:
+                    self.logger.warning(
+                        "Kagi rate limit or quota exhausted (HTTP 429); falling back to DuckDuckGo"
+                    )
+                else:
+                    self.logger.warning(
+                        f"Kagi search failed (HTTP {status}): {e}; falling back to DuckDuckGo"
+                    )
             except Exception as e:
-                self.logger.warning(f"Kagi search failed: {e}, falling back to DuckDuckGo")
+                self.logger.warning(f"Kagi search failed ({type(e).__name__}: {e}), falling back to DuckDuckGo")
 
         try:
             ddgs = DDGS()
@@ -623,12 +639,24 @@ class WebTool(Tool):
         try:
             from clients.vault_client import get_api_key
             api_key = get_api_key("kagi_api_key")
-        except Exception as e:
+        except FileNotFoundError:
             self.logger.warning(
-                "Kagi API key unavailable (%s); using DuckDuckGo for search. "
-                "To run without Kagi, set the Vault field kagi_api_key under "
-                "mira/api_keys to an empty value — an empty key suppresses "
-                "this warning and searches fall back to DuckDuckGo.", e
+                "kagi_api_key not set in Vault (mira/api_keys); using DuckDuckGo for search. "
+                "To run without Kagi deliberately, set the field to an empty value — "
+                "an empty key suppresses this warning and searches fall back to DuckDuckGo."
+            )
+            return
+        except PermissionError as e:
+            self.logger.error(
+                "Vault denied access to mira/api_keys (%s); using DuckDuckGo for search. "
+                "Check the AppRole policy grants read on mira/api_keys.", e
+            )
+            return
+        except Exception as e:
+            self.logger.error(
+                "Vault error fetching kagi_api_key (%s: %s); using DuckDuckGo for search. "
+                "This is a Vault/connectivity problem, not a missing key.",
+                type(e).__name__, e,
             )
             return
         if api_key:
