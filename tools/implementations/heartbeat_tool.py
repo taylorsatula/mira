@@ -53,6 +53,8 @@ BRIEFS_DDL = """
     consecutive_failures INTEGER NOT NULL DEFAULT 0,
     encrypted__last_result TEXT,
     last_wake_at TEXT,
+    agent_id TEXT,
+    last_outcome TEXT,
     author TEXT NOT NULL DEFAULT 'mira',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -85,7 +87,50 @@ _MISSION_MAX_CHARS = 4000
 def ensure_briefs_table(db) -> None:
     """Create the briefs table and index if absent. Idempotent."""
     db.create_table("briefs", BRIEFS_DDL)
+    _ensure_briefs_columns(db)
     db.execute(BRIEFS_STATE_INDEX_DDL)
+
+
+def _ensure_briefs_columns(db) -> None:
+    """Add columns introduced after the briefs table first shipped.
+
+    Both are nullable with no default; the migration step does the same for
+    files that predate the userdata migration, so this is the same change
+    expressed as an idempotent guard for fresh and existing files alike.
+    """
+    rows = db.execute("PRAGMA table_info(briefs)")
+    columns = {row["name"] for row in rows}
+    if "agent_id" not in columns:
+        db.execute("ALTER TABLE briefs ADD COLUMN agent_id TEXT")
+    if "last_outcome" not in columns:
+        db.execute("ALTER TABLE briefs ADD COLUMN last_outcome TEXT")
+
+
+def _decrypt_field(value):
+    """Decrypt an encrypted__ column value read via raw SQL.
+
+    Rows written before the write path encrypted consistently hold
+    plaintext in these columns; those read back as-is. Fernet tokens
+    always start with 'gAAAAA', so the fallback is unambiguous in practice.
+    """
+    if value is None:
+        return None
+    try:
+        from utils.userdata_manager import get_user_data_manager
+        from utils.user_context import get_current_user_id
+
+        return get_user_data_manager(get_current_user_id())._decrypt_value(value)
+    except Exception:
+        return value
+
+
+def _encrypt_field(value: Optional[str]):
+    if value is None:
+        return None
+    from utils.userdata_manager import get_user_data_manager
+    from utils.user_context import get_current_user_id
+
+    return get_user_data_manager(get_current_user_id())._encrypt_value(value)
 
 
 def _brief_row_public(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -99,11 +144,13 @@ def _brief_row_public(row: Dict[str, Any]) -> Dict[str, Any]:
         "interval_seconds": row.get("interval_seconds"),
         "consecutive_false": row.get("consecutive_false"),
         "consecutive_failures": row.get("consecutive_failures"),
-        "mission": row.get("encrypted__mission"),
-        "condition_check": row.get("encrypted__condition_check"),
-        "bail_if": row.get("encrypted__bail_if"),
-        "last_result": row.get("encrypted__last_result"),
+        "mission": _decrypt_field(row.get("encrypted__mission")),
+        "condition_check": _decrypt_field(row.get("encrypted__condition_check")),
+        "bail_if": _decrypt_field(row.get("encrypted__bail_if")),
+        "last_result": _decrypt_field(row.get("encrypted__last_result")),
         "last_wake_at": row.get("last_wake_at"),
+        "agent_id": row.get("agent_id"),
+        "last_outcome": row.get("last_outcome"),
         "author": row.get("author"),
         "created_at": row.get("created_at"),
     }
@@ -338,8 +385,9 @@ class HeartbeatTool(Tool):
             "Schedule and manage briefs: persisted wake-ups carrying a mission, a "
             "condition to check at wake, and (one-offs) a bail_if early-exit. "
             "At the wake time the HeartbeatAgent is dispatched with the brief's "
-            "payload: it evaluates bail_if first, then the condition, and executes "
-            "the mission only when the condition holds."
+            "payload: it evaluates bail_if first, then the condition, and reports "
+            "the outcome. If the brief names an agent_id, a 'fired' report "
+            "dispatches that agent deterministically after the gate finishes."
         ),
         "input_schema": {
             "type": "object",
@@ -403,6 +451,14 @@ class HeartbeatTool(Tool):
                         "Re-arm cadence when the condition is false, seconds (default "
                         "600, minimum 60). Sustained false results decay toward "
                         "max_interval_seconds."
+                    ),
+                },
+                "agent_id": {
+                    "type": "string",
+                    "description": (
+                        "schedule only: when the condition holds, dispatch this "
+                        "registered agent (id agt_... or its name) with the mission "
+                        "as the task. Omit for a pure gate brief that does no work."
                     ),
                 },
                 "brief_id": {
@@ -476,6 +532,7 @@ class HeartbeatTool(Tool):
         every: Optional[str] = None,
         interval_seconds: Optional[int] = None,
         note: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         from config.config_manager import config
         from utils.user_context import get_current_user_id
@@ -514,6 +571,18 @@ class HeartbeatTool(Tool):
         # DST resolution) before any default derivation reads it.
         if type == "scheduled":
             wake_dt = _parse_wake_at(None, every)
+        if agent_id is not None:
+            agent_id = agent_id.strip()
+            if not agent_id:
+                agent_id = None
+            else:
+                from agents.definitions import get_definition, ensure_definitions_table
+                ensure_definitions_table(self.db)
+                agent_row = get_definition(self.db, agent_id)
+                if agent_row is None:
+                    raise ValueError(f"agent_id {agent_id!r} does not name a known agent")
+                agent_id = agent_row["agent_id"]
+
         if interval_seconds is not None:
             base_interval = interval_seconds
         elif _is_fixed_cadence(every):
@@ -551,6 +620,8 @@ class HeartbeatTool(Tool):
             "consecutive_failures": 0,
             "encrypted__last_result": None,
             "last_wake_at": None,
+            "agent_id": agent_id,
+            "last_outcome": None,
             "author": "mira",
             "created_at": now_iso,
             "updated_at": now_iso,
@@ -601,7 +672,7 @@ class HeartbeatTool(Tool):
                 {
                     "id": r.get("id"),
                     "state": r.get("state"),
-                    "last_result": r.get("encrypted__last_result"),
+                    "last_result": _decrypt_field(r.get("encrypted__last_result")),
                     "last_wake_at": r.get("last_wake_at"),
                     "updated_at": r.get("updated_at"),
                 }
@@ -622,7 +693,7 @@ class HeartbeatTool(Tool):
         self.db.execute(
             "UPDATE briefs SET state = 'cancelled', "
             "encrypted__last_result = :note, updated_at = :now WHERE id = :id",
-            {"note": note or "cancelled by user/mira", "now": now_iso, "id": brief_id},
+            {"note": _encrypt_field(note or "cancelled by user/mira"), "now": now_iso, "id": brief_id},
         )
         refresh_armed_marker(self.db, str(get_current_user_id()))
         return {
@@ -664,8 +735,8 @@ class HeartbeatTool(Tool):
         if outcome == "bailed":
             self.db.execute(
                 "UPDATE briefs SET state = 'bailed', encrypted__last_result = :note, "
-                "last_wake_at = :now, updated_at = :now WHERE id = :id",
-                {"note": note or "bail_if held; brief is moot", "now": now_iso, "id": brief_id},
+                "last_wake_at = :now, updated_at = :now, last_outcome = 'bailed' WHERE id = :id",
+                {"note": _encrypt_field(note or "bail_if held; brief is moot"), "now": now_iso, "id": brief_id},
             )
             refresh_armed_marker(self.db, user_id)
             return {
@@ -679,8 +750,8 @@ class HeartbeatTool(Tool):
             if row.get("type") == "one-off":
                 self.db.execute(
                     "UPDATE briefs SET state = 'done', encrypted__last_result = :note, "
-                    "last_wake_at = :now, updated_at = :now WHERE id = :id",
-                    {"note": note or "condition held; mission executed", "now": now_iso, "id": brief_id},
+                    "last_wake_at = :now, updated_at = :now, last_outcome = 'fired' WHERE id = :id",
+                    {"note": _encrypt_field(note or "condition held; mission executed"), "now": now_iso, "id": brief_id},
                 )
                 refresh_armed_marker(self.db, user_id)
                 return {
@@ -694,8 +765,8 @@ class HeartbeatTool(Tool):
             self.db.execute(
                 "UPDATE briefs SET encrypted__last_result = :note, next_wake_at = :nw, "
                 "consecutive_false = 0, consecutive_failures = 0, last_wake_at = :now, "
-                "updated_at = :now WHERE id = :id",
-                {"note": note, "nw": next_wake, "now": now_iso, "id": brief_id},
+                "updated_at = :now, last_outcome = 'fired' WHERE id = :id",
+                {"note": _encrypt_field(note), "nw": next_wake, "now": now_iso, "id": brief_id},
             )
             refresh_armed_marker(self.db, user_id)
             return {
@@ -729,9 +800,10 @@ class HeartbeatTool(Tool):
         next_wake = format_utc_iso(now + timedelta(seconds=delay))
         self.db.execute(
             "UPDATE briefs SET encrypted__last_result = :note, next_wake_at = :nw, "
-            "consecutive_false = :cf, last_wake_at = :now, updated_at = :now WHERE id = :id",
+            "consecutive_false = :cf, last_wake_at = :now, updated_at = :now, "
+            "last_outcome = 'false' WHERE id = :id",
             {
-                "note": note or "condition did not hold",
+                "note": _encrypt_field(note or "condition did not hold"),
                 "nw": next_wake,
                 "cf": false_count,
                 "now": now_iso,
@@ -786,7 +858,7 @@ def apply_run_failure(brief_ids: List[str], failure_note: str) -> List[Dict[str,
                 "encrypted__last_result = :note, consecutive_failures = :cf, "
                 "last_wake_at = :now, updated_at = :now WHERE id = :id",
                 {
-                    "note": f"{failure_note} (gave up after {failures} consecutive failed runs)",
+                    "note": _encrypt_field(f"{failure_note} (gave up after {failures} consecutive failed runs)"),
                     "cf": failures,
                     "now": now_iso,
                     "id": brief_id,
@@ -802,7 +874,7 @@ def apply_run_failure(brief_ids: List[str], failure_note: str) -> List[Dict[str,
                 "consecutive_failures = :cf, next_wake_at = :nw, last_wake_at = :now, "
                 "updated_at = :now WHERE id = :id",
                 {
-                    "note": failure_note,
+                    "note": _encrypt_field(failure_note),
                     "cf": failures,
                     "nw": next_wake,
                     "now": now_iso,
@@ -818,7 +890,7 @@ def apply_run_failure(brief_ids: List[str], failure_note: str) -> List[Dict[str,
                 "consecutive_failures = :cf, next_wake_at = :nw, last_wake_at = :now, "
                 "updated_at = :now WHERE id = :id",
                 {
-                    "note": failure_note,
+                    "note": _encrypt_field(failure_note),
                     "cf": failures,
                     "nw": next_wake,
                     "now": now_iso,
@@ -828,3 +900,24 @@ def apply_run_failure(brief_ids: List[str], failure_note: str) -> List[Dict[str,
             results.append({"brief_id": brief_id, "state": "armed", "next_wake_at": next_wake})
     refresh_armed_marker(db, user_id)
     return results
+
+
+def append_brief_note(db, brief_id: str, note: str) -> None:
+    """Append a machine-written dispatch note to a brief's last_result.
+
+    Used by the agent dispatch path (agents/dispatch.py) to record why a
+    fired brief did or did not spawn its agent. Tolerates legacy plaintext
+    rows via _decrypt_field; writes back encrypted.
+    """
+    row = db.fetchone(
+        "SELECT encrypted__last_result FROM briefs WHERE id = :id",
+        {"id": brief_id},
+    )
+    if row is None:
+        return
+    current = _decrypt_field(row.get("encrypted__last_result"))
+    merged = f"{current} | {note}" if current else note
+    db.execute(
+        "UPDATE briefs SET encrypted__last_result = :note, updated_at = :now WHERE id = :id",
+        {"note": _encrypt_field(merged[:_NOTE_MAX_CHARS]), "now": format_utc_iso(utc_now()), "id": brief_id},
+    )

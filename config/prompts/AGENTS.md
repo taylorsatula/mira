@@ -86,6 +86,9 @@ Tier-1 questions — one file per name in `SCREEN_QUESTIONS`, and the name is al
 **Sidebar agent rubrics**
 
 - `agents/base_system.txt` — the sidebar loop contract; open it before changing what an agent tells itself about its own loop.
+- `agents/template_investigator.txt` — the investigator contract for user-authored agents (read-only, sources, verdict). Open it before changing what a research agent owes its reader.
+- `agents/template_implementer.txt` — the implementer contract (smallest change, verify, no unauthorized side effects). Open it before changing what an implementer may do unprompted.
+- `agents/template_watcher.txt` — the watcher contract (delta-only reports against the agent's own memory). Open it before changing what a watcher reports.
 - `agents/forage_system.txt` — the research protocol; open it before changing how a sidebar research agent is told to get past the first page of results.
 - `agents/heartbeat_agent_system.txt` — the brief gate: bail, check, or dispatch, one report per brief.
 - `agents/phoneafriend_system.txt` — the outside voice, whose completion summary is the only channel back to the caller.
@@ -102,7 +105,7 @@ Tier-1 questions — one file per name in `SCREEN_QUESTIONS`, and the name is al
 - Pending-entity edge: `pending_memory_entities_*` is loaded and its reply parsed in `cns/services/segment_collapse_handler.py`, which owns the pending_id echo keyed by identity. An output-shape change to that template and the parser move in the same commit. Counterpart: `cns/services/AGENTS.md`.
 - Subcortical edge: `subcortical_system.txt` carries no output format. The report is a tool call whose schema `SubcorticalAnalysis` generates in `cns/services/subcortical.py`, and the worked example the model imitates is code-built there too, so changing what the fast route must return edits that class and never this template. Counterpart: `cns/services/AGENTS.md`.
 - Sidebar rubrics: `load_agent_prompt` → `load_prompt("agents/<name>")`. A rubric loads at the agent's first prompt fetch, not at import, so a `py_compile`-clean agent can still carry a missing rubric. Counterpart: `agents/AGENTS.md`.
-- Gated edge — `config/prompts/agents/base_system.txt`: reached only when `BaseAgent.inherit_base_prompt` is left at its default `True`, and every concrete agent sets it `False`, so the file currently reaches no live prompt. A new agent leaving the default re-activates it; the loop contract it states is enforced by `agents/base.py` either way. Counterpart: `agents/AGENTS.md`.
+- Gated edge — `config/prompts/agents/base_system.txt`: reached when `BaseAgent.inherit_base_prompt` is left at its default `True`. `TemplatedAgent` (user-authored persistent agents) leaves it `True`; every other concrete agent sets it `False`. The loop contract it states is enforced by `agents/base.py` either way. Counterpart: `agents/AGENTS.md`.
 
 ## Rules
 

@@ -123,8 +123,11 @@ def _run_agent(
     """Thread body — construct and run the agent; publish a terminal
     failure if the thread dies outside the agent's own error handling."""
     try:
-        agent_class = load_agent_class(spec)
-        agent = agent_class(tool_repo)
+        factory = getattr(spec, "factory", None)
+        if factory is not None:
+            agent = factory(tool_repo)
+        else:
+            agent = load_agent_class(spec)(tool_repo)
         agent.run(work_item, event_bus)
     except Exception as e:
         logger.error(

@@ -159,6 +159,9 @@ ESSENTIAL_TOOLS = [
     # Heartbeat briefs: the tool that schedules wake-ups with missions; the
     # model must be able to author briefs in any turn.
     "heartbeat_tool",
+    # Persistent agents: the model must be able to create and run them in
+    # any turn, same as briefs.
+    "agent_tool",
     # Skills: the skills_catalog prompt section always instructs the model to
     # call invoke_skill_tool — it must be in every user's baseline, not an
     # invokeother-loaded optional (the catalog would otherwise name a tool the

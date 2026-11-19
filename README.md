@@ -64,6 +64,7 @@ MIRA ships with
 - InvokeOther
 - Maps
 - Pager
+- Persistent agents
 - Phone-a-friend
 - Punchclock
 - Reminder

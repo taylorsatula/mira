@@ -497,12 +497,66 @@ class SidebarAgent(ABC):
         """
         if self._blocking:
             return
+        # Ledger first: the trinket re-renders on the publish below, and the
+        # render reads the ledger — the row must exist before it fires.
+        self._record_result(work_item, status, summary)
         from cns.core.events import UpdateTrinketEvent
         event_bus.publish(UpdateTrinketEvent.create(
             continuum_id='sidebar',
             target_trinket=self._get_completion_trinket(),
             context=self._build_completion_context(status, summary, work_item),
         ))
+
+    def _record_result(
+        self,
+        work_item: 'WorkItem',
+        status: str,
+        summary: str,
+    ) -> None:
+        """Persist the run in the durable results ledger.
+
+        Every background run leaves a row; the SubagentResultsTrinket and
+        `recall` read from here. Blocking runs never reach on_completion,
+        so consults don't pollute the ledger. Agents whose completion is a
+        gate verdict rather than user-facing work opt out via
+        _record_agent_result = False. Never raises.
+        """
+        if not getattr(self, '_record_agent_result', True):
+            return
+        try:
+            from agents.results_store import record_run
+            from utils.userdata_manager import get_user_data_manager
+            from utils.user_context import get_current_user_id
+
+            record_run(
+                get_user_data_manager(get_current_user_id()),
+                agent=self._result_agent_key(),
+                status=status,
+                summary=summary,
+                subject=self._result_subject(work_item),
+                task_id=work_item.item_id,
+                payload={
+                    'interface_name': work_item.interface_name,
+                    'agent_class': type(self).__name__,
+                },
+            )
+        except Exception:
+            logger.exception("%s: failed to record agent result", self.agent_id)
+
+    def _result_agent_key(self) -> str:
+        """Key used for per-agent grouping/limits in the ledger."""
+        return self.agent_id
+
+    @property
+    def _record_agent_result(self) -> bool:
+        return type(self) not in _RESULT_LEDGER_EXEMPT
+
+    def _result_subject(self, work_item: 'WorkItem') -> str | None:
+        ctx = work_item.context or {}
+        subject = ctx.get('subject') or ctx.get('mission')
+        if subject:
+            return str(subject)
+        return None
 
     def _build_system_prompt(
         self, work_item: 'WorkItem', iteration: int = 1
@@ -915,6 +969,11 @@ class SidebarAgent(ABC):
                 break
 
         return completed, tool_results
+
+
+# Agents whose completion is not a user-facing result (the heartbeat gate is
+# a scheduler verdict, not a deliverable) opt out of the results ledger.
+_RESULT_LEDGER_EXEMPT: set[type] = set()
 
 
 def _init_trace(
