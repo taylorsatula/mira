@@ -8,7 +8,7 @@
 - `memory_curator_agent.py` — the two-mode memory-graph curator and its work-item context shapes. Open it before changing a shape a trigger or the collapse handler fills.
 - `phoneafriend_agent.py` — the outside-model consult and its segment-scoped thread store. Open it before changing how a consult thread is keyed, resumed, or expired.
 - `whilethecatsaway_agent.py` — fire-and-forget curiosity research. Open it before changing what a background discovery is allowed to write into memory.
-- `templated_agent.py` — the runtime for user-authored persistent agents: one class, three templates (investigator/implementer/watcher), everything variable read from the `agent_definitions` row at run time. Open it before changing what a persistent agent may do, or how a definition binds to a run.
+- `templated_agent.py` — the runtime for user-authored persistent agents: one class, four templates (investigator/implementer/watcher/general), everything variable read from the `agent_definitions` row at run time. Open it before changing what a persistent agent may do, or how a definition binds to a run.
 
 ## Wiring
 

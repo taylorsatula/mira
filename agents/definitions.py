@@ -2,7 +2,7 @@
 
 Custom agents are rows, not classes: a template name, an allowlist of
 tools, a prompt tophat authored in-session with Mira, and a state. Code
-provides the three templates; everything user-specific lives here.
+provides the four templates; everything user-specific lives here.
 
 Blacklist: `heartbeat_tool` and `agent_tool` (NEVER_GRANTABLE_TOOLS) can
 never be granted, regardless of what a create/update call carries. Agents
@@ -18,7 +18,7 @@ from typing import Any
 
 from utils.timezone_utils import utc_now, format_utc_iso
 
-TEMPLATES = ("investigator", "implementer", "watcher")
+TEMPLATES = ("investigator", "implementer", "watcher", "general")
 
 # Never grantable to an agent, regardless of request. heartbeat_tool would
 # let a spawned agent re-arm or edit its own wake conditions; the gate is
@@ -167,6 +167,10 @@ def create_definition(
     name = validate_name(name)
     template = validate_template(template)
     tophat = validate_tophat(tophat)
+    if template == "general" and not tools:
+        # The general template is the catch-all: omitted tools means every
+        # grantable tool, not none. Explicit lists are honored as given.
+        tools = sorted(set(tool_names) - NEVER_GRANTABLE_TOOLS)
     tools = validate_tools(tool_names, tools)
     model_route = validate_model_route(model_route)
     max_iterations = validate_max_iterations(max_iterations)

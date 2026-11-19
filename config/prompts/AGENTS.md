@@ -89,6 +89,7 @@ Tier-1 questions — one file per name in `SCREEN_QUESTIONS`, and the name is al
 - `agents/template_investigator.txt` — the investigator contract for user-authored agents (read-only, sources, verdict). Open it before changing what a research agent owes its reader.
 - `agents/template_implementer.txt` — the implementer contract (smallest change, verify, no unauthorized side effects). Open it before changing what an implementer may do unprompted.
 - `agents/template_watcher.txt` — the watcher contract (delta-only reports against the agent's own memory). Open it before changing what a watcher reports.
+- `agents/template_general.txt` — the general-purpose contract (minimal, catch-all, steered by the tophat). Open it before changing what an unconstrained agent owes its reader.
 - `agents/forage_system.txt` — the research protocol; open it before changing how a sidebar research agent is told to get past the first page of results.
 - `agents/heartbeat_agent_system.txt` — the brief gate: bail, check, or dispatch, one report per brief.
 - `agents/phoneafriend_system.txt` — the outside voice, whose completion summary is the only channel back to the caller.

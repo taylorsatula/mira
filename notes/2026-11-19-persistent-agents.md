@@ -15,7 +15,9 @@ nothing is merged, no PR is open, and the live install is untouched.
   encrypting accessors; 14-day archive sweep, never deletes; `recall` reads
   archived rows forever.
 - `agents/implementations/templated_agent.py` — one class, three templates
-  (investigator/implementer/watcher); prompt files in `config/prompts/agents/`.
+  (investigator/implementer/watcher/general); prompt files in
+  `config/prompts/agents/`. `general` is the catch-all: minimal contract,
+  full tool access by default (every grantable tool when `tools` is omitted).
   Memory namespace `agent:<name>`.
 - `agents/dispatch.py` — deterministic bridge: a brief reported `fired` with an
   `agent_id` spawns that agent at the gate's `on_completion`, guarded by

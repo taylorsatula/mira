@@ -2,15 +2,19 @@
 agent_tool — create and run persistent agents.
 
 One surface for the user-authored agent lifecycle: create an agent from a
-template (investigator / implementer / watcher) with a standing brief, list
-and inspect what exists, pause/resume/retire, recall archived results, and
-trigger an immediate run. Scheduled runs are not this tool's job — a brief
-with `agent_id` (heartbeat_tool) is what wakes an agent on a cadence.
+template (investigator / implementer / watcher / general) with a standing
+brief, list and inspect what exists, pause/resume/retire, recall archived
+results, and trigger an immediate run. Scheduled runs are not this tool's
+job — a brief with `agent_id` (heartbeat_tool) is what wakes an agent on a
+cadence.
 
 Templates:
   investigator — read-only research; reports with sources and a verdict.
   implementer  — makes changes; verifies before claiming done.
   watcher      — recurring check; reports deltas against its own memory.
+  general      — the catch-all for work that fits none of the above. Full
+                 tool access by default (every grantable tool); minimal
+                 contract meant to be steered by the tophat.
 
 Agents never get heartbeat_tool or agent_tool: they cannot re-arm their own
 schedule and cannot mint further agents.
@@ -41,7 +45,7 @@ class AgentToolConfig(BaseModel):
 
 registry.register("agent_tool", AgentToolConfig)
 
-_TEMPLATES = ("investigator", "implementer", "watcher")
+_TEMPLATES = ("investigator", "implementer", "watcher", "general")
 
 
 class AgentTool(Tool):
@@ -73,13 +77,16 @@ class AgentTool(Tool):
             "  create (name, template, tophat, tools): define an agent. "
             "template is one of investigator (read-only research, reports with "
             "sources), implementer (makes changes, verifies, reports diffs), "
-            "watcher (recurring check, reports only deltas). tophat is the "
-            "standing brief — everything the agent needs to know, since it "
-            "starts fresh each run. tools is the allowlist of tool names the "
-            "agent may call; heartbeat_tool and agent_tool are never grantable. "
-            "Optional: display_name, model_route (primary|fast|batch|assessment|"
-            "other), max_iterations (1-50), workdir (advisory), min_interval_sec "
-            "(dispatch floor, default 3600).\n"
+            "watcher (recurring check, reports only deltas), or general (the "
+            "catch-all: full tool access, minimal contract, steered by the "
+            "tophat). tophat is the standing brief — everything the agent "
+            "needs to know, since it starts fresh each run. tools is the "
+            "allowlist of tool names the agent may call; heartbeat_tool and "
+            "agent_tool are never grantable. For general, omit tools to grant "
+            "every grantable tool. Optional: display_name, model_route "
+            "(primary|fast|batch|assessment|other), max_iterations (1-50), "
+            "workdir (advisory), min_interval_sec (dispatch floor, default "
+            "3600).\n"
             "  list: every agent with state, run count, last run, failures.\n"
             "  inspect (agent): one agent's definition, recent results, and "
             "counts. inspect (run_id): one result in full.\n"
@@ -121,7 +128,7 @@ class AgentTool(Tool):
                 "tools": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "create only: tool names the agent may call. heartbeat_tool and agent_tool are never grantable.",
+                    "description": "create only: tool names the agent may call. heartbeat_tool and agent_tool are never grantable. Omit for template=general to grant every grantable tool; required for the other templates.",
                 },
                 "display_name": {
                     "type": "string",
@@ -130,7 +137,7 @@ class AgentTool(Tool):
                 "model_route": {
                     "type": "string",
                     "enum": ["primary", "fast", "batch", "assessment", "other"],
-                    "description": "create only: LLM route. Defaults per template (investigator=batch, implementer=primary, watcher=fast).",
+                    "description": "create only: LLM route. Defaults per template (investigator=batch, implementer=primary, watcher=fast, general=primary).",
                 },
                 "max_iterations": {
                     "type": "integer",
@@ -244,12 +251,13 @@ class AgentTool(Tool):
     def _create(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from agents.definitions import create_definition
 
+        requested_tools = params.get("tools") or []
         defn = create_definition(
             self.db,
             name=params.get("name"),
             template=params.get("template"),
             tophat=params.get("tophat") or "",
-            tools=params.get("tools") or [],
+            tools=requested_tools,
             tool_names=self._tool_names(),
             model_route=params.get("model_route"),
             max_iterations=params.get("max_iterations"),
@@ -257,11 +265,14 @@ class AgentTool(Tool):
             min_interval_sec=params.get("min_interval_sec", 3600),
             display_name=params.get("display_name"),
         )
+        grant_note = ""
+        if defn["template"] == "general" and not requested_tools:
+            grant_note = f" Granted all {len(defn['tools'])} grantable tools."
         return {
             "success": True,
             "agent": self._public(defn),
             "message": (
-                f"Agent {defn['name']!r} created. It runs on demand via "
+                f"Agent {defn['name']!r} created.{grant_note} It runs on demand via "
                 f"agent_tool run_now, or on a schedule via a heartbeat brief "
                 f"with agent_id={defn['agent_id']!r} (or the name)."
             ),

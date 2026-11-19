@@ -1,6 +1,6 @@
 """TemplatedAgent — the runtime for user-authored agent definitions.
 
-A row in `agent_definitions` plus one of three templates is a complete
+A row in `agent_definitions` plus one of four templates is a complete
 agent: no per-agent code. The template supplies the behavioral contract and
 the default route; the row supplies the name, the mission (`prompt_tophat`),
 the tool allowlist, and optionally a route, an iteration cap, and a workdir
@@ -10,7 +10,7 @@ The same class serves interactive dispatch (via `agent_tool run_now`) and
 scheduled dispatch from the heartbeat gate. In both cases the work item
 context carries `subject` (the mission) and optionally `detail` and
 `last_result`; everything else is read from the table at run time, so
-`pause`/`retire`/`update` take effect on the next run without a restart.
+`pause`/`retire` take effect on the next run without a restart.
 
 Memory: `agent_memory` rows are keyed by `agent:<name>`, so a persistent
 agent accumulates its own memory across runs and the existing
@@ -33,12 +33,14 @@ TEMPLATE_PROMPTS = {
     "investigator": "template_investigator.txt",
     "implementer": "template_implementer.txt",
     "watcher": "template_watcher.txt",
+    "general": "template_general.txt",
 }
 
 TEMPLATE_DEFAULT_ROUTES = {
     "investigator": "batch",
     "implementer": "primary",
     "watcher": "fast",
+    "general": "primary",
 }
 
 
