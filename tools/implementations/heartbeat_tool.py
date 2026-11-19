@@ -797,6 +797,19 @@ def apply_run_failure(brief_ids: List[str], failure_note: str) -> List[Dict[str,
             # same fixed-cadence rule as the false re-arm: failure backoff must
             # not clamp a sub-daily cadence below itself
             next_wake = format_utc_iso(now + timedelta(seconds=base_interval))
+            db.execute(
+                "UPDATE briefs SET encrypted__last_result = :note, "
+                "consecutive_failures = :cf, next_wake_at = :nw, last_wake_at = :now, "
+                "updated_at = :now WHERE id = :id",
+                {
+                    "note": failure_note,
+                    "cf": failures,
+                    "nw": next_wake,
+                    "now": now_iso,
+                    "id": brief_id,
+                },
+            )
+            results.append({"brief_id": brief_id, "state": "armed", "next_wake_at": next_wake})
         else:
             delay = _clamped_interval(base_interval, failures)
             next_wake = format_utc_iso(now + timedelta(seconds=delay))
