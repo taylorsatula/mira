@@ -22,7 +22,7 @@
 - `lora_service.py` — user-initiated refinement of the stored user model, with its preview flow. Open it when a manual model edit is requested or a preview has expired.
 - `portrait_service.py` — the prose portrait: use-day-gated synthesis on collapse, plus preview-based refinement. Open it when the `{user_context}` placeholder is empty or a portrait edit is requested.
 - `system_prompt_parser.py` — the section vocabulary every anchor check derives from. Open it before adding a system-prompt section that other code must recognize.
-- `peanutgallery_service.py` — the observer's trigger and its HUD injection. Open it before changing when guidance appears or which observer actions reach the trinket.
+- `peanutgallery_service.py` — the observer's trigger and its record/steering injection. Open it before changing when a pass runs or which observer results reach the trinket.
 - `peanutgallery_model.py` — the observer's single fast-route call and its parse. Open it before changing what an observation is made of or how a verdict is read.
 - `background_digest.py` — dead: no module imports it, so its import-time contributor registration never runs. Kept as a worked contributor example for a planned wake digest; do not build on it as exercised. The background-job notice is a wake path that does not consume it: that notice carries one job's record and needs no ambient context, so wiring the digest here would widen a narrow call.
 - `domaindoc_summary_service.py` — one-sentence DomainDoc section summaries for the section index. Open it when that index shows a stale or missing summary or a section save produced none.

@@ -44,7 +44,7 @@ Build a trinket when you need to:
 | `EventAwareTrinket` | Stateless render, or state that survives segment collapse | `generate_content()` | Valkey persist/clear, self-registration, publish cycle |
 | `StatefulTrinket` | Turn-scoped state that must expire or reset on collapse | `generate_content()`, `_expire_items()`, `_clear_all_state()` | `current_turn` (per-user), `TurnCompletedEvent` subscription, `_refresh_content()` |
 
-Live split: `manifest`, `time_manager`, `location`, `persona`, `lora`, `proactive_memory`, `reminder_manager`, `domaindoc`, `asyncactivity`, `skills_catalog` are plain; `email`, `subagent_results`, `active_skills`, `peanutgallery` are stateful.
+Live split: `manifest`, `time_manager`, `location`, `persona`, `lora`, `proactive_memory`, `reminder_manager`, `domaindoc`, `asyncactivity`, `skills_catalog` are plain; `email`, `subagent_results`, `active_skills`, `peanutgallery` are stateful (peanutgallery is the one with no TTL: its record never expires, only segment collapse flushes it).
 
 ### Pattern 1: Basic Trinket Structure
 
@@ -131,7 +131,7 @@ Result-feed trinkets that key on `task_id` return `super().handle_update_request
 
 ### Pattern 4: State Management
 
-**See:** `email_trinket.py:_inbox_snapshots`, `peanutgallery_trinket.py:_user_guidance`, `subagent_results_trinket.py:_user_results`
+**See:** `email_trinket.py:_inbox_snapshots`, `peanutgallery_trinket.py:_user_records`, `subagent_results_trinket.py:_user_results`
 
 Trinket instances are **process-global singletons shared across every user**. All mutable state must be a dict keyed by the user-id contextvar — never a bare instance attribute, or user A's state renders into user B's prompt.
 
@@ -536,7 +536,7 @@ a Valkey round-trip is unverified — `get_trinket_state()` is the check.
 | `reminder_manager.py` | plain | Invokes a tool directly (`ReminderTool.run()`) |
 | `email_trinket.py` | stateful | Snapshot store, one `wrap_untrusted` boundary around the listing, `_expire_items()` returns `False` |
 | `subagent_results_trinket.py` | stateful | Per-type task-status state machine (spec-driven from `agents/specs.py`), terminal-state guard, per-iteration summary stacking, per-type TTL expiry, legacy-slot cleanup on first persist |
-| `peanutgallery_trinket.py` | stateful | TTL-in-turns expiry, constructor arg beyond the base two |
+| `peanutgallery_trinket.py` | stateful | append-only record + one-pass steering; no TTL, no constructor args |
 
 ## Summary
 
