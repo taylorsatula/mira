@@ -58,8 +58,8 @@
 
 - `repulsion_rewriter_system.txt` — the register-conditional de-telling rewriter. Open it before changing what counts as assistant-shaped writing.
 - `repulsion_rewriter_user.txt` — the message pair plus the flagged tells.
-- `peanutgallery_system.txt` — the Tuning Fork observer contract. Open it before changing when MIRA is told to correct itself mid-conversation.
-- `peanutgallery_user.txt` — the history and execution trace it judges.
+- `peanutgallery_system.txt` — the Tuning Fork contract. Open it before changing how the standing record is extended or when steering is authorized.
+- `peanutgallery_user.txt` — the standing record, the delta window, and the evidence ledger it judges.
 - `domaindoc_summary_system.txt` — the table-of-contents sentence contract; open it before changing what a section's index line says.
 - `domaindoc_summary_user.txt` — the section header and content it summarizes.
 - `background_job_notice_system.txt` — the one-call contract for the message MIRA writes when a background job finishes: no tools, no history, report the record and stop. Open it before changing what a finished job says to the user.

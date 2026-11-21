@@ -18,7 +18,7 @@ Codebase-specific terms, one sentence each. Each entry names the map or file tha
 ## Turn pipeline and auxiliary models
 
 - **Subcortical**: the auxiliary LLM stage that runs before the main model call, handling entity extraction, memory filtering, query expansion, and complexity classification (`config/prompts/AGENTS.md`).
-- **Peanut gallery (Tuning Fork)**: a metacognitive observer that emits at most one out-of-band concern or coaching signal (`config/prompts/AGENTS.md`).
+- **Peanut gallery (Tuning Fork)**: a standing append-only session record with rare steering — the observer that extends the record every five turns and emits at most one directive when the session degrades (`config/prompts/AGENTS.md`).
 - **Trinket**: a per-user slot in the system prompt with one `variable_name`, updated by events (`working_memory/AGENTS.md`).
 - **Compose (`ComposeSystemPromptEvent`)**: the event round-trip in which trinkets build the system prompt before a turn runs (`cns/services/AGENTS.md`).
 - **Route (`primary`, `fast`, `batch`, `assessment`, `other`)**: a named LLM configuration row in `model_configs`; code calls routes by name and no route falls back to another (`clients/llm/AGENTS.md`).

@@ -408,10 +408,11 @@ class CNSIntegrationFactory:
 
     def _initialize_peanutgallery_service(self, event_bus: EventBus, llm_provider: LLMProvider) -> None:
         """
-        Initialize Peanut Gallery metacognitive observer service with event bus.
+        Initialize Peanut Gallery standing-record observer service with event bus.
 
-        The service subscribes to TurnCompletedEvent and periodically evaluates
-        the conversation for evidence-backed concerns and coaching directives.
+        The service subscribes to TurnCompletedEvent and periodically extends the
+        standing session record, emitting rare steering only when the session
+        genuinely degrades.
         """
         if self._peanutgallery_service is not None:
             return
@@ -426,22 +427,22 @@ class CNSIntegrationFactory:
         from cns.services.peanutgallery_service import PeanutGalleryService
         from working_memory.trinkets.peanutgallery_trinket import PeanutGalleryTrinket
 
-        from cns.services.peanutgallery_service import PG_TRIGGER_INTERVAL, PG_GUIDANCE_TTL_TURNS
+        from cns.services.peanutgallery_service import PG_TRIGGER_INTERVAL
 
         model = PeanutGalleryModel(
             llm_provider=llm_provider,
             analysis_interval_turns=PG_TRIGGER_INTERVAL,
         )
 
-        PeanutGalleryTrinket(
+        trinket = PeanutGalleryTrinket(
             event_bus,
             self._working_memory,
-            default_ttl=PG_GUIDANCE_TTL_TURNS
         )
 
         self._peanutgallery_service = PeanutGalleryService(
             model=model,
             event_bus=event_bus,
+            trinket=trinket,
         )
 
         logger.info(
