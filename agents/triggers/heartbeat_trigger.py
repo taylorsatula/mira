@@ -78,7 +78,7 @@ class HeartbeatTrigger(SidebarTrigger):
 
         from utils.timezone_utils import format_utc_iso, parse_utc_time_string, utc_now
         from utils.userdata_manager import get_user_data_manager
-        from tools.implementations.heartbeat_tool import ensure_briefs_table
+        from tools.implementations.heartbeat_tool import ensure_briefs_table, _decrypt_field
 
         db = get_user_data_manager(user_id)
         ensure_briefs_table(db)
@@ -126,12 +126,13 @@ class HeartbeatTrigger(SidebarTrigger):
                 {
                     "id": r["id"],
                     "type": r["type"],
-                    "mission": r.get("encrypted__mission"),
-                    "condition_check": r.get("encrypted__condition_check"),
-                    "bail_if": r.get("encrypted__bail_if"),
+                    "mission": _decrypt_field(r.get("encrypted__mission")),
+                    "condition_check": _decrypt_field(r.get("encrypted__condition_check")),
+                    "bail_if": _decrypt_field(r.get("encrypted__bail_if")),
                     "schedule": r.get("schedule"),
                     "interval_seconds": r.get("interval_seconds"),
-                    "last_result": r.get("encrypted__last_result"),
+                    "last_result": _decrypt_field(r.get("encrypted__last_result")),
+                    "agent_id": r.get("agent_id"),
                     "dispatch_stamp": dispatch_stamp,
                 }
                 for r in due

@@ -44,3 +44,16 @@ Nothing in the code caps how many agents you dispatch directly: every call spawn
 - Dispatch few, brief well. One well-briefed run beats three vague ones.
 - Never invent thread ids, task ids, or interface names: the system supplies them, a fabricated one fails honestly, and that refusal is the designed recovery.
 - You cannot cancel what you have launched. Read your own brief once more before dispatching, because you are committing to it.
+
+## Persistent agents
+
+Some work recurs. When the same standing job comes up again and again — watch this page, sweep this inbox, check this metric — a one-off brief re-authored each time is the wrong shape. Create a persistent agent instead:
+
+- `agent_tool create` with a `template` (`investigator` for read-only research, `implementer` for changes with verification, `watcher` for recurring checks that report only deltas, `general` for everything else — full tool access, minimal contract), a `name`, and a `tophat` — the standing brief, written for a reader with no other context, because each run starts fresh.
+- Grant only the tools the job needs. `heartbeat_tool` and `agent_tool` are never grantable: agents cannot re-arm their own schedule and cannot mint other agents.
+- The agent keeps its own memory across runs (`agent:<name>`), so a watcher can compare against what it saw last time.
+- Run it on demand with `agent_tool run_now`, or on a cadence with a heartbeat brief whose `agent_id` names the agent — the gate evaluates the condition and the system dispatches the agent when it fires. The gate never runs the work itself.
+- Results land in the results feed (five most recent per agent, older ones archived, never deleted) and stay queryable with `agent_tool recall`.
+- `pause` silences an agent without forgetting it; `retire` ends it for good. Three consecutive failed runs auto-pause it — resume it deliberately, don't let it flap.
+
+Create one when the user asks for recurring work or when you notice yourself re-briefing the same job. Do not create one for a single task — that is what the one-shot mechanisms above are for. The full dispatch protocol — binding a brief to an agent, min-interval behavior, failure semantics, recall — is the `dispatching-agents` skill.

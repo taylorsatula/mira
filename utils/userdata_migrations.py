@@ -189,6 +189,73 @@ def _domaindoc_versions_unique(ctx: UserdataStepContext) -> None:
         return
 
 
+def _agents_and_briefs_columns(ctx: UserdataStepContext) -> None:
+    """Agent registry + results ledger + brief dispatch columns.
+
+    Steps here create the persistent-agents tables and the two columns
+    `briefs` gains for dispatch. `briefs` may not exist yet on a file that
+    never ran the heartbeat tool, so table creation is checked, not assumed.
+    """
+    cursor = ctx.cursor
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_definitions (
+            agent_id TEXT PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            template TEXT NOT NULL,
+            display_name TEXT,
+            prompt_tophat TEXT NOT NULL,
+            tools_json TEXT NOT NULL,
+            model_route TEXT,
+            max_iterations INTEGER,
+            workdir TEXT,
+            min_interval_sec INTEGER NOT NULL DEFAULT 3600,
+            state TEXT NOT NULL DEFAULT 'active',
+            run_count INTEGER NOT NULL DEFAULT 0,
+            last_run_at TEXT,
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_definitions_state ON agent_definitions(state)"
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_results (
+            run_id TEXT PRIMARY KEY,
+            agent TEXT NOT NULL,
+            status TEXT NOT NULL,
+            subject TEXT,
+            task_id TEXT,
+            encrypted__summary TEXT,
+            encrypted__payload TEXT,
+            created_at TEXT NOT NULL,
+            seen_at TEXT,
+            archived_at TEXT
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_results_agent ON agent_results(agent, created_at)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_results_active ON agent_results(seen_at, archived_at, created_at)"
+    )
+    cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'briefs'")
+    if cursor.fetchone():
+        cursor.execute("PRAGMA table_info(briefs)")
+        brief_columns = {row[1] for row in cursor.fetchall()}
+        if "agent_id" not in brief_columns:
+            cursor.execute("ALTER TABLE briefs ADD COLUMN agent_id TEXT")
+            logger.info("Migrated briefs: added agent_id column")
+        if "last_outcome" not in brief_columns:
+            cursor.execute("ALTER TABLE briefs ADD COLUMN last_outcome TEXT")
+            logger.info("Migrated briefs: added last_outcome column")
+
+
 def _contacts_columns(ctx: UserdataStepContext) -> None:
     """Add optional contact fields to existing per-user databases."""
     cursor = ctx.cursor
@@ -213,6 +280,7 @@ STEPS: tuple[tuple[int, str, Callable[[UserdataStepContext], None]], ...] = (
     (3, "domaindoc_versions_unique", _domaindoc_versions_unique),
     (4, "contacts_columns", _contacts_columns),
     (5, "pager_plaintext_cleared", _pager_plaintext_cleared),
+    (6, "agents_and_brief_dispatch", _agents_and_briefs_columns),
 )
 USERDATA_HEAD = STEPS[-1][0]
 

@@ -7,10 +7,13 @@ else. Separation of duties: this agent is a gate, not a worker. It evaluates
 each brief (bail_if first, then condition_check) and reports the outcome.
 
 The rubric asks the gate to dispatch a mission that needs real work to a
-specialized agent. This surface cannot: `available_tools` carries no dispatch
-tool, and no work-item key names a target agent. So a `fired` report records
-this agent's own say-so, not an observed dispatch -- read one as a claim to
-verify, never as evidence that work started.
+specialized agent. The gate has no dispatch tool; the dispatch is
+deterministic code that runs after the reports are in: `on_completion` hands
+every brief reported `fired` this run to `agents/dispatch.py`, which spawns
+the brief's `agent_id` agent (subject to the definition's state, its
+`min_interval_sec`, and the in-flight registry) and notes the outcome on the
+brief. A `fired` report with no `agent_id` still records the gate's say-so
+and nothing more.
 
 Runs on the 'fast' route: gate decisions are that route's job. Ephemeral by
 construction -- nothing touches the main conversation; the trace lands in the
@@ -31,6 +34,7 @@ import logging
 from typing import Any, TYPE_CHECKING
 
 from agents.base import SidebarAgent, load_agent_prompt
+from agents.base import _RESULT_LEDGER_EXEMPT
 from tools.implementations.heartbeat_tool import HEARTBEAT_AGENT_SCHEMA
 
 if TYPE_CHECKING:
@@ -74,6 +78,8 @@ class HeartbeatAgent(SidebarAgent):
             lines.append(f"- condition_check: {b.get('condition_check')}")
             if b.get('bail_if'):
                 lines.append(f"- bail_if: {b.get('bail_if')}")
+            if b.get('agent_id'):
+                lines.append(f"- agent: {b.get('agent_id')} (dispatched automatically if you report fired)")
             if b.get('last_result'):
                 lines.append(f"- last_result: {b.get('last_result')}")
             lines.append("")
@@ -145,3 +151,22 @@ class HeartbeatAgent(SidebarAgent):
                 "HeartbeatAgent: failure accounting raised; unreported "
                 "briefs remain armed behind their dispatch window"
             )
+        # Deterministic dispatch: briefs the gate reported 'fired' this run
+        # and that name an agent get their agent spawned. No model involved.
+        try:
+            from agents.dispatch import dispatch_fired_briefs
+
+            dispatch_fired_briefs(
+                event_bus=event_bus,
+                tool_repo=self._tool_repo,
+                work_item=work_item,
+            )
+        except Exception:
+            logger.exception(
+                "HeartbeatAgent: agent dispatch raised; fired briefs did not dispatch"
+            )
+
+
+# The gate's completion is a dispatch decision, not a deliverable; the
+# brief row records it. Keep it out of the user-facing results ledger.
+_RESULT_LEDGER_EXEMPT.add(HeartbeatAgent)

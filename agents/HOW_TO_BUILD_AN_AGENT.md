@@ -203,11 +203,11 @@ class MyAgent(SidebarAgent):
 
 Agent prompts are **files**, not string literals. Create `config/prompts/agents/my_agent_system.txt` and load it with `load_agent_prompt()` (which delegates to `config.prompts.loader.load_prompt`). A missing prompt file fails at the first `get_agent_prompt()` call, not at import -- so this is a runtime failure you must verify.
 
-All three live agents set `inherit_base_prompt = False` and load a self-contained rubric that includes its own loop and `complete_task` framing.
+The built-in agents set `inherit_base_prompt = False` and load a self-contained rubric that includes its own loop and `complete_task` framing. `TemplatedAgent` (user-authored persistent agents) leaves the default `True` — the base prompt carries the loop contract its template files build on.
 
 **Default (`inherit_base_prompt = True`)**: `base_system.txt` (MIRA's personality/voice) is prepended to your rubric by `_build_system_prompt()`. Use for customer-facing agents (email, SMS) where voice coherence matters.
 
-**Override (`inherit_base_prompt = False`)**: only your prompt is used. Use for internal agents (research, analysis, curation) where MIRA's personality is noise. This is what every current implementation does.
+**Override (`inherit_base_prompt = False`)**: only your prompt is used. Use for internal agents (research, analysis, curation) where MIRA's personality is noise. This is what every built-in implementation does.
 
 Rubric shape that works:
 
@@ -674,7 +674,7 @@ The base class `run()` loop (do not override):
 
 **Prompt**
 - [ ] Rubric file in `config/prompts/agents/` loaded via `load_agent_prompt()`
-- [ ] `inherit_base_prompt` chosen deliberately (every current agent sets `False`)
+- [ ] `inherit_base_prompt` chosen deliberately (built-in agents set `False`; `TemplatedAgent` keeps the default)
 - [ ] `config/prompts/AGENTS.md` inventory updated
 
 **Completion**

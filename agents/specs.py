@@ -30,6 +30,7 @@ is a lazy import string — no agent class is imported at module level here, and
 dispatch-path consumers must keep it that way.
 """
 from dataclasses import dataclass
+from typing import Any, Callable
 import importlib
 
 
@@ -78,6 +79,10 @@ class SubagentSpec:
     result_ttl_turns: int | None
     error_ttl_turns: int | None
     agent_class_path: str
+    # Optional factory(tool_repo) returning a constructed agent. Templated
+    # agents bind their definition row per spawn and use this; static types
+    # leave it None and go through agent_class_path.
+    factory: Callable[[Any], Any] | None = None
 
 
 SUBAGENT_SPECS: dict[str, SubagentSpec] = {
