@@ -151,7 +151,7 @@ class SystemConfig(BaseModel):
     """System-level settings and feature flags."""
 
     subcortical_enabled: bool = Field(default=True, description="Enable the subcortical LLM memory-surfacing pass. When disabled, memory surfacing runs in lite mode: text-only BM25 retrieval plus graph traversal on the current message, with no embeddings, no vector search, and no LLM call.")
-    peanutgallery_enabled: bool = Field(default=True, description="Enable peanut gallery metacognitive observer")
+    peanutgallery_enabled: bool = Field(default=True, description="Enable peanut gallery standing session record and rare steering")
     follow_up_enabled: bool = Field(default=True, description="Enable the follow-up nudge: one short, unprompted assistant message after a user goes quiet for two minutes following a completed turn. On by default; overridable via MIRA_FOLLOW_UP_ENABLED (strict 0/1)")
     persona_enabled: bool = Field(default=True, description="Enable Persona evaluation, refinement, and prompt injection")
     injection_screen_enabled: bool = Field(
@@ -261,7 +261,7 @@ class AuthConfig(BaseModel):
 class WorkerPoolsConfig(BaseModel):
     """Background executor thread-pool sizes."""
 
-    peanutgallery_workers: int = Field(default=1, ge=1, description="Peanut-gallery commentary executor workers")
+    peanutgallery_workers: int = Field(default=1, ge=1, description="Peanut-gallery observer executor workers")
     orchestrator_encode_workers: int = Field(default=2, ge=1, description="Orchestrator dual-embedding encode executor workers")
     repulsion_rewriter_workers: int = Field(default=4, ge=1, description="Repulsion-rewrite executor workers")
 

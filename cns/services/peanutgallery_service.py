@@ -1,5 +1,6 @@
 """
-Peanut Gallery observer: periodic metacognitive guidance injected into the HUD.
+Peanut Gallery observer service: a standing session record and rare steering
+injected into the HUD.
 
 `PeanutGalleryService` subscribes to `TurnCompletedEvent` and fires on every
 `PG_TRIGGER_INTERVAL`th segment turn, running the observation on a copied-context
@@ -7,11 +8,12 @@ executor so it never blocks the reply. It is fire-and-forget: observation
 failures are logged and swallowed, because a failed observation must not affect a
 turn that already completed.
 
-The model's `action_type` is the whole contract between the two halves:
-`_apply_result` handles `noop` and the three guidance types
-(`concern`/`coaching`/`initiative`), and anything else drops with a warning. A new
-action type must land here and in the trinket's rendering, or the guidance is
-silently discarded.
+The contract between the two halves lives in `PeanutGalleryModel` (what an
+observation is made of, how a verdict is read) and `PeanutGalleryTrinket` (how a
+record is stored and rendered). This service only orchestrates: snapshot the
+continuum and the standing record, run the model, publish one `observe`
+update carrying the new beats and any steering. Every pass re-decides the
+steering — an absent steering in the result clears the previous one.
 """
 import contextvars
 import logging
@@ -21,23 +23,23 @@ from cns.core.events import TurnCompletedEvent, UpdateTrinketEvent
 from cns.core.message import Message
 from cns.integration.event_bus import EventBus
 from cns.services.peanutgallery_model import PeanutGalleryModel, PeanutGalleryResult
+from working_memory.trinkets.peanutgallery_trinket import PeanutGalleryTrinket
 
 from config import config
 
 logger = logging.getLogger(__name__)
 
-PG_TRIGGER_INTERVAL = 5      # Run observer every N turns (broad periodic correction)
-PG_GUIDANCE_TTL_TURNS = 2    # Short-lived directive: repair now or let it disappear
+PG_TRIGGER_INTERVAL = 5      # Run observer every N segment turns (broad periodic refresh)
 
 
 class PeanutGalleryService:
     """
-    Orchestrates the Peanut Gallery metacognitive observer.
+    Orchestrates the Peanut Gallery standing-record observer.
 
-    Every N turns, asynchronously:
-    1. Captures the turn-completed continuum snapshot
+    Every N segment turns, asynchronously:
+    1. Captures the turn-completed continuum snapshot and the standing record
     2. Runs PeanutGalleryModel evaluation
-    3. Applies guidance results into HUD
+    3. Applies the result into the standing record and (rarely) steering
 
     Fire-and-forget pattern ensures observation doesn't block conversation.
     """
@@ -46,9 +48,11 @@ class PeanutGalleryService:
         self,
         model: PeanutGalleryModel,
         event_bus: EventBus,
+        trinket: PeanutGalleryTrinket,
     ):
         self.model = model
         self.event_bus = event_bus
+        self.trinket = trinket
 
         self._executor = ThreadPoolExecutor(
             max_workers=config.worker_pools.peanutgallery_workers,
@@ -66,15 +70,11 @@ class PeanutGalleryService:
         """
         Handle turn completion - check if it's time for observation.
 
-        Runs every N turns based on segment_turn_number.
+        Runs every N segment turns based on segment_turn_number.
         Fire-and-forget async execution to avoid blocking the conversation.
         """
         if event.segment_turn_number % PG_TRIGGER_INTERVAL != 0:
             return
-
-        for message in reversed(event.continuum.messages):
-            if message.role == "user":
-                break
 
         logger.debug(
             "Triggering Peanut Gallery observation at segment turn %d",
@@ -82,10 +82,23 @@ class PeanutGalleryService:
         )
 
         messages_snapshot = tuple(event.continuum.messages)
-        ctx = contextvars.copy_context()
-        self._executor.submit(ctx.run, self._run_observation, messages_snapshot)
+        standing_log = tuple(self.trinket.get_session_log())
 
-    def _run_observation(self, messages_snapshot: tuple[Message, ...]) -> None:
+        ctx = contextvars.copy_context()
+        self._executor.submit(
+            ctx.run,
+            self._run_observation,
+            event.continuum_id,
+            messages_snapshot,
+            standing_log,
+        )
+
+    def _run_observation(
+        self,
+        continuum_id: str,
+        messages_snapshot: tuple[Message, ...],
+        standing_log: tuple[str, ...],
+    ) -> None:
         """
         Execute Peanut Gallery observation and apply results.
 
@@ -96,52 +109,42 @@ class PeanutGalleryService:
                 logger.debug("No messages in snapshot for observation")
                 return
 
-            result = self.model.evaluate(list(messages_snapshot))
-            self._apply_result(result)
+            result = self.model.evaluate(list(messages_snapshot), list(standing_log))
+            self._apply_result(continuum_id, result)
 
         except Exception as e:
             logger.warning("Peanut Gallery observation failed (non-critical): %s", e)
+            # A failed pass is still a pass boundary: clear any steering the
+            # previous pass set, so a stale directive (possibly critical) does
+            # not render indefinitely while the observer is down.
+            try:
+                self._apply_result(continuum_id, PeanutGalleryResult())
+            except Exception:
+                logger.warning("Peanut Gallery: could not clear steering after observation failure", exc_info=True)
 
-    def _apply_result(self, result: PeanutGalleryResult) -> None:
-        """Apply Peanut Gallery result to working memory."""
-        if result.action_type == "noop":
-            logger.debug("Peanut Gallery: noop (no action needed)")
-            return
+    def _apply_result(self, continuum_id: str, result: PeanutGalleryResult) -> None:
+        """Apply observation results to the standing record and steering."""
+        steering = None
+        if result.steering:
+            steering = {"text": result.steering, "critical": result.steering_critical}
 
-        if result.action_type in ("concern", "coaching", "initiative"):
-            self._inject_guidance(result.action_type, result.guidance, result.critical)
-            return
-
-        logger.warning("Unsupported Peanut Gallery action type: %s", result.action_type)
-
-    def _inject_guidance(
-        self,
-        guidance_type: str,
-        guidance_text: str,
-        critical: bool = False
-    ) -> None:
-        """
-        Inject guidance into HUD via PeanutGalleryTrinket.
-
-        Args:
-            guidance_type: "concern" or "coaching"
-            guidance_text: The guidance message
-            critical: Whether this guidance warrants 4th-wall-breaking
-        """
-        if not guidance_text:
-            logger.debug("Empty %s guidance, skipping", guidance_type)
-            return
+        if result.session_log:
+            logger.info(
+                "Peanut Gallery: %d new beat(s)",
+                len(result.session_log),
+            )
+        if result.steering:
+            logger.info(
+                "Peanut Gallery steering (critical=%s): %s...",
+                result.steering_critical, result.steering[:80],
+            )
 
         self.event_bus.publish(UpdateTrinketEvent.create(
-            continuum_id="peanutgallery",
+            continuum_id=continuum_id,
             target_trinket="PeanutGalleryTrinket",
             context={
-                "action": "add_guidance",
-                "type": guidance_type,
-                "text": guidance_text,
-                "ttl": PG_GUIDANCE_TTL_TURNS,
-                "critical": critical,
-            }
+                "action": "observe",
+                "log_lines": list(result.session_log),
+                "steering": steering,
+            },
         ))
-
-        logger.info("Peanut Gallery %s (critical=%s): %s...", guidance_type, critical, guidance_text[:80])

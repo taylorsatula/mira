@@ -1,17 +1,17 @@
 """
-Peanut Gallery observer model: one fast-route call over a scoped conversation
-window plus a compact execution ledger.
+Peanut Gallery observer model: one fast-route call over a bounded delta window
+plus a compact evidence ledger, maintaining the standing session record.
 
-`evaluate` narrows the continuum to the recent turn window, builds the ledger
-(the latest user request, the latest assistant response, assistant commitments
-extracted by phrase pattern, and tool activity), and asks the observer for a
-verdict. Actions are `noop`, `concern`, `coaching`, `initiative`.
+`evaluate` narrows the continuum to the recent delta window (the work since
+the previous pass), builds the ledger (latest user request, latest assistant
+response, assistant commitments extracted by phrase pattern, and tool
+activity), and asks the observer to extend the standing record. Steering is a
+rare, secondary output.
 
 Parsing is the entire contract, and it fails toward silence: an unparseable
-response, a missing type attribute, an unknown action type, or a missing
-`<guidance>` block all degrade to `noop` rather than raising. A malformed
-emission therefore costs one observation, never a turn. `initiative` is never
-marked critical.
+response, a missing session log, or an unparseable steering block degrade to
+an empty result rather than raising. A malformed emission therefore costs one
+observation, never a turn.
 
 Everything spliced into the prompt from conversation content is XML-escaped at
 the interpolation point, because that text is user-authored and would otherwise
@@ -20,8 +20,8 @@ be able to close a container and speak as the prompt.
 import json
 import logging
 import re
-from dataclasses import dataclass
-from typing import List, Literal, Optional
+from dataclasses import dataclass, field
+from typing import List, Optional
 
 from config.prompts.loader import load_prompt
 from cns.core.message import Message, preprocess_content_blocks
@@ -39,27 +39,28 @@ def _escape(value: str) -> str:
     )
 
 
-
 @dataclass
 class PeanutGalleryResult:
-    """Result from the Peanut Gallery observer evaluation."""
-    action_type: Literal["noop", "concern", "coaching", "initiative"]
-    guidance: Optional[str] = None
-    critical: bool = False
+    """Result from the Peanut Gallery observer evaluation.
+
+    session_log: new one-sentence beats to append to the standing record.
+    steering:    at most one rare directive | None.
+    steering_critical: whether the steering authorizes the fourth wall.
+    """
+    session_log: List[str] = field(default_factory=list)
+    steering: Optional[str] = None
+    steering_critical: bool = False
 
 
 class PeanutGalleryModel:
     """
-    Single-stage LLM model for metacognitive conversation observation.
+    Single-stage LLM model for the session's standing record.
 
-    The observer reviews recent conversation and execution evidence, then
-    emits either noop or a high-salience corrective directive.
-
-    The observer can output:
-    - noop: No action needed
-    - concern: Direct corrective guidance for an active failure
-    - coaching: Strong steering guidance before a bigger failure lands
-    - initiative: Conversational stewardship directive when MIRA is correct but passive
+    Each pass:
+    - slices the continuum to the delta window (recent conversational messages)
+    - builds a compact ledger of the delta (commitments, tool activity, latest
+      user request and assistant response)
+    - asks the observer to append 1-3 beats and (rarely) one steering directive
     """
 
     def __init__(
@@ -68,76 +69,121 @@ class PeanutGalleryModel:
         analysis_interval_turns: int
     ):
         self.llm_provider = llm_provider
-        self._observer_window_turns = analysis_interval_turns * 2
+        # The delta window is the last `analysis_interval_turns` turns, keyed on
+        # the turn_id stamped on user and assistant messages: an agentic turn
+        # emits several conversational messages, so a message count would drop
+        # whole turns from the window. The message-count fallback covers
+        # histories with no turn_id stamps.
+        self._delta_window_turns = analysis_interval_turns
+        self._delta_window = 2 * analysis_interval_turns
 
         self._system_prompt = load_prompt("peanutgallery_system.txt")
         self._user_template = load_prompt("peanutgallery_user.txt")
 
         logger.info(
-            "PeanutGalleryModel initialized (observer_window_turns=%d)",
-            self._observer_window_turns,
+            "PeanutGalleryModel initialized (delta_window_turns=%d)",
+            self._delta_window_turns,
         )
 
-    def evaluate(self, messages: List[Message]) -> PeanutGalleryResult:
+    def evaluate(
+        self,
+        messages: List[Message],
+        standing_log: Optional[List[str]] = None,
+    ) -> PeanutGalleryResult:
         """
-        Evaluate recent conversation for metacognitive intervention.
+        Evaluate the delta window for a record extension and (rarely) steering.
 
         Args:
-            messages: Recent messages from conversation cache
+            messages: Messages from the active continuum snapshot.
+            standing_log: Current standing record beats (empty on first pass).
 
         Returns:
-            PeanutGalleryResult with action_type and guidance when warranted
+            PeanutGalleryResult with session_log beats and optional steering
         """
-        observation_messages = self._get_observation_messages(messages)
-        if not observation_messages:
-            return PeanutGalleryResult(action_type="noop")
+        delta_messages = self._delta_slice(messages)
+        if not delta_messages:
+            return PeanutGalleryResult()
 
-        execution_trace = self._build_execution_trace(observation_messages)
-        return self._run_observer(observation_messages, execution_trace)
+        conversational_messages = self._extract_conversational_messages(delta_messages)
+        if len(conversational_messages) < 3:
+            logger.debug("Not enough conversational messages (%d) for observer evaluation", len(conversational_messages))
+            return PeanutGalleryResult()
 
-    def _get_observation_messages(self, messages: List[Message]) -> list[Message]:
-        """Scope raw messages to the same recent turn window the observer reviews."""
-        conversational_messages = self._extract_conversational_messages(messages)
-        recent_conversational_messages = conversational_messages[-(self._observer_window_turns * 2):]
+        execution_trace = self._build_delta_ledger(delta_messages)
+        return self._run_observer(conversational_messages, execution_trace, standing_log or [])
 
-        if not recent_conversational_messages:
+    def _delta_slice(self, messages: List[Message]) -> list[Message]:
+        """
+        Scope raw messages to the delta window the observer reviews.
+
+        Keeps the conversational messages from the last `self._delta_window_turns`
+        turns (keyed on the turn_id stamped on user and assistant messages), then
+        returns the raw slice from the earliest kept message so tool and assistant
+        noise between kept messages is preserved for the ledger. Falls back to a
+        message-count window when the history carries no turn_id stamps.
+        """
+        conversational = self._extract_conversational_messages(messages)
+        if not conversational:
             return []
 
-        first_recent_message_id = recent_conversational_messages[0].id
+        turn_ids: list[str] = []
+        for message in conversational:
+            turn_id = (message.metadata or {}).get("turn_id")
+            if turn_id and turn_id not in turn_ids:
+                turn_ids.append(turn_id)
+
+        if len(turn_ids) >= self._delta_window_turns:
+            keep = set(turn_ids[-self._delta_window_turns:])
+            recent = [
+                message for message in conversational
+                if (message.metadata or {}).get("turn_id") in keep
+            ]
+        else:
+            recent = conversational[-self._delta_window:]
+        if not recent:
+            return []
+
+        first_recent_id = recent[0].id
         for idx, message in enumerate(messages):
-            if message.id == first_recent_message_id:
+            if message.id == first_recent_id:
                 return messages[idx:]
 
-        logger.warning("Failed to align Peanut Gallery observation window; using filtered messages only")
-        return recent_conversational_messages
+        logger.warning("Failed to align Peanut Gallery delta window; using filtered messages only")
+        return recent
 
     def _run_observer(
         self,
         messages: List[Message],
-        execution_trace: str
+        execution_trace: str,
+        standing_log: List[str],
     ) -> PeanutGalleryResult:
         """
-        Run observer to evaluate conversation and decide action.
+        Run observer to extend the record and decide on steering.
 
         Args:
-            messages: Scoped recent conversation messages
-            execution_trace: Compact action/evidence summary from recent turns
+            messages: Delta window conversational messages (already scoped)
+            execution_trace: Compact ledger of the delta window
+            standing_log: Current standing record beats
 
         Returns:
-            PeanutGalleryResult with action and details
+            PeanutGalleryResult with session_log beats and optional steering
         """
-        conversational_messages = self._extract_conversational_messages(messages)
+        formatted_messages = self._format_with_ids(messages)
+        standing_record = "\n".join(
+            f"- {_escape(line)}" for line in standing_log
+        ) if standing_log else "(empty — first pass)"
 
-        if len(conversational_messages) < 3:
-            logger.debug("Not enough conversational messages for observer evaluation")
-            return PeanutGalleryResult(action_type="noop")
-
-        formatted_messages = self._format_with_ids(conversational_messages)
-
-        user_prompt = self._user_template.replace(
-            "{formatted_messages}", formatted_messages
-        ).replace(
-            "{execution_trace}", execution_trace
+        # Single pass: replacement text is never rescanned, so a beat that
+        # contains a placeholder token cannot splice another section in.
+        substitutions = {
+            "standing_record": standing_record,
+            "formatted_messages": formatted_messages,
+            "delta_ledger": execution_trace,
+        }
+        user_prompt = re.sub(
+            r"\{(standing_record|formatted_messages|delta_ledger)\}",
+            lambda match: substitutions[match.group(1)],
+            self._user_template,
         )
 
         response = self.llm_provider.generate_response(
@@ -150,7 +196,7 @@ class PeanutGalleryModel:
 
         if not response_text:
             logger.debug("Observer returned empty response")
-            return PeanutGalleryResult(action_type="noop")
+            return PeanutGalleryResult()
 
         return self._parse_observer_response(response_text)
 
@@ -158,66 +204,90 @@ class PeanutGalleryModel:
         """
         Parse observer response into PeanutGalleryResult.
 
-        Expected formats:
-        - <mira:noop/>
-        - <mira:peanutgallery type="concern">...</mira:peanutgallery>
-        - <mira:peanutgallery type="coaching">...</mira:peanutgallery>
-        """
-        if re.search(r'<mira:noop\s*/>', response_text, re.IGNORECASE):
-            logger.debug("Observer: noop")
-            return PeanutGalleryResult(action_type="noop")
+        Expected shape:
+        <mira:session_log> 1-3 lines, one sentence each </mira:session_log>
+        <mira:steering critical="true"> one directive sentence </mira:steering>
 
-        pg_match = re.search(
-            r'<mira:peanutgallery\b([^>]*)>(.*?)</mira:peanutgallery>',
+        Both tags are optional. Silence degrades to an empty result.
+        """
+        session_log = self._parse_session_log(response_text)
+        steering, steering_critical = self._parse_steering(response_text)
+        return PeanutGalleryResult(
+            session_log=session_log,
+            steering=steering,
+            steering_critical=steering_critical,
+        )
+
+    def _parse_session_log(self, response_text: str) -> List[str]:
+        """
+        Extract and normalize the standing-record beats.
+
+        Bullets are stripped, blanks dropped, over 300 chars truncated, exact
+        duplicates removed, and capped at three beats per pass.
+        """
+        match = re.search(
+            r'<mira:session_log\b[^>]*>(.*?)</mira:session_log>',
             response_text,
             re.DOTALL | re.IGNORECASE
         )
+        if not match:
+            return []
 
-        if not pg_match:
-            logger.debug("Malformed observer response, treating as noop")
-            return PeanutGalleryResult(action_type="noop")
+        lines: List[str] = []
+        for raw_line in match.group(1).splitlines():
+            line = re.sub(r'^(\s*[-*•]+\s*)+', '', raw_line).strip()
+            if not line:
+                continue
+            if len(line) > 300:
+                line = line[:300].strip() + "..."
+            if line not in lines:
+                lines.append(line)
+        return lines[:3]
 
-        attributes = pg_match.group(1)
-        content = pg_match.group(2)
+    def _parse_steering(self, response_text: str) -> tuple[Optional[str], bool]:
+        """
+        Extract a steering directive, if present.
 
-        action_type_match = re.search(r'\btype="(\w+)"', attributes, re.IGNORECASE)
-        if not action_type_match:
-            logger.debug("Observer response missing action type, treating as noop")
-            return PeanutGalleryResult(action_type="noop")
-
-        severity_match = re.search(r'\bseverity="(\w+)"', attributes, re.IGNORECASE)
-
-        action_type = action_type_match.group(1).lower()
-        severity = severity_match.group(1) if severity_match else None
-
-        if action_type in ("concern", "coaching", "initiative") and content is not None:
-            return self._parse_guidance(action_type, content, severity)
-
-        logger.warning("Unknown action type: %s", action_type)
-        return PeanutGalleryResult(action_type="noop")
-
-    def _parse_guidance(
-        self,
-        guidance_type: Literal["concern", "coaching", "initiative"],
-        content: str,
-        severity: Optional[str] = None
-    ) -> PeanutGalleryResult:
-        """Parse concern, coaching, or initiative guidance from content."""
-        guidance_match = re.search(
-            r'<guidance>(.*?)</guidance>',
-            content,
-            re.DOTALL
+        Returns (text, critical). The fourth-wall path is taken only for
+        critical="true" (case-insensitive), the one form the observer prompt
+        documents. A steering tag quoted inside the session_log block is data,
+        not a directive, and is ignored.
+        """
+        without_log = re.sub(
+            r'<mira:session_log\b[^>]*>.*?</mira:session_log>',
+            '',
+            response_text,
+            flags=re.DOTALL | re.IGNORECASE,
         )
-
-        if not guidance_match:
-            logger.debug("Malformed %s response", guidance_type)
-            return PeanutGalleryResult(action_type="noop")
-
-        return PeanutGalleryResult(
-            action_type=guidance_type,
-            guidance=guidance_match.group(1).strip(),
-            critical=False if guidance_type == "initiative" else (severity is not None and severity.lower() == "critical")
+        # An unterminated session_log swallows the rest of the response;
+        # nothing after it is a directive.
+        without_log = re.sub(
+            r'<mira:session_log\b[^>]*>.*$',
+            '',
+            without_log,
+            flags=re.DOTALL | re.IGNORECASE,
         )
+        match = re.search(
+            r'<mira:steering\b([^>]*)>(.*?)</mira:steering>',
+            without_log,
+            re.DOTALL | re.IGNORECASE
+        )
+        if not match:
+            return None, False
+
+        attributes = match.group(1)
+        text = match.group(2).strip()
+        if not text:
+            return None, False
+        if len(text) > 600:
+            text = text[:600].strip() + "..."
+
+        critical = False
+        critical_match = re.search(r'\bcritical="([^"]*)"', attributes, re.IGNORECASE)
+        if critical_match and critical_match.group(1).lower() == "true":
+            critical = True
+
+        return text, critical
 
     def _extract_conversational_messages(self, messages: List[Message]) -> list[Message]:
         """Extract human-visible user/assistant messages for observer review."""
@@ -248,8 +318,12 @@ class PeanutGalleryModel:
         has_media_content = preprocessed.image_count > 0
         return has_text_content or has_media_content
 
-    def _build_execution_trace(self, messages: List[Message]) -> str:
-        """Build a compact evidence ledger for dropped-task and hallucination checks."""
+    def _build_delta_ledger(self, messages: List[Message]) -> str:
+        """Build a compact evidence ledger for the delta window.
+
+        Same shape as the old full-window trace, but scoped to the delta
+        window only — the new work since the last pass.
+        """
         conversational_messages = self._extract_conversational_messages(messages)
         assistant_commitments: list[str] = []
         tool_activity: list[str] = []
@@ -296,7 +370,7 @@ class PeanutGalleryModel:
             tool_activity.append("none observed")
 
         trace_parts = [
-            "<execution_trace>",
+            "<delta_ledger>",
             f"<latest_user_request>{_escape(latest_user_request)}</latest_user_request>",
             f"<latest_assistant_response>{_escape(latest_assistant_response)}</latest_assistant_response>",
             "<assistant_commitments>",
@@ -310,7 +384,7 @@ class PeanutGalleryModel:
             f"- {_escape(activity)}" for activity in tool_activity[:8]
         )
         trace_parts.append("</tool_activity>")
-        trace_parts.append("</execution_trace>")
+        trace_parts.append("</delta_ledger>")
         return "\n".join(trace_parts)
 
     def _extract_commitments(self, rendered_message: str) -> list[str]:

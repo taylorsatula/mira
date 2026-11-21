@@ -10,6 +10,7 @@
 - `OFFLINE_MODELS.md` — the local llama-server endpoints, model-name configuration, and pre-start checklist. Open it before an offline-mode install.
 - `SEGMENT_SYSTEM.md` — the operator-level account of segments, sentinels, collapse, and live context compaction. Open it when explaining stored conversation history to an operator.
 - `GLOSSARY.md` — one sentence per codebase-specific term, each naming the map or file that owns the detail. Open it when a term in a user message or a tool result does not decode.
+- `PEANUT_GALLERY_TOPHAT.md` — the Peanut Gallery redesign runbook: the pre-change audit (§1, line citations name `main` @ `531d73e`), the design, and the verification path. Open it when working on the standing session record or the steering contract.
 
 ## Wiring
 
