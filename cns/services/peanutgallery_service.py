@@ -114,6 +114,13 @@ class PeanutGalleryService:
 
         except Exception as e:
             logger.warning("Peanut Gallery observation failed (non-critical): %s", e)
+            # A failed pass is still a pass boundary: clear any steering the
+            # previous pass set, so a stale directive (possibly critical) does
+            # not render indefinitely while the observer is down.
+            try:
+                self._apply_result(continuum_id, PeanutGalleryResult())
+            except Exception:
+                logger.warning("Peanut Gallery: could not clear steering after observation failure", exc_info=True)
 
     def _apply_result(self, continuum_id: str, result: PeanutGalleryResult) -> None:
         """Apply observation results to the standing record and steering."""

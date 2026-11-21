@@ -4,6 +4,8 @@
 **Session:** redesign of the Peanut Gallery metacognitive observer (`taylorsatula/mira`, `main` @ `531d73e`).
 **Purpose:** a runbook. An agent with an empty context window should be able to read this, orient in the tree, and actualize the change. Every behavioral claim in this document is cited to `path:line`.
 
+**Reading note:** §1 describes the pre-change code at `main` @ `531d73e` (the "as-built" system this change replaces); its `path:line` citations name that commit, not the current tree. §3 onward describes the design this branch implements; where the two disagree, §3 and the code win.
+
 ---
 
 ## 0. TL;DR
@@ -92,17 +94,17 @@ Not part of this change: reviving `<mira:internal_monologue>` (dead code — `ut
 
 ### 3.5 The record's shape (the standing block)
 
-One beat per pass, one sentence, ≤ ~300 chars, append-only, newest last. The record is a *record* — it describes what happened and the direction the session took, not a directive. Rendering (default; see Open questions):
+One to three beats per pass, one sentence each, ≤ ~300 chars, append-only, newest last. The record is a *record* — it describes what happened and the direction the session took, not a directive. Rendering (default; see Open questions):
 
 ```
 <mira:peanutgallery>
+  <header>Session record (append-only — describes session shape, not a directive; may lag the conversation):</header>
   <session_log>
-    <header>Session record (append-only, may lag up to 5 turns):</header>
     - Session begins. The user wants to talk about making an indian food dish.
     - The conversation pivots to cybersecurity; Mira runs many toolcalls, including nmap on a local Roborock S8 vacuum.
     - User just pivoted to checking the weather.
   </session_log>
-  <steering critical="false">One directive, or nothing.</steering>
+  <steering>One directive, or nothing.</steering>
 </mira:peanutgallery>
 ```
 
@@ -114,7 +116,7 @@ New parse shape (`_parse_observer_response`):
 
 ```
 <mira:session_log>
-  <line>...</line>          # 1–3 lines, one sentence each, ≤ ~300 chars
+  one sentence per line   # 1–3 lines, one sentence each, ≤ ~300 chars
 </mira:session_log>
 
 <mira:steering critical="true">
@@ -125,9 +127,9 @@ New parse shape (`_parse_observer_response`):
 - `session_log` missing / empty → **skip the append** (log unchanged). The record is not rewritten; silence is the default fate.
 - `steering` missing → no steering (and any prior steering is dropped by the trinket).
 - `steering` present but empty → no steering.
-- `steering critical="true"` → critical; otherwise standard. (`critical="critical"` is accepted as an alias; only the exact string `"true"` takes the fourth-wall path.)
+- `steering critical="true"` (case-insensitive) → critical; any other value or a bare `<steering>` → standard. Only `critical="true"` takes the fourth-wall path. A `<mira:steering>` tag appearing inside the `<mira:session_log>` block is treated as log content, never as a directive.
 - Neither tag present → no-op pass.
-- Failure anywhere (parse error, LLM error, empty response) → no-op pass; log unchanged.
+- Failure anywhere (parse error, LLM error, empty response) → no-op pass; log unchanged. A failed pass still clears any standing steering — the pass boundary is what bounds steering's lifetime.
 
 All of this stays inside the same "fire-and-forget, never blocks a turn" pattern as today (`peanutgallery_service.py:88-103`).
 
@@ -176,11 +178,11 @@ This is the difference from today's `peanutgallery_system.txt` (134 lines built 
       steering: Optional[str] = None                        # rare directive
       steering_critical: bool = False
   ```
-- `PeanutGalleryModel.__init__(llm_provider, analysis_interval_turns)` — keep the constructor arg (factory passes `PG_TRIGGER_INTERVAL`); add `self._delta_window = 2 * analysis_interval_turns` and use it for `_delta_slice`; the `* 2` window doubling is gone.
+- `PeanutGalleryModel.__init__(llm_provider, analysis_interval_turns)` — keep the constructor arg (factory passes `PG_TRIGGER_INTERVAL`); add turn-keyed windowing for `_delta_slice` (`self._delta_window_turns = analysis_interval_turns`), with a message-count fallback when the history carries no `turn_id` stamps; the old `* 2` window doubling is gone.
 - `evaluate(messages, standing_log: list[str])` — new signature. `standing_log` comes from the trinket (the service reads it before submitting the observation). First pass → `[]`.
-- `_delta_slice(messages)` — `messages` → conversational subset (`_is_conversational_message`, kept) → take the tail `2 * interval` conversational messages → return the raw slice from the earliest kept message. (Count-based; the alternative — `turn_id`-keyed slicing — is an implementation detail the implementer may use if available; the plain count is preferred since messages don't carry segment turn ids.)
-- `_build_delta_ledger(delta_messages)` — the existing `_build_execution_trace` logic, re-scoped to the delta slice only (latest request/response, ≤5 commitments, ≤8 tool entries, ≤500-char truncation, escaping). If the delta is empty, return `""`.
-- `_run_observer` — build the prompt from a single user message: `<standing_record>` + `<delta_window>` (formatted messages) + `<delta_ledger>` + the task instruction. One fast-route call (`model_config="fast"`), unchanged.
+- `_delta_slice(messages)` — `messages` → conversational subset (`_is_conversational_message`, kept) → keep the conversational messages from the last `interval` turns (keyed on the `turn_id` stamped on user and assistant messages), falling back to a message-count window when no `turn_id` stamps are present → return the raw slice from the earliest kept message.
+- `_build_delta_ledger(delta_messages)` — the existing `_build_execution_trace` logic, re-scoped to the delta slice only (latest request/response, ≤5 commitments, ≤8 tool entries, ≤500-char truncation, escaping). The ledger always renders; an empty delta yields `none` placeholders.
+- `_run_observer` — build the prompt from a single user message: `<standing_record>` + `<window_messages>` (formatted messages) + `<delta_ledger>` + the task instruction. One fast-route call (`model_config="fast"`), unchanged.
 - `_parse_observer_response` — the new contract (`:286-292`-shape below; do not parse old action types). Fail to no-op.
 - `_format_with_ids` — kept (8-char ids).
 - `_render_message_content` — kept (500-char cap).
@@ -210,7 +212,7 @@ This is the difference from today's `peanutgallery_system.txt` (134 lines built 
 4. Staleness — the record lags the turn; do not treat it as current state.
 5. Output format — exactly the two tags; nothing else.
 
-**`config/prompts/peanutgallery_user.txt`** (rewrite): `<standing_record>` (current beats, escaped) + `<delta_window>` (formatted messages with IDs, escaped) + `<delta_ledger>` (escaped) + the task sentence.
+**`config/prompts/peanutgallery_user.txt`** (rewrite): `<standing_record>` (current beats, escaped) + `<window_messages>` (formatted messages with IDs, escaped) + `<delta_ledger>` (escaped) + the task sentence.
 
 **`config/system_prompt.txt:43`** (amend): update the HUD sentence — "time, reminders, memories, subagent results, and the peanut gallery's session record and rare steering" — and add one sentence naming the record's nature: background, may lag up to 5 turns, not a directive, do not cite it to the user.
 

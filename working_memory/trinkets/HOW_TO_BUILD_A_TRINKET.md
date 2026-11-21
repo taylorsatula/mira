@@ -44,7 +44,7 @@ Build a trinket when you need to:
 | `EventAwareTrinket` | Stateless render, or state that survives segment collapse | `generate_content()` | Valkey persist/clear, self-registration, publish cycle |
 | `StatefulTrinket` | Turn-scoped state that must expire or reset on collapse | `generate_content()`, `_expire_items()`, `_clear_all_state()` | `current_turn` (per-user), `TurnCompletedEvent` subscription, `_refresh_content()` |
 
-Live split: `manifest`, `time_manager`, `location`, `persona`, `lora`, `proactive_memory`, `reminder_manager`, `domaindoc`, `asyncactivity`, `skills_catalog` are plain; `email`, `subagent_results`, `active_skills`, `peanutgallery` are stateful (peanutgallery is the one with no TTL: its record never expires, only segment collapse flushes it).
+Live split: `manifest`, `time_manager`, `location`, `persona`, `lora`, `proactive_memory`, `reminder_manager`, `domaindoc`, `asyncactivity`, `skills_catalog` are plain; `email`, `subagent_results`, `active_skills`, `peanutgallery` are stateful (peanutgallery and email have no turn-based expiry: the record never expires, only segment collapse flushes it).
 
 ### Pattern 1: Basic Trinket Structure
 

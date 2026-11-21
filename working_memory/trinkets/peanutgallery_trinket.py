@@ -1,8 +1,8 @@
 """
 Renders the standing session record and rare steering for the HUD.
 
-The Peanut Gallery is a standing record, not an event. Every fiveth segment
-turn the observer extends the record with one or three beats; the record is
+The Peanut Gallery is a standing record, not an event. Every fifth segment
+turn the observer extends the record with one to three beats; the record is
 append-only, never expires, and re-renders each turn through the compose
 path. Steering is the exception: at most one directive per pass, rendered
 only until the next pass (which either replaces it or clears it).
@@ -140,7 +140,7 @@ class PeanutGalleryTrinket(StatefulTrinket):
         parts: List[str] = ['<mira:peanutgallery>']
 
         if record:
-            parts.append('  <header>Session record (append-only — describes session shape, not a directive, may lag up to 5 turns):</header>')
+            parts.append('  <header>Session record (append-only — describes session shape, not a directive; may lag the conversation):</header>')
             parts.append('  <session_log>')
             for line in record:
                 parts.append(f'    - {html.escape(line)}')

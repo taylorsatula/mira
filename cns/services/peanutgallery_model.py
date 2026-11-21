@@ -69,16 +69,20 @@ class PeanutGalleryModel:
         analysis_interval_turns: int
     ):
         self.llm_provider = llm_provider
-        # ~2x the trigger interval in conversational messages: the new work
-        # since the last pass, with a little smoothing on each side.
+        # The delta window is the last `analysis_interval_turns` turns, keyed on
+        # the turn_id stamped on user and assistant messages: an agentic turn
+        # emits several conversational messages, so a message count would drop
+        # whole turns from the window. The message-count fallback covers
+        # histories with no turn_id stamps.
+        self._delta_window_turns = analysis_interval_turns
         self._delta_window = 2 * analysis_interval_turns
 
         self._system_prompt = load_prompt("peanutgallery_system.txt")
         self._user_template = load_prompt("peanutgallery_user.txt")
 
         logger.info(
-            "PeanutGalleryModel initialized (delta_window=%d)",
-            self._delta_window,
+            "PeanutGalleryModel initialized (delta_window_turns=%d)",
+            self._delta_window_turns,
         )
 
     def evaluate(
@@ -112,16 +116,30 @@ class PeanutGalleryModel:
         """
         Scope raw messages to the delta window the observer reviews.
 
-        Keeps the last `self._delta_window` conversational messages (the new
-        work since the last pass), then returns the raw slice from the earliest
-        kept message so tool and assistant noise between kept messages is
-        preserved for the ledger.
+        Keeps the conversational messages from the last `self._delta_window_turns`
+        turns (keyed on the turn_id stamped on user and assistant messages), then
+        returns the raw slice from the earliest kept message so tool and assistant
+        noise between kept messages is preserved for the ledger. Falls back to a
+        message-count window when the history carries no turn_id stamps.
         """
         conversational = self._extract_conversational_messages(messages)
         if not conversational:
             return []
 
-        recent = conversational[-self._delta_window:]
+        turn_ids: list[str] = []
+        for message in conversational:
+            turn_id = (message.metadata or {}).get("turn_id")
+            if turn_id and turn_id not in turn_ids:
+                turn_ids.append(turn_id)
+
+        if len(turn_ids) >= self._delta_window_turns:
+            keep = set(turn_ids[-self._delta_window_turns:])
+            recent = [
+                message for message in conversational
+                if (message.metadata or {}).get("turn_id") in keep
+            ]
+        else:
+            recent = conversational[-self._delta_window:]
         if not recent:
             return []
 
@@ -155,12 +173,17 @@ class PeanutGalleryModel:
             f"- {_escape(line)}" for line in standing_log
         ) if standing_log else "(empty — first pass)"
 
-        user_prompt = self._user_template.replace(
-            "{standing_record}", standing_record
-        ).replace(
-            "{formatted_messages}", formatted_messages
-        ).replace(
-            "{delta_ledger}", execution_trace
+        # Single pass: replacement text is never rescanned, so a beat that
+        # contains a placeholder token cannot splice another section in.
+        substitutions = {
+            "standing_record": standing_record,
+            "formatted_messages": formatted_messages,
+            "delta_ledger": execution_trace,
+        }
+        user_prompt = re.sub(
+            r"\{(standing_record|formatted_messages|delta_ledger)\}",
+            lambda match: substitutions[match.group(1)],
+            self._user_template,
         )
 
         response = self.llm_provider.generate_response(
@@ -225,12 +248,28 @@ class PeanutGalleryModel:
         """
         Extract a steering directive, if present.
 
-        Returns (text, critical). The fourth-wall path is taken for
-        critical="true", critical="critical", or severity="critical".
+        Returns (text, critical). The fourth-wall path is taken only for
+        critical="true" (case-insensitive), the one form the observer prompt
+        documents. A steering tag quoted inside the session_log block is data,
+        not a directive, and is ignored.
         """
+        without_log = re.sub(
+            r'<mira:session_log\b[^>]*>.*?</mira:session_log>',
+            '',
+            response_text,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        # An unterminated session_log swallows the rest of the response;
+        # nothing after it is a directive.
+        without_log = re.sub(
+            r'<mira:session_log\b[^>]*>.*$',
+            '',
+            without_log,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
         match = re.search(
             r'<mira:steering\b([^>]*)>(.*?)</mira:steering>',
-            response_text,
+            without_log,
             re.DOTALL | re.IGNORECASE
         )
         if not match:
@@ -245,12 +284,8 @@ class PeanutGalleryModel:
 
         critical = False
         critical_match = re.search(r'\bcritical="([^"]*)"', attributes, re.IGNORECASE)
-        if critical_match and critical_match.group(1).lower() in ("true", "critical"):
+        if critical_match and critical_match.group(1).lower() == "true":
             critical = True
-        if not critical:
-            severity_match = re.search(r'\bseverity="([^"]*)"', attributes, re.IGNORECASE)
-            if severity_match and severity_match.group(1).lower() == "critical":
-                critical = True
 
         return text, critical
 
