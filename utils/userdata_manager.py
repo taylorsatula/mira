@@ -371,9 +371,19 @@ class UserDataManager:
         )
         """
 
+        federation_contacts_sql = """
+        CREATE TABLE IF NOT EXISTS federation_contacts (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            address TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+
         cursor.execute(devices_sql)
         cursor.execute(trust_sql)
         cursor.execute(messages_sql)
+        cursor.execute(federation_contacts_sql)
 
     def _init_domaindoc_schema(self):
         """Initialize Domaindoc database schema for section-aware storage."""

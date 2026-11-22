@@ -45,7 +45,7 @@ Codebase-specific terms, one sentence each. Each entry names the map or file tha
 - **Lunaroute**: the default hosted LLM gateway the installer uses for chat, subcortical, and embedding routes (`deploy/AGENTS.md`).
 - **Sarcophagus**: a sealed dump of a running instance, restored onto a dev VM with `pg_restore` (`deploy/vm/AGENTS.md`).
 - **POST gate**: the check in `main.py` that rejects POST requests before the server binds, held closed until a deploy has real configuration (`deploy/vm/AGENTS.md`).
-- **Lattice**: the federation subsystem, mounted only when `config.lattice.enabled` is set (`clients/AGENTS.md`).
+- **Lattice**: the federation subsystem for cross-server pager messaging, enabled only when `config.lattice.enabled` is set; it talks to latticed over the local Unix socket, delivers through a pull-based inbox poller, and has no HTTP surface (`clients/AGENTS.md`, `cns/services/AGENTS.md`).
 - **Firehose**: a debug mode that writes every LLM API call to `firehose_output.json`, toggled by `SIGUSR1` (`main.py`).
 
 ## Verification

@@ -677,11 +677,11 @@ CREATE TABLE feedback_synthesis_tracking (
 -- ---------------------------------------------------------------------------
 -- Lattice federation: global username registry
 -- ---------------------------------------------------------------------------
--- Maps federated usernames to user_ids so the Lattice discovery daemon can
--- resolve inbound `username@server` addresses to a local recipient.
+-- Maps federated usernames to user_ids so the federation inbox poller can
+-- resolve a delivery's mailbox to a local recipient.
 -- No RLS: this is a global routing/lookup table, queried contextlessly by
--- mira_resolve_username, which runs outside any user context. A trigger or
--- policy requiring matching user context would break the federation resolver.
+-- the poller, which runs outside any user context. A trigger or
+-- policy requiring matching user context would break the poller's lookup.
 -- Application logic in pager_tool._register_username only ever inserts the
 -- current user's own row, and the UNIQUE constraint prevents duplicate
 -- registrations.

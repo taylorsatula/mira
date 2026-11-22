@@ -323,10 +323,10 @@ class LatticeConfig(BaseModel):
 
     enabled: bool = Field(
         default=False,
-        description="Enable Lattice federation (cross-server pager messaging). Requires the optional lattice package; startup fails fast when enabled and unavailable"
+        description="Enable Lattice federation (cross-server pager messaging over lattice's v2 local API). Requires the optional lattice package (lattice/clients/python); startup fails fast when enabled and unavailable"
     )
-    service_url: str = Field(default="http://localhost:1113", description="URL of the Lattice discovery service")
-    timeout: int = Field(default=30, description="HTTP request timeout in seconds")
+    app_socket: str = Field(default="/run/lattice/app.sock", description="Path of latticed's application Unix socket")
+    service: str = Field(default="mira", description="Service name in latticed's [services] table; the service secret is read from Vault mira/services field lattice_service_secret")
 
 
 class SystemOneConfig(BaseModel):
