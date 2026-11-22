@@ -22,7 +22,7 @@ is registered last and therefore outermost), installs the handlers that map
 envelope, mounts the routers, and then mounts the browser client. Every name
 in `UI_BROWSER_FILES` is checked against `UI_BROWSER_DIR` at construction so a
 missing page fails the boot rather than the first request for it. The
-federation router and the MCP sub-app mount only under their config flags.
+MCP sub-app mounts only under its config flag.
 
 `main` parses `--firehose`, serves under Hypercorn with HTTP/2 preferred, runs
 the pre-server POST gate before the port binds, and after a graceful shutdown
@@ -60,7 +60,7 @@ from auth.remote_gate import RemoteGateMiddleware, router as remote_gate_router
 from auth.security_middleware import SecurityHeadersMiddleware
 from config.config_manager import config
 from config.announcement import load_announcement
-from cns.api import data, actions, health, websocket_chat, tool_config, trigger_rules, update, federation as federation_api
+from cns.api import data, actions, health, websocket_chat, tool_config, trigger_rules, update
 from cns.api import chat as chat_api
 from cns.api import files as files_api
 from cns.api import heartbeat_api
@@ -279,32 +279,20 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Vault connection issue: {vault_status['message']}")
 
     # Lattice federation is first-class but opt-in via config.lattice.enabled.
-    # When enabled it must work or the service aborts startup loudly; when
-    # disabled nothing is imported and the /v1/api/federation router stays unmounted.
+    # When enabled the node must be reachable and the mira service secret must
+    # authenticate before the process binds; when disabled nothing lattice is
+    # imported at all.
     if config.lattice.enabled:
-        logger.info("Initializing Lattice federation username resolver...")
+        logger.info("Initializing Lattice federation inbox poller...")
         try:
-            from lattice.username_resolver import set_username_resolver
-            from clients.postgres_client import PostgresClient
-            from typing import Optional
-
-            def mira_resolve_username(username: str) -> Optional[str]:
-                """Resolve username to user_id for Lattice federation."""
-                db = PostgresClient("mira_service")
-                result = db.execute_single(
-                    "SELECT user_id FROM global_usernames WHERE username = %(username)s AND active = true",
-                    {"username": username.lower()}
-                )
-                return str(result["user_id"]) if result else None
-
-            set_username_resolver(mira_resolve_username)
-        except ImportError as e:
-            logger.critical(f"Lattice package unavailable but federation is enabled: {e}")
-            raise RuntimeError(f"lattice initialization failed - cannot start MIRA: {e}") from e
+            from clients.lattice_client import get_lattice_client
+            node_id = get_lattice_client().node_id()
         except Exception as e:
-            logger.critical(f"Failed to register Lattice username resolver: {e}")
+            logger.critical(f"Lattice federation is enabled but unusable: {e}")
             raise RuntimeError(f"lattice initialization failed - cannot start MIRA: {e}") from e
-        logger.info("Lattice username resolver registered")
+        from cns.services.federation_poller import start_federation_inbox_poller
+        start_federation_inbox_poller()
+        logger.info(f"Lattice federation enabled (node {node_id.hex()[:16]}…), inbox poller started")
     else:
         logger.info("Lattice federation disabled (enable via config.lattice.enabled=true)")
 
@@ -333,6 +321,8 @@ async def lifespan(app: FastAPI):
     
     
     logger.info("Shutting down MIRA...")
+    from cns.services.federation_poller import stop_federation_inbox_poller
+    stop_federation_inbox_poller()
     scheduler_service.stop()
 
     from cns.api.websocket_chat import close_all_connections
@@ -536,9 +526,6 @@ def create_app() -> FastAPI:
     app.include_router(location.router, prefix="/v1/api", tags=["location"])
     app.include_router(heartbeat_api.router, prefix="/v1/api", tags=["heartbeat"])
     app.include_router(websocket_chat.router, prefix="/v1", tags=["websocket"])  # /v1/ws/chat
-    if config.lattice.enabled:
-        app.include_router(federation_api.router, prefix="/v1/api", tags=["federation"])
-
     # MCP check-in endpoint (opt-in, config.system.mcp_enabled — default off).
     # Lazy import: disabled mode constructs nothing MCP-related at boot — no
     # SDK import, no app, no session manager. mount() parks the session
