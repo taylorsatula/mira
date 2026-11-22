@@ -73,9 +73,12 @@ pytest-asyncio==1.4.0
 #playwright      # playwright_service.py maps ImportError to "playwright_unavailable"; the
                  # chromium browser is gated separately by CONFIG_INSTALL_PLAYWRIGHT (deploy)
 
-# Lattice federation - enables cross-server pager messaging (username@server).
+# Lattice federation - enables cross-server pager messaging (mira:user@<identifier>).
 # ImportError-guarded: MIRA runs fine without it (federation simply disabled).
-# Not on PyPI. Install from the sibling repo, then run the discovery daemon:
-#   git clone https://github.com/taylorsatula/lattice && pip install -e ./lattice
-#   uvicorn lattice.discovery_daemon:app --port 1113
-#lattice         # main.py (username resolver), cns/api/federation.py, tools/implementations/pager_tool.py
+# Not on PyPI. Install from a checkout of the lattice repo (the Rust daemon
+# latticed plus the Python client for the local API), then run latticed with a
+# [services] entry for mira and patch the matching secret into Vault:
+#   git clone https://github.com/taylorsatula/lattice
+#   pip install -e ./lattice/clients/python
+#   vault kv patch secret/mira/services lattice_service_secret=<same secret as latticed's [services].mira.secret>
+#lattice         # clients/lattice_client.py, cns/services/federation_poller.py, tools/implementations/pager_tool.py (needs cbor2, blake3)
