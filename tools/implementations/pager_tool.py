@@ -8,7 +8,7 @@ contact records trust on use, a match refreshes it, and a mismatch marks the
 row `conflicted` and raises `PermissionError` instead of delivering.
 Impersonation is refused, not flagged.
 
-`deliver_federated_message` is the write-only seam the federation router calls:
+`deliver_federated_message` is the write-only seam the federation inbox poller calls:
 it can append a message for this user and never read one, and an
 `external_message_id` already stored returns that row as a duplicate instead of
 delivering twice. Local recipient resolution reads the recipient's own per-user
@@ -45,9 +45,18 @@ from utils.timezone_utils import (
 from utils.userdata_manager import get_user_data_manager
 from clients.llm_provider import get_llm_provider
 
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from clients.lattice_client import LatticeIdentity
+
+def _validate_contact_name(name: Optional[str]) -> str:
+    """Normalize and validate an address-book name (case-insensitive, no ':', '@' or whitespace)."""
+    normalized = (name or "").strip().lower()
+    if not normalized:
+        raise ValueError("contact_name is required")
+    if len(normalized) > 64:
+        raise ValueError("contact_name must be at most 64 characters")
+    if any(c in normalized for c in ":@") or any(c.isspace() for c in normalized):
+        raise ValueError("contact_name may not contain ':', '@' or whitespace")
+    return normalized
+
 
 class PagerToolConfig(BaseModel):
     """Configuration for the pager_tool."""
@@ -80,7 +89,7 @@ class PagerTool(Tool):
                 "properties": {
                     "operation": {
                         "type": "string",
-                        "enum": ["register_device", "register_username", "send_message", "get_received_messages", "get_sent_messages", "mark_message_read", "get_devices", "deactivate_device", "cleanup_expired", "list_trusted_devices", "revoke_trust", "send_location"],
+                        "enum": ["register_device", "register_username", "send_message", "get_received_messages", "get_sent_messages", "mark_message_read", "get_devices", "deactivate_device", "cleanup_expired", "list_trusted_devices", "revoke_trust", "send_location", "add_federation_contact", "remove_federation_contact", "list_federation_contacts"],
                         "description": "The pager operation to perform"
                     },
                     "username": {
@@ -101,7 +110,7 @@ class PagerTool(Tool):
                     },
                     "recipient": {
                         "type": "string",
-                        "description": "Recipient username (e.g. 'taylor') or federated address (e.g. 'taylor@server'). For send_message. Usernames resolve to the recipient's active pager device"
+                        "description": "Recipient username (e.g. 'taylor'), a federated address (e.g. 'mira:alex@<identifier>'), or the name of a federation contact added with add_federation_contact. For send_message. Usernames resolve to the recipient's active pager device"
                     },
                     "content": {
                         "type": "string",
@@ -140,6 +149,14 @@ class PagerTool(Tool):
                         "type": "boolean",
                         "description": "Filter to unread messages only. Default false. get_received_messages only"
                     },
+                    "contact_name": {
+                        "type": "string",
+                        "description": "Short name for a federation contact (add_federation_contact, remove_federation_contact). Non-empty; may not contain ':', '@' or whitespace. Matched case-insensitively"
+                    },
+                    "contact_address": {
+                        "type": "string",
+                        "description": "Full federated address the contact_name maps to (add_federation_contact only), e.g. 'mira:alex@<52-char base32 identifier>'. Copy the peer's complete address; Mira cannot resolve names or servers on its own"
+                    },
                 },
                 "required": ["operation"]
             }
@@ -161,7 +178,19 @@ class PagerTool(Tool):
     2. register_username: Register a username for federated pager addressing.
        - Required: username (3-20 alphanumeric characters, e.g., "taylor")
        - One username per user - enables receiving federated messages and local username routing
-       - Returns the registered username and federated address (username@server)
+       - Returns the registered username and federated address (mira:<username>@<identifier>)
+       - Share that full address with peers out-of-band; peers add it to their
+         address book with add_federation_contact
+
+    2a. add_federation_contact: Map a short name to a peer's full federated address.
+        - Required: contact_name, contact_address
+        - Sending to contact_name then routes to the mapped address
+        - Replaces any existing mapping for the same name
+
+    2b. remove_federation_contact: Drop an address-book mapping.
+        - Required: contact_name
+
+    2c. list_federation_contacts: List the address book (name and full address).
 
     3. send_message: Send a message from one pager to another.
        - Required: sender_id, recipient, content
@@ -274,6 +303,19 @@ class PagerTool(Tool):
         },
         {
             "input": {
+                "operation": "add_federation_contact",
+                "contact_name": "alex",
+                "contact_address": "mira:alex@k7f3aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "output": {
+                "success": True,
+                "contact_name": "alex",
+                "address": "mira:alex@k7f3aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "message": "Federation contact 'alex' added: mira:alex@k7f3aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+        },
+        {
+            "input": {
                 "operation": "send_location",
                 "sender_id": "dev_a1b2c3d4",
                 "recipient": "taylor",
@@ -317,13 +359,13 @@ class PagerTool(Tool):
         Deliver a federated message to this user's pager (write-only, no read access).
 
         This is a security-bounded instance method that ONLY allows writing messages to
-        the user's database. The federation adapter calls this method and has NO ability
+        the user's database. The federation inbox poller calls this method and has NO ability
         to read existing messages, maintaining strict data isolation.
 
         Each user has exactly one active pager device - this method looks it up automatically.
 
         Args:
-            from_address: Federated sender address (e.g., "user@remote-server")
+            from_address: Federated sender address (e.g., "mira:taylor@<identifier>")
             content: Message content (stored verbatim; untrusted-content wrapping is applied
                 when received messages are returned into model context, not before storage)
             priority: Message priority (0=normal, 1=high, 2=urgent)
@@ -582,6 +624,12 @@ class PagerTool(Tool):
                 return self._send_location(**kwargs)
             elif operation == "register_username":
                 return self._register_username(**kwargs)
+            elif operation == "add_federation_contact":
+                return self._add_federation_contact(**kwargs)
+            elif operation == "remove_federation_contact":
+                return self._remove_federation_contact(**kwargs)
+            elif operation == "list_federation_contacts":
+                return self._list_federation_contacts(**kwargs)
             else:
                 self.logger.error(f"Unknown operation: {operation}")
                 raise ValueError(
@@ -589,7 +637,8 @@ class PagerTool(Tool):
                     "register_device, register_username, send_message, get_received_messages, "
                     "get_sent_messages, mark_message_read, get_devices, "
                     "deactivate_device, cleanup_expired, list_trusted_devices, "
-                    "revoke_trust, send_location"
+                    "revoke_trust, send_location, add_federation_contact, "
+                    "remove_federation_contact, list_federation_contacts"
                 )
         except Exception as e:
             self.logger.error(f"Error executing {operation} in pager_tool: {e}")
@@ -652,40 +701,20 @@ class PagerTool(Tool):
             "message": f"Pager device '{device_name}' registered successfully with ID {pager_id}"
         }
 
-    def _get_lattice_identity(self) -> "LatticeIdentity":
-        """
-        Get server identity from Lattice discovery daemon.
+    def _our_federated_address(self, username: str) -> str:
+        """This node's federated address for `username` (hello returns our node id)."""
+        from clients.lattice_client import format_federated_address, get_lattice_client
 
-        Returns:
-            LatticeIdentity with server_id, server_uuid, fingerprint, public_key
-
-        Raises:
-            ValueError: If Lattice service unavailable or not configured
-        """
-        from clients.lattice_client import get_lattice_client
-        import httpx
-
-        try:
-            client = get_lattice_client()
-            return client.get_identity()
-        except httpx.ConnectError:
-            raise ValueError(
-                "Cannot connect to Lattice discovery daemon. "
-                "Ensure the lattice-discovery service is running."
-            )
-        except ValueError:
-            raise
-        except Exception as e:
-            raise ValueError(f"Failed to get Lattice identity: {e}")
+        node_id = get_lattice_client().node_id()
+        return format_federated_address(config.lattice.service, username, node_id)
 
     def _register_username(self, username: str) -> Dict[str, Any]:
         """
         Register a username for the current user in the global registry.
 
         This enables:
-        - Receiving federated messages addressed to username@server
+        - Receiving federated messages addressed to mira:<username>@<identifier>
         - Local routing via username instead of pager device UUID
-        - Cross-server identity
 
         Args:
             username: Desired username (3-20 alphanumeric characters)
@@ -752,9 +781,9 @@ class PagerTool(Tool):
             )
 
             try:
-                identity = self._get_lattice_identity()
-                federated_address = f"{username}@{identity['server_id']}"
-            except ValueError:
+                federated_address = self._our_federated_address(username)
+            except Exception as e:
+                self.logger.warning(f"Lattice unavailable, federated address withheld: {e}")
                 federated_address = f"{username}@[lattice-not-configured]"
 
             self.logger.info(f"Registered username '{username}' for user {self.user_id}")
@@ -769,6 +798,73 @@ class PagerTool(Tool):
         except Exception as e:
             self.logger.error(f"Failed to register username '{username}': {e}")
             raise ValueError(f"Failed to register username: {e}")
+
+    def _add_federation_contact(self, contact_name: str, contact_address: str) -> Dict[str, Any]:
+        """Map a short address-book name to a peer's full federated address."""
+        from clients.lattice_client import format_federated_address, parse_federated_address
+
+        name = _validate_contact_name(contact_name)
+        service, mailbox, node_id = parse_federated_address(contact_address or "")
+        address = format_federated_address(service, mailbox, node_id)
+
+        existing = self.db.select('federation_contacts', 'name = :name', {'name': name})
+        if existing:
+            self.db.update('federation_contacts', {'address': address}, 'name = :name', {'name': name})
+            outcome = "updated"
+        else:
+            self.db.insert('federation_contacts', {
+                'id': f"fc_{uuid.uuid4().hex}",
+                'name': name,
+                'address': address,
+                'created_at': utc_now().isoformat(),
+            })
+            outcome = "added"
+
+        self.logger.info(f"Federation contact {name!r} {outcome} for user {self.user_id}")
+        return {
+            "success": True,
+            "contact_name": name,
+            "address": address,
+            "message": f"Federation contact '{name}' {outcome}: {address}",
+        }
+
+    def _remove_federation_contact(self, contact_name: str) -> Dict[str, Any]:
+        """Drop an address-book mapping."""
+        name = _validate_contact_name(contact_name)
+        removed = self.db.delete('federation_contacts', 'name = :name', {'name': name})
+        if removed == 0:
+            raise ValueError(f"No federation contact named '{name}'")
+        self.logger.info(f"Federation contact {name!r} removed for user {self.user_id}")
+        return {"success": True, "contact_name": name, "message": f"Federation contact '{name}' removed"}
+
+    def _list_federation_contacts(self) -> Dict[str, Any]:
+        """List the address book (short name → full federated address)."""
+        rows = self.db.select('federation_contacts')
+        contacts = [{"contact_name": row["name"], "address": row["address"]} for row in rows]
+        return {"contacts": contacts, "count": len(contacts)}
+
+    def _resolve_federated_recipient(self, recipient: str) -> Optional[str]:
+        """
+        Resolve a send_message recipient to a federated address, or None when
+        the recipient is meant for local delivery.
+
+        A recipient containing '@' must be a full federated address
+        (<service>:<mailbox>@<identifier>); a recipient matching an address-book
+        name resolves to the mapped address. Anything else falls through to
+        local username routing.
+        """
+        from clients.lattice_client import format_federated_address, parse_federated_address
+
+        text = recipient.strip()
+        if '@' in text:
+            service, mailbox, node_id = parse_federated_address(text)
+            return format_federated_address(service, mailbox, node_id)
+
+        name = text.lower()
+        existing = self.db.select('federation_contacts', 'name = :name', {'name': name})
+        if existing:
+            return existing[0]['address']
+        return None
 
     def _resolve_recipient_to_pager_id(self, recipient_address: str) -> tuple:
         """
@@ -829,7 +925,7 @@ class PagerTool(Tool):
 
         Args:
             sender_pager_id: Sender's pager device ID (internal)
-            recipient_address: Federated address (user@domain)
+            recipient_address: Federated address (mira:<mailbox>@<identifier>)
             content: Message content
             priority: Message priority
             location: Optional location data
@@ -837,6 +933,11 @@ class PagerTool(Tool):
         Returns:
             Dict with message delivery status
         """
+        if not content or not content.strip():
+            raise ValueError("content is required")
+        if priority not in [0, 1, 2]:
+            raise ValueError("Priority must be 0 (normal), 1 (high), or 2 (urgent)")
+
         sender = self.db.select(
             'pager_devices',
             'id = :sender_id',
@@ -845,9 +946,6 @@ class PagerTool(Tool):
         if not sender or not sender[0]['active']:
             raise ValueError("Sender device not found or inactive")
         sender = sender[0]
-
-        identity = self._get_lattice_identity()
-        our_domain = identity['server_id']
 
         from clients.postgres_client import PostgresClient
         postgres_db = PostgresClient("mira_service")
@@ -865,7 +963,7 @@ class PagerTool(Tool):
         if not username_result:
             raise ValueError("Sender must have a registered username for federated messaging")
 
-        from_address = f"{username_result['username']}@{our_domain}"
+        sender_username = username_result['username']
 
         location_dict = None
         if location:
@@ -877,24 +975,27 @@ class PagerTool(Tool):
         from clients.lattice_client import get_lattice_client
 
         client = get_lattice_client()
+        body = json.dumps(
+            {"v": 1, "content": content, "priority": priority, "location": location_dict}
+        ).encode("utf-8")
 
         try:
-            result = client.send_message(
-                from_address=from_address,
+            from_address = self._our_federated_address(sender_username)
+            mid = client.send_message(
                 to_address=recipient_address,
-                content=content,
+                fmbx=sender_username,
+                body=body,
                 priority=priority,
-                metadata={"location": location_dict} if location_dict else None
             )
 
             self.logger.info(
                 f"Queued federated message from {from_address} to {recipient_address} "
-                f"(message_id: {result['message_id']})"
+                f"(message_id: {mid.hex()})"
             )
 
             return {
                 "success": True,
-                "message_id": result["message_id"],
+                "message_id": mid.hex(),
                 "status": "queued_for_federation",
                 "from_address": from_address,
                 "to_address": recipient_address,
@@ -919,11 +1020,12 @@ class PagerTool(Tool):
 
         Recipient addressing formats:
         1. Local username: "taylor" - delivers to local user's pager
-        2. Federated address: "alex@otherserver" - routes through federation
+        2. Federated address: "mira:alex@<identifier>" - routes through federation
+        3. Address-book name: a name added with add_federation_contact - routes to the mapped address
 
         Args:
             sender_id: ID of the sending pager device (dev_XXXXXXXX)
-            recipient: Recipient username or federated address
+            recipient: Recipient username, federated address, or address-book name
             content: Message content (will be distilled if too long)
             priority: Message priority (0=normal, 1=high, 2=urgent)
             location: Optional location information
@@ -936,10 +1038,11 @@ class PagerTool(Tool):
             ValueError: If recipient not found or parameters invalid
         """
 
-        if '@' in recipient:
+        federated_address = self._resolve_federated_recipient(recipient)
+        if federated_address is not None:
             return self._send_federated_message(
                 sender_pager_id=sender_id,
-                recipient_address=recipient,
+                recipient_address=federated_address,
                 content=content,
                 priority=priority,
                 location=location
@@ -1591,7 +1694,7 @@ Provide ONLY the distilled message, no explanations or meta-text."""
 
         Args:
             sender_id: ID of the sending pager
-            recipient: Recipient username or federated address
+            recipient: Recipient username, address-book name, or federated address
             priority: Message priority (default 1=high for location pins)
             note: Optional brief note (max 50 chars)
 
