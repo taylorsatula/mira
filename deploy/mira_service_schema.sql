@@ -450,7 +450,6 @@ CREATE TABLE memories (
     happens_at TIMESTAMPTZ,
     inbound_links JSONB NOT NULL DEFAULT '[]'::jsonb,
     outbound_links JSONB NOT NULL DEFAULT '[]'::jsonb,
-    entity_links JSONB NOT NULL DEFAULT '[]'::jsonb,
     is_archived BOOLEAN NOT NULL DEFAULT FALSE,
     archived_at TIMESTAMPTZ,
     last_tended_at TIMESTAMPTZ,
@@ -551,6 +550,18 @@ CREATE INDEX idx_entities_name_trgm ON entities USING gin(name gin_trgm_ops);
 CREATE TRIGGER entities_updated_at
 BEFORE UPDATE ON entities
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Memory ↔ entity links: one row per linked pair. link_count on entities
+-- counts non-archived memories through this table; only LTMemoryDB writes it.
+CREATE TABLE memory_entities (
+    memory_id UUID NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    entity_id UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (memory_id, entity_id)
+);
+
+CREATE INDEX idx_memory_entities_entity ON memory_entities(entity_id, memory_id);
 
 -- ---------------------------------------------------------------------------
 -- Persona: immutable behavioral directives and evaluation evidence
@@ -780,6 +791,12 @@ CREATE POLICY entities_user_policy ON entities
     USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
     WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
 
+ALTER TABLE memory_entities ENABLE ROW LEVEL SECURITY;
+CREATE POLICY memory_entities_user_policy ON memory_entities
+    FOR ALL TO mira_dbuser
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+
 ALTER TABLE persona_revisions ENABLE ROW LEVEL SECURITY;
 CREATE POLICY persona_revisions_user_policy ON persona_revisions
     FOR ALL TO mira_dbuser
@@ -856,6 +873,7 @@ GRANT SELECT, UPDATE ON users TO mira_dbuser;
 GRANT SELECT, INSERT, UPDATE, DELETE ON magic_links, api_tokens TO mira_dbuser;
 GRANT SELECT, INSERT, UPDATE, DELETE ON user_activity_days TO mira_dbuser;
 GRANT SELECT, INSERT, UPDATE, DELETE ON continuums, messages, memories, entities TO mira_dbuser;
+GRANT SELECT, INSERT, UPDATE, DELETE ON memory_entities TO mira_dbuser;
 GRANT SELECT, INSERT, UPDATE, DELETE ON domain_knowledge_blocks, domain_knowledge_block_content TO mira_dbuser;
 GRANT SELECT ON global_memories_runtime TO mira_dbuser;
 GRANT SELECT, INSERT ON persona_revisions TO mira_dbuser;
