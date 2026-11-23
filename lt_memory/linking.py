@@ -178,27 +178,23 @@ class LinkingService:
             and candidates below entity_similarity_floor)
         """
         source_memory = self.db.get_memory(memory_id)
-        if not source_memory or not source_memory.entity_links:
+        if not source_memory:
             return []
 
         source_embedding = source_memory.embedding
         if not source_embedding:
             return []
 
+        source_links = self.db.get_entity_links([memory_id])
+        if not source_links.get(memory_id):
+            return []
+
         seen_ids = {memory_id}
         candidates = []
         floor = ENTITY_SIMILARITY_FLOOR
 
-        for entity_link in source_memory.entity_links:
-            entity_id = entity_link.get("uuid")
-            if not entity_id:
-                continue
-
-            try:
-                entity_uuid = UUID(entity_id)
-            except ValueError:
-                logger.warning(f"Malformed entity UUID in entity_links: {entity_id}")
-                continue
+        for entity_link in source_links[memory_id]:
+            entity_uuid = UUID(entity_link["uuid"])
 
             co_occurring = self.db.get_memories_for_entity(entity_uuid)
 

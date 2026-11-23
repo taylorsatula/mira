@@ -223,13 +223,12 @@ class HubDiscoveryService:
                 SELECT m.*
                 FROM unnest(%(ids)s::uuid[]) AS e(entity_id)
                 JOIN LATERAL (
-                    SELECT *
-                    FROM memories
-                    WHERE entity_links @> jsonb_build_array(
-                              jsonb_build_object('uuid', e.entity_id::text)
-                          )
-                      AND is_archived = FALSE
-                    ORDER BY created_at DESC
+                    SELECT m.*
+                    FROM memory_entities me
+                    JOIN memories m ON m.id = me.memory_id
+                    WHERE me.entity_id = e.entity_id
+                      AND m.is_archived = FALSE
+                    ORDER BY m.created_at DESC
                     LIMIT %(per_entity)s
                 ) m ON TRUE
             """, {

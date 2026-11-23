@@ -50,8 +50,8 @@ class MemoryLinkEntry(TypedDict):
     extraction_bond: NotRequired[str]
 
 
-class EntityLinkEntry(TypedDict):
-    """Entry in Memory.entity_links JSONB array."""
+class EntityLink(TypedDict):
+    """Link between a memory and an entity, as the gateway returns it."""
     uuid: str
     type: str
     name: str
@@ -144,7 +144,7 @@ class MemoryDict(TypedDict):
     expires_at: str | None
     inbound_links: list[MemoryLinkEntry]
     outbound_links: list[MemoryLinkEntry]
-    entity_links: list[EntityLinkEntry]
+    entity_links: list[EntityLink]
     annotations: list[AnnotationEntry]
     link_metadata: NotRequired[LinkMetadata]
     linked_memories: NotRequired[list['MemoryDict']]
@@ -171,7 +171,7 @@ class Memory(BaseModel):
     happens_at: Optional[datetime] = None
     inbound_links: List[MemoryLinkEntry] = Field(default_factory=list)
     outbound_links: List[MemoryLinkEntry] = Field(default_factory=list)
-    entity_links: List[EntityLinkEntry] = Field(default_factory=list)
+
     is_archived: bool = False
     archived_at: Optional[datetime] = None
 

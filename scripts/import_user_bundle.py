@@ -6,8 +6,9 @@ exporter and restores the person into THIS install:
   1. Verify manifest.json sha256 checksums for every file. Stop on any mismatch.
   2. Ask the local user which local account receives the data (never guess).
   3. Postgres side, in order: user_profile, continuums, messages, entities,
-     memories (keep original row UUIDs so entity_links and memory cross-links
-     resolve; remap only user_id), feedback_signals, user_activity_days.
+     memories, then memory_entities (keep original row UUIDs so the links and
+     memory cross-links resolve; remap only user_id), feedback_signals,
+     user_activity_days.
      Embeddings/search_vectors were excluded at export; regenerate all with
      THIS install's embedding model after rows land.
   4. Sqlite side, per table, in dependency order (domaindocs before

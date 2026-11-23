@@ -5,6 +5,7 @@
 - `V0001__widen_segment_sentinel_uniqueness.sql` — the index swap that made a paused message count as a live segment boundary. Open it before changing what makes a message a live boundary, or before writing a step that must refuse bad existing data.
 - `V0002__drop_keepsleeping_turn_index.sql` — one `DROP INDEX IF EXISTS` and nothing else. Open it when you want the smallest step that still satisfies the header contract.
 - `V0003__create_heartbeat_armed_users.sql` — the table the heartbeat dispatcher reads to find armed users. Open it before changing how a user's wake time is stored or queried.
+- `V0004__memory_entities_junction.sql` — the `memory_entities` table and the backfill that carries each memory's entity links out of its old JSONB list before the column is dropped. Open it before changing how a memory's entity links are stored, backfilled, or dropped.
 - `R__usage_pricing.sql` — the price keys MIRA ships, inserted only when absent. Open it before adding or changing a price row that MIRA itself supplies.
 - `BASELINE` — generated: one row per supported starting release, then one row per versioned step of the newest release's walk. Open it when an update refuses with `ADOPTION_DRIFT` ("structure matches no BASELINE row"), when `baseline_fingerprints` raises its append-only `ValueError`, or at a release cut.
 - `HEAD_FINGERPRINT.json` — generated: the whole structure at head, as the drift report diff's right-hand side. Open it when a drift report lists a table, policy, or grant and you need to know what head expects.

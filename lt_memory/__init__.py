@@ -23,7 +23,7 @@ from lt_memory.models import (
     ProcessingChunk,
     RelationshipType,
     MemoryLinkEntry,
-    EntityLinkEntry,
+    EntityLink,
     AnnotationEntry,
     LinkMetadata,
     TraversalResult,
@@ -53,7 +53,7 @@ __all__ = [
 
     'RelationshipType',
     'MemoryLinkEntry',
-    'EntityLinkEntry',
+    'EntityLink',
     'AnnotationEntry',
     'LinkMetadata',
     'TraversalResult',

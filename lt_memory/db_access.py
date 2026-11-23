@@ -43,6 +43,7 @@ from lt_memory.models import (
     MemoryPageResult,
     EntityPairRow,
     Entity,
+    EntityLink,
 )
 
 from utils.timezone_utils import utc_now, format_utc_iso
@@ -58,7 +59,7 @@ logger = logging.getLogger(__name__)
 # these fields are raw Python lists/dicts and must be wrapped in Jsonb() for
 # psycopg — the driver cannot adapt them on its own.
 _JSONB_MEMORY_FIELDS = frozenset(
-    {"inbound_links", "outbound_links", "entity_links", "annotations"}
+    {"inbound_links", "outbound_links", "annotations"}
 )
 
 
@@ -514,7 +515,7 @@ class LTMemoryDB:
                 SELECT m.id, m.user_id, m.text, m.embedding, m.importance_score,
                        m.created_at, m.updated_at, m.expires_at, m.access_count,
                        m.mention_count, m.last_accessed, m.happens_at,
-                       m.inbound_links, m.outbound_links, m.entity_links,
+                       m.inbound_links, m.outbound_links,
                        m.is_archived, m.archived_at,
                        m.activity_days_at_creation, m.activity_days_at_last_access,
                        m.annotations, m.source_segment_id,
@@ -532,7 +533,7 @@ class LTMemoryDB:
                 SELECT gm.id, NULL::uuid as user_id, gm.text, gm.embedding, gm.importance_score,
                        gm.created_at, gm.updated_at, NULL::timestamptz as expires_at, 0 as access_count,
                        0 as mention_count, NULL::timestamptz as last_accessed, gm.happens_at,
-                       gm.inbound_links, gm.outbound_links, gm.entity_links,
+                       gm.inbound_links, gm.outbound_links,
                        gm.is_archived, gm.archived_at,
                        NULL::int as activity_days_at_creation, NULL::int as activity_days_at_last_access,
                        '[]'::jsonb as annotations, NULL::uuid as source_segment_id,
@@ -704,18 +705,16 @@ class LTMemoryDB:
             UPDATE entities
             SET link_count = (
                     SELECT COUNT(*)
-                    FROM memories m
-                    WHERE m.entity_links @> jsonb_build_array(
-                              jsonb_build_object('uuid', entities.id::text)
-                          )
+                    FROM memory_entities me
+                    JOIN memories m ON m.id = me.memory_id
+                    WHERE me.entity_id = entities.id
                       AND m.is_archived = FALSE
                 ),
                 updated_at = NOW()
             WHERE id IN (
-                SELECT (el->>'uuid')::uuid
-                FROM memories m2,
-                     jsonb_array_elements(COALESCE(m2.entity_links, '[]'::jsonb)) AS el
-                WHERE m2.id = ANY(%(memory_ids)s::uuid[])
+                SELECT DISTINCT entity_id
+                FROM memory_entities
+                WHERE memory_id = ANY(%(memory_ids)s::uuid[])
             )
         """, {'memory_ids': list(memory_ids)})
 
@@ -1184,17 +1183,15 @@ class LTMemoryDB:
             query = """
             SELECT a.id AS id_a, a.name AS name_a, a.entity_type AS type_a,
                    (SELECT COUNT(*)
-                    FROM memories m
-                    WHERE m.entity_links @> jsonb_build_array(
-                              jsonb_build_object('uuid', a.id::text)
-                          )
+                    FROM memory_entities me
+                    JOIN memories m ON m.id = me.memory_id
+                    WHERE me.entity_id = a.id
                       AND m.is_archived = FALSE) AS links_a,
                    b.id AS id_b, b.name AS name_b, b.entity_type AS type_b,
                    (SELECT COUNT(*)
-                    FROM memories m
-                    WHERE m.entity_links @> jsonb_build_array(
-                              jsonb_build_object('uuid', b.id::text)
-                          )
+                    FROM memory_entities me
+                    JOIN memories m ON m.id = me.memory_id
+                    WHERE me.entity_id = b.id
                       AND m.is_archived = FALSE) AS links_b,
                    similarity(a.name, b.name) AS sim
             FROM entities a
@@ -1312,52 +1309,44 @@ class LTMemoryDB:
         self,
         memory_id: UUID,
         entity_id: UUID,
-        entity_name: str,
-        entity_type: str,
         user_id: Optional[str] = None
     ) -> None:
         """
         Link memory to entity.
 
-        Adds entity to memory's entity_links JSONB array and updates
-        entity's link_count and last_linked_at timestamp.
+        Inserts one junction row; a repeat call is a no-op. The entity's
+        link_count and last_linked_at move only on a real insert, so
+        re-linking the same memory cannot inflate the tally.
 
         Args:
             memory_id: Memory UUID
             entity_id: Entity UUID
-            entity_name: Entity name for JSONB storage
-            entity_type: Entity type for JSONB storage
             user_id: User ID (uses ambient context if None)
         """
         resolved_user_id = self._resolve_user_id(user_id)
 
         with self.session_manager.get_session(resolved_user_id) as session:
             with session.transaction():
-                entity_link_obj = {
-                    'uuid': str(entity_id),
-                    'type': entity_type,
-                    'name': entity_name
-                }
-
-                session.execute_update("""
-                    UPDATE memories
-                    SET entity_links = COALESCE(entity_links, '[]'::jsonb) || %(entity_obj)s::jsonb,
-                        updated_at = NOW()
-                    WHERE id = %(memory_id)s
+                inserted = session.execute_update("""
+                    INSERT INTO memory_entities (memory_id, entity_id, user_id)
+                    VALUES (%(memory_id)s, %(entity_id)s, %(user_id)s)
+                    ON CONFLICT (memory_id, entity_id) DO NOTHING
                 """, {
                     'memory_id': memory_id,
-                    'entity_obj': json.dumps(entity_link_obj)
+                    'entity_id': entity_id,
+                    'user_id': resolved_user_id
                 })
 
-                session.execute_update("""
-                    UPDATE entities
-                    SET link_count = link_count + 1,
-                        last_linked_at = NOW(),
-                        updated_at = NOW()
-                    WHERE id = %(entity_id)s
-                """, {
-                    'entity_id': entity_id
-                })
+                if inserted:
+                    session.execute_update("""
+                        UPDATE entities
+                        SET link_count = link_count + 1,
+                            last_linked_at = NOW(),
+                            updated_at = NOW()
+                        WHERE id = %(entity_id)s
+                    """, {
+                        'entity_id': entity_id
+                    })
 
     def get_memories_for_entity(
         self,
@@ -1368,9 +1357,9 @@ class LTMemoryDB:
         """
         Get memories linking to an entity.
 
-        Queries memories.entity_links JSONB array. When limit is given, the
-        cap is applied in SQL (ORDER BY created_at DESC LIMIT N) so unbounded
-        rows are never fetched then discarded.
+        Joins through the junction table. When limit is given, the cap is
+        applied in SQL (ORDER BY created_at DESC LIMIT N) so unbounded rows
+        are never fetched then discarded.
 
         Args:
             entity_id: Entity UUID
@@ -1384,21 +1373,102 @@ class LTMemoryDB:
 
         with self.session_manager.get_session(resolved_user_id) as session:
             query = """
-            SELECT * FROM memories
-            WHERE entity_links @> %s::jsonb
-              AND is_archived = FALSE
-            ORDER BY created_at DESC
+            SELECT m.* FROM memories m
+            JOIN memory_entities me ON me.memory_id = m.id
+            WHERE me.entity_id = %(entity_id)s
+              AND m.is_archived = FALSE
+            ORDER BY m.created_at DESC
             """
 
-            entity_filter = json.dumps([{"uuid": str(entity_id)}])
-
-            params: list = [entity_filter]
+            params: dict = {'entity_id': entity_id}
             if limit is not None:
-                query += " LIMIT %s"
-                params.append(int(limit))
+                query += " LIMIT %(limit)s"
+                params['limit'] = int(limit)
 
-            results = session.execute_query(query, tuple(params))
+            results = session.execute_query(query, params)
             return [Memory(**row) for row in results]
+
+    def get_entity_links(
+        self,
+        memory_ids: List[UUID],
+        user_id: Optional[str] = None
+    ) -> Dict[UUID, List[EntityLink]]:
+        """Bulk-fetch the entity links of many memories in one statement.
+
+        Returns a dict keyed by memory_id; memories with no links are absent.
+        Each entry carries the entity's current uuid/name/type — the junction
+        stores only the pair, so a renamed entity reads fresh.
+        """
+        if not memory_ids:
+            return {}
+
+        resolved_user_id = self._resolve_user_id(user_id)
+
+        with self.session_manager.get_session(resolved_user_id) as session:
+            rows = session.execute_query("""
+                SELECT me.memory_id, e.id AS entity_id, e.name, e.entity_type
+                FROM memory_entities me
+                JOIN entities e ON e.id = me.entity_id
+                WHERE me.memory_id = ANY(%(memory_ids)s::uuid[])
+            """, {'memory_ids': list(memory_ids)})
+
+        links: Dict[UUID, List[EntityLink]] = {}
+        for row in rows:
+            links.setdefault(row['memory_id'], []).append(
+                EntityLink(uuid=str(row['entity_id']), name=row['name'], type=row['entity_type'])
+            )
+        return links
+
+    def get_entity_link_counts(
+        self,
+        memory_ids: List[UUID],
+        user_id: Optional[str] = None
+    ) -> Dict[UUID, int]:
+        """Bulk-fetch the entity-link count per memory in one statement."""
+        if not memory_ids:
+            return {}
+
+        resolved_user_id = self._resolve_user_id(user_id)
+
+        with self.session_manager.get_session(resolved_user_id) as session:
+            rows = session.execute_query("""
+                SELECT memory_id, COUNT(*) AS link_count
+                FROM memory_entities
+                WHERE memory_id = ANY(%(memory_ids)s::uuid[])
+                GROUP BY memory_id
+            """, {'memory_ids': list(memory_ids)})
+
+        return {row['memory_id']: row['link_count'] for row in rows}
+
+    def copy_entity_links(
+        self,
+        target_id: UUID,
+        source_ids: List[UUID],
+        user_id: Optional[str] = None
+    ) -> int:
+        """Carry every entity link of the source memories onto a target memory.
+
+        Used by consolidation to give the merged rollup the union of its
+        sources' links. Returns the number of junction rows inserted; the
+        archived sources' recount settles entity link_count afterwards.
+        """
+        if not source_ids:
+            return 0
+
+        resolved_user_id = self._resolve_user_id(user_id)
+
+        with self.session_manager.get_session(resolved_user_id) as session:
+            return session.execute_update("""
+                INSERT INTO memory_entities (memory_id, entity_id, user_id, created_at)
+                SELECT DISTINCT %(target_id)s, entity_id, %(user_id)s, NOW()
+                FROM memory_entities
+                WHERE memory_id = ANY(%(source_ids)s::uuid[])
+                ON CONFLICT (memory_id, entity_id) DO NOTHING
+            """, {
+                'target_id': target_id,
+                'user_id': resolved_user_id,
+                'source_ids': [str(source_id) for source_id in source_ids],
+            })
 
     def get_entity(
         self,
@@ -1424,11 +1494,12 @@ class LTMemoryDB:
     ) -> None:
         """Merge the source entity into the target entity.
 
-        Rewrites every memory's entity_links entry pointing at source to point
-        at target instead (deduplicating any memory already linked to both),
-        recounts target's link_count from non-archived linked memories, zeroes
-        the source's count, and archives the source entity. The target keeps
-        its name/type; the source is soft-deleted.
+        Re-points every junction row from source to target. Rows whose
+        memory was already linked to target are deleted first, then the
+        rest re-point, so no (memory, entity) pair ever lands twice. Then
+        recounts target's link_count from non-archived linked memories,
+        zeroes the source's count, and archives the source entity. The
+        target keeps its name/type; the source is soft-deleted.
         """
         resolved_user_id = self._resolve_user_id(user_id)
 
@@ -1438,60 +1509,36 @@ class LTMemoryDB:
                 if not target:
                     raise ValueError(f"Target entity {target_id} not found")
 
-                # Every parameter inside a variadic jsonb function
-                # (jsonb_build_object's any-variadic args) MUST carry an
-                # explicit cast: Postgres cannot infer a parameter type from a
-                # variadic argument, so an untyped %(x)s there fails the whole
-                # statement at PARSE time with IndeterminateDatatype — before
-                # any row is touched (this silently no-op'd every production
-                # entity merge on first observation).
-                update_query = """
-                UPDATE memories
-                SET entity_links = (
-                    SELECT COALESCE(jsonb_agg(replaced_elem), '[]'::jsonb)
-                    FROM (
-                        SELECT DISTINCT ON (elem_out->>'uuid') elem_out AS replaced_elem
-                        FROM (
-                            SELECT CASE
-                                WHEN elem->>'uuid' = %(source_id)s
-                                THEN jsonb_build_object(
-                                    'uuid', %(target_id_str)s::text,
-                                    'name', %(target_name)s::text,
-                                    'type', %(target_type)s::text
-                                )
-                                ELSE elem
-                            END AS elem_out
-                            FROM jsonb_array_elements(entity_links) AS elem
-                        ) replaced
-                    ) deduped
-                ),
-                updated_at = NOW()
-                WHERE entity_links @> %(source_filter)s::jsonb
-                """
+                session.execute_update("""
+                    DELETE FROM memory_entities src
+                    WHERE src.entity_id = %(source_id)s
+                      AND EXISTS (
+                          SELECT 1 FROM memory_entities tgt
+                          WHERE tgt.memory_id = src.memory_id
+                            AND tgt.entity_id = %(target_id)s
+                      )
+                """, {'source_id': source_id, 'target_id': target_id})
 
-                affected_count = session.execute_update(update_query, {
-                    'source_id': str(source_id),
-                    'target_id_str': str(target_id),
-                    'target_name': target.name,
-                    'target_type': target.entity_type,
-                    'source_filter': json.dumps([{"uuid": str(source_id)}])
-                })
+                affected_count = session.execute_update("""
+                    UPDATE memory_entities
+                    SET entity_id = %(target_id)s
+                    WHERE entity_id = %(source_id)s
+                """, {'source_id': source_id, 'target_id': target_id})
 
                 # Recount, not increment: a memory linked to both entities would double-count
                 session.execute_update("""
                     UPDATE entities
                     SET link_count = (
                         SELECT COUNT(*)
-                        FROM memories
-                        WHERE entity_links @> jsonb_build_array(
-                                  jsonb_build_object('uuid', %(target_id_str)s::text)
-                              )
-                          AND is_archived = FALSE
+                        FROM memory_entities me
+                        JOIN memories m ON m.id = me.memory_id
+                        WHERE me.entity_id = %(target_id)s
+                          AND m.is_archived = FALSE
                     ),
                         last_linked_at = NOW(),
                         updated_at = NOW()
                     WHERE id = %(target_id)s
-                """, {'target_id_str': str(target_id), 'target_id': target_id})
+                """, {'target_id': target_id})
 
                 session.execute_update("""
                     UPDATE entities
@@ -1504,7 +1551,7 @@ class LTMemoryDB:
 
                 logger.info(
                     f"Merged entity {source_id} into {target_id}: "
-                    f"updated {affected_count} memories"
+                    f"re-pointed {affected_count} links"
                 )
 
     def get_users_with_memory_enabled(self) -> List[UserMemorySettings]:
