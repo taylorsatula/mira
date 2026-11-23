@@ -68,8 +68,6 @@ def persist_llm_entities(
             db.link_memory_to_entity(
                 memory_id=memory_id,
                 entity_id=entity.id,
-                entity_name=entity_name,
-                entity_type=entity.entity_type,
                 user_id=user_id,
             )
             total_links += 1
