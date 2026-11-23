@@ -457,12 +457,20 @@ class MemoryTool(Tool):
                         "linked_from_id": related[i]["linked_from_id"]
                     }
 
+        page_ids = []
+        id_stack = list(paginated_results)
+        while id_stack:
+            mem = id_stack.pop()
+            page_ids.append(mem.id)
+            id_stack.extend(getattr(mem, 'linked_memories', None) or [])
+        links_by_id = self._memory_db.get_entity_links(page_ids)
+
         formatted_results = []
         for memory in paginated_results:
-            result = self._format_memory_for_output(memory)
+            result = self._format_memory_for_output(memory, links_by_id)
             if include_link_traversal and hasattr(memory, 'linked_memories') and memory.linked_memories:
                 result["related_memories"] = [
-                    self._format_memory_for_output(linked)
+                    self._format_memory_for_output(linked, links_by_id)
                     for linked in memory.linked_memories
                 ]
             formatted_results.append(result)
@@ -517,8 +525,10 @@ class MemoryTool(Tool):
         merged.sort(key=effective_score, reverse=True)
         return merged
 
-    def _format_memory_for_output(self, memory) -> Dict[str, Any]:
+    def _format_memory_for_output(self, memory, links_by_id=None) -> Dict[str, Any]:
         """Format a Memory model for API output."""
+        if links_by_id is None:
+            links_by_id = self._memory_db.get_entity_links([memory.id])
         result = {
             "memory_id": format_memory_id(str(memory.id)),
             "full_uuid": str(memory.id),
@@ -528,7 +538,7 @@ class MemoryTool(Tool):
             "created_at": format_utc_iso(memory.created_at),
             "happens_at": format_utc_iso(memory.happens_at) if memory.happens_at else None,
             "expires_at": format_utc_iso(memory.expires_at) if memory.expires_at else None,
-            "entity_links": memory.entity_links or [],
+            "entity_links": links_by_id.get(memory.id, []),
             "inbound_links_count": len(memory.inbound_links) if memory.inbound_links else 0,
             "outbound_links_count": len(memory.outbound_links) if memory.outbound_links else 0,
             "annotations": memory.annotations if hasattr(memory, 'annotations') and memory.annotations else [],

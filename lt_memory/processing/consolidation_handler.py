@@ -102,12 +102,10 @@ class ConsolidationHandler:
 
         all_inbound_links = []
         all_outbound_links = []
-        all_entity_links = []
 
         for memory in old_memories:
             all_inbound_links.extend(memory.inbound_links)
             all_outbound_links.extend(memory.outbound_links)
-            all_entity_links.extend(memory.entity_links)
 
         old_memory_id_strs = {str(mid) for mid in old_memory_ids}
 
@@ -133,13 +131,9 @@ class ConsolidationHandler:
                 if link.get('created_at', '') > unique_outbound[uuid].get('created_at', ''):
                     unique_outbound[uuid] = link
 
-        unique_entities = {
-            link['uuid']: link for link in all_entity_links
-        }
-
         logger.debug(
             f"Collected link bundles: {len(unique_inbound)} inbound, "
-            f"{len(unique_outbound)} outbound, {len(unique_entities)} entities"
+            f"{len(unique_outbound)} outbound"
         )
 
         # Pick earliest source segment for primary tracing column;
@@ -174,18 +168,21 @@ class ConsolidationHandler:
         new_memory_id = new_ids[0]
         new_memory_id_str = str(new_memory_id)
 
-        if unique_inbound or unique_outbound or unique_entities:
+        copied_entity_links = self.db.copy_entity_links(
+            new_memory_id, list(old_memory_ids), user_id=user_id
+        )
+
+        if unique_inbound or unique_outbound:
             self.db.update_memory(new_memory_id, {
                 'inbound_links': list(unique_inbound.values()),
-                'outbound_links': list(unique_outbound.values()),
-                'entity_links': list(unique_entities.values())
+                'outbound_links': list(unique_outbound.values())
             }, user_id=user_id)
 
-            logger.info(
-                f"Transferred links to consolidated memory {new_memory_id}: "
-                f"{len(unique_inbound)} inbound, {len(unique_outbound)} outbound, "
-                f"{len(unique_entities)} entities"
-            )
+        logger.info(
+            f"Transferred links to consolidated memory {new_memory_id}: "
+            f"{len(unique_inbound)} inbound, {len(unique_outbound)} outbound, "
+            f"{copied_entity_links} entities"
+        )
 
         # Min activity-days is the most conservative decay position
         last_accessed = max(

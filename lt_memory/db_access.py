@@ -1440,6 +1440,36 @@ class LTMemoryDB:
 
         return {row['memory_id']: row['link_count'] for row in rows}
 
+    def copy_entity_links(
+        self,
+        target_id: UUID,
+        source_ids: List[UUID],
+        user_id: Optional[str] = None
+    ) -> int:
+        """Carry every entity link of the source memories onto a target memory.
+
+        Used by consolidation to give the merged rollup the union of its
+        sources' links. Returns the number of junction rows inserted; the
+        archived sources' recount settles entity link_count afterwards.
+        """
+        if not source_ids:
+            return 0
+
+        resolved_user_id = self._resolve_user_id(user_id)
+
+        with self.session_manager.get_session(resolved_user_id) as session:
+            return session.execute_update("""
+                INSERT INTO memory_entities (memory_id, entity_id, user_id, created_at)
+                SELECT DISTINCT %(target_id)s, entity_id, %(user_id)s, NOW()
+                FROM memory_entities
+                WHERE memory_id = ANY(%(source_ids)s::uuid[])
+                ON CONFLICT (memory_id, entity_id) DO NOTHING
+            """, {
+                'target_id': target_id,
+                'user_id': resolved_user_id,
+                'source_ids': [str(source_id) for source_id in source_ids],
+            })
+
     def get_entity(
         self,
         entity_id: UUID,

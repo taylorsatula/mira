@@ -5,8 +5,8 @@ Over time, entities like "Round Lake" / "Round Lake, IL" / "round lake" accumula
 as separate rows across sessions (get_or_create_entity only fuzzy-dedups at
 creation, never after). This service finds similar entity pairs via pg_trgm,
 groups them by connected components, asks a single LLM call to judge which are
-the same entity, and merges the duplicates (rewriting memory entity_links to
-point at the canonical, bumping its link_count, archiving the losers).
+the same entity, and merges the duplicates (re-pointing memory_entities rows
+at the canonical, recounting its link_count, archiving the losers).
 
 Runs infrequently as a use-day-gated scheduled job. No agent tools — a plain LLM
 call presenting candidate groups and parsing JSON output. The LLM only decides

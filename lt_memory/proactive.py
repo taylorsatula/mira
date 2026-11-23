@@ -17,12 +17,13 @@ update did.
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
-from typing import List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional, TYPE_CHECKING
+from uuid import UUID
 import numpy as np
 
 from lt_memory.db_access import LTMemoryDB
 from lt_memory.linking import LinkingService
-from lt_memory.models import Memory, MemoryDict
+from lt_memory.models import EntityLink, Memory, MemoryDict
 from lt_memory.vector_ops import VectorOps
 
 from config import config
@@ -31,6 +32,18 @@ if TYPE_CHECKING:
     from lt_memory.hub_discovery import HubDiscoveryService
 
 logger = logging.getLogger(__name__)
+
+
+def _collect_linked_ids(memories: List[Memory]) -> List:
+    """All memory ids in the result tree, linked traversal included."""
+    ids = []
+    stack = list(memories)
+    while stack:
+        memory = stack.pop()
+        ids.append(memory.id)
+        stack.extend(getattr(memory, 'linked_memories', None) or [])
+    return ids
+
 
 PROACTIVE_SIMILARITY_THRESHOLD = 0.42
 PROACTIVE_MAX_LINK_TRAVERSAL_DEPTH = 3
@@ -242,7 +255,9 @@ class ProactiveService:
 
         self._track_memory_access(final_results)
 
-        return [self._memory_to_dict(m) for m in final_results]
+        link_ids = _collect_linked_ids(final_results)
+        links_by_id = self.db.get_entity_links(link_ids) if link_ids else {}
+        return [self._memory_to_dict(m, links_by_id) for m in final_results]
 
     def _merge_memory_pools(
         self,
@@ -279,6 +294,10 @@ class ProactiveService:
                 merged.append(memory)
                 seen_ids.add(memory.id)
 
+        personal_ids = [m.id for m in merged
+                        if getattr(m, 'source', 'personal') != 'global']
+        link_counts = self.db.get_entity_link_counts(personal_ids)
+
         def effective_score(memory) -> float:
             score = memory.importance_score
 
@@ -288,7 +307,7 @@ class ProactiveService:
             # Debut boost logic (apply to score, not early return)
             if not is_global and memory.activity_days_at_creation is not None:
                 age_in_days = current_activity_days - memory.activity_days_at_creation
-                entity_link_count = len(memory.entity_links) if memory.entity_links else 0
+                entity_link_count = link_counts.get(memory.id, 0)
 
                 if entity_link_count < hub_connection_threshold:
                     if age_in_days < debut_full_boost_days:
@@ -438,8 +457,10 @@ class ProactiveService:
 
         return primary_memories
 
-    def _memory_to_dict(self, memory: Memory) -> MemoryDict:
+    def _memory_to_dict(self, memory: Memory,
+                        links_by_id: Optional[Dict[UUID, List[EntityLink]]] = None) -> MemoryDict:
         """Convert Memory model to dictionary with hierarchical structure."""
+        links_by_id = links_by_id if links_by_id is not None else self.db.get_entity_links([memory.id])
         result = {
             "id": str(memory.id),
             "text": memory.text,
@@ -456,7 +477,7 @@ class ProactiveService:
             "inbound_links": memory.inbound_links if hasattr(memory, 'inbound_links') else [],
             "outbound_links": memory.outbound_links if hasattr(memory, 'outbound_links') else [],
             # Entity links for self-improving loop - shows which hubs this memory connects to
-            "entity_links": memory.entity_links if hasattr(memory, 'entity_links') else [],
+            "entity_links": links_by_id.get(memory.id, []),
             "annotations": memory.annotations if hasattr(memory, 'annotations') else [],
         }
 
@@ -465,7 +486,7 @@ class ProactiveService:
 
         if hasattr(memory, 'linked_memories') and memory.linked_memories:
             result['linked_memories'] = [
-                self._memory_to_dict(linked)
+                self._memory_to_dict(linked, links_by_id)
                 for linked in memory.linked_memories
             ]
         else:
