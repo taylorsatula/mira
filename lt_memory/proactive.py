@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _collect_linked_ids(memories: List[Memory]) -> List:
+def _collect_linked_ids(memories: List[Memory]) -> List[UUID]:
     """All memory ids in the result tree, linked traversal included."""
     ids = []
     stack = list(memories)
