@@ -14,7 +14,7 @@ hosted app root, psycopg2 + cryptography in the venv.
 
 Bundle format (see AGENTS.md inside the zip for the import contract):
   messagesmemories.json - user profile, continuums, messages, memories,
-      entities, feedback signals, activity days (Postgres side). Embeddings and
+      entities, memory↔entity links, feedback signals, activity days (Postgres side). Embeddings and
       search vectors are excluded; the receiving install regenerates them.
   userdb.json  - per-user sqlite tables with encrypted__ columns decrypted
       (credential_value nulled). Receiving install re-encrypts under its own
@@ -67,6 +67,7 @@ PG_TABLES = {
     "messages":           {"where": "user_id = %s", "drop": ["segment_embedding"]},
     "memories":           {"where": "user_id = %s", "drop": ["embedding", "search_vector"]},
     "entities":          {"where": "user_id = %s", "drop": ["embedding"]},
+    "memory_entities":   {"where": "user_id = %s", "drop": []},
     "feedback_signals":   {"where": "user_id = %s", "drop": []},
     "user_activity_days": {"where": "user_id = %s", "drop": []},
 }
@@ -130,7 +131,7 @@ os.makedirs(TMP, exist_ok=True)
 AGENTS_MD = """# MIRA User Data Bundle — Deployment Instructions
 
 This zip contains one user's complete data from a MIRA hosted instance:
-- `messagesmemories.json` — user profile, continuums, messages, memories, entities, feedback signals, activity days (Postgres side)
+- `messagesmemories.json` — user profile, continuums, messages, memories, entities, memory↔entity links, feedback signals, activity days (Postgres side)
 - `userdb.json` — per-user tool data: domaindocs/sections, contacts, reminders, pager, punchclock, scratchpad, trigger rules, etc. (sqlite side, values already decrypted)
 - `manifest.json` — checksums and row counts; verify before importing
 
@@ -149,8 +150,8 @@ Mira wakes up with their history intact. Procedure:
 3. Import order matters:
    a. user_profile first (name, timezone, portrait — overwrite the placeholder).
    b. continuums, then messages (messages reference continuum ids).
-   c. entities, then memories (memories reference entity ids via entity_links;
-      keep original UUIDs so cross-links resolve; remap only the user id).
+   c. entities, then memories, then memory_entities (the links between
+      them; keep original UUIDs so the links resolve; remap only the user id).
    d. feedback signals and activity days.
    e. Then userdb.json tables into the local per-user sqlite, per table,
       re-encrypting encrypted__ columns with THIS install's per-user key.
