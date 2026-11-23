@@ -12,7 +12,7 @@
 -- 4. Access rate: effective_access_count / MAX(7, activity_days_since_creation)
 -- 5. Value score: LN(1 + access_rate / 0.02) * 0.8
 -- 6. Hub score: f(inbound_links) with diminishing returns after 10 links
--- 7. Entity hub score: f(entity_links × entity.link_count × type_weight) with diminishing returns
+-- 7. Entity hub score: f(memory_entities × entity.link_count × type_weight) with diminishing returns
 -- 8. Mention score: f(mention_count) - explicit LLM references (strongest signal)
 -- 9. Newness boost: 2.0 decaying to 0 over 15 activity days (grace period for new memories)
 -- 10. Raw score: value_score + hub_score + entity_hub_score + mention_score + newness_boost
@@ -82,7 +82,7 @@ ROUND(CAST(
                     -- Memories linked to important/frequently-referenced entities score higher
                     (
                         CASE
-                            WHEN jsonb_array_length(COALESCE(m.entity_links, '[]'::jsonb)) = 0 THEN 0.0
+                            WHEN NOT EXISTS (SELECT 1 FROM memory_entities me WHERE me.memory_id = m.id) THEN 0.0
                             ELSE
                                 -- Calculate weighted entity links via subquery
                                 COALESCE((
@@ -109,8 +109,9 @@ ROUND(CAST(
                                                 WHEN 'LANGUAGE' THEN 0.3
                                                 ELSE 0.5
                                             END as entity_weight
-                                        FROM jsonb_array_elements(m.entity_links) AS el
-                                        JOIN entities e ON (el->>'uuid')::uuid = e.id
+                                        FROM memory_entities me
+                                        JOIN entities e ON e.id = me.entity_id
+                                        WHERE me.memory_id = m.id
                                     ) entity_weights
                                 ), 0.0)
                         END
