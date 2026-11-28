@@ -42,7 +42,16 @@ install_host_file() {
     if [ -f "$target" ] && cmp -s "$content" "$target"; then
         return 0
     fi
-    if [ -w "$(dirname "$target")" ] && { [ ! -e "$target" ] || [ -w "$target" ]; }; then
+    local dir
+    dir="$(dirname "$target")"
+    if [ ! -d "$dir" ]; then
+        # Stock Apple Silicon macOS has no /usr/local/bin, so the write
+        # target's parent may not exist. Create it instead of failing the
+        # install silently. Applies to every caller — today the only targets
+        # are the mira CLI wrapper and the systemd unit, both intended paths.
+        mkdir -p "$dir" 2>/dev/null || sudo mkdir -p "$dir" || return 1
+    fi
+    if [ -w "$dir" ] && { [ ! -e "$target" ] || [ -w "$target" ]; }; then
         cp "$content" "$target" && chmod "$mode" "$target"
     else
         sudo cp "$content" "$target" && sudo chmod "$mode" "$target"

@@ -303,9 +303,15 @@ print_header "Step 15d: Terminal Chat Command (${MIRA_CLI_PATH})"
 echo -ne "${DIM}${ARROW}${RESET} Writing ${MIRA_CLI_PATH}... "
 MIRA_CLI_TMP="$(mktemp)"
 render_mira_cli > "$MIRA_CLI_TMP"
-install_host_file "$MIRA_CLI_TMP" "$MIRA_CLI_PATH"
+if install_host_file "$MIRA_CLI_TMP" "$MIRA_CLI_PATH"; then
+    echo -e "${CHECKMARK}"
+else
+    echo -e "${ERROR}"
+    print_error "Could not write ${MIRA_CLI_PATH} — the 'mira' command was not installed."
+    print_info "Check permissions on $(dirname "$MIRA_CLI_PATH") (it may need sudo mkdir -p) and re-run the installer."
+    MIRA_CLI_INSTALLED="no"
+fi
 rm -f "$MIRA_CLI_TMP"
-echo -e "${CHECKMARK}"
 
 # Write one-time credential dump to user's home directory
 print_header "Step 15c: Credential Dump"
@@ -495,7 +501,11 @@ fi
 
 echo ""
 echo -e "${BOLD}${GREEN}Next Steps${RESET}"
-echo -e "  ${CYAN}→${RESET} Chat from any terminal: ${BOLD}mira${RESET} (first run: ${BOLD}mira --login --base-url http://localhost:1993 --chat${RESET})"
+if [ "${MIRA_CLI_INSTALLED:-yes}" = "yes" ]; then
+    echo -e "  ${CYAN}→${RESET} Chat from any terminal: ${BOLD}mira${RESET} (first run: ${BOLD}mira --login --base-url http://localhost:1993 --chat${RESET})"
+else
+    echo -e "  ${CYAN}→${RESET} The ${BOLD}mira${RESET} command was not installed (see Step 15d above); the web UI works regardless."
+fi
 if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ] && [ "$OS" = "linux" ]; then
     if [[ "${STATUS_MIRA_SERVICE}" == *"Running"* ]]; then
         echo -e "  ${CYAN}→${RESET} MIRA is running at: ${BOLD}http://localhost:1993${RESET}"
